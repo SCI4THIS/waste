@@ -129,7 +129,7 @@ HTML = r'''<!doctype html>
     }
     .group-header h2 { margin: 0 auto 0 0; font-size: 15px; font-family: ui-monospace, monospace; }
     .group-count { color: var(--muted); }
-    .test { display: grid; grid-template-columns: 22px minmax(240px, 1fr) auto; gap: 10px; align-items: center; padding: 8px 14px; border-top: 1px solid #222c3a; }
+    .test { display: grid; grid-template-columns: 22px minmax(240px, 1fr) minmax(72px, auto) auto; gap: 10px; align-items: center; padding: 8px 14px; border-top: 1px solid #222c3a; }
     .test:first-child { border-top: 0; }
     .test:hover { background: #192230; }
     .indicator { width: 11px; height: 11px; border-radius: 50%; background: #596579; box-shadow: 0 0 0 3px #252e3c; }
@@ -137,16 +137,19 @@ HTML = r'''<!doctype html>
     .test.pass .indicator { background: var(--pass); }
     .test.fail .indicator { background: var(--fail); }
     .test-path { min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .duration { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
     .expected { margin-left: 8px; color: var(--muted); font: 11px system-ui, sans-serif; }
-    details { grid-column: 2 / 4; color: var(--muted); }
+    details { grid-column: 2 / 5; color: var(--muted); }
     pre { max-height: 280px; overflow: auto; padding: 10px; border-radius: 6px; background: #090c12; color: #cbd5e3; white-space: pre-wrap; }
     @keyframes pulse { to { opacity: .35; } }
     @media (max-width: 620px) {
       header { padding: 12px; }
       main { width: calc(100% - 16px); margin-top: 12px; }
-      .test { grid-template-columns: 18px 1fr; }
-      .test button { grid-column: 2; justify-self: start; }
-      details { grid-column: 2; }
+      .test { grid-template-columns: 18px 1fr auto; }
+      .test-path { grid-column: 2 / 4; }
+      .duration { grid-column: 2; grid-row: 2; text-align: left; }
+      .test button { grid-column: 3; grid-row: 2; }
+      details { grid-column: 2 / 4; }
     }
   </style>
 </head>
@@ -253,11 +256,14 @@ HTML = r'''<!doctype html>
             expected.textContent = "expected rejection";
             path.append(expected);
           }
+          const duration = document.createElement("span");
+          duration.className = "duration";
+          duration.textContent = "—";
           const run = document.createElement("button");
           run.type = "button";
           run.textContent = "Run";
           run.addEventListener("click", () => runTest(test));
-          row.append(indicator, path, run);
+          row.append(indicator, path, duration, run);
           list.append(row);
         }
         section.append(list);
@@ -271,10 +277,21 @@ HTML = r'''<!doctype html>
       return [...document.querySelectorAll(".test")].find(row => row.dataset.path === test.path);
     }
 
-    function setResult(test, state, detail = "") {
+    function formatDuration(milliseconds) {
+      if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
+      if (milliseconds < 60000) return `${(milliseconds / 1000).toFixed(2)} s`;
+      const minutes = Math.floor(milliseconds / 60000);
+      const seconds = ((milliseconds % 60000) / 1000).toFixed(1);
+      return `${minutes}m ${seconds}s`;
+    }
+
+    function setResult(test, state, detail = "", durationMs = null) {
       const row = rowFor(test);
       row.classList.remove("idle", "running", "pass", "fail");
       row.classList.add(state);
+      const duration = row.querySelector(".duration");
+      duration.textContent = state === "running" ? "running…" :
+        durationMs === null ? "—" : formatDuration(durationMs);
       const oldDetails = row.querySelector("details");
       if (oldDetails) oldDetails.remove();
       if (detail) {
@@ -286,16 +303,23 @@ HTML = r'''<!doctype html>
         details.append(summary, pre);
         row.append(details);
       }
-      if (state === "pass" || state === "fail") results.set(test.path, state);
+      if (state === "running") results.delete(test.path);
+      if (state === "pass" || state === "fail") {
+        results.set(test.path, {state, durationMs});
+      }
       updateSummary();
     }
 
     function updateSummary() {
       let passed = 0;
       let failed = 0;
-      for (const result of results.values()) result === "pass" ? passed++ : failed++;
+      let totalDuration = 0;
+      for (const result of results.values()) {
+        result.state === "pass" ? passed++ : failed++;
+        totalDuration += result.durationMs;
+      }
       document.querySelector("#summary").textContent =
-        `${results.size} / ${PAYLOAD.tests.length} completed · ${passed} passed · ${failed} failed`;
+        `${results.size} / ${PAYLOAD.tests.length} completed · ${passed} passed · ${failed} failed · ${formatDuration(totalDuration)}`;
     }
 
     function execute(test) {
@@ -323,11 +347,13 @@ HTML = r'''<!doctype html>
       const button = row.querySelector("button");
       button.disabled = true;
       setResult(test, "running");
+      const startedAt = performance.now();
       const raw = await execute(test);
+      const durationMs = performance.now() - startedAt;
       const passed = test.expectFailure ? raw.exitCode === 1 : raw.ok;
       const expectation = test.expectFailure && raw.exitCode === 1 ? "Expected rejection observed." : "";
       const detail = [expectation, raw.output, raw.error].filter(Boolean).join("\n\n");
-      setResult(test, passed ? "pass" : "fail", detail);
+      setResult(test, passed ? "pass" : "fail", detail, durationMs);
       button.disabled = false;
       return passed;
     }

@@ -61,8 +61,9 @@ The **Generate embedded browser test dashboard** entry creates the self-containe
 `build/ocaml-wasm/browser-tests.html`. It embeds the compiled OCaml Wasm runtime
 and every `.wast` file under `submodules/wasm-spec/test`, groups tests by their
 source directory, and provides Run, Test module, and Test all controls with live
-pass/fail indicators. Every test gets a fresh Web Worker so failures remain
-isolated.
+pass/fail indicators. Each result shows its elapsed time, and the header shows
+the cumulative time for completed tests. Every test gets a fresh Web Worker so
+failures remain isolated.
 
 The **Safe pull/rebase and submodule update** menu entry temporarily removes the
 managed Wasm32 patch, runs `git pull --rebase --autostash`, updates initialized
