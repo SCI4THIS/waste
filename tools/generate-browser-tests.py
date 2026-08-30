@@ -205,7 +205,7 @@ HTML = r'''<!doctype html>
         };
         console.log = (...values) => output.push(values.map(format).join(" "));
         console.error = (...values) => output.push(values.map(format).join(" "));
-        globalThis.waste_argv = data.argv;
+        globalThis.waste_argv = ["wasm", "-ca", "-e", data.source];
         globalThis.waste_exit_code = 0;
         const binary = atob(data.wasm);
         const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
@@ -451,15 +451,7 @@ HTML = r'''<!doctype html>
         const timer = setTimeout(() => finish({ok: false, error: `Timed out after ${TIMEOUT_MS / 1000} seconds`}), TIMEOUT_MS);
         worker.onerror = event => finish({ok: false, error: event.message || "Worker error"});
         worker.onmessage = event => finish(event.data);
-        const customHandlers = {
-          "custom/custom": "custom",
-          "custom/metadata.code.branch_hint": "metadata.code.branch_hint",
-          "custom/name": "name"
-        };
-        const handler = customHandlers[test.group];
-        const argv = handler ? ["wasm", "-c", handler, "-e", test.source] :
-          ["wasm", "-e", test.source];
-        worker.postMessage({loader: PAYLOAD.loader, wasm: PAYLOAD.wasm, argv});
+        worker.postMessage({loader: PAYLOAD.loader, wasm: PAYLOAD.wasm, source: test.source});
       });
     }
 
