@@ -1,0 +1,1 @@
+\production{white space} & \Tspace &::=& ("~~" ~|~ \Tformat ~|~ \Tcomment)^\ast 

@@ -1,0 +1,1 @@
+\production{decimal digit} & \Tdigit &::=& "0" \Rightarrow 0 ~~|~~ \dots ~~|~~ "9" \Rightarrow 9 

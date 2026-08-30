@@ -1,0 +1,1 @@
+\production{element item} & "("~\Tinstr~")" &\equiv& "("~"item"~~\Tinstr~")" 

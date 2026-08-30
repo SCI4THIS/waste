@@ -1,0 +1,1 @@
+\production{global} & \Tglobal_I &::=& "("~"global"~~\Tid^?~~\X{gt}{:}\Tglobaltype~~e{:}\Texpr_I~")" &\Rightarrow& \{ \GTYPE~\X{gt}, \GINIT~e \} 

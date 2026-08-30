@@ -1,0 +1,2 @@
+\production{memory offset} & \Toffset &::=& "offset{="}o{:}\Tu32 &\Rightarrow& o  
+| \epsilon &\Rightarrow& 0 

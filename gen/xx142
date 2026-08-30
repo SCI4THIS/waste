@@ -1,0 +1,8 @@
+\production{string character} & \Tstringchar &::=& c{:}\Tchar &\Rightarrow& c \qquad & (\iff c \geq \unicode{20} \wedge c \neq \unicode{7F} \wedge c \neq """ \wedge c \neq \text{\backslash})  
+| \text{\backslash t} &\Rightarrow& \unicode{09}  
+| \text{\backslash n} &\Rightarrow& \unicode{0A}  
+| \text{\backslash r} &\Rightarrow& \unicode{0D}  
+| \text{\backslash{"}} &\Rightarrow& \unicode{22}  
+| \text{\backslash{'}} &\Rightarrow& \unicode{27}  
+| \text{\backslash\backslash} &\Rightarrow& \unicode{5C}  
+| \text{\backslash u\{}~n{:}\Thexnum~\text{\}} &\Rightarrow& \unicode{(n)} & (\iff n < \hex{D800} \vee \hex{E000} \leq n < \hex{110000}) 

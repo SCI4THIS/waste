@@ -1,0 +1,2 @@
+\production{type use} & \Ttypeuse_I &::=& "("~"type"~~x{:}\Ttypeidx_I~")" \quad\Rightarrow\quad x, I'  &&& \qquad (\iff \begin{array}[t]{@{}l@{}} I.\ITYPEDEFS[x] = [t_1^n] \to [t_2^\ast] \wedge I' = \{\ILOCALS~(\epsilon)^n\})  \end{array} [1ex] 
+| "("~"type"~~x{:}\Ttypeidx_I~")" ~~(t_1{:}\Tparam)^\ast~~(t_2{:}\Tresult)^\ast \quad\Rightarrow\quad x, I'  &&& \qquad (\iff \begin{array}[t]{@{}l@{}} I.\ITYPEDEFS[x] = [t_1^\ast] \to [t_2^\ast] \wedge I' = \{\ILOCALS~\F{id}(\Tparam)^\ast\} \idcwellformed)  \end{array} 

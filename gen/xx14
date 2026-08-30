@@ -1,0 +1,9 @@
+\production{instruction} & \Tplaininstr_I &::=& \dots  
+| "table.get"~~x{:}\Ttableidx_I &\Rightarrow& \TABLEGET~x  
+| "table.set"~~x{:}\Ttableidx_I &\Rightarrow& \TABLESET~x  
+| "table.size"~~x{:}\Ttableidx_I &\Rightarrow& \TABLESIZE~x  
+| "table.grow"~~x{:}\Ttableidx_I &\Rightarrow& \TABLEGROW~x  
+| "table.fill"~~x{:}\Ttableidx_I &\Rightarrow& \TABLEFILL~x  
+| "table.copy"~~x{:}\Ttableidx_I~~y{:}\Ttableidx_I &\Rightarrow& \TABLECOPY~x~y  
+| "table.init"~~x{:}\Ttableidx_I~~y{:}\Telemidx_I &\Rightarrow& \TABLEINIT~x~y  
+| "elem.drop"~~x{:}\Telemidx_I &\Rightarrow& \ELEMDROP~x 

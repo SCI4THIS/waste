@@ -1,0 +1,4 @@
+\production{instruction} & \Tplaininstr_I &::=& \dots  
+| "ref.null"~~t{:}\Theaptype &\Rightarrow& \REFNULL~t  
+| \text{ref.is\_null} &\Rightarrow& \REFISNULL  
+| "ref.func"~~x{:}\Tfuncidx &\Rightarrow& \REFFUNC~x 

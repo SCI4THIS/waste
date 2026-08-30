@@ -1,0 +1,8 @@
+\production{plain instruction} & \Tplaininstr_I &::=& "unreachable" &\Rightarrow& \UNREACHABLE  
+| "nop" &\Rightarrow& \NOP  
+| "br"~~l{:}\Tlabelidx_I &\Rightarrow& \BR~l  
+| \text{br\_if}~~l{:}\Tlabelidx_I &\Rightarrow& \BRIF~l  
+| \text{br\_table}~~l^\ast{:}\Tvec(\Tlabelidx_I)~~l_N{:}\Tlabelidx_I &\Rightarrow& \BRTABLE~l^\ast~l_N  
+| "return" &\Rightarrow& \RETURN  
+| "call"~~x{:}\Tfuncidx_I &\Rightarrow& \CALL~x  
+| \text{call\_indirect}~~x{:}\Ttableidx~~y,I'{:}\Ttypeuse_I &\Rightarrow& \CALLINDIRECT~x~y & (\iff I' = \{\ILOCALS~(\epsilon)^\ast\}) 

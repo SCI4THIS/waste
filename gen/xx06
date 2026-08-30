@@ -1,0 +1,1 @@
+\production{block type} & \Tblocktype_I & \begin{array}[t]{@{}c@{}} ::=  |  \end{array} & \begin{array}[t]{@{}lcll@{}} (t{:}\Tresult)^? &\Rightarrow& t^?  x,I'{:}\Ttypeuse_I &\Rightarrow& x & (\iff I' = \{\ILOCALS~(\epsilon)^\ast\})  \end{array} 

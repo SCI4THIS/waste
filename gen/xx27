@@ -1,0 +1,7 @@
+\production{instruction}} & \Tplaininstr_I} &::=}& thisisenough} && thisshouldbeenough} [-2ex] 
+| "f32.eq" &\Rightarrow& \F32.\EQ  
+| "f32.ne" &\Rightarrow& \F32.\NE  
+| "f32.lt" &\Rightarrow& \F32.\LT  
+| "f32.gt" &\Rightarrow& \F32.\GT  
+| "f32.le" &\Rightarrow& \F32.\LE  
+| "f32.ge" &\Rightarrow& \F32.\GE 

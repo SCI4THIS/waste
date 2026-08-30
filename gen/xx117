@@ -1,0 +1,1 @@
+\production{function type} & \Tfunctype &::=& "("~"func"~~t_1^\ast{:\,}\Tvec(\Tparam)~~t_2^\ast{:\,}\Tvec(\Tresult)~")" &\Rightarrow& [t_1^\ast] \to [t_2^\ast] 

@@ -1,0 +1,8 @@
+\production{instruction}} & \Tplaininstr_I} &::=}& averylonginstructionnameforvectext} && vechasreallylonginstructionnames} [-2ex] 
+| "v128.not" &\Rightarrow& \V128.\VNOT 
+| "v128.and" &\Rightarrow& \V128.\VAND 
+| "v128.andnot" &\Rightarrow& \V128.\VANDNOT 
+| "v128.or" &\Rightarrow& \V128.\VOR 
+| "v128.xor" &\Rightarrow& \V128.\VXOR 
+| "v128.bitselect" &\Rightarrow& \V128.\BITSELECT 
+| \text{v128.any\_true} &\Rightarrow& \V128.\ANYTRUE

@@ -1,0 +1,1 @@
+\production{start function} & \Tstart_I &::=& "("~"start"~~x{:}\Tfuncidx_I~")" &\Rightarrow& \{ \SFUNC~x \} 

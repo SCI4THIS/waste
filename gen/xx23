@@ -1,0 +1,15 @@
+\production{instruction}} & \Tplaininstr_I} &::=}& thisisenough} && thisshouldbeenough} [-2ex] 
+| "f32.abs" &\Rightarrow& \F32.\ABS  
+| "f32.neg" &\Rightarrow& \F32.\NEG  
+| "f32.ceil" &\Rightarrow& \F32.\CEIL  
+| "f32.floor" &\Rightarrow& \F32.\FLOOR  
+| "f32.trunc" &\Rightarrow& \F32.\TRUNC  
+| "f32.nearest" &\Rightarrow& \F32.\NEAREST  
+| "f32.sqrt" &\Rightarrow& \F32.\SQRT  
+| "f32.add" &\Rightarrow& \F32.\ADD  
+| "f32.sub" &\Rightarrow& \F32.\SUB  
+| "f32.mul" &\Rightarrow& \F32.\MUL  
+| "f32.div" &\Rightarrow& \F32.\DIV  
+| "f32.min" &\Rightarrow& \F32.\FMIN  
+| "f32.max" &\Rightarrow& \F32.\FMAX  
+| "f32.copysign" &\Rightarrow& \F32.\COPYSIGN 

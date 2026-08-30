@@ -1,0 +1,15 @@
+\production{instruction}} & \Tplaininstr_I} &::=}& thisisenough} && thisshouldbeenough} [-2ex] 
+| "f64.abs" &\Rightarrow& \F64.\ABS  
+| "f64.neg" &\Rightarrow& \F64.\NEG  
+| "f64.ceil" &\Rightarrow& \F64.\CEIL  
+| "f64.floor" &\Rightarrow& \F64.\FLOOR  
+| "f64.trunc" &\Rightarrow& \F64.\TRUNC  
+| "f64.nearest" &\Rightarrow& \F64.\NEAREST  
+| "f64.sqrt" &\Rightarrow& \F64.\SQRT  
+| "f64.add" &\Rightarrow& \F64.\ADD  
+| "f64.sub" &\Rightarrow& \F64.\SUB  
+| "f64.mul" &\Rightarrow& \F64.\MUL  
+| "f64.div" &\Rightarrow& \F64.\DIV  
+| "f64.min" &\Rightarrow& \F64.\FMIN  
+| "f64.max" &\Rightarrow& \F64.\FMAX  
+| "f64.copysign" &\Rightarrow& \F64.\COPYSIGN 

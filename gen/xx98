@@ -1,0 +1,1 @@
+\production{table use} & \Ttableuse_I &::=& "("~"table"~~x{:}\Ttableidx_I ~")" \quad\Rightarrow\quad x 

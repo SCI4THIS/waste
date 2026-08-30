@@ -1,0 +1,1 @@
+\production{element list} & "func"~~\Tvec(\Tfuncidx_I) &\equiv& "funcref"~~\Tvec("("~"ref.func"~~\Tfuncidx_I~")")

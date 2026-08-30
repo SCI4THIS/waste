@@ -1,0 +1,1 @@
+\production{instruction} & "table.get" &\equiv& "table.get"~~"0"  & "table.set" &\equiv& "table.set"~~"0"  & "table.size" &\equiv& "table.size"~~"0"  & "table.grow" &\equiv& "table.grow"~~"0"  & "table.fill" &\equiv& "table.fill"~~"0"  & "table.copy" &\equiv& "table.copy"~~"0"~~"0"  & "table.init"~~x{:}\Telemidx_I &\equiv& "table.init"~~"0"~~x{:}\Telemidx_I 

@@ -1,0 +1,2 @@
+\production{hexadecimal number} & \Thexnum &::=& h{:}\Thexdigit &\Rightarrow& h  
+| n{:}\Thexnum~~\text{\_}^?~~h{:}\Thexdigit &\Rightarrow& 16\cdot n + h 

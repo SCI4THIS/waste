@@ -1,0 +1,1 @@
+\production{element expression} & \Telemexpr_I &::=& "("~"item"~~e{:}\Texpr_I~")" \quad\Rightarrow\quad e 

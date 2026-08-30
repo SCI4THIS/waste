@@ -1,0 +1,5 @@
+\production{instruction} & \Tplaininstr_I &::=& \dots 
+| "i32.const"~~n{:}\Ti32 &\Rightarrow& \I32.\CONST~n  
+| "i64.const"~~n{:}\Ti64 &\Rightarrow& \I64.\CONST~n  
+| "f32.const"~~z{:}\Tf32 &\Rightarrow& \F32.\CONST~z  
+| "f64.const"~~z{:}\Tf64 &\Rightarrow& \F64.\CONST~z 

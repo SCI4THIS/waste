@@ -1,0 +1,1 @@
+\production{element list} & \Telemlist_I &::=& t{:}\Treftype~~y^\ast{:}\Tvec(\Telemexpr_I) \qquad\Rightarrow\quad ( \ETYPE~t, \EINIT~y^\ast ) 

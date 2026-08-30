@@ -1,0 +1,2 @@
+\production{type index} & \Ttypeidx_I &::=& x{:}\Tu32 &\Rightarrow& x 
+| v{:}\Tid &\Rightarrow& x & (\iff I.\ITYPES[x] = v) 

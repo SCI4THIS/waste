@@ -1,0 +1,2 @@
+\production{string element} & \Tstringelem &::=& c{:}\Tstringchar &\Rightarrow& \utf8(c)  
+| \text{\backslash}~n{:}\Thexdigit~m{:}\Thexdigit &\Rightarrow& 16\cdot n+m 

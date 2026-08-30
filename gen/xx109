@@ -1,0 +1,1 @@
+\production{module} & \Tmodule & \begin{array}[t]{@{}cllll} ::=& "("~"module"~~\Tid^?~~(m{:}\Tmodulefield_I)^\ast~")" \quad\Rightarrow\quad \bigcompose m^\ast  &\qquad (\iff I = \bigcompose \F{idc}(\Tmodulefield)^\ast \idcwellformed)  \end{array} [1ex]

@@ -1,0 +1,1 @@
+\production{line comment} & \Tlinecomment &::=& \Tcommentd~~\Tlinechar^\ast~~(\Tnewline ~|~ \T{eof}) 

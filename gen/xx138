@@ -1,0 +1,1 @@
+\production{floating-point value} & \TfN &::=& {\pm}{:}\Tsign~z{:}\TfNmag &\Rightarrow& \pm z 

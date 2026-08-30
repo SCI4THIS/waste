@@ -1,0 +1,1 @@
+\production{result} & "("~~"result"~~\Tvaltype^\ast~~")" &\equiv& ("("~~"result"~~\Tvaltype~~")")^\ast 

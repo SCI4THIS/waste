@@ -1,0 +1,1 @@
+\production{element segment} & "("~"elem"~~\Tid^?~~"("~"offset"~~\Texpr_I~")"~~\Tvec(\Tfuncidx_I)~")" &\equiv& "("~"elem"~~\Tid^?~~"("~"table"~~"0"~")"~~"("~"offset"~~\Texpr_I~")"~~"func"~~\Tvec(\Tfuncidx_I)~")"

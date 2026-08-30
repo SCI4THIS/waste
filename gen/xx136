@@ -1,0 +1,4 @@
+\production{decimal floating-point number} & \Tfloat &::=& p{:}\Tnum~"."^? &\Rightarrow& p  
+| p{:}\Tnum~"."~q{:}\Tfrac &\Rightarrow& p+q  
+| p{:}\Tnum~"."^?~("E"~|~"e")~{\pm}{:}\Tsign~e{:}\Tnum &\Rightarrow& p\cdot 10^{\pm e}  
+| p{:}\Tnum~"."~q{:}\Tfrac~("E"~|~"e")~{\pm}{:}\Tsign~e{:}\Tnum &\Rightarrow& (p+q)\cdot 10^{\pm e} 

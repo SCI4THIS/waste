@@ -1,0 +1,7 @@
+\production{instruction}} & \Tplaininstr_I} &::=}& thisisenough} && thisshouldbeenough} [-2ex] 
+| "f64.eq" &\Rightarrow& \F64.\EQ  
+| "f64.ne" &\Rightarrow& \F64.\NE  
+| "f64.lt" &\Rightarrow& \F64.\LT  
+| "f64.gt" &\Rightarrow& \F64.\GT  
+| "f64.le" &\Rightarrow& \F64.\LE  
+| "f64.ge" &\Rightarrow& \F64.\GE 

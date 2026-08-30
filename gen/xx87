@@ -1,0 +1,1 @@
+\production{memory} & \Tmem_I &::=& "("~"memory"~~\Tid^?~~\X{mt}{:}\Tmemtype~")" &\Rightarrow& \{ \MTYPE~\X{mt} \} 

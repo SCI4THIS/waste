@@ -1,0 +1,1 @@
+\production{table type} & \Ttabletype &::=& \X{lim}{:}\Tlimits~~\X{et}{:}\Treftype &\Rightarrow& \X{lim}~\X{et} 

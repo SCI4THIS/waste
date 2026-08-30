@@ -1,0 +1,16 @@
+\production{instruction}} & \Tplaininstr_I} &::=}& averylonginstructionnameforvectext} && vechasreallylonginstructionnames} [-2ex] 
+| "f64x2.abs" &\Rightarrow& \F64X2.\VABS 
+| "f64x2.neg" &\Rightarrow& \F64X2.\VNEG 
+| "f64x2.sqrt" &\Rightarrow& \F64X2.\VSQRT 
+| "f64x2.ceil" &\Rightarrow& \F64X2.\VCEIL 
+| "f64x2.floor" &\Rightarrow& \F64X2.\VFLOOR 
+| "f64x2.trunc" &\Rightarrow& \F64X2.\VTRUNC 
+| "f64x2.nearest" &\Rightarrow& \F64X2.\VNEAREST 
+| "f64x2.add" &\Rightarrow& \F64X2.\VADD 
+| "f64x2.sub" &\Rightarrow& \F64X2.\VSUB 
+| "f64x2.mul" &\Rightarrow& \F64X2.\VMUL 
+| "f64x2.div" &\Rightarrow& \F64X2.\VDIV 
+| "f64x2.min" &\Rightarrow& \F64X2.\VMIN 
+| "f64x2.max" &\Rightarrow& \F64X2.\VMAX 
+| "f64x2.pmin" &\Rightarrow& \F64X2.\VPMIN 
+| "f64x2.pmax" &\Rightarrow& \F64X2.\VPMAX

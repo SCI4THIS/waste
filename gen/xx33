@@ -1,0 +1,3 @@
+\production{instruction}} & \Tplaininstr_I} &::=}& averylonginstructionnameforvectext} && vechasreallylonginstructionnames} [-2ex] 
+| "i8x16.shuffle"~~(laneidx{:}\Tu8)^{16} &\Rightarrow& \I8X16.\SHUFFLE~laneidx^{16}  
+| "i8x16.swizzle" &\Rightarrow& \I8X16.\SWIZZLE

@@ -1,0 +1,1 @@
+\production{type use} & (t_1{:}\Tparam)^\ast~~(t_2{:}\Tresult)^\ast &\equiv& "("~"type"~~x~")"~~\Tparam^\ast~~\Tresult^\ast 

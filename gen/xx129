@@ -1,0 +1,2 @@
+\production{decimal number} & \Tnum &::=& d{:}\Tdigit &\Rightarrow& d  
+| n{:}\Tnum~~\text{\_}^?~~d{:}\Tdigit &\Rightarrow& 10\cdot n + d 

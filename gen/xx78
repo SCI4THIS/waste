@@ -1,0 +1,4 @@
+\production{import description} & \Timportdesc_I &::=& "("~"func"~~\Tid^?~~x,I'{:}\Ttypeuse_I~")" &\Rightarrow& \IDFUNC~x  
+| "("~"table"~~\Tid^?~~\X{tt}{:}\Ttabletype~")" &\Rightarrow& \IDTABLE~\X{tt}  
+| "("~"memory"~~\Tid^?~~\X{mt}{:}\Tmemtype~")" &\Rightarrow& \IDMEM~~\X{mt}  
+| "("~"global"~~\Tid^?~~\X{gt}{:}\Tglobaltype~")" &\Rightarrow& \IDGLOBAL~\X{gt} 

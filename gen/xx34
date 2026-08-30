@@ -1,0 +1,7 @@
+\production{instruction}} & \Tplaininstr_I} &::=}& averylonginstructionnameforvectext} && vechasreallylonginstructionnames} [-2ex] 
+| "i8x16.splat" &\Rightarrow& \I8X16.\SPLAT 
+| "i16x8.splat" &\Rightarrow& \I16X8.\SPLAT 
+| "i32x4.splat" &\Rightarrow& \I32X4.\SPLAT 
+| "i64x2.splat" &\Rightarrow& \I64X2.\SPLAT 
+| "f32x4.splat" &\Rightarrow& \F32X4.\SPLAT 
+| "f64x2.splat" &\Rightarrow& \F64X2.\SPLAT

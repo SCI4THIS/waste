@@ -1,0 +1,4 @@
+\production{export description} & \Texportdesc_I &::=& "("~"func"~~x{:}\Tfuncidx_I~")" &\Rightarrow& \EDFUNC~x  
+| "("~"table"~~x{:}\Ttableidx_I~")" &\Rightarrow& \EDTABLE~x  
+| "("~"memory"~~x{:}\Tmemidx_I~")" &\Rightarrow& \EDMEM~x  
+| "("~"global"~~x{:}\Tglobalidx_I~")" &\Rightarrow& \EDGLOBAL~x 

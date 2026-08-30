@@ -1,0 +1,11 @@
+\production{instruction}} & \Tplaininstr_I} &::=}& averylonginstructionnameforvectext} && vechasreallylonginstructionnames} [-2ex] 
+| "i32x4.eq" &\Rightarrow& \I32X4.\VEQ 
+| "i32x4.ne" &\Rightarrow& \I32X4.\VNE 
+| \text{i32x4.lt\_s} &\Rightarrow& \I32X4.\VLT\K{\_s} 
+| \text{i32x4.lt\_u} &\Rightarrow& \I32X4.\VLT\K{\_u} 
+| \text{i32x4.gt\_s} &\Rightarrow& \I32X4.\VGT\K{\_s} 
+| \text{i32x4.gt\_u} &\Rightarrow& \I32X4.\VGT\K{\_u} 
+| \text{i32x4.le\_s} &\Rightarrow& \I32X4.\VLE\K{\_s} 
+| \text{i32x4.le\_u} &\Rightarrow& \I32X4.\VLE\K{\_u} 
+| \text{i32x4.ge\_s} &\Rightarrow& \I32X4.\VGE\K{\_s} 
+| \text{i32x4.ge\_u} &\Rightarrow& \I32X4.\VGE\K{\_u}

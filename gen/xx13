@@ -1,0 +1,6 @@
+\production{instruction} & \Tplaininstr_I &::=& \dots  
+| "local.get"~~x{:}\Tlocalidx_I &\Rightarrow& \LOCALGET~x  
+| "local.set"~~x{:}\Tlocalidx_I &\Rightarrow& \LOCALSET~x  
+| "local.tee"~~x{:}\Tlocalidx_I &\Rightarrow& \LOCALTEE~x  
+| "global.get"~~x{:}\Tglobalidx_I &\Rightarrow& \GLOBALGET~x  
+| "global.set"~~x{:}\Tglobalidx_I &\Rightarrow& \GLOBALSET~x 

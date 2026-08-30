@@ -1,0 +1,1 @@
+\production{module field} & "("~"memory"~~\Tid^?~~"("~"data"~~b^n{:}\Tdatastring~")"~~")" \quad\equiv  & \qquad "("~"memory"~~\Tid'~~m~~m~")"  & \qquad "("~"data"~~"("~"memory"~~\Tid'~")"~~"("~"i32.const"~~"0"~")"~~\Tdatastring~")"  & \qquad\qquad (\iff \Tid^? \neq \epsilon \wedge \Tid' = \Tid^? \vee \Tid^? = \epsilon \wedge \Tid' \idfresh, m = \F{ceil}(n / 64\,\F{Ki})) 

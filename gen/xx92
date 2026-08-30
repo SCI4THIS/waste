@@ -1,0 +1,1 @@
+\production{export} & \Texport_I &::=& "("~"export"~~\X{nm}{:}\Tname~~d{:}\Texportdesc_I~")" &\Rightarrow& \{ \ENAME~\X{nm}, \EDESC~d \} 

@@ -1,0 +1,1 @@
+\production{name} & \Tname &::=& b^\ast{:}\Tstring &\Rightarrow& c^\ast & (\iff b^\ast = \utf8(c^\ast)) 

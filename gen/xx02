@@ -1,0 +1,1 @@
+\production{identifier context} & I &::=& \begin{array}[t]{l@{~}ll} \{ & \ITYPES & (\Tid^?)^\ast,  & \IFUNCS & (\Tid^?)^\ast,  & \ITABLES & (\Tid^?)^\ast,  & \IMEMS & (\Tid^?)^\ast,  & \IGLOBALS & (\Tid^?)^\ast,  & \IELEM & (\Tid^?)^\ast,  & \IDATA & (\Tid^?)^\ast,  & \ILOCALS & (\Tid^?)^\ast,  & \ILABELS & (\Tid^?)^\ast,  & \ITYPEDEFS & \functype^\ast ~\}  

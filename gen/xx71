@@ -1,0 +1,2 @@
+\production{data index} & \Tdataidx_I &::=& x{:}\Tu32 &\Rightarrow& x 
+| v{:}\Tid &\Rightarrow& x & (\iff I.\IDATA[x] = v) 

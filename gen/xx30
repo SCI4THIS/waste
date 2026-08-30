@@ -1,0 +1,6 @@
+\production{instruction}} & \Tplaininstr_I} &::=}& thisisenough} && thisshouldbeenough} [-2ex] 
+| \text{i32.extend8\_s} &\Rightarrow& \I32.\EXTEND\K{8\_s}  
+| \text{i32.extend16\_s} &\Rightarrow& \I32.\EXTEND\K{16\_s}  
+| \text{i64.extend8\_s} &\Rightarrow& \I64.\EXTEND\K{8\_s}  
+| \text{i64.extend16\_s} &\Rightarrow& \I64.\EXTEND\K{16\_s}  
+| \text{i64.extend32\_s} &\Rightarrow& \I64.\EXTEND\K{32\_s} 

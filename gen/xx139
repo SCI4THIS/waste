@@ -1,0 +1,5 @@
+\production{floating-point magnitude} & \TfNmag &::=& z{:}\Tfloat &\Rightarrow& \ieee_N(z) & (\iff \ieee_N(z) \neq \pm \infty)  
+| z{:}\Thexfloat &\Rightarrow& \ieee_N(z) & (\iff \ieee_N(z) \neq \pm \infty)  
+| "inf" &\Rightarrow& \infty  
+| "nan" &\Rightarrow& \NAN(\canon_N)  
+| "nan{:"0x}~n{:}\Thexnum &\Rightarrow& \NAN(n) & (\iff 1 \leq n < 2^{\significand(N)}) 

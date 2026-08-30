@@ -1,0 +1,2 @@
+\production{limits} & \Tlimits &::=& n{:}\Tu32 &\Rightarrow& \{ \LMIN~n, \LMAX~\epsilon \}  
+| n{:}\Tu32~~m{:}\Tu32 &\Rightarrow& \{ \LMIN~n, \LMAX~m \} 

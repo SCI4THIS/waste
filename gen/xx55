@@ -1,0 +1,1 @@
+\production{keyword} & \Tkeyword &::=& ("a" ~|~ \dots ~|~ "z")~\Tidchar^\ast \qquad (\iff~\mbox{occurring as a literal terminal in the grammar}) 

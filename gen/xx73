@@ -1,0 +1,2 @@
+\production{label index} & \Tlabelidx_I &::=& l{:}\Tu32 &\Rightarrow& l 
+| v{:}\Tid &\Rightarrow& l & (\iff I.\ILABELS[l] = v) 

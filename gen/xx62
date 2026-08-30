@@ -1,0 +1,1 @@
+\production{line character} & \Tlinechar &::=& c{:}\Tchar & (\iff c \neq \unicode{0A} \land c \neq \unicode{0D}) 

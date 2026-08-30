@@ -1,0 +1,12 @@
+\production{instruction}} & \Tplaininstr_I} &::=}& thisisenough} && thisshouldbeenough} [-2ex] 
+| "i64.eqz" &\Rightarrow& \I64.\EQZ  
+| "i64.eq" &\Rightarrow& \I64.\EQ  
+| "i64.ne" &\Rightarrow& \I64.\NE  
+| \text{i64.lt\_s} &\Rightarrow& \I64.\LT\K{\_s}  
+| \text{i64.lt\_u} &\Rightarrow& \I64.\LT\K{\_u}  
+| \text{i64.gt\_s} &\Rightarrow& \I64.\GT\K{\_s}  
+| \text{i64.gt\_u} &\Rightarrow& \I64.\GT\K{\_u}  
+| \text{i64.le\_s} &\Rightarrow& \I64.\LE\K{\_s}  
+| \text{i64.le\_u} &\Rightarrow& \I64.\LE\K{\_u}  
+| \text{i64.ge\_s} &\Rightarrow& \I64.\GE\K{\_s}  
+| \text{i64.ge\_u} &\Rightarrow& \I64.\GE\K{\_u} 

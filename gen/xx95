@@ -1,0 +1,2 @@
+\production{element segment} & \Telem_I &::=& "("~"elem"~~\Tid^?~~(et, y^\ast){:}\Telemlist_I~")"  &&& \qquad \Rightarrow\quad \{ \ETYPE~et, \EINIT~y^\ast, \EMODE~\EPASSIVE \}  
+| "("~"elem"~~\Tid^?~~x{:}\Ttableuse_I~~"("~"offset"~~e{:}\Texpr_I~")"~~(et, y^\ast){:}\Telemlist_I~")"  &&& \qquad \Rightarrow\quad \{ \ETYPE~et, \EINIT~y^\ast, \EMODE~\EACTIVE~\{ \ETABLE~x, \EOFFSET~e \} \}  &&& "("~"elem"~~\Tid^?~~"declare"~~(et, y^\ast){:}\Telemlist_I~")"  &&& \qquad \Rightarrow\quad \{ \ETYPE~et, \EINIT~y^\ast, \EMODE~\EDECLARATIVE \} 

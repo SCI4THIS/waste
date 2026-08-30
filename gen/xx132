@@ -1,0 +1,2 @@
+\production{signed integer} & \TsN &::=& {\pm}{:}\Tsign~~n{:}\Tnum &\Rightarrow& \pm n & (\iff -2^{N-1} \leq \pm n < 2^{N-1})  
+| {\pm}{:}\Tsign~~"0x"~~n{:}\Thexnum &\Rightarrow& \pm n & (\iff -2^{N-1} \leq \pm n < 2^{N-1}) 

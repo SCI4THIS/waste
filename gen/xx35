@@ -1,0 +1,15 @@
+\production{instruction}} & \Tplaininstr_I} &::=}& averylonginstructionnameforvectext} && vechasreallylonginstructionnames} [-2ex] 
+| \text{i8x16.extract\_lane\_s}~~laneidx{:}\Tu8 &\Rightarrow& \I8X16.\EXTRACTLANE\K{\_s}~laneidx  
+| \text{i8x16.extract\_lane\_u}~~laneidx{:}\Tu8 &\Rightarrow& \I8X16.\EXTRACTLANE\K{\_u}~laneidx  
+| \text{i8x16.replace\_lane}~~laneidx{:}\Tu8 &\Rightarrow& \I8X16.\REPLACELANE~laneidx  
+| \text{i16x8.extract\_lane\_s}~~laneidx{:}\Tu8 &\Rightarrow& \I16X8.\EXTRACTLANE\K{\_s}~laneidx  
+| \text{i16x8.extract\_lane\_u}~~laneidx{:}\Tu8 &\Rightarrow& \I16X8.\EXTRACTLANE\K{\_u}~laneidx  
+| \text{i16x8.replace\_lane}~~laneidx{:}\Tu8 &\Rightarrow& \I16X8.\REPLACELANE~laneidx  
+| \text{i32x4.extract\_lane}~~laneidx{:}\Tu8 &\Rightarrow& \I32X4.\EXTRACTLANE~laneidx  
+| \text{i32x4.replace\_lane}~~laneidx{:}\Tu8 &\Rightarrow& \I32X4.\REPLACELANE~laneidx  
+| \text{i64x2.extract\_lane}~~laneidx{:}\Tu8 &\Rightarrow& \I64X2.\EXTRACTLANE~laneidx  
+| \text{i64x2.replace\_lane}~~laneidx{:}\Tu8 &\Rightarrow& \I64X2.\REPLACELANE~laneidx  
+| \text{f32x4.extract\_lane}~~laneidx{:}\Tu8 &\Rightarrow& \F32X4.\EXTRACTLANE~laneidx  
+| \text{f32x4.replace\_lane}~~laneidx{:}\Tu8 &\Rightarrow& \F32X4.\REPLACELANE~laneidx  
+| \text{f64x2.extract\_lane}~~laneidx{:}\Tu8 &\Rightarrow& \F64X2.\EXTRACTLANE~laneidx  
+| \text{f64x2.replace\_lane}~~laneidx{:}\Tu8 &\Rightarrow& \F64X2.\REPLACELANE~laneidx 

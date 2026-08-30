@@ -1,0 +1,1 @@
+\production{identifier} & \Tid &::=& \text{\$}~\Tidchar^+ 

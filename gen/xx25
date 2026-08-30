@@ -1,0 +1,12 @@
+\production{instruction}} & \Tplaininstr_I} &::=}& thisisenough} && thisshouldbeenough} [-2ex] 
+| "i32.eqz" &\Rightarrow& \I32.\EQZ  
+| "i32.eq" &\Rightarrow& \I32.\EQ  
+| "i32.ne" &\Rightarrow& \I32.\NE  
+| \text{i32.lt\_s} &\Rightarrow& \I32.\LT\K{\_s}  
+| \text{i32.lt\_u} &\Rightarrow& \I32.\LT\K{\_u}  
+| \text{i32.gt\_s} &\Rightarrow& \I32.\GT\K{\_s}  
+| \text{i32.gt\_u} &\Rightarrow& \I32.\GT\K{\_u}  
+| \text{i32.le\_s} &\Rightarrow& \I32.\LE\K{\_s}  
+| \text{i32.le\_u} &\Rightarrow& \I32.\LE\K{\_u}  
+| \text{i32.ge\_s} &\Rightarrow& \I32.\GE\K{\_s}  
+| \text{i32.ge\_u} &\Rightarrow& \I32.\GE\K{\_u} 

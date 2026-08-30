@@ -1,0 +1,2 @@
+\production{decimal floating-point fraction} & \Tfrac &::=& d{:}\Tdigit &\Rightarrow& d/10  
+| d{:}\Tdigit~~\text{\_}^?~~p{:}\Tfrac &\Rightarrow& (d+p/10)/10 

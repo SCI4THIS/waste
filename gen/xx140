@@ -1,0 +1,1 @@
+\production{string} & \Tstring &::=& """~(b^\ast{:}\Tstringelem)^\ast~""" &\Rightarrow& \concat((b^\ast)^\ast) & (\iff |\concat((b^\ast)^\ast)| < 2^{32}) 

@@ -1,0 +1,4 @@
+\production{number type} & \Tnumtype &::=& "i32" &\Rightarrow& \I32  
+| "i64" &\Rightarrow& \I64  
+| "f32" &\Rightarrow& \F32  
+| "f64" &\Rightarrow& \F64 

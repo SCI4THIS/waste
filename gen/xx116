@@ -1,0 +1,3 @@
+\production{value type} & \Tvaltype &::=& t{:}\Tnumtype &\Rightarrow& t  
+| t{:}\Tvectype &\Rightarrow& t  
+| t{:}\Treftype &\Rightarrow& t 

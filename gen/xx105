@@ -1,0 +1,1 @@
+\production{data string} & \Tdatastring &::=& (b^\ast{:}\Tstring)^\ast \quad\Rightarrow\quad \concat((b^\ast)^\ast) 

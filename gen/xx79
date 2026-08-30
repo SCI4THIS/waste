@@ -1,0 +1,1 @@
+\production{function} & \Tfunc_I &::=& "("~"func"~~\Tid^?~~x,I'{:}\Ttypeuse_I~~ (t{:}\Tlocal)^\ast~~(\X{in}{:}\Tinstr_{I''})^\ast~")"  &&& \qquad \Rightarrow\quad \{ \FTYPE~x, \FLOCALS~t^\ast, \FBODY~\X{in}^\ast~\END \}  &&& \qquad\qquad\qquad (\iff I'' = I \compose I' \compose \{\ILOCALS~\F{id}(\Tlocal)^\ast\} \idcwellformed) [1ex]

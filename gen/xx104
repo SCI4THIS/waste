@@ -1,0 +1,2 @@
+\production{data segment} & \Tdata_I &::=& "("~"data"~~\Tid^?~~b^\ast{:}\Tdatastring~")"  &&& \qquad \Rightarrow\quad \{ \DINIT~b^\ast, \DMODE~\DPASSIVE \}  
+| "("~"data"~~\Tid^?~~x{:}\Tmemuse_I~~"("~"offset"~~e{:}\Texpr_I~")"~~b^\ast{:}\Tdatastring~")"  &&& \qquad \Rightarrow\quad \{ \DINIT~b^\ast, \DMODE~\DACTIVE~\{ \DMEM~x', \DOFFSET~e \} \} 

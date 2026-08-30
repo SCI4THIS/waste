@@ -1,0 +1,1 @@
+\production{import} & \Timport_I &::=& "("~"import"~~\X{mod}{:}\Tname~~\X{nm}{:}\Tname~~d{:}\Timportdesc_I~")"  &&& \qquad \Rightarrow\quad \{ \IMODULE~\X{mod}, \INAME~\X{nm}, \IDESC~d \} [1ex]

@@ -1,0 +1,4 @@
+\production{hexadecimal floating-point number} & \Thexfloat &::=& "0x"~p{:}\Thexnum~"."^? &\Rightarrow& p  
+| "0x"~p{:}\Thexnum~"."~q{:}\Thexfrac &\Rightarrow& p+q  
+| "0x"~p{:}\Thexnum~"."^?~("P"~|~"p")~{\pm}{:}\Tsign~e{:}\Tnum &\Rightarrow& p\cdot 2^{\pm e}  
+| "0x"~p{:}\Thexnum~"."~q{:}\Thexfrac~("P"~|~"p")~{\pm}{:}\Tsign~e{:}\Tnum &\Rightarrow& (p+q)\cdot 2^{\pm e}

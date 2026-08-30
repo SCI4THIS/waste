@@ -1,0 +1,2 @@
+\production{reference type} & \Treftype &::=& "funcref" &\Rightarrow& \FUNCREF  
+| "externref" &\Rightarrow& \EXTERNREF 

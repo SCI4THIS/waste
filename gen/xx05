@@ -1,0 +1,3 @@
+\production{label} & \Tlabel_I &::=& v{:}\Tid &\Rightarrow& \{\ILABELS~v\} \compose I & (\iff v \notin I.\ILABELS)  
+| v{:}\Tid &\Rightarrow& \{\ILABELS~v\} \compose (I \with \ILABELS[i] = \epsilon) & (\iff I.\ILABELS[i] = v)  
+| \epsilon &\Rightarrow& \{\ILABELS~(\epsilon)\} \compose I 

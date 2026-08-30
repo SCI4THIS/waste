@@ -1,0 +1,7 @@
+\production{instruction}} & \Tplaininstr_I} &::=}& averylonginstructionnameforvectext} && vechasreallylonginstructionnames} [-2ex] 
+| "f32x4.eq" &\Rightarrow& \F32X4.\VEQ 
+| "f32x4.ne" &\Rightarrow& \F32X4.\VNE 
+| "f32x4.lt" &\Rightarrow& \F32X4.\VLT 
+| "f32x4.gt" &\Rightarrow& \F32X4.\VGT 
+| "f32x4.le" &\Rightarrow& \F32X4.\VLE 
+| "f32x4.ge" &\Rightarrow& \F32X4.\VGE

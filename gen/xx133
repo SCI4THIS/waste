@@ -1,0 +1,2 @@
+\production{uninterpreted integers} & \TiN &::=& n{:}\TuN &\Rightarrow& n  
+| i{:}\TsN &\Rightarrow& n & (\iff i = \signed(n)) 

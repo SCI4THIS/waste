@@ -1,0 +1,2 @@
+\production{instruction} & \Tinstr_I &::=& \X{in}{:}\Tplaininstr_I &\Rightarrow& \X{in}  
+| \X{in}{:}\Tblockinstr_I &\Rightarrow& \X{in} 

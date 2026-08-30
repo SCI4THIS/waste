@@ -1,0 +1,1 @@
+\production{character} & \Tchar &::=& \unicode{00} ~|~ \dots ~|~ \unicode{D7FF} ~|~ \unicode{E000} ~|~ \dots ~|~ \unicode{10FFFF} 
