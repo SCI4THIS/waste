@@ -41,3 +41,35 @@ diff --git a/interpreter/runtime/i31.mli b/interpreter/runtime/i31.mli
  type t = i31
  
  type ref_ += I31Ref of i31
+diff --git a/interpreter/binary/decode.ml b/interpreter/binary/decode.ml
+--- a/interpreter/binary/decode.ml
++++ b/interpreter/binary/decode.ml
+@@ -103,5 +103,5 @@ let rec sN n s =
+ let u8 s = I8.of_int_u (I64.to_int_u (uN 8 s))
+-let u32 s = I32.of_int_u (I64.to_int_u (uN 32 s))
++let u32 s = Int64.to_int32 (uN 32 s)
+ let u64 s = uN 64 s
+ let s7 s = I64.to_int_s (sN 7 s)
+ let s32 s = I32.of_int_s (I64.to_int_s (sN 32 s))
+@@ -346,6 +346,8 @@ let locals s =
+   let pos = pos s in
+   let nts = vec local s in
+   let ns = List.map (fun (n, _) -> Convert.I64_.extend_i32_u n) nts in
+-  require (I64.lt_u (List.fold_left I64.add 0L ns) 0x1_0000_0000L)
++  require
++    (I64.lt_u (List.fold_left I64.add 0L ns) 0x1_0000_0000L &&
++      List.for_all (fun (n, _) -> Int32.compare n 0l >= 0) nts)
+     s pos "too many locals";
+   List.flatten (List.map (Lib.Fun.uncurry Lib.List32.make) nts)
+diff --git a/interpreter/valid/valid.ml b/interpreter/valid/valid.ml
+--- a/interpreter/valid/valid.ml
++++ b/interpreter/valid/valid.ml
+@@ -385,6 +385,7 @@ let check_memop (c : context) (memop : ('t, 's) memop) ty_size get_sz at =
+       Pack.packed_size sz
+   in
+-  require (1 lsl memop.align >= 1 && 1 lsl memop.align <= size) at
++  require (memop.align >= 0 && memop.align < Sys.int_size &&
++    1 lsl memop.align <= size) at
+     "alignment must not be larger than natural";
+   let MemoryT (at_, _lim) = memory c (0l @@ at) in
+   if at_ = I32AT then

@@ -34,10 +34,13 @@ The most recent build transcript is written to `build.log` in the repository
 root, including dependency failures and the Dune compiler output.
 
 The main menu also manages `submodules/wasm-spec-i31-int32.patch`. This optional
-compatibility patch changes the reference interpreter's i31 payload from
-`int` to `int32`, preventing the maximum unsigned i31 value from being truncated
-to `-1` by wasm_of_ocaml. The menu reports the patch as `available`, `applied`,
-or `conflict` and provides confirmed apply and revert operations.
+Wasm32 compatibility patch removes assumptions that an OCaml `int` is wider
+than 32 bits. It preserves unsigned i31 and decoded u32 values, prevents
+alignment-shift overflow, and rejects unrepresentable local counts before they
+trigger an enormous allocation. The menu reports the patch as `available`,
+`applied`, or `conflict` and provides confirmed apply and revert operations.
+The `--apply-i31` and `--revert-i31` names are retained for compatibility with
+the original i31-only version of the patch.
 Apply and revert affect source used by the next compilation; they do not replace
 already-generated files in `build/ocaml-wasm/dist` until you compile again.
 
@@ -47,14 +50,22 @@ Useful non-interactive commands are:
 ./start.sh --check
 ./start.sh --install-deps
 ./start.sh --compile
+./start.sh --generate-html
 ./start.sh --patch-status
 ./start.sh --apply-i31
 ./start.sh --revert-i31
 ./start.sh --update
 ```
 
+The **Generate embedded browser test dashboard** entry creates the self-contained
+`build/ocaml-wasm/browser-tests.html`. It embeds the compiled OCaml Wasm runtime
+and every `.wast` file under `submodules/wasm-spec/test`, groups tests by their
+source directory, and provides Run, Test module, and Test all controls with live
+pass/fail indicators. Every test gets a fresh Web Worker so failures remain
+isolated.
+
 The **Safe pull/rebase and submodule update** menu entry temporarily removes the
-managed i31 patch, runs `git pull --rebase --autostash`, updates initialized
+managed Wasm32 patch, runs `git pull --rebase --autostash`, updates initialized
 submodules, and reapplies the patch only when the updated spec does not already
 contain it. It refuses to proceed over unmanaged submodule changes. Its latest
 transcript is stored in `update.log`.

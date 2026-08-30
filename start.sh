@@ -19,6 +19,9 @@ STAGING_DIR="$BUILD_ROOT/staging/interpreter"
 DIST_DIR="$BUILD_ROOT/dist"
 LOG_FILE="$REPO_ROOT/build.log"
 UPDATE_LOG="$REPO_ROOT/update.log"
+BROWSER_TEST_GENERATOR="$REPO_ROOT/tools/generate-browser-tests.py"
+BROWSER_TEST_HTML="$BUILD_ROOT/browser-tests.html"
+HTML_LOG="$REPO_ROOT/html.log"
 
 SWITCH_NAME="${WASTE_OCAML_SWITCH:-waste-wasm}"
 OCAML_VERSION="${WASTE_OCAML_VERSION:-5.3.0}"
@@ -38,10 +41,11 @@ interpreter to WebAssembly.
   --check          print dependency status and exit
   --install-deps   interactively install missing dependencies
   --compile        compile without opening the main menu
-  --patch-status   show the i31 compatibility patch status
-  --apply-i31      apply the i31 int32 compatibility patch
-  --revert-i31     revert the i31 int32 compatibility patch
-  --update         safely pull, update submodules, and restore the i31 patch
+  --generate-html  generate the embedded browser test dashboard
+  --patch-status   show the Wasm32 compatibility patch status
+  --apply-i31      apply the Wasm32 patch (legacy option name)
+  --revert-i31     revert the Wasm32 patch (legacy option name)
+  --update         safely pull, update submodules, and restore the patch
   --help           show this help
 
 Environment overrides:
@@ -261,26 +265,26 @@ apply_i31_patch() {
   state="$(i31_patch_status)"
   case "$state" in
     applied)
-      show_message "i31 compatibility patch" "The patch is already applied."
+      show_message "Wasm32 compatibility patch" "The patch is already applied."
       return 0 ;;
     available)
-      if ! confirm "Apply the i31 int32 compatibility patch to the spec submodule?\n\n$I31_PATCH_FILE"; then
+      if ! confirm "Apply the Wasm32 compatibility patch to the spec submodule?\n\n$I31_PATCH_FILE"; then
         return 1
       fi
       if git -C "$SPEC_DIR" apply "$I31_PATCH_FILE"; then
-        show_message "i31 compatibility patch" "Patch applied.\n\n./submodules/wasm-spec is now modified. Recompile to update the generated Wasm artifacts."
+        show_message "Wasm32 compatibility patch" "Patch applied.\n\n./submodules/wasm-spec is now modified. Recompile to update the generated Wasm artifacts."
       else
-        show_message "i31 compatibility patch" "Patch application failed. The submodule was not changed."
+        show_message "Wasm32 compatibility patch" "Patch application failed. The submodule was not changed."
         return 1
       fi ;;
     empty)
-      show_message "i31 compatibility patch" "The spec submodule is empty. Initialize it first."
+      show_message "Wasm32 compatibility patch" "The spec submodule is empty. Initialize it first."
       return 1 ;;
     missing)
-      show_message "i31 compatibility patch" "Patch file not found:\n$I31_PATCH_FILE"
+      show_message "Wasm32 compatibility patch" "Patch file not found:\n$I31_PATCH_FILE"
       return 1 ;;
     conflict)
-      show_message "i31 compatibility patch" "The source differs from both the patched and unpatched versions. Resolve its changes before applying this patch."
+      show_message "Wasm32 compatibility patch" "The source differs from both the patched and unpatched versions. Resolve its changes before applying this patch."
       return 1 ;;
   esac
 }
@@ -290,26 +294,26 @@ revert_i31_patch() {
   state="$(i31_patch_status)"
   case "$state" in
     available)
-      show_message "i31 compatibility patch" "The patch is not currently applied."
+      show_message "Wasm32 compatibility patch" "The patch is not currently applied."
       return 0 ;;
     applied)
-      if ! confirm "Revert the i31 int32 compatibility patch from the spec submodule?"; then
+      if ! confirm "Revert the Wasm32 compatibility patch from the spec submodule?"; then
         return 1
       fi
       if git -C "$SPEC_DIR" apply --reverse "$I31_PATCH_FILE"; then
-        show_message "i31 compatibility patch" "Patch reverted.\n\n./submodules/wasm-spec is back to its original i31 source. Recompile to update the generated Wasm artifacts."
+        show_message "Wasm32 compatibility patch" "Patch reverted.\n\n./submodules/wasm-spec is back to its upstream source. Recompile to update the generated Wasm artifacts."
       else
-        show_message "i31 compatibility patch" "Patch reversion failed."
+        show_message "Wasm32 compatibility patch" "Patch reversion failed."
         return 1
       fi ;;
     empty)
-      show_message "i31 compatibility patch" "The spec submodule is empty."
+      show_message "Wasm32 compatibility patch" "The spec submodule is empty."
       return 1 ;;
     missing)
-      show_message "i31 compatibility patch" "Patch file not found:\n$I31_PATCH_FILE"
+      show_message "Wasm32 compatibility patch" "Patch file not found:\n$I31_PATCH_FILE"
       return 1 ;;
     conflict)
-      show_message "i31 compatibility patch" "The source differs from both the patched and unpatched versions. It cannot be safely reverted automatically."
+      show_message "Wasm32 compatibility patch" "The source differs from both the patched and unpatched versions. It cannot be safely reverted automatically."
       return 1 ;;
   esac
 }
@@ -319,7 +323,7 @@ i31_patch_menu() {
     local state
     local choice
     state="$(i31_patch_status)"
-    choice="$(whiptail --title "i31 int32 compatibility patch" --menu \
+    choice="$(whiptail --title "Wasm32 compatibility patch" --menu \
       "Patch status: $state\n\nPatch: submodules/wasm-spec-i31-int32.patch" 19 82 4 \
       apply "Apply patch to the spec submodule" \
       revert "Revert patch from the spec submodule" \
@@ -330,8 +334,8 @@ i31_patch_menu() {
       apply) apply_i31_patch || true ;;
       revert) revert_i31_patch || true ;;
       details)
-        show_message "i31 int32 compatibility patch" \
-          "Replaces the 31-bit payload's OCaml int representation with int32. This prevents 0x7fffffff from becoming -1 in wasm_of_ocaml's signed 31-bit int model.\n\nApplying it intentionally makes the spec submodule dirty; reverting restores the pinned source." ;;
+        show_message "Wasm32 compatibility patch" \
+          "Removes host-int assumptions that fail in a 32-bit Wasm target. It preserves unsigned i31 and u32 values, makes alignment validation shift-safe, and rejects unrepresentable local counts before allocation.\n\nApplying it intentionally makes the spec submodule dirty; reverting restores the pinned source." ;;
       back) return 0 ;;
     esac
   done
@@ -343,11 +347,11 @@ restore_i31_patch_after_update() {
   case "$state" in
     available)
       git -C "$SPEC_DIR" apply "$I31_PATCH_FILE"
-      printf 'i31 patch: reapplied\n' >>"$UPDATE_LOG" ;;
+      printf 'Wasm32 patch: reapplied\n' >>"$UPDATE_LOG" ;;
     applied)
-      printf 'i31 patch: already present in the updated source\n' >>"$UPDATE_LOG" ;;
+      printf 'Wasm32 patch: already present in the updated source\n' >>"$UPDATE_LOG" ;;
     *)
-      printf 'i31 patch: could not restore automatically (status: %s)\n' "$state" >>"$UPDATE_LOG"
+      printf 'Wasm32 patch: could not restore automatically (status: %s)\n' "$state" >>"$UPDATE_LOG"
       return 1 ;;
   esac
 }
@@ -359,11 +363,11 @@ safe_repository_update() {
 
   if [[ "$original_patch_state" == "conflict" || "$original_patch_state" == "missing" ]]; then
     show_message "Safe repository update" \
-      "Cannot update safely while the i31 patch status is '$original_patch_state'. Resolve the patch state first."
+      "Cannot update safely while the Wasm32 patch status is '$original_patch_state'. Resolve the patch state first."
     return 1
   fi
 
-  if ! confirm "Perform a safe repository update?\n\n1. Temporarily revert the managed i31 patch if needed\n2. git pull --rebase --autostash\n3. git submodule update --init --recursive\n4. Reapply the i31 patch if upstream does not contain it\n\nNote: Git autostash does not include untracked files."; then
+  if ! confirm "Perform a safe repository update?\n\n1. Temporarily revert the managed Wasm32 patch if needed\n2. git pull --rebase --autostash\n3. git submodule update --init --recursive\n4. Reapply the patch if upstream does not contain it\n\nNote: Git autostash does not include untracked files."; then
     return 1
   fi
 
@@ -371,12 +375,12 @@ safe_repository_update() {
      [[ -n "$(git -C "$SPEC_DIR" status --porcelain 2>/dev/null)" ]]; then
     if [[ "$original_patch_state" != "applied" ]]; then
       show_message "Safe repository update" \
-        "The spec submodule contains changes other than the managed i31 patch. Commit, stash, or revert them before updating."
+        "The spec submodule contains changes other than the managed Wasm32 patch. Commit, stash, or revert them before updating."
       return 1
     fi
 
     if ! git -C "$SPEC_DIR" apply --reverse "$I31_PATCH_FILE"; then
-      show_message "Safe repository update" "Could not temporarily revert the i31 patch."
+      show_message "Safe repository update" "Could not temporarily revert the Wasm32 patch."
       return 1
     fi
     patch_was_reverted=true
@@ -384,7 +388,7 @@ safe_repository_update() {
     if [[ -n "$(git -C "$SPEC_DIR" status --porcelain 2>/dev/null)" ]]; then
       git -C "$SPEC_DIR" apply "$I31_PATCH_FILE" || true
       show_message "Safe repository update" \
-        "The submodule also contains unmanaged changes. The i31 patch was restored; commit, stash, or revert the other changes before updating."
+        "The submodule also contains unmanaged changes. The Wasm32 patch was restored; commit, stash, or revert the other changes before updating."
       return 1
     fi
   fi
@@ -393,7 +397,7 @@ safe_repository_update() {
   {
     printf 'WASTE safe repository update\n'
     printf 'Started: %s\n' "$(date --iso-8601=seconds)"
-    printf 'Original i31 patch state: %s\n\n' "$original_patch_state"
+    printf 'Original Wasm32 patch state: %s\n\n' "$original_patch_state"
     printf '$ git pull --rebase --autostash\n'
   } >>"$UPDATE_LOG"
 
@@ -424,18 +428,18 @@ safe_repository_update() {
   if [[ "$patch_was_reverted" == true ]]; then
     if ! restore_i31_patch_after_update; then
       show_message "Repository updated; patch needs attention" \
-        "The repository and submodule updated, but the i31 patch could not be reapplied automatically.\n\nPatch status: $(i31_patch_status)\nLog: $UPDATE_LOG"
+        "The repository and submodule updated, but the Wasm32 patch could not be reapplied automatically.\n\nPatch status: $(i31_patch_status)\nLog: $UPDATE_LOG"
       return 1
     fi
   fi
 
   {
     printf '\nCompleted: %s\n' "$(date --iso-8601=seconds)"
-    printf 'Current i31 patch state: %s\n' "$(i31_patch_status)"
+    printf 'Current Wasm32 patch state: %s\n' "$(i31_patch_status)"
   } >>"$UPDATE_LOG"
 
   show_message "Safe repository update complete" \
-    "The repository and submodules are updated.\n\ni31 patch: $(i31_patch_status)\nLog: $UPDATE_LOG"
+    "The repository and submodules are updated.\n\nWasm32 patch: $(i31_patch_status)\nLog: $UPDATE_LOG"
 }
 
 install_missing_dependencies() {
@@ -479,7 +483,7 @@ compile_interpreter() {
     printf 'Repository: %s\n' "$REPO_ROOT"
     printf 'Spec source: %s\n' "$INTERPRETER_DIR"
     printf 'opam switch: %s\n\n' "$SWITCH_NAME"
-    printf 'i31 patch: %s\n\n' "$compile_patch_state"
+    printf 'Wasm32 patch: %s\n\n' "$compile_patch_state"
   } >>"$LOG_FILE"
 
   if ! check_dependencies; then
@@ -537,7 +541,48 @@ compile_interpreter() {
   } >>"$LOG_FILE"
 
   show_message "Build complete" \
-    "The spec interpreter was compiled using i31 patch state: $compile_patch_state. The compilation itself did not modify the submodule.\n\nLoader: $DIST_DIR/wasm_cli.bc.wasm.js\nAssets: $DIST_DIR/wasm_cli.bc.wasm.assets\nLog: $LOG_FILE"
+    "The spec interpreter was compiled using Wasm32 patch state: $compile_patch_state. The compilation itself did not modify the submodule.\n\nLoader: $DIST_DIR/wasm_cli.bc.wasm.js\nAssets: $DIST_DIR/wasm_cli.bc.wasm.assets\nLog: $LOG_FILE"
+}
+
+generate_browser_test_html() {
+  : >"$HTML_LOG"
+  {
+    printf 'WASTE browser test dashboard generation\n'
+    printf 'Started: %s\n' "$(date --iso-8601=seconds)"
+    printf 'Output: %s\n\n' "$BROWSER_TEST_HTML"
+  } >>"$HTML_LOG"
+
+  if ! have_command python3; then
+    printf 'error: Python 3 is not installed\n' >>"$HTML_LOG"
+    show_message "Browser test dashboard" "Python 3 is required to generate the HTML.\n\nLog: $HTML_LOG"
+    return 1
+  fi
+  if [[ ! -f "$DIST_DIR/wasm_cli.bc.wasm.js" ]]; then
+    printf 'error: compiled Wasm loader is missing\n' >>"$HTML_LOG"
+    show_message "Browser test dashboard" "Compile the OCaml interpreter to Wasm first.\n\nLog: $HTML_LOG"
+    return 1
+  fi
+  if [[ ! -f "$BROWSER_TEST_GENERATOR" ]]; then
+    printf 'error: generator is missing: %s\n' "$BROWSER_TEST_GENERATOR" >>"$HTML_LOG"
+    show_message "Browser test dashboard" "The HTML generator is missing.\n\nLog: $HTML_LOG"
+    return 1
+  fi
+
+  if have_command whiptail && [[ -t 0 && -t 1 ]]; then
+    whiptail --title "Browser test dashboard" --infobox \
+      "Embedding the compiled OCaml Wasm and all specification tests...\n\nLog: $HTML_LOG" 9 78
+  else
+    printf 'Generating embedded browser test dashboard...\n'
+  fi
+
+  if ! python3 "$BROWSER_TEST_GENERATOR" --repo-root "$REPO_ROOT" \
+      --output "$BROWSER_TEST_HTML" >>"$HTML_LOG" 2>&1; then
+    show_message "Browser test dashboard failed" "HTML generation failed.\n\nLog: $HTML_LOG"
+    return 1
+  fi
+
+  show_message "Browser test dashboard generated" \
+    "A self-contained HTML dashboard was generated with the OCaml Wasm and all .wast tests embedded.\n\nOutput: $BROWSER_TEST_HTML\nLog: $HTML_LOG"
 }
 
 dependency_menu() {
@@ -577,9 +622,10 @@ main_menu() {
     local choice
     patch_state="$(i31_patch_status)"
     choice="$(whiptail --title "OCaml to WebAssembly" --menu \
-      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 22 84 6 \
+      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 24 88 7 \
       compile "Compile the OCaml interpreter to Wasm" \
-      patch "Manage i31 int32 patch [$patch_state]" \
+      html "Generate embedded browser test dashboard" \
+      patch "Manage Wasm32 compatibility patch [$patch_state]" \
       update "Safe pull/rebase and submodule update" \
       status "Show dependency status" \
       log "Show the last build log" \
@@ -587,6 +633,7 @@ main_menu() {
 
     case "$choice" in
       compile) compile_interpreter || true ;;
+      html) generate_browser_test_html || true ;;
       patch) i31_patch_menu ;;
       update) safe_repository_update || true ;;
       status)
@@ -624,6 +671,7 @@ main() {
       return 1 ;;
     --install-deps) install_missing_dependencies ;;
     --compile) compile_interpreter ;;
+    --generate-html) generate_browser_test_html ;;
     --patch-status) i31_patch_status ;;
     --apply-i31) apply_i31_patch ;;
     --revert-i31) revert_i31_patch ;;
