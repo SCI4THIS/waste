@@ -73,3 +73,58 @@ diff --git a/interpreter/valid/valid.ml b/interpreter/valid/valid.ml
      "alignment must not be larger than natural";
    let MemoryT (at_, _lim) = memory c (0l @@ at) in
    if at_ = I32AT then
+diff --git a/interpreter/exec/convert.ml b/interpreter/exec/convert.ml
+--- a/interpreter/exec/convert.ml
++++ b/interpreter/exec/convert.ml
+@@ -4,6 +4,8 @@ module I8_ =
+ struct
+   let sat_s x = min (max x (-0x80)) 0x7f
+   let sat_u x = min (max x 0) 0xff
++  let sat_i32_s x = Int32.min (Int32.max x (-0x80l)) 0x7fl
++  let sat_i32_u x = Int32.min (Int32.max x 0l) 0xffl
+ 
+   let wrap_i16 x = I8.of_int_s (I16.to_int_s x)
+ 
+@@ -13,15 +15,15 @@ struct
+ 
+   let narrow_sat_i16_u x = I8.of_int_u (sat_u (I16.to_int_s x))
+ 
+-  let narrow_sat_i32_s x = I8.of_int_s (sat_s (I32.to_int_s x))
++  let narrow_sat_i32_s x = I8.of_int_s (Int32.to_int (sat_i32_s x))
+ 
+-  let narrow_sat_i32_u x = I8.of_int_u (sat_u (I32.to_int_s x))
++  let narrow_sat_i32_u x = I8.of_int_u (Int32.to_int (sat_i32_u x))
+ end
+ 
+ module I16_ =
+ struct
+-  let sat_s x = min (max x (-0x8000)) 0x7fff
+-  let sat_u x = min (max x 0) 0xffff
++  let sat_i32_s x = Int32.min (Int32.max x (-0x8000l)) 0x7fffl
++  let sat_i32_u x = Int32.min (Int32.max x 0l) 0xffffl
+ 
+   let extend_i8_s x = I16.of_int_s (I8.to_int_s x)
+ 
+@@ -29,9 +31,9 @@ struct
+ 
+   let wrap_i32 x = I16.of_int_s (I32.to_int_s x)
+ 
+-  let narrow_sat_i32_s x = I16.of_int_s (sat_s (I32.to_int_s x))
++  let narrow_sat_i32_s x = I16.of_int_s (Int32.to_int (sat_i32_s x))
+ 
+-  let narrow_sat_i32_u x = I16.of_int_u (sat_u (I32.to_int_s x))
++  let narrow_sat_i32_u x = I16.of_int_u (Int32.to_int (sat_i32_u x))
+ end
+ 
+ module I32_ =
+diff --git a/interpreter/script/run.ml b/interpreter/script/run.ml
+--- a/interpreter/script/run.ml
++++ b/interpreter/script/run.ml
+@@ -26,6 +26,7 @@ struct
+   let validate_with_custom (m, cs) =
+     try Ok (Valid.check_module_with_custom (m, cs)) with
+     | Valid.Invalid (at, msg) -> Error (at, msg)
++    | Custom.Invalid (at, msg) -> Error (at, msg)
+ 
+   let instantiate m ims =
+     try Ok (result Eval.init m ims) with

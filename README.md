@@ -65,8 +65,11 @@ pass/fail indicators. Each result shows its elapsed time, and the header shows
 the cumulative time for completed tests. A Download results button exports a
 JSON report with the summary, timings, exit codes, captured output, and errors.
 Test all records and displays its local start and finish times; both timestamps
-are included in the downloaded report.
-Every test gets a fresh Web Worker so failures remain isolated.
+are included in the downloaded report. Test all runs each displayed directory
+group in order. Legacy exception groups are highlighted as unsupported and are
+excluded from Test all, while remaining available for explicit runs. All custom
+annotation handlers are enabled for browser tests. Every test gets a fresh Web
+Worker so failures remain isolated.
 
 The **Safe pull/rebase and submodule update** menu entry temporarily removes the
 managed Wasm32 patch, runs `git pull --rebase --autostash`, updates initialized

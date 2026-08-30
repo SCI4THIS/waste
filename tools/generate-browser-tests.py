@@ -37,12 +37,19 @@ def collect_tests(test_root: Path):
         relative = path.relative_to(test_root).as_posix()
         parent = path.parent.relative_to(test_root).as_posix()
         group = parent if parent != "." else "root"
+        unsupported = relative.startswith("legacy/")
         tests.append(
             {
                 "path": relative,
                 "name": path.name,
                 "group": group,
                 "expectFailure": ".fail." in path.name,
+                "unsupported": unsupported,
+                "unsupportedReason": (
+                    "Legacy exception syntax is not supported by the current WebAssembly 3.0 interpreter"
+                    if unsupported
+                    else None
+                ),
                 "source": path.read_text(encoding="utf-8"),
             }
         )
@@ -68,6 +75,7 @@ HTML = r'''<!doctype html>
       --pass: #54d68b;
       --fail: #ff707c;
       --run: #ffd166;
+      --unsupported: #f0a43a;
     }
     * { box-sizing: border-box; }
     body {
@@ -121,6 +129,9 @@ HTML = r'''<!doctype html>
       overflow: clip;
       background: var(--panel);
     }
+    .group.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+    .group.unsupported { border-color: #875a22; }
+    .group.unsupported .group-header { background: #372817; }
     .group-header {
       display: flex;
       align-items: center;
@@ -138,9 +149,12 @@ HTML = r'''<!doctype html>
     .test.running .indicator { background: var(--run); animation: pulse 1s infinite alternate; }
     .test.pass .indicator { background: var(--pass); }
     .test.fail .indicator { background: var(--fail); }
+    .test.unsupported { background: #211a12; }
+    .test.unsupported .indicator { background: var(--unsupported); box-shadow: 0 0 0 3px #3b2b18; }
     .test-path { min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
     .duration { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
     .expected { margin-left: 8px; color: var(--muted); font: 11px system-ui, sans-serif; }
+    .unsupported-label { margin-left: 8px; color: var(--unsupported); font: 11px system-ui, sans-serif; font-weight: 700; }
     details { grid-column: 2 / 5; color: var(--muted); }
     pre { max-height: 280px; overflow: auto; padding: 10px; border-radius: 6px; background: #090c12; color: #cbd5e3; white-space: pre-wrap; }
     @keyframes pulse { to { opacity: .35; } }
@@ -167,12 +181,14 @@ HTML = r'''<!doctype html>
     <div class="notice">
       Each test runs in a fresh Web Worker containing the compiled OCaml reference interpreter.
       Expected <code>.fail.wast</code> rejections count as passes. A test times out after 120 seconds.
+      Orange legacy modules are unsupported by the current interpreter and are excluded from Test all.
     </div>
     <div id="groups"></div>
   </main>
   <script>
     "use strict";
     const PAYLOAD = __PAYLOAD__;
+    const SUPPORTED_TESTS = PAYLOAD.tests.filter(test => !test.unsupported);
     const TIMEOUT_MS = 120000;
     const results = new Map();
     let batchRunning = false;
@@ -189,7 +205,7 @@ HTML = r'''<!doctype html>
         };
         console.log = (...values) => output.push(values.map(format).join(" "));
         console.error = (...values) => output.push(values.map(format).join(" "));
-        globalThis.waste_argv = ["wasm", "-e", data.source];
+        globalThis.waste_argv = ["wasm", "-ca", "-e", data.source];
         globalThis.waste_exit_code = 0;
         const binary = atob(data.wasm);
         const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
@@ -232,16 +248,20 @@ HTML = r'''<!doctype html>
       for (const [groupName, tests] of groupedTests()) {
         const section = document.createElement("section");
         section.className = "group";
+        section.dataset.group = groupName;
+        const unsupportedGroup = tests.every(test => test.unsupported);
+        if (unsupportedGroup) section.classList.add("unsupported");
         const header = document.createElement("div");
         header.className = "group-header";
         const title = document.createElement("h2");
         title.textContent = groupName;
         const count = document.createElement("span");
         count.className = "group-count";
-        count.textContent = `${tests.length} tests`;
+        count.textContent = unsupportedGroup ?
+          `${tests.length} tests · unsupported` : `${tests.length} tests`;
         const button = document.createElement("button");
         button.type = "button";
-        button.textContent = "Test module";
+        button.textContent = unsupportedGroup ? "Test module anyway" : "Test module";
         button.addEventListener("click", () => runBatch(tests));
         header.append(title, count, button);
         section.append(header);
@@ -249,7 +269,7 @@ HTML = r'''<!doctype html>
         const list = document.createElement("div");
         for (const test of tests) {
           const row = document.createElement("div");
-          row.className = "test idle";
+          row.className = `test idle${test.unsupported ? " unsupported" : ""}`;
           row.dataset.path = test.path;
           const indicator = document.createElement("span");
           indicator.className = "indicator";
@@ -261,6 +281,13 @@ HTML = r'''<!doctype html>
             expected.className = "expected";
             expected.textContent = "expected rejection";
             path.append(expected);
+          }
+          if (test.unsupported) {
+            const unsupported = document.createElement("span");
+            unsupported.className = "unsupported-label";
+            unsupported.textContent = "unsupported legacy module";
+            unsupported.title = test.unsupportedReason;
+            path.append(unsupported);
           }
           const duration = document.createElement("span");
           duration.className = "duration";
@@ -282,6 +309,11 @@ HTML = r'''<!doctype html>
 
     function rowFor(test) {
       return [...document.querySelectorAll(".test")].find(row => row.dataset.path === test.path);
+    }
+
+    function groupFor(groupName) {
+      return [...document.querySelectorAll(".group")]
+        .find(section => section.dataset.group === groupName);
     }
 
     function formatDuration(milliseconds) {
@@ -333,6 +365,8 @@ HTML = r'''<!doctype html>
           name: test.name,
           group: test.group,
           expectedFailure: test.expectFailure,
+          unsupported: test.unsupported,
+          unsupportedReason: test.unsupportedReason,
           state,
           durationMs,
           completedAt: new Date().toISOString(),
@@ -346,12 +380,13 @@ HTML = r'''<!doctype html>
       let passed = 0;
       let failed = 0;
       let totalDuration = 0;
-      for (const result of results.values()) {
+      const supportedResults = [...results.values()].filter(result => !result.unsupported);
+      for (const result of supportedResults) {
         result.state === "pass" ? passed++ : failed++;
         totalDuration += result.durationMs;
       }
       document.querySelector("#summary").textContent =
-        `${results.size} / ${PAYLOAD.tests.length} completed · ${passed} passed · ${failed} failed · ${formatDuration(totalDuration)}`;
+        `${supportedResults.length} / ${SUPPORTED_TESTS.length} supported completed · ${passed} passed · ${failed} failed · ${formatDuration(totalDuration)} · ${PAYLOAD.tests.length - SUPPORTED_TESTS.length} unsupported excluded`;
       document.querySelector("#download-results").disabled = results.size === 0 || batchRunning;
     }
 
@@ -360,8 +395,9 @@ HTML = r'''<!doctype html>
       const orderedResults = PAYLOAD.tests
         .map(test => results.get(test.path))
         .filter(Boolean);
-      const passed = orderedResults.filter(result => result.state === "pass").length;
-      const failed = orderedResults.length - passed;
+      const supportedResults = orderedResults.filter(result => !result.unsupported);
+      const passed = supportedResults.filter(result => result.state === "pass").length;
+      const failed = supportedResults.length - passed;
       const report = {
         format: "waste-spec-test-results-v1",
         downloadedAt: new Date().toISOString(),
@@ -377,10 +413,13 @@ HTML = r'''<!doctype html>
         },
         summary: {
           available: PAYLOAD.tests.length,
+          supported: SUPPORTED_TESTS.length,
+          unsupported: PAYLOAD.tests.length - SUPPORTED_TESTS.length,
           completed: orderedResults.length,
+          completedSupported: supportedResults.length,
           passed,
           failed,
-          durationMs: orderedResults.reduce((sum, result) => sum + result.durationMs, 0)
+          durationMs: supportedResults.reduce((sum, result) => sum + result.durationMs, 0)
         },
         results: orderedResults
       };
@@ -432,17 +471,20 @@ HTML = r'''<!doctype html>
         output: raw.output || "",
         error: raw.error || ""
       });
-      button.disabled = false;
+      button.disabled = batchRunning;
       return passed;
     }
 
     async function runBatch(tests) {
       if (batchRunning) return;
       batchRunning = true;
-      document.querySelectorAll("header button, .group-header button").forEach(button => button.disabled = true);
+      document.querySelectorAll("button").forEach(button => button.disabled = true);
+      const section = tests.length ? groupFor(tests[0].group) : null;
+      section?.classList.add("active");
       try {
         for (const test of tests) await runTest(test);
       } finally {
+        section?.classList.remove("active");
         batchRunning = false;
         document.querySelectorAll("button").forEach(button => button.disabled = false);
         updateSummary();
@@ -454,11 +496,26 @@ HTML = r'''<!doctype html>
       testAllStartedAt = new Date();
       testAllFinishedAt = null;
       updateTestAllTiming();
+      batchRunning = true;
+      document.querySelectorAll("button").forEach(button => button.disabled = true);
       try {
-        await runBatch(PAYLOAD.tests);
+        for (const [groupName, tests] of groupedTests()) {
+          const supported = tests.filter(test => !test.unsupported);
+          if (supported.length === 0) continue;
+          const section = groupFor(groupName);
+          section?.classList.add("active");
+          try {
+            for (const test of supported) await runTest(test);
+          } finally {
+            section?.classList.remove("active");
+          }
+        }
       } finally {
+        batchRunning = false;
         testAllFinishedAt = new Date();
         updateTestAllTiming();
+        document.querySelectorAll("button").forEach(button => button.disabled = false);
+        updateSummary();
       }
     }
 
@@ -499,7 +556,8 @@ def main():
         "wasm": base64.b64encode(wasm_files[0].read_bytes()).decode("ascii"),
         "tests": tests,
     }
-    document = HTML.replace("__TEST_COUNT__", str(len(tests))).replace("__PAYLOAD__", script_json(payload))
+    supported_count = sum(not test["unsupported"] for test in tests)
+    document = HTML.replace("__TEST_COUNT__", str(supported_count)).replace("__PAYLOAD__", script_json(payload))
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(document, encoding="utf-8")
     print(f"Generated {output}")
