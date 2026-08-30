@@ -50,7 +50,14 @@ Useful non-interactive commands are:
 ./start.sh --patch-status
 ./start.sh --apply-i31
 ./start.sh --revert-i31
+./start.sh --update
 ```
+
+The **Safe pull/rebase and submodule update** menu entry temporarily removes the
+managed i31 patch, runs `git pull --rebase --autostash`, updates initialized
+submodules, and reapplies the patch only when the updated spec does not already
+contain it. It refuses to proceed over unmanaged submodule changes. Its latest
+transcript is stored in `update.log`.
 
 The generated loader and Wasm assets are the compiled command-line reference
 interpreter. A browser API for supplying WAT, presenting output, and controlling

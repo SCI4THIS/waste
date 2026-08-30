@@ -18,6 +18,7 @@ BUILD_ROOT="$REPO_ROOT/build/ocaml-wasm"
 STAGING_DIR="$BUILD_ROOT/staging/interpreter"
 DIST_DIR="$BUILD_ROOT/dist"
 LOG_FILE="$REPO_ROOT/build.log"
+UPDATE_LOG="$REPO_ROOT/update.log"
 
 SWITCH_NAME="${WASTE_OCAML_SWITCH:-waste-wasm}"
 OCAML_VERSION="${WASTE_OCAML_VERSION:-5.3.0}"
@@ -40,6 +41,7 @@ interpreter to WebAssembly.
   --patch-status   show the i31 compatibility patch status
   --apply-i31      apply the i31 int32 compatibility patch
   --revert-i31     revert the i31 int32 compatibility patch
+  --update         safely pull, update submodules, and restore the i31 patch
   --help           show this help
 
 Environment overrides:
@@ -335,6 +337,107 @@ i31_patch_menu() {
   done
 }
 
+restore_i31_patch_after_update() {
+  local state
+  state="$(i31_patch_status)"
+  case "$state" in
+    available)
+      git -C "$SPEC_DIR" apply "$I31_PATCH_FILE"
+      printf 'i31 patch: reapplied\n' >>"$UPDATE_LOG" ;;
+    applied)
+      printf 'i31 patch: already present in the updated source\n' >>"$UPDATE_LOG" ;;
+    *)
+      printf 'i31 patch: could not restore automatically (status: %s)\n' "$state" >>"$UPDATE_LOG"
+      return 1 ;;
+  esac
+}
+
+safe_repository_update() {
+  local original_patch_state
+  local patch_was_reverted=false
+  original_patch_state="$(i31_patch_status)"
+
+  if [[ "$original_patch_state" == "conflict" || "$original_patch_state" == "missing" ]]; then
+    show_message "Safe repository update" \
+      "Cannot update safely while the i31 patch status is '$original_patch_state'. Resolve the patch state first."
+    return 1
+  fi
+
+  if ! confirm "Perform a safe repository update?\n\n1. Temporarily revert the managed i31 patch if needed\n2. git pull --rebase --autostash\n3. git submodule update --init --recursive\n4. Reapply the i31 patch if upstream does not contain it\n\nNote: Git autostash does not include untracked files."; then
+    return 1
+  fi
+
+  if [[ "$original_patch_state" != "empty" ]] &&
+     [[ -n "$(git -C "$SPEC_DIR" status --porcelain 2>/dev/null)" ]]; then
+    if [[ "$original_patch_state" != "applied" ]]; then
+      show_message "Safe repository update" \
+        "The spec submodule contains changes other than the managed i31 patch. Commit, stash, or revert them before updating."
+      return 1
+    fi
+
+    if ! git -C "$SPEC_DIR" apply --reverse "$I31_PATCH_FILE"; then
+      show_message "Safe repository update" "Could not temporarily revert the i31 patch."
+      return 1
+    fi
+    patch_was_reverted=true
+
+    if [[ -n "$(git -C "$SPEC_DIR" status --porcelain 2>/dev/null)" ]]; then
+      git -C "$SPEC_DIR" apply "$I31_PATCH_FILE" || true
+      show_message "Safe repository update" \
+        "The submodule also contains unmanaged changes. The i31 patch was restored; commit, stash, or revert the other changes before updating."
+      return 1
+    fi
+  fi
+
+  : >"$UPDATE_LOG"
+  {
+    printf 'WASTE safe repository update\n'
+    printf 'Started: %s\n' "$(date --iso-8601=seconds)"
+    printf 'Original i31 patch state: %s\n\n' "$original_patch_state"
+    printf '$ git pull --rebase --autostash\n'
+  } >>"$UPDATE_LOG"
+
+  if have_command whiptail && [[ -t 0 && -t 1 ]]; then
+    whiptail --title "Safe repository update" --infobox \
+      "Pulling and rebasing the main repository...\n\nLog: $UPDATE_LOG" 9 76
+  fi
+
+  if ! git -C "$REPO_ROOT" pull --rebase --autostash >>"$UPDATE_LOG" 2>&1; then
+    if [[ "$patch_was_reverted" == true ]]; then
+      restore_i31_patch_after_update || true
+    fi
+    show_message "Safe repository update failed" \
+      "git pull failed. The managed patch was restored when possible.\n\nLog: $UPDATE_LOG"
+    return 1
+  fi
+
+  printf '\n$ git submodule update --init --recursive\n' >>"$UPDATE_LOG"
+  if ! git -C "$REPO_ROOT" submodule update --init --recursive >>"$UPDATE_LOG" 2>&1; then
+    if [[ "$patch_was_reverted" == true ]]; then
+      restore_i31_patch_after_update || true
+    fi
+    show_message "Safe repository update incomplete" \
+      "The main repository updated, but the submodule update failed. The managed patch was restored when possible.\n\nLog: $UPDATE_LOG"
+    return 1
+  fi
+
+  if [[ "$patch_was_reverted" == true ]]; then
+    if ! restore_i31_patch_after_update; then
+      show_message "Repository updated; patch needs attention" \
+        "The repository and submodule updated, but the i31 patch could not be reapplied automatically.\n\nPatch status: $(i31_patch_status)\nLog: $UPDATE_LOG"
+      return 1
+    fi
+  fi
+
+  {
+    printf '\nCompleted: %s\n' "$(date --iso-8601=seconds)"
+    printf 'Current i31 patch state: %s\n' "$(i31_patch_status)"
+  } >>"$UPDATE_LOG"
+
+  show_message "Safe repository update complete" \
+    "The repository and submodules are updated.\n\ni31 patch: $(i31_patch_status)\nLog: $UPDATE_LOG"
+}
+
 install_missing_dependencies() {
   check_dependencies || true
   if ((${#MISSING_SYSTEM[@]})); then
@@ -474,9 +577,10 @@ main_menu() {
     local choice
     patch_state="$(i31_patch_status)"
     choice="$(whiptail --title "OCaml to WebAssembly" --menu \
-      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 20 82 5 \
+      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 22 84 6 \
       compile "Compile the OCaml interpreter to Wasm" \
       patch "Manage i31 int32 patch [$patch_state]" \
+      update "Safe pull/rebase and submodule update" \
       status "Show dependency status" \
       log "Show the last build log" \
       quit "Exit" 3>&1 1>&2 2>&3)" || return 0
@@ -484,6 +588,7 @@ main_menu() {
     case "$choice" in
       compile) compile_interpreter || true ;;
       patch) i31_patch_menu ;;
+      update) safe_repository_update || true ;;
       status)
         check_dependencies || true
         show_message "Dependency status" "$STATUS_TEXT" ;;
@@ -522,6 +627,7 @@ main() {
     --patch-status) i31_patch_status ;;
     --apply-i31) apply_i31_patch ;;
     --revert-i31) revert_i31_patch ;;
+    --update) safe_repository_update ;;
     wizard)
       dependency_menu || return 1
       main_menu ;;
