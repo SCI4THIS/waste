@@ -102,7 +102,9 @@ HTML = r'''<!doctype html>
     button:hover:not(:disabled) { border-color: var(--accent); }
     button:disabled { cursor: wait; opacity: .55; }
     #test-all { background: #14568a; border-color: #2580bd; font-weight: 650; }
+    #download-results { background: #26374d; }
     #summary { min-width: 235px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    #test-all-timing { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
     main { width: min(1180px, calc(100% - 32px)); margin: 24px auto 60px; }
     .notice {
       margin-bottom: 18px;
@@ -157,6 +159,8 @@ HTML = r'''<!doctype html>
   <header>
     <h1>WASTE · embedded specification tests</h1>
     <div id="summary">0 / __TEST_COUNT__ completed</div>
+    <div id="test-all-timing">Started at: — · Finished at: —</div>
+    <button id="download-results" type="button" disabled>Download results</button>
     <button id="test-all" type="button">Test all</button>
   </header>
   <main>
@@ -172,6 +176,8 @@ HTML = r'''<!doctype html>
     const TIMEOUT_MS = 120000;
     const results = new Map();
     let batchRunning = false;
+    let testAllStartedAt = null;
+    let testAllFinishedAt = null;
 
     const workerProgram = String.raw`
       "use strict";
@@ -269,7 +275,8 @@ HTML = r'''<!doctype html>
         section.append(list);
         container.append(section);
       }
-      document.querySelector("#test-all").addEventListener("click", () => runBatch(PAYLOAD.tests));
+      document.querySelector("#test-all").addEventListener("click", runTestAll);
+      document.querySelector("#download-results").addEventListener("click", downloadResults);
       updateSummary();
     }
 
@@ -285,7 +292,23 @@ HTML = r'''<!doctype html>
       return `${minutes}m ${seconds}s`;
     }
 
-    function setResult(test, state, detail = "", durationMs = null) {
+    function formatLocalTime(date) {
+      return date.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+      });
+    }
+
+    function updateTestAllTiming() {
+      const started = testAllStartedAt ? formatLocalTime(testAllStartedAt) : "—";
+      const finished = testAllFinishedAt ? formatLocalTime(testAllFinishedAt) : "—";
+      document.querySelector("#test-all-timing").textContent =
+        `Started at: ${started} · Finished at: ${finished}`;
+    }
+
+    function setResult(test, state, detail = "", durationMs = null, record = {}) {
       const row = rowFor(test);
       row.classList.remove("idle", "running", "pass", "fail");
       row.classList.add(state);
@@ -305,7 +328,16 @@ HTML = r'''<!doctype html>
       }
       if (state === "running") results.delete(test.path);
       if (state === "pass" || state === "fail") {
-        results.set(test.path, {state, durationMs});
+        results.set(test.path, {
+          path: test.path,
+          name: test.name,
+          group: test.group,
+          expectedFailure: test.expectFailure,
+          state,
+          durationMs,
+          completedAt: new Date().toISOString(),
+          ...record
+        });
       }
       updateSummary();
     }
@@ -320,6 +352,48 @@ HTML = r'''<!doctype html>
       }
       document.querySelector("#summary").textContent =
         `${results.size} / ${PAYLOAD.tests.length} completed · ${passed} passed · ${failed} failed · ${formatDuration(totalDuration)}`;
+      document.querySelector("#download-results").disabled = results.size === 0 || batchRunning;
+    }
+
+    function downloadResults() {
+      if (results.size === 0 || batchRunning) return;
+      const orderedResults = PAYLOAD.tests
+        .map(test => results.get(test.path))
+        .filter(Boolean);
+      const passed = orderedResults.filter(result => result.state === "pass").length;
+      const failed = orderedResults.length - passed;
+      const report = {
+        format: "waste-spec-test-results-v1",
+        downloadedAt: new Date().toISOString(),
+        userAgent: navigator.userAgent,
+        testAll: {
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          startedAt: testAllStartedAt?.toISOString() ?? null,
+          startedAtLocal: testAllStartedAt ? formatLocalTime(testAllStartedAt) : null,
+          finishedAt: testAllFinishedAt?.toISOString() ?? null,
+          finishedAtLocal: testAllFinishedAt ? formatLocalTime(testAllFinishedAt) : null,
+          durationMs: testAllStartedAt && testAllFinishedAt ?
+            testAllFinishedAt - testAllStartedAt : null
+        },
+        summary: {
+          available: PAYLOAD.tests.length,
+          completed: orderedResults.length,
+          passed,
+          failed,
+          durationMs: orderedResults.reduce((sum, result) => sum + result.durationMs, 0)
+        },
+        results: orderedResults
+      };
+      const blob = new Blob([JSON.stringify(report, null, 2) + "\n"], {type: "application/json"});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      link.href = url;
+      link.download = `waste-spec-results-${timestamp}.json`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
     }
 
     function execute(test) {
@@ -353,7 +427,11 @@ HTML = r'''<!doctype html>
       const passed = test.expectFailure ? raw.exitCode === 1 : raw.ok;
       const expectation = test.expectFailure && raw.exitCode === 1 ? "Expected rejection observed." : "";
       const detail = [expectation, raw.output, raw.error].filter(Boolean).join("\n\n");
-      setResult(test, passed ? "pass" : "fail", detail, durationMs);
+      setResult(test, passed ? "pass" : "fail", detail, durationMs, {
+        exitCode: raw.exitCode ?? null,
+        output: raw.output || "",
+        error: raw.error || ""
+      });
       button.disabled = false;
       return passed;
     }
@@ -367,6 +445,20 @@ HTML = r'''<!doctype html>
       } finally {
         batchRunning = false;
         document.querySelectorAll("button").forEach(button => button.disabled = false);
+        updateSummary();
+      }
+    }
+
+    async function runTestAll() {
+      if (batchRunning) return;
+      testAllStartedAt = new Date();
+      testAllFinishedAt = null;
+      updateTestAllTiming();
+      try {
+        await runBatch(PAYLOAD.tests);
+      } finally {
+        testAllFinishedAt = new Date();
+        updateTestAllTiming();
       }
     }
 

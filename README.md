@@ -62,8 +62,11 @@ The **Generate embedded browser test dashboard** entry creates the self-containe
 and every `.wast` file under `submodules/wasm-spec/test`, groups tests by their
 source directory, and provides Run, Test module, and Test all controls with live
 pass/fail indicators. Each result shows its elapsed time, and the header shows
-the cumulative time for completed tests. Every test gets a fresh Web Worker so
-failures remain isolated.
+the cumulative time for completed tests. A Download results button exports a
+JSON report with the summary, timings, exit codes, captured output, and errors.
+Test all records and displays its local start and finish times; both timestamps
+are included in the downloaded report.
+Every test gets a fresh Web Worker so failures remain isolated.
 
 The **Safe pull/rebase and submodule update** menu entry temporarily removes the
 managed Wasm32 patch, runs `git pull --rebase --autostash`, updates initialized
