@@ -1,0 +1,43 @@
+diff --git a/interpreter/runtime/i31.ml b/interpreter/runtime/i31.ml
+--- a/interpreter/runtime/i31.ml
++++ b/interpreter/runtime/i31.ml
+@@ -1,17 +1,16 @@
+ open Types
+ open Value
+ 
+-type i31 = int
++type i31 = int32
+ type t = i31
+ 
+ type ref_ += I31Ref of i31
+ 
+-let of_i32 i = Int32.to_int i land 0x7fff_ffff
++let of_i32 i = Int32.logand i 0x7fff_ffffl
+ let to_i32 sx i =
+-  let i' = Int32.of_int i in
+   match sx with
+-  | Pack.U -> i'
+-  | Pack.S -> Int32.(shift_right (shift_left i' 1) 1)
++  | Pack.U -> i
++  | Pack.S -> Int32.(shift_right (shift_left i 1) 1)
+ 
+ let () =
+   let eq_ref' = !Value.eq_ref' in
+@@ -29,5 +28,5 @@ let () =
+ let () =
+   let string_of_ref' = !Value.string_of_ref' in
+   Value.string_of_ref' := function
+-    | I31Ref i -> "(i31 " ^ string_of_int i ^ ")"
++    | I31Ref i -> "(i31 " ^ Int32.to_string i ^ ")"
+     | r -> string_of_ref' r
+diff --git a/interpreter/runtime/i31.mli b/interpreter/runtime/i31.mli
+--- a/interpreter/runtime/i31.mli
++++ b/interpreter/runtime/i31.mli
+@@ -1,6 +1,6 @@
+ open Value
+ 
+-type i31 = int
++type i31 = int32
+ type t = i31
+ 
+ type ref_ += I31Ref of i31
