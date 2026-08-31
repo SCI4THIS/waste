@@ -112,6 +112,16 @@ HTML = r'''<!doctype html>
     #test-all { background: #14568a; border-color: #2580bd; font-weight: 650; }
     #download-results { background: #26374d; }
     #summary { min-width: 235px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    #execution-mode { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    #quantum {
+      width: 92px;
+      border: 1px solid #40506a;
+      border-radius: 6px;
+      padding: 6px 8px;
+      background: #111824;
+      color: var(--text);
+      font: inherit;
+    }
     #test-all-timing { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
     main { width: min(1180px, calc(100% - 32px)); margin: 24px auto 60px; }
     .notice {
@@ -172,6 +182,7 @@ HTML = r'''<!doctype html>
 <body>
   <header>
     <h1>WASTE · embedded specification tests</h1>
+    <div id="execution-mode"></div>
     <div id="summary">0 / __TEST_COUNT__ completed</div>
     <div id="test-all-timing">Started at: — · Finished at: —</div>
     <button id="download-results" type="button" disabled>Download results</button>
@@ -179,8 +190,8 @@ HTML = r'''<!doctype html>
   </header>
   <main>
     <div class="notice">
-      Each test runs in a fresh Web Worker containing the compiled OCaml reference interpreter.
-      Expected <code>.fail.wast</code> rejections count as passes. A test times out after 120 seconds.
+      __EXECUTION_NOTICE__
+      Expected <code>.fail.wast</code> rejections count as passes. __TIMEOUT_NOTICE__
       Orange legacy modules are unsupported by the current interpreter and are excluded from Test all.
     </div>
     <div id="groups"></div>
@@ -189,6 +200,9 @@ HTML = r'''<!doctype html>
     "use strict";
     const PAYLOAD = __PAYLOAD__;
     const SUPPORTED_TESTS = PAYLOAD.tests.filter(test => !test.unsupported);
+    const EXECUTION_MODE = __EXECUTION_MODE__;
+    const DEFAULT_QUANTUM = __DEFAULT_QUANTUM__;
+    const THREAD_COUNT = EXECUTION_MODE === "threaded" ? SUPPORTED_TESTS.length : 1;
     const TIMEOUT_MS = 120000;
     const results = new Map();
     let batchRunning = false;
@@ -199,13 +213,44 @@ HTML = r'''<!doctype html>
       "use strict";
       self.onmessage = async ({data}) => {
         const output = [];
+        const taskOutput = data.tests ? data.tests.map(() => []) : null;
+        let activeTask = null;
         const format = value => {
           if (typeof value === "string") return value;
           try { return JSON.stringify(value); } catch (_) { return String(value); }
         };
-        console.log = (...values) => output.push(values.map(format).join(" "));
-        console.error = (...values) => output.push(values.map(format).join(" "));
-        globalThis.waste_argv = ["wasm", "-ca", "-e", data.source];
+        const capture = values => {
+          const message = values.map(format).join(" ").trimEnd();
+          const task = /^WASTE_TASK (\d+)$/.exec(message);
+          if (task) {
+            activeTask = Number(task[1]);
+            return;
+          }
+          const result = /^WASTE_RESULT (\d+) ([01])$/.exec(message);
+          if (result) {
+            const index = Number(result[1]);
+            self.postMessage({
+              type: "result",
+              index,
+              path: data.tests[index].path,
+              ok: result[2] === "0",
+              output: taskOutput[index].join("\n")
+            });
+            return;
+          }
+          if (taskOutput && activeTask !== null) taskOutput[activeTask].push(message);
+          else output.push(message);
+        };
+        console.log = (...values) => capture(values);
+        console.error = (...values) => capture(values);
+        if (data.tests) {
+          globalThis.waste_argv = ["wasm", "-ca", "--schedule"];
+          if (data.failLast) globalThis.waste_argv.push("--fail-last");
+          globalThis.waste_argv.push("-q", String(data.quantum));
+          for (const test of data.tests) globalThis.waste_argv.push("-e", test.source);
+        } else {
+          globalThis.waste_argv = ["wasm", "-ca", "-e", data.source];
+        }
         globalThis.waste_exit_code = 0;
         const binary = atob(data.wasm);
         const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
@@ -219,12 +264,14 @@ HTML = r'''<!doctype html>
           }
           await completion;
           self.postMessage({
+            type: "done",
             ok: globalThis.waste_exit_code === 0,
             output: output.join("\n"),
             exitCode: globalThis.waste_exit_code
           });
         } catch (error) {
           self.postMessage({
+            type: "done",
             ok: false,
             output: output.join("\n"),
             error: error && (error.stack || error.message) || String(error),
@@ -244,6 +291,20 @@ HTML = r'''<!doctype html>
     }
 
     function render() {
+      const executionMode = document.querySelector("#execution-mode");
+      if (EXECUTION_MODE === "threaded") {
+        executionMode.append(`Cooperative threads: ${THREAD_COUNT} · quantum: `);
+        const quantum = document.createElement("input");
+        quantum.id = "quantum";
+        quantum.type = "number";
+        quantum.min = "1";
+        quantum.step = "1000";
+        quantum.value = String(DEFAULT_QUANTUM);
+        quantum.title = "Interpreter steps executed by a test before switching";
+        executionMode.append(quantum, " steps");
+      } else {
+        executionMode.textContent = "Sequential threads: 1";
+      }
       const container = document.querySelector("#groups");
       for (const [groupName, tests] of groupedTests()) {
         const section = document.createElement("section");
@@ -398,10 +459,16 @@ HTML = r'''<!doctype html>
       const supportedResults = orderedResults.filter(result => !result.unsupported);
       const passed = supportedResults.filter(result => result.state === "pass").length;
       const failed = supportedResults.length - passed;
-      const report = {
-        format: "waste-spec-test-results-v1",
-        downloadedAt: new Date().toISOString(),
-        userAgent: navigator.userAgent,
+        const report = {
+          format: "waste-spec-test-results-v1",
+          downloadedAt: new Date().toISOString(),
+          userAgent: navigator.userAgent,
+          execution: {
+            mode: EXECUTION_MODE,
+            threadCount: THREAD_COUNT,
+            instructionQuantum: EXECUTION_MODE === "threaded" ?
+              Math.max(1, Number(document.querySelector("#quantum")?.value) || DEFAULT_QUANTUM) : null
+          },
         testAll: {
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           startedAt: testAllStartedAt?.toISOString() ?? null,
@@ -455,6 +522,77 @@ HTML = r'''<!doctype html>
       });
     }
 
+    function executeCooperatively(tests, onResult) {
+      return new Promise(resolve => {
+        const workerUrl = URL.createObjectURL(new Blob([workerProgram], {type: "text/javascript"}));
+        const worker = new Worker(workerUrl);
+        let finished = false;
+        const finish = result => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timer);
+          worker.terminate();
+          URL.revokeObjectURL(workerUrl);
+          resolve(result);
+        };
+        const timer = setTimeout(() => finish({
+          ok: false,
+          error: "Cooperative test run timed out after 30 minutes"
+        }), 30 * 60 * 1000);
+        worker.onerror = event => finish({ok: false, error: event.message || "Worker error"});
+        worker.onmessage = event => {
+          if (event.data.type === "result") onResult(event.data);
+          else if (event.data.type === "done") finish(event.data);
+        };
+        const quantum = Math.max(1, Number(document.querySelector("#quantum")?.value) || DEFAULT_QUANTUM);
+        const failLast = tests.some(test => test.path === "core/custom.wast");
+        const ordered = failLast ? [
+          ...tests.filter(test => test.path !== "core/custom.wast"),
+          ...tests.filter(test => test.path === "core/custom.wast")
+        ] : tests;
+        worker.postMessage({
+          loader: PAYLOAD.loader,
+          wasm: PAYLOAD.wasm,
+          tests: ordered,
+          quantum,
+          failLast
+        });
+      });
+    }
+
+    async function runCooperativeBatch(tests) {
+      const startedAt = performance.now();
+      const pending = new Set(tests.map(test => test.path));
+      for (const test of tests) setResult(test, "running");
+      const raw = await executeCooperatively(tests, result => {
+        const test = tests.find(candidate => candidate.path === result.path);
+        if (!test || !pending.delete(test.path)) return;
+        const durationMs = performance.now() - startedAt;
+        const passed = test.expectFailure ? !result.ok : result.ok;
+        const expectation = test.expectFailure && !result.ok ? "Expected rejection observed." : "";
+        const knownFailure = test.path === "core/custom.wast" && !result.ok ?
+          "Known failure: -c custom recursively dispatches a binary section named custom. The cooperative runner records this expected result without entering the non-terminating handler." : "";
+        const detail = [expectation, knownFailure, result.output].filter(Boolean).join("\n\n");
+        setResult(test, passed ? "pass" : "fail", detail, durationMs, {
+          exitCode: result.ok ? 0 : 1,
+          output: result.output || "",
+          error: knownFailure
+        });
+      });
+      if (pending.size) {
+        const detail = raw.error || raw.output || "The cooperative interpreter stopped before reporting this test.";
+        for (const test of tests) {
+          if (!pending.has(test.path)) continue;
+          setResult(test, "fail", detail, performance.now() - startedAt, {
+            exitCode: raw.exitCode ?? null,
+            output: raw.output || "",
+            error: raw.error || ""
+          });
+        }
+      }
+      return pending.size === 0 && [...tests].every(test => results.get(test.path)?.state === "pass");
+    }
+
     async function runTest(test) {
       const row = rowFor(test);
       const button = row.querySelector("button");
@@ -482,7 +620,8 @@ HTML = r'''<!doctype html>
       const section = tests.length ? groupFor(tests[0].group) : null;
       section?.classList.add("active");
       try {
-        for (const test of tests) await runTest(test);
+        if (EXECUTION_MODE === "threaded") await runCooperativeBatch(tests);
+        else for (const test of tests) await runTest(test);
       } finally {
         section?.classList.remove("active");
         batchRunning = false;
@@ -499,15 +638,26 @@ HTML = r'''<!doctype html>
       batchRunning = true;
       document.querySelectorAll("button").forEach(button => button.disabled = true);
       try {
-        for (const [groupName, tests] of groupedTests()) {
-          const supported = tests.filter(test => !test.unsupported);
-          if (supported.length === 0) continue;
-          const section = groupFor(groupName);
-          section?.classList.add("active");
+        if (EXECUTION_MODE === "threaded") {
+          document.querySelectorAll(".group:not(.unsupported)")
+            .forEach(section => section.classList.add("active"));
           try {
-            for (const test of supported) await runTest(test);
+            await runCooperativeBatch(SUPPORTED_TESTS);
           } finally {
-            section?.classList.remove("active");
+            document.querySelectorAll(".group")
+              .forEach(section => section.classList.remove("active"));
+          }
+        } else {
+          for (const [groupName, tests] of groupedTests()) {
+            const supported = tests.filter(test => !test.unsupported);
+            if (supported.length === 0) continue;
+            const section = groupFor(groupName);
+            section?.classList.add("active");
+            try {
+              for (const test of supported) await runTest(test);
+            } finally {
+              section?.classList.remove("active");
+            }
           }
         }
       } finally {
@@ -530,14 +680,21 @@ def main():
     parser = argparse.ArgumentParser(description="Generate the embedded WASTE browser test dashboard")
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--mode", choices=("sequential", "threaded"), default="sequential")
+    parser.add_argument("--quantum", type=int, default=10_000)
     args = parser.parse_args()
 
+    if args.quantum <= 0:
+        parser.error("--quantum must be positive")
+
     root = args.repo_root.resolve()
-    dist = root / "build" / "ocaml-wasm" / "dist"
+    dist_name = "dist-threaded" if args.mode == "threaded" else "dist"
+    dist = root / "build" / "ocaml-wasm" / dist_name
     loader_path = dist / "wasm_cli.bc.wasm.js"
     asset_dir = dist / "wasm_cli.bc.wasm.assets"
     test_root = root / "submodules" / "wasm-spec" / "test"
-    output = args.output or root / "build" / "ocaml-wasm" / "browser-tests.html"
+    default_name = "browser-tests-threaded.html" if args.mode == "threaded" else "browser-tests.html"
+    output = args.output or root / "build" / "ocaml-wasm" / default_name
 
     if not loader_path.is_file():
         raise SystemExit(f"compiled loader not found: {loader_path}")
@@ -557,7 +714,28 @@ def main():
         "tests": tests,
     }
     supported_count = sum(not test["unsupported"] for test in tests)
-    document = HTML.replace("__TEST_COUNT__", str(supported_count)).replace("__PAYLOAD__", script_json(payload))
+    document = (
+        HTML.replace("__TEST_COUNT__", str(supported_count))
+        .replace(
+            "__EXECUTION_NOTICE__",
+            (
+                "Test all runs every supported test as a cooperative thread inside one compiled OCaml WebAssembly interpreter instance. Logical threads switch after the configured instruction quantum."
+                if args.mode == "threaded"
+                else "Each test runs in a fresh Web Worker containing the compiled OCaml reference interpreter. Thread count is fixed at 1."
+            ),
+        )
+        .replace(
+            "__TIMEOUT_NOTICE__",
+            (
+                "Individual runs time out after 120 seconds; cooperative batches time out after 30 minutes."
+                if args.mode == "threaded"
+                else "A test times out after 120 seconds."
+            ),
+        )
+        .replace("__PAYLOAD__", script_json(payload))
+        .replace("__EXECUTION_MODE__", script_json(args.mode))
+        .replace("__DEFAULT_QUANTUM__", str(args.quantum))
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(document, encoding="utf-8")
     print(f"Generated {output}")

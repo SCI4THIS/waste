@@ -128,3 +128,234 @@ diff --git a/interpreter/script/run.ml b/interpreter/script/run.ml
  
    let instantiate m ims =
      try Ok (result Eval.init m ims) with
+diff --git a/interpreter/exec/eval.ml b/interpreter/exec/eval.ml
+--- a/interpreter/exec/eval.ml
++++ b/interpreter/exec/eval.ml
+@@ -19,6 +19,27 @@ exception Crash = Crash.Error (* failure that cannot happen in valid code *)
+ exception Exhaustion = Exhaustion.Error
+ exception Exception of region * Exn.t
+ 
++type _ Effect.t += Yield : unit Effect.t
++
++let quantum = ref 0
++let remaining = ref 0
++
++let set_quantum n =
++  if n < 0 then invalid_arg "Eval.set_quantum";
++  quantum := n;
++  remaining := n
++
++let reset_quantum () = remaining := !quantum
++
++let checkpoint () =
++  if !quantum > 0 then begin
++    if !remaining <= 1 then begin
++      remaining := !quantum;
++      Effect.perform Yield
++    end else
++      decr remaining
++  end
++
+ let table_error at = function
+   | Table.Bounds -> "out of bounds table access"
+   | Table.SizeOverflow -> "table size overflow"
+@@ -176,6 +197,7 @@ let array_oob a i n =
+     (Convert.I64_.extend_i32_u (Aggr.array_length a))
+ 
+ let rec step (c : config) : config =
++  checkpoint ();
+   let vs, es = c.code in
+   let e = List.hd es in
+   let vs', es' =
+diff --git a/interpreter/exec/eval.mli b/interpreter/exec/eval.mli
+--- a/interpreter/exec/eval.mli
++++ b/interpreter/exec/eval.mli
+@@ -7,5 +7,10 @@ exception Crash of Source.region * string
+ exception Exhaustion of Source.region * string
+ exception Exception of Source.region * Exn.t
+ 
++type _ Effect.t += Yield : unit Effect.t
++
++val set_quantum : int -> unit
++val reset_quantum : unit -> unit
++
+ val init : Ast.module_ -> externinst list -> moduleinst (* raises Link, Trap, Exception *)
+ val invoke : funcinst -> value list -> value list (* raises Trap, Exception *)
+diff --git a/interpreter/main/main.ml b/interpreter/main/main.ml
+--- a/interpreter/main/main.ml
++++ b/interpreter/main/main.ml
+@@ -20,6 +20,10 @@ let usage = "Usage: " ^ name ^ " [option] [file ...]"
+ let args = ref []
+ let add_arg source = args := !args @ [source]
+ 
++let schedule = ref false
++let quantum = ref 10_000
++let fail_last = ref false
++
+ let customs = ref []
+ let add_custom name =
+   let n = Utf8.decode name in
+@@ -42,6 +46,12 @@ let argspec = Arg.align
+     " write module to file";
+   "-b", Arg.Int (fun n -> Flags.budget := n),
+     " configure call depth budget (default is " ^ string_of_int !Flags.budget ^ ")";
++  "-q", Arg.Int (fun n -> quantum := n),
++    " configure cooperative scheduler instruction quantum (default is 10000)";
++  "--schedule", Arg.Set schedule,
++    " run all inputs as isolated cooperative threads";
++  "--fail-last", Arg.Set fail_last,
++    " report the final scheduled input as a known failure without executing it";
+   "-w", Arg.Int (fun n -> Flags.width := n),
+     " configure output width (default is " ^ string_of_int !Flags.width ^ ")";
+   "-c", Arg.String add_custom,
+@@ -58,13 +68,98 @@ let argspec = Arg.align
+   "-v", Arg.Unit banner, " show version"
+ ]
+ 
++type slice =
++  | Finished of bool
++  | Suspended of (unit -> slice)
++
++type task =
++{
++  id : int;
++  mutable state : Run.state;
++  mutable resume : unit -> slice;
++}
++
++let run_slice f =
++  Effect.Deep.try_with f ()
++  {
++    Effect.Deep.effc = fun (type a) (eff : a Effect.t) ->
++      match eff with
++      | Eval.Yield ->
++        Some (fun (continuation : (a, slice) Effect.Deep.continuation) ->
++          Suspended (fun () -> Effect.Deep.continue continuation ()))
++      | _ -> None
++  }
++
++let report_task id success =
++  Printf.printf "WASTE_RESULT %d %d\n%!" id (if success then 0 else 1)
++
++let report_task_slice id =
++  Printf.printf "WASTE_TASK %d\n%!" id
++
++let run_scheduled sources =
++  if !quantum <= 0 then begin
++    prerr_endline "option -q: instruction quantum must be positive";
++    false
++  end else begin
++    Eval.set_quantum !quantum;
++    let initial_state = Run.save_state () in
++    let tasks = Queue.create () in
++    let deferred = ref None in
++    let last = List.length sources - 1 in
++    List.iteri (fun id source ->
++      let task =
++        {id; state = initial_state;
++         resume = (fun () -> run_slice (fun () -> Finished (Run.run_string source)))}
++      in
++      if !fail_last && id = last then deferred := Some task else
++      Queue.add task tasks
++    ) sources;
++    let success = ref true in
++    let run_ready_tasks () =
++      while not (Queue.is_empty tasks) do
++        let task = Queue.take tasks in
++        Run.restore_state task.state;
++        Eval.reset_quantum ();
++        report_task_slice task.id;
++        let slice =
++          try task.resume () with exn ->
++            flush_all ();
++            prerr_endline
++              (Sys.argv.(0) ^ ": task " ^ string_of_int task.id ^
++               " uncaught exception " ^ Printexc.to_string exn);
++            Printexc.print_backtrace stderr;
++            Finished false
++        in
++        task.state <- Run.save_state ();
++        match slice with
++        | Finished ok ->
++          if not ok then success := false;
++          report_task task.id ok
++        | Suspended resume ->
++          task.resume <- resume;
++          Queue.add task tasks
++      done
++    in
++    run_ready_tasks ();
++    Option.iter (fun task ->
++      success := false;
++      report_task task.id false
++    ) !deferred;
++    Run.restore_state initial_state;
++    Eval.set_quantum 0;
++    !success
++  end
++
+ let () =
+   Printexc.record_backtrace true;
+   try
+     Arg.parse argspec
+       (fun file -> add_arg ("(input " ^ quote file ^ ")")) usage;
+     configure !customs;
+-    List.iter (fun arg -> if not (Run.run_string arg) then exit 1) !args;
++    if !schedule then begin
++      if not (run_scheduled !args) then exit 1
++    end else
++      List.iter (fun arg -> if not (Run.run_string arg) then exit 1) !args;
+     if !args = [] then Flags.interactive := true;
+     if !Flags.interactive then begin
+       Flags.print_sig := true;
+diff --git a/interpreter/script/runner.ml b/interpreter/script/runner.ml
+--- a/interpreter/script/runner.ml
++++ b/interpreter/script/runner.ml
+@@ -314,6 +314,26 @@ let modules : (Ast.module_ * Custom.section list) Map.t ref = ref Map.empty
+ let instances : Engine.moduleinst Map.t ref = ref Map.empty
+ let registry : (Ast.name -> Types.externtype -> Engine.externinst option) Map.t ref = ref Map.empty
+ 
++type state =
++{
++  quote : script;
++  scripts : script Map.t;
++  modules : (Ast.module_ * Custom.section list) Map.t;
++  instances : Engine.moduleinst Map.t;
++  registry : (Ast.name -> Types.externtype -> Engine.externinst option) Map.t;
++}
++
++let save_state () =
++  {quote = !quote; scripts = !scripts; modules = !modules;
++   instances = !instances; registry = !registry}
++
++let restore_state state =
++  quote := state.quote;
++  scripts := state.scripts;
++  modules := state.modules;
++  instances := state.instances;
++  registry := state.registry
++
+ let bind category map x_opt y =
+   let map' =
+     match x_opt with
+diff --git a/interpreter/script/runner.mli b/interpreter/script/runner.mli
+--- a/interpreter/script/runner.mli
++++ b/interpreter/script/runner.mli
+@@ -1,5 +1,7 @@
+ module Make (Engine : Embed.Engine) :
+ sig
++  type state
++
+   val register_instance : Ast.name -> Engine.moduleinst -> unit
+   val register_virtual : Ast.name ->
+     (Ast.name -> Types.externtype -> Engine.externinst option) ->
+@@ -9,6 +11,9 @@ sig
+   val run_file : string -> bool
+   val run_stdin : unit -> unit
+ 
++  val save_state : unit -> state
++  val restore_state : state -> unit
++
+   (* Currently used by SpecTec AL runner, should be ported to functor *)
+   val assert_message : Source.region -> string -> string -> string -> unit
+   val assert_results :

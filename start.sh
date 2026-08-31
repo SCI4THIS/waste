@@ -17,11 +17,14 @@ I31_PATCH_FILE="$REPO_ROOT/submodules/wasm-spec-i31-int32.patch"
 BUILD_ROOT="$REPO_ROOT/build/ocaml-wasm"
 STAGING_DIR="$BUILD_ROOT/staging/interpreter"
 DIST_DIR="$BUILD_ROOT/dist"
+THREADED_DIST_DIR="$BUILD_ROOT/dist-threaded"
 LOG_FILE="$REPO_ROOT/build.log"
 UPDATE_LOG="$REPO_ROOT/update.log"
 BROWSER_TEST_GENERATOR="$REPO_ROOT/tools/generate-browser-tests.py"
 BROWSER_TEST_HTML="$BUILD_ROOT/browser-tests.html"
+BROWSER_THREADED_HTML="$BUILD_ROOT/browser-tests-threaded.html"
 HTML_LOG="$REPO_ROOT/html.log"
+THREADED_HTML_LOG="$REPO_ROOT/threaded-html.log"
 
 SWITCH_NAME="${WASTE_OCAML_SWITCH:-waste-wasm}"
 OCAML_VERSION="${WASTE_OCAML_VERSION:-5.3.0}"
@@ -42,6 +45,8 @@ interpreter to WebAssembly.
   --install-deps   interactively install missing dependencies
   --compile        compile without opening the main menu
   --generate-html  generate the embedded browser test dashboard
+  --generate-threaded-html
+                   generate the cooperative threaded browser dashboard
   --patch-status   show the Wasm32 compatibility patch status
   --apply-i31      apply the Wasm32 patch (legacy option name)
   --revert-i31     revert the Wasm32 patch (legacy option name)
@@ -51,6 +56,8 @@ interpreter to WebAssembly.
 Environment overrides:
   WASTE_OCAML_SWITCH   opam switch name (default: $SWITCH_NAME)
   WASTE_OCAML_VERSION  OCaml version for a new switch (default: $OCAML_VERSION)
+  WASTE_INSTRUCTION_QUANTUM
+                       threaded scheduler quantum (default: 10000)
 EOF
 }
 
@@ -473,6 +480,11 @@ prepare_overlay() {
     grep -Fqx '  (name wasm_cli)' "$STAGING_DIR/dune"
 }
 
+enable_threaded_overlay() {
+  sed -i '0,/^  (libraries wasm)$/s//  (libraries wasm)\n  (wasm_of_ocaml (flags (:standard --effects cps)))/' "$STAGING_DIR/dune"
+  grep -Fqx '  (wasm_of_ocaml (flags (:standard --effects cps)))' "$STAGING_DIR/dune"
+}
+
 compile_interpreter() {
   local compile_patch_state
   compile_patch_state="$(i31_patch_status)"
@@ -508,7 +520,7 @@ compile_interpreter() {
 
   {
     printf 'Overlay: %s\n' "$STAGING_DIR"
-    printf 'Command: opam exec --switch=%s -- dune build --profile release ./wasm_cli.bc.wasm.js\n\n' "$SWITCH_NAME"
+    printf 'Sequential command: opam exec --switch=%s -- dune build --profile release ./wasm_cli.bc.wasm.js\n\n' "$SWITCH_NAME"
   } >>"$LOG_FILE"
 
   if ! (
@@ -535,54 +547,106 @@ compile_interpreter() {
   fi
 
   {
+    printf '\nEnabling CPS continuations for the cooperative threaded build.\n'
+    printf 'Threaded command: opam exec --switch=%s -- dune build --profile release ./wasm_cli.bc.wasm.js\n\n' "$SWITCH_NAME"
+  } >>"$LOG_FILE"
+
+  if ! enable_threaded_overlay >>"$LOG_FILE" 2>&1 || ! (
+    cd -- "$STAGING_DIR"
+    opam exec --switch="$SWITCH_NAME" -- \
+      dune build --profile release ./wasm_cli.bc.wasm.js
+  ) >>"$LOG_FILE" 2>&1; then
+    show_message "Threaded build failed" "The sequential build succeeded, but the CPS threaded build failed.\n\nLog: $LOG_FILE"
+    return 1
+  fi
+
+  rm -rf -- "$THREADED_DIST_DIR"
+  mkdir -p -- "$THREADED_DIST_DIR"
+  if ! cp -- "$STAGING_DIR/_build/default/wasm_cli.bc.wasm.js" "$THREADED_DIST_DIR/" ||
+     ! cp -a -- "$STAGING_DIR/_build/default/wasm_cli.bc.wasm.assets" "$THREADED_DIST_DIR/"; then
+    show_message "Threaded build failed" "The CPS Wasm files were built but could not be copied to the threaded output directory.\n\nLog: $LOG_FILE"
+    return 1
+  fi
+
+  {
     printf '\nCompleted: %s\n' "$(date --iso-8601=seconds)"
     printf 'Loader: %s\n' "$DIST_DIR/wasm_cli.bc.wasm.js"
     printf 'Assets: %s\n' "$DIST_DIR/wasm_cli.bc.wasm.assets"
+    printf 'Threaded loader: %s\n' "$THREADED_DIST_DIR/wasm_cli.bc.wasm.js"
+    printf 'Threaded assets: %s\n' "$THREADED_DIST_DIR/wasm_cli.bc.wasm.assets"
   } >>"$LOG_FILE"
 
   show_message "Build complete" \
-    "The spec interpreter was compiled using Wasm32 patch state: $compile_patch_state. The compilation itself did not modify the submodule.\n\nLoader: $DIST_DIR/wasm_cli.bc.wasm.js\nAssets: $DIST_DIR/wasm_cli.bc.wasm.assets\nLog: $LOG_FILE"
+    "The spec interpreter was compiled using Wasm32 patch state: $compile_patch_state. The compilation itself did not modify the submodule.\n\nSequential: $DIST_DIR/wasm_cli.bc.wasm.js\nThreaded CPS: $THREADED_DIST_DIR/wasm_cli.bc.wasm.js\nLog: $LOG_FILE"
 }
 
 generate_browser_test_html() {
-  : >"$HTML_LOG"
-  {
-    printf 'WASTE browser test dashboard generation\n'
-    printf 'Started: %s\n' "$(date --iso-8601=seconds)"
-    printf 'Output: %s\n\n' "$BROWSER_TEST_HTML"
-  } >>"$HTML_LOG"
-
-  if ! have_command python3; then
-    printf 'error: Python 3 is not installed\n' >>"$HTML_LOG"
-    show_message "Browser test dashboard" "Python 3 is required to generate the HTML.\n\nLog: $HTML_LOG"
+  local mode="${1:-sequential}"
+  local quantum="${2:-${WASTE_INSTRUCTION_QUANTUM:-10000}}"
+  local output="$BROWSER_TEST_HTML"
+  local html_log="$HTML_LOG"
+  local description="sequential"
+  local loader_dist="$DIST_DIR"
+  if [[ "$mode" == "threaded" ]]; then
+    output="$BROWSER_THREADED_HTML"
+    html_log="$THREADED_HTML_LOG"
+    description="cooperative threaded"
+    loader_dist="$THREADED_DIST_DIR"
+  fi
+  if [[ ! "$quantum" =~ ^[1-9][0-9]*$ ]]; then
+    show_message "Browser test dashboard" "Instruction quantum must be a positive integer."
     return 1
   fi
-  if [[ ! -f "$DIST_DIR/wasm_cli.bc.wasm.js" ]]; then
-    printf 'error: compiled Wasm loader is missing\n' >>"$HTML_LOG"
-    show_message "Browser test dashboard" "Compile the OCaml interpreter to Wasm first.\n\nLog: $HTML_LOG"
+
+  : >"$html_log"
+  {
+    printf 'WASTE %s browser test dashboard generation\n' "$description"
+    printf 'Started: %s\n' "$(date --iso-8601=seconds)"
+    printf 'Output: %s\n' "$output"
+    printf 'Instruction quantum: %s\n\n' "$quantum"
+  } >>"$html_log"
+
+  if ! have_command python3; then
+    printf 'error: Python 3 is not installed\n' >>"$html_log"
+    show_message "Browser test dashboard" "Python 3 is required to generate the HTML.\n\nLog: $html_log"
+    return 1
+  fi
+  if [[ ! -f "$loader_dist/wasm_cli.bc.wasm.js" ]]; then
+    printf 'error: compiled Wasm loader is missing\n' >>"$html_log"
+    show_message "Browser test dashboard" "Compile the OCaml interpreter to Wasm first.\n\nLog: $html_log"
     return 1
   fi
   if [[ ! -f "$BROWSER_TEST_GENERATOR" ]]; then
-    printf 'error: generator is missing: %s\n' "$BROWSER_TEST_GENERATOR" >>"$HTML_LOG"
-    show_message "Browser test dashboard" "The HTML generator is missing.\n\nLog: $HTML_LOG"
+    printf 'error: generator is missing: %s\n' "$BROWSER_TEST_GENERATOR" >>"$html_log"
+    show_message "Browser test dashboard" "The HTML generator is missing.\n\nLog: $html_log"
     return 1
   fi
 
   if have_command whiptail && [[ -t 0 && -t 1 ]]; then
     whiptail --title "Browser test dashboard" --infobox \
-      "Embedding the compiled OCaml Wasm and all specification tests...\n\nLog: $HTML_LOG" 9 78
+      "Embedding the compiled OCaml Wasm and all specification tests...\n\nLog: $html_log" 9 78
   else
     printf 'Generating embedded browser test dashboard...\n'
   fi
 
   if ! python3 "$BROWSER_TEST_GENERATOR" --repo-root "$REPO_ROOT" \
-      --output "$BROWSER_TEST_HTML" >>"$HTML_LOG" 2>&1; then
-    show_message "Browser test dashboard failed" "HTML generation failed.\n\nLog: $HTML_LOG"
+      --mode "$mode" --quantum "$quantum" --output "$output" >>"$html_log" 2>&1; then
+    show_message "Browser test dashboard failed" "HTML generation failed.\n\nLog: $html_log"
     return 1
   fi
 
   show_message "Browser test dashboard generated" \
-    "A self-contained HTML dashboard was generated with the OCaml Wasm and all .wast tests embedded.\n\nOutput: $BROWSER_TEST_HTML\nLog: $HTML_LOG"
+    "A self-contained $description HTML dashboard was generated with the OCaml Wasm and all .wast tests embedded.\n\nOutput: $output\nLog: $html_log"
+}
+
+generate_threaded_browser_test_html() {
+  local quantum="${WASTE_INSTRUCTION_QUANTUM:-10000}"
+  if have_command whiptail && [[ -t 0 && -t 1 ]]; then
+    quantum="$(whiptail --title "Cooperative scheduler" --inputbox \
+      "Interpreter steps per test before switching:" 9 64 "$quantum" \
+      3>&1 1>&2 2>&3)" || return 1
+  fi
+  generate_browser_test_html threaded "$quantum"
 }
 
 dependency_menu() {
@@ -622,9 +686,10 @@ main_menu() {
     local choice
     patch_state="$(i31_patch_status)"
     choice="$(whiptail --title "OCaml to WebAssembly" --menu \
-      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 24 88 7 \
+      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 25 92 8 \
       compile "Compile the OCaml interpreter to Wasm" \
       html "Generate embedded browser test dashboard" \
+      threaded "Generate cooperative threaded browser dashboard" \
       patch "Manage Wasm32 compatibility patch [$patch_state]" \
       update "Safe pull/rebase and submodule update" \
       status "Show dependency status" \
@@ -634,6 +699,7 @@ main_menu() {
     case "$choice" in
       compile) compile_interpreter || true ;;
       html) generate_browser_test_html || true ;;
+      threaded) generate_threaded_browser_test_html || true ;;
       patch) i31_patch_menu ;;
       update) safe_repository_update || true ;;
       status)
@@ -672,6 +738,7 @@ main() {
     --install-deps) install_missing_dependencies ;;
     --compile) compile_interpreter ;;
     --generate-html) generate_browser_test_html ;;
+    --generate-threaded-html) generate_threaded_browser_test_html ;;
     --patch-status) i31_patch_status ;;
     --apply-i31) apply_i31_patch ;;
     --revert-i31) revert_i31_patch ;;
