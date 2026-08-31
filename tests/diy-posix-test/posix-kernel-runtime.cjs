@@ -3,7 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const root = path.resolve(__dirname, "..");
+const root = path.resolve(__dirname, "../..");
 const mode = process.argv[2] === "threaded" ? "threaded" : "sequential";
 const loaderPath = path.join(
   root,

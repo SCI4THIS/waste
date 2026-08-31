@@ -1,4 +1,4 @@
-;; Foundational kernel integration tests. These deliberately use the same env
+;; diy-posix-test kernel integration tests. These deliberately use the same env
 ;; ABI as src/bash.wat and run under --schedule so blocking syscalls and fork
 ;; are serviced by the cooperative process scheduler.
 (module

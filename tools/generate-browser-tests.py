@@ -31,21 +31,25 @@ def script_json(value) -> str:
     )
 
 
-def collect_tests(test_root: Path):
+def collect_tests(test_root: Path, suite: str, path_prefix: str = ""):
     tests = []
     for path in sorted(test_root.rglob("*.wast")):
         relative_path = path.relative_to(test_root)
         if "_output" in relative_path.parts:
             continue
-        relative = relative_path.as_posix()
+        local_relative = relative_path.as_posix()
+        relative = "/".join(part for part in (path_prefix, local_relative) if part)
         parent = path.parent.relative_to(test_root).as_posix()
-        group = parent if parent != "." else "root"
-        unsupported = relative.startswith("legacy/")
+        group = "/".join(
+            part for part in (path_prefix, parent if parent != "." else "") if part
+        ) or "root"
+        unsupported = suite == "wasm-spec" and local_relative.startswith("legacy/")
         tests.append(
             {
                 "path": relative,
                 "name": path.name,
                 "group": group,
+                "suite": suite,
                 "expectFailure": ".fail." in path.name,
                 "unsupported": unsupported,
                 "unsupportedReason": (
@@ -64,7 +68,7 @@ HTML = r'''<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WASTE · WebAssembly specification tests</title>
+  <title>WASTE · WebAssembly and POSIX tests</title>
   <style>
     :root {
       color-scheme: dark;
@@ -195,7 +199,7 @@ HTML = r'''<!doctype html>
 </head>
 <body>
   <header>
-    <h1>WASTE · embedded specification tests</h1>
+    <h1>WASTE · embedded WebAssembly and POSIX tests</h1>
     <div id="execution-mode"></div>
     <div id="summary">0 / __TEST_COUNT__ completed</div>
     <div id="test-all-timing">Started at: — · Finished at: —</div>
@@ -571,6 +575,7 @@ HTML = r'''<!doctype html>
           path: test.path,
           name: test.name,
           group: test.group,
+          suite: test.suite,
           expectedFailure: test.expectFailure,
           unsupported: test.unsupported,
           unsupportedReason: test.unsupportedReason,
@@ -847,6 +852,7 @@ def main():
     loader_path = dist / "wasm_cli.bc.wasm.js"
     asset_dir = dist / "wasm_cli.bc.wasm.assets"
     test_root = root / "submodules" / "wasm-spec" / "test"
+    diy_posix_root = root / "tests" / "diy-posix-test"
     output = args.output or root / "build" / "ocaml-wasm" / "browser-tests.html"
 
     if not loader_path.is_file():
@@ -856,8 +862,17 @@ def main():
         raise SystemExit(f"expected one Wasm asset in {asset_dir}, found {len(wasm_files)}")
     if not test_root.is_dir():
         raise SystemExit(f"spec test directory not found: {test_root}")
+    if not diy_posix_root.is_dir():
+        raise SystemExit(f"DIY POSIX test directory not found: {diy_posix_root}")
 
-    tests = collect_tests(test_root)
+    tests = [
+        *collect_tests(test_root, suite="wasm-spec"),
+        *collect_tests(
+            diy_posix_root,
+            suite="diy-posix-test",
+            path_prefix="diy-posix-test",
+        ),
+    ]
     if not tests:
         raise SystemExit(f"no .wast tests found under {test_root}")
 

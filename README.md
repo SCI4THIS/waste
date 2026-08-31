@@ -78,13 +78,13 @@ excluded from Test all, while remaining available for explicit runs. All custom
 annotation handlers are enabled for browser tests. Generated compiler artifacts
 under test `_output` directories are excluded from discovery.
 
-The dashboard offers thread-count choices of **1**, **#tests** (currently 261),
-or a custom positive integer. Test all passes every supported script to one
-OCaml Wasm interpreter instance. The interpreter starts at most the selected
-number of isolated logical tasks and starts queued tests as earlier tasks
-finish. Each task retains its own continuation and runner state. The
-instruction-quantum input controls how many evaluator steps a runnable task
-receives before it yields. The default is 10,000 and can also be set during
+The dashboard offers thread-count choices of **1**, **#tests** (derived from
+all supported embedded suites), or a custom positive integer. Test all passes
+every supported script to one OCaml Wasm interpreter instance. The interpreter
+starts at most the selected number of isolated logical tasks and backfills from
+the ordered queue as tasks finish. Each task retains its own continuation and
+runner state. The instruction-quantum input controls how many evaluator steps
+a runnable task receives before it yields. The default is 10,000 and can also be set during
 non-interactive generation with `WASTE_INSTRUCTION_QUANTUM`.
 
 This is deterministic cooperative threading on one browser execution thread,
@@ -117,6 +117,12 @@ remaining POSIX boundary are documented in
 The POSIX kernel integration probe runs against both generated runtimes:
 
 ```sh
-node tests/posix-kernel-runtime.cjs
-node tests/posix-kernel-runtime.cjs threaded
+node tests/diy-posix-test/posix-kernel-runtime.cjs
+node tests/diy-posix-test/posix-kernel-runtime.cjs threaded
 ```
+
+The `diy-posix-test` suite validates WASTE's interpreter ABI and is embedded in
+the browser dashboard alongside the WebAssembly spec tests. It is not an
+official POSIX conformance suite. Test sourcing and the browser/emulation/
+WebSocket-broker policy are documented in
+[docs/posix-runtime.md](docs/posix-runtime.md).

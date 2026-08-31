@@ -4,6 +4,38 @@ The POSIX layer is part of the interpreter, not a collection of JavaScript
 stubs. JavaScript supplies browser capabilities and an asynchronous control
 channel; the OCaml runtime owns process semantics.
 
+## Capability tiers
+
+Browser restrictions define implementation boundaries, not reasons to flatten
+POSIX semantics into JavaScript shims. Each facility belongs to one of three
+tiers:
+
+1. **Browser-backed:** use a browser primitive when it can faithfully supply a
+   capability, such as clocks, cryptographic entropy, terminal presentation,
+   or an optional persistence backend.
+2. **Interpreter-emulated:** keep OS semantics in the shared OCaml kernel when
+   they can be modeled locally. This includes processes, signals, timers,
+   pipes, descriptor state, terminal job control, and a virtual filesystem
+   whose files, directories, permissions, timestamps, and mutations live in
+   memory.
+3. **Broker-backed:** delegate operations that browser security deliberately
+   prevents, such as raw sockets, to an optional POSIX service reached through
+   WebSocket. The browser sends structured requests and the service performs
+   the privileged operation and returns data or a POSIX error.
+
+The broker is a capability transport, not the owner of guest process state.
+The OCaml layer must retain descriptor identity, blocking/readiness behavior,
+signal interruption, validation, and errno translation. The protocol should be
+versioned and include request IDs, operation names, typed arguments, result or
+`errno`, cancellation, and readiness notifications. Connections should be
+explicitly configured, authenticated, encrypted, and capability-scoped. If a
+facility cannot be emulated and no broker is configured, report an appropriate
+unsupported error rather than silently approximating success.
+
+This does not change static deployment: the HTML remains self-contained and
+openable through `file://`; a WebSocket endpoint is an optional runtime
+dependency only for delegated capabilities.
+
 ## Browser control channel and control-page ABI (version 1)
 
 The self-contained dashboard uses the CPS interpreter and yields to the worker
@@ -137,19 +169,40 @@ POSIX applications should therefore launch through the cooperative scheduler.
 
 ## Verification
 
+The `tests/diy-posix-test/` suite contains WASTE integration probes, not tests
+published or certified by IEEE or The Open Group. In particular,
+`posix-control-runtime.cjs` was introduced with the signal/non-local-jump work,
+and `posix-kernel.wast` plus its Node harness exercise WASTE's custom `env` ABI
+and cooperative evaluator. The WAST fixture is embedded in the browser
+dashboard as the `diy-posix-test` group. These are useful fast regressions but
+do not establish POSIX conformance.
+
+For formal conformance, The Open Group's current VSX-PCTS/VSC-PCTS suites are
+the authority, but they are licensed test products rather than public Git
+repositories. Do not commit or submodule them without an applicable license;
+load a licensed copy from a configured external path. For an open development
+baseline, the Linux Test Project contains the GPL-2.0
+[`testcases/open_posix_testsuite`](https://github.com/linux-test-project/ltp/tree/master/testcases/open_posix_testsuite).
+Revisit LTP after Bash and a guest C compiler are working. At that point, pin it
+as `submodules/ltp`, record its release/commit, and keep the upstream suite
+unchanged. A separate WASTE adapter should compile selected C tests against the
+guest libc ABI, preserve upstream assertion IDs, and classify each result as
+emulated, browser-backed, broker-backed, unsupported, or failed. LTP is useful
+open conformance coverage, but it is not The Open Group certification suite.
+
 Build both runtimes, then run the shared-memory integration probe:
 
 ```sh
 ./start.sh --compile
-node tests/posix-control-runtime.cjs
-node tests/posix-control-runtime.cjs threaded
-node tests/posix-kernel-runtime.cjs
-node tests/posix-kernel-runtime.cjs threaded
+node tests/diy-posix-test/posix-control-runtime.cjs
+node tests/diy-posix-test/posix-control-runtime.cjs threaded
+node tests/diy-posix-test/posix-kernel-runtime.cjs
+node tests/diy-posix-test/posix-kernel-runtime.cjs threaded
 ```
 
 The control probe uses a second JavaScript worker to pause and resume a busy guest and
 then inject `SIGINT`. It passes only if the guest handler runs and returns to
 the interrupted instruction stream. The kernel probe executes
-`tests/posix-kernel.wast` and checks process identity, VFS and pipes, forked
+`tests/diy-posix-test/posix-kernel.wast` and checks process identity, VFS and pipes, forked
 memory isolation, zombie reaping, stop/continue events, group signals, and
 foreground terminal transfer in both compiled runtime variants.

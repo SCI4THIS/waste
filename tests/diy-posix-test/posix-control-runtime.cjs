@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {Worker} = require("node:worker_threads");
 
-const root = path.resolve(__dirname, "..");
+const root = path.resolve(__dirname, "../..");
 const loaderPath = path.join(
   root,
   process.argv[2] === "threaded" ? "build/ocaml-wasm/dist-threaded" : "build/ocaml-wasm/dist",
