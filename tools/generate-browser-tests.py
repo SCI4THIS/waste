@@ -34,7 +34,10 @@ def script_json(value) -> str:
 def collect_tests(test_root: Path):
     tests = []
     for path in sorted(test_root.rglob("*.wast")):
-        relative = path.relative_to(test_root).as_posix()
+        relative_path = path.relative_to(test_root)
+        if "_output" in relative_path.parts:
+            continue
+        relative = relative_path.as_posix()
         parent = path.parent.relative_to(test_root).as_posix()
         group = parent if parent != "." else "root"
         unsupported = relative.startswith("legacy/")
@@ -199,6 +202,7 @@ HTML = r'''<!doctype html>
         <option value="28">SIGWINCH</option>
       </select>
       <button class="runtime-control" id="send-signal" type="button">Send signal</button>
+      <span id="control-status"></span>
     </div>
     <button id="download-results" type="button" disabled>Download results</button>
     <button id="test-all" type="button">Test all</button>
@@ -218,16 +222,32 @@ HTML = r'''<!doctype html>
     const EXECUTION_MODE = __EXECUTION_MODE__;
     const DEFAULT_QUANTUM = __DEFAULT_QUANTUM__;
     const THREAD_COUNT = EXECUTION_MODE === "threaded" ? SUPPORTED_TESTS.length : 1;
-    const TIMEOUT_MS = 120000;
+    const TIMEOUT_MS = 30 * 60 * 1000;
     const results = new Map();
-    const activeControlPages = new Set();
+    const activeWorkers = new Set();
     let batchRunning = false;
     let testAllStartedAt = null;
     let testAllFinishedAt = null;
 
     const workerProgram = String.raw`
       "use strict";
+      let running = false;
+      const queueControl = (operation, argument = 0) => {
+        const page = globalThis.waste_control_page;
+        if (!(page instanceof Int32Array)) return;
+        const sequence = page[0] + 1;
+        page[4 + (sequence & 255)] = (operation << 16) | (argument & 0xffff);
+        page[0] = sequence;
+      };
       self.onmessage = async ({data}) => {
+        if (data.type === "control") {
+          if (data.operation === 1) globalThis.waste_runtime_paused = true;
+          else if (data.operation === 0) globalThis.waste_runtime_paused = false;
+          else queueControl(data.operation, data.argument);
+          return;
+        }
+        if (running) return;
+        running = true;
         const output = [];
         const taskOutput = data.tests ? data.tests.map(() => []) : null;
         let activeTask = null;
@@ -254,21 +274,47 @@ HTML = r'''<!doctype html>
             });
             return;
           }
+          const done = /^WASTE_DONE ([01])$/.exec(message);
+          if (done) {
+            self.postMessage({
+              type: "done",
+              ok: done[1] === "0",
+              output: output.join("\n"),
+              exitCode: done[1] === "0" ? 0 : 1
+            });
+            return;
+          }
           if (taskOutput && activeTask !== null) taskOutput[activeTask].push(message);
           else output.push(message);
         };
         console.log = (...values) => capture(values);
         console.error = (...values) => capture(values);
-        if (data.controlPage) globalThis.waste_control_page = new Int32Array(data.controlPage);
+        globalThis.waste_control_page = new Int32Array(4 + 256);
+        globalThis.waste_control_page[3] = 1;
+        globalThis.waste_runtime_paused = false;
+        const deferred = [];
+        const deferChannel = new MessageChannel();
+        deferChannel.port1.onmessage = () => deferred.shift()?.();
+        globalThis.waste_defer = (callback, milliseconds) => {
+          const resume = () => {
+            if (globalThis.waste_runtime_paused)
+              globalThis.setTimeout(resume, 10);
+            else callback();
+          };
+          if (milliseconds > 0) globalThis.setTimeout(resume, milliseconds);
+          else {
+            deferred.push(resume);
+            deferChannel.port2.postMessage(0);
+          }
+        };
         if (data.tests) {
-          globalThis.waste_argv = ["wasm", "-ca", "--schedule"];
+          globalThis.waste_argv = ["wasm", "-ca", "--schedule", "--browser-schedule", "--control-page"];
           if (data.failLast) globalThis.waste_argv.push("--fail-last");
           globalThis.waste_argv.push("-q", String(data.quantum));
           for (const test of data.tests) globalThis.waste_argv.push("-e", test.source);
         } else {
           globalThis.waste_argv = ["wasm", "-ca", "-e", data.source];
         }
-        if (data.controlPage) globalThis.waste_argv.push("--control-page");
         globalThis.waste_exit_code = 0;
         const binary = atob(data.wasm);
         const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
@@ -281,12 +327,12 @@ HTML = r'''<!doctype html>
             throw new Error("Generated loader did not return a completion promise");
           }
           await completion;
-          self.postMessage({
-            type: "done",
-            ok: globalThis.waste_exit_code === 0,
-            output: output.join("\n"),
-            exitCode: globalThis.waste_exit_code
-          });
+          if (!data.tests) self.postMessage({
+              type: "done",
+              ok: globalThis.waste_exit_code === 0,
+              output: output.join("\n"),
+              exitCode: globalThis.waste_exit_code
+            });
         } catch (error) {
           self.postMessage({
             type: "done",
@@ -308,38 +354,28 @@ HTML = r'''<!doctype html>
       return groups;
     }
 
-    function createControlPage() {
-      if (typeof SharedArrayBuffer !== "function") return null;
-      const page = new Int32Array(new SharedArrayBuffer((4 + 256) * 4));
-      page[3] = 1; // control ABI version
-      return page;
-    }
-
-    function sendControl(page, operation, argument = 0) {
-      const sequence = Atomics.load(page, 0) + 1;
-      const slot = 4 + (sequence & 255);
-      Atomics.store(page, slot, (operation << 16) | (argument & 0xffff));
-      Atomics.store(page, 0, sequence);
-      Atomics.notify(page, 0);
+    function sendControl(worker, operation, argument = 0) {
+      worker.postMessage({type: "control", operation, argument});
     }
 
     function pauseRuntimes() {
-      for (const page of activeControlPages) {
-        Atomics.store(page, 1, 1);
-        sendControl(page, 1);
-      }
+      for (const worker of activeWorkers) sendControl(worker, 1);
+      document.querySelector("#control-status").textContent =
+        `paused ${activeWorkers.size} active runtime(s)`;
     }
 
     function resumeRuntimes() {
-      for (const page of activeControlPages) {
-        Atomics.store(page, 1, 0);
-        Atomics.notify(page, 1);
-      }
+      for (const worker of activeWorkers) sendControl(worker, 0);
+      document.querySelector("#control-status").textContent =
+        `running ${activeWorkers.size} active runtime(s)`;
     }
 
     function signalRuntimes() {
       const signal = Number(document.querySelector("#signal-number").value);
-      for (const page of activeControlPages) sendControl(page, 2, signal);
+      for (const worker of activeWorkers) sendControl(worker, 2, signal);
+      const name = document.querySelector("#signal-number").selectedOptions[0].textContent;
+      document.querySelector("#control-status").textContent =
+        `${name} queued for ${activeWorkers.size} active runtime(s)`;
     }
 
     function render() {
@@ -420,12 +456,8 @@ HTML = r'''<!doctype html>
       document.querySelector("#pause-runtime").addEventListener("click", pauseRuntimes);
       document.querySelector("#resume-runtime").addEventListener("click", resumeRuntimes);
       document.querySelector("#send-signal").addEventListener("click", signalRuntimes);
-      if (typeof SharedArrayBuffer !== "function") {
-        document.querySelectorAll(".runtime-control").forEach(control => control.disabled = true);
-        document.querySelector(".notice").append(
-          " Shared memory controls require a cross-origin-isolated page (COOP/COEP)."
-        );
-      }
+      document.querySelector("#control-status").textContent =
+        "ready (static worker messaging)";
       updateSummary();
     }
 
@@ -567,24 +599,29 @@ HTML = r'''<!doctype html>
       return new Promise(resolve => {
         const workerUrl = URL.createObjectURL(new Blob([workerProgram], {type: "text/javascript"}));
         const worker = new Worker(workerUrl);
-        const controlPage = createControlPage();
-        if (controlPage) activeControlPages.add(controlPage);
+        activeWorkers.add(worker);
         let finished = false;
         const finish = result => {
           if (finished) return;
           finished = true;
           clearTimeout(timer);
           worker.terminate();
-          if (controlPage) activeControlPages.delete(controlPage);
+          activeWorkers.delete(worker);
           URL.revokeObjectURL(workerUrl);
           resolve(result);
         };
         const timer = setTimeout(() => finish({ok: false, error: `Timed out after ${TIMEOUT_MS / 1000} seconds`}), TIMEOUT_MS);
         worker.onerror = event => finish({ok: false, error: event.message || "Worker error"});
-        worker.onmessage = event => finish(event.data);
+        let taskResult = null;
+        worker.onmessage = event => {
+          if (event.data.type === "result") taskResult = event.data;
+          else if (event.data.type === "done")
+            finish(taskResult || event.data);
+        };
         worker.postMessage({
-          loader: PAYLOAD.loader, wasm: PAYLOAD.wasm, source: test.source,
-          controlPage: controlPage?.buffer
+          loader: PAYLOAD.loader, wasm: PAYLOAD.wasm,
+          tests: [test], quantum: DEFAULT_QUANTUM,
+          failLast: test.path === "core/custom.wast"
         });
       });
     }
@@ -593,15 +630,14 @@ HTML = r'''<!doctype html>
       return new Promise(resolve => {
         const workerUrl = URL.createObjectURL(new Blob([workerProgram], {type: "text/javascript"}));
         const worker = new Worker(workerUrl);
-        const controlPage = createControlPage();
-        if (controlPage) activeControlPages.add(controlPage);
+        activeWorkers.add(worker);
         let finished = false;
         const finish = result => {
           if (finished) return;
           finished = true;
           clearTimeout(timer);
           worker.terminate();
-          if (controlPage) activeControlPages.delete(controlPage);
+          activeWorkers.delete(worker);
           URL.revokeObjectURL(workerUrl);
           resolve(result);
         };
@@ -625,8 +661,7 @@ HTML = r'''<!doctype html>
           wasm: PAYLOAD.wasm,
           tests: ordered,
           quantum,
-          failLast,
-          controlPage: controlPage?.buffer
+          failLast
         });
       });
     }
@@ -759,7 +794,10 @@ def main():
         parser.error("--quantum must be positive")
 
     root = args.repo_root.resolve()
-    dist_name = "dist-threaded" if args.mode == "threaded" else "dist"
+    # Both dashboards use the CPS artifact so a running interpreter can retain
+    # its continuations while yielding to a static page's worker event loop.
+    # Sequential mode still creates exactly one isolated task per worker.
+    dist_name = "dist-threaded"
     dist = root / "build" / "ocaml-wasm" / dist_name
     loader_path = dist / "wasm_cli.bc.wasm.js"
     asset_dir = dist / "wasm_cli.bc.wasm.assets"
@@ -798,9 +836,9 @@ def main():
         .replace(
             "__TIMEOUT_NOTICE__",
             (
-                "Individual runs time out after 120 seconds; cooperative batches time out after 30 minutes."
+                "Individual runs and cooperative batches time out after 30 minutes."
                 if args.mode == "threaded"
-                else "A test times out after 120 seconds."
+                else "A test times out after 30 minutes."
             ),
         )
         .replace("__PAYLOAD__", script_json(payload))

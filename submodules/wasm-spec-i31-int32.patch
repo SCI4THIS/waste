@@ -1,6 +1,6 @@
-diff --git i/interpreter/binary/decode.ml w/interpreter/binary/decode.ml
+diff --git c/interpreter/binary/decode.ml w/interpreter/binary/decode.ml
 index f817ff260..1d1c270c4 100644
---- i/interpreter/binary/decode.ml
+--- c/interpreter/binary/decode.ml
 +++ w/interpreter/binary/decode.ml
 @@ -101,7 +101,7 @@ let rec sN n s =
    else Int64.(logor x (shift_left (sN (n - 7) s) 7))
@@ -22,21 +22,22 @@ index f817ff260..1d1c270c4 100644
      s pos "too many locals";
    List.flatten (List.map (Lib.Fun.uncurry Lib.List32.make) nts)
  
-diff --git i/interpreter/dune w/interpreter/dune
-index fc6206248..fb8a79453 100644
---- i/interpreter/dune
+diff --git c/interpreter/dune w/interpreter/dune
+index fc6206248..a16be0b45 100644
+--- c/interpreter/dune
 +++ w/interpreter/dune
-@@ -3,6 +3,7 @@
+@@ -3,6 +3,8 @@
  (library
    (public_name wasm)
    (modules :standard \ main wasm wast smallint)
++  (libraries js_of_ocaml)
 +  (foreign_stubs (language c) (names control_stubs))
  )
  
  (executable
-diff --git i/interpreter/exec/convert.ml w/interpreter/exec/convert.ml
+diff --git c/interpreter/exec/convert.ml w/interpreter/exec/convert.ml
 index c7cdf09fc..ad833dae4 100644
---- i/interpreter/exec/convert.ml
+--- c/interpreter/exec/convert.ml
 +++ w/interpreter/exec/convert.ml
 @@ -4,6 +4,8 @@ module I8_ =
  struct
@@ -79,9 +80,9 @@ index c7cdf09fc..ad833dae4 100644
  end
  
  module I32_ =
-diff --git i/interpreter/exec/eval.ml w/interpreter/exec/eval.ml
+diff --git c/interpreter/exec/eval.ml w/interpreter/exec/eval.ml
 index ab78027fe..72547a53d 100644
---- i/interpreter/exec/eval.ml
+--- c/interpreter/exec/eval.ml
 +++ w/interpreter/exec/eval.ml
 @@ -19,6 +19,28 @@ exception Crash = Crash.Error (* failure that cannot happen in valid code *)
  exception Exhaustion = Exhaustion.Error
@@ -483,9 +484,9 @@ index ab78027fe..72547a53d 100644
  
  
  (* Functions & Constants *)
-diff --git i/interpreter/exec/eval.mli w/interpreter/exec/eval.mli
+diff --git c/interpreter/exec/eval.mli w/interpreter/exec/eval.mli
 index 033f5c5e2..03829eb5e 100644
---- i/interpreter/exec/eval.mli
+--- c/interpreter/exec/eval.mli
 +++ w/interpreter/exec/eval.mli
 @@ -7,5 +7,23 @@ exception Crash of Source.region * string
  exception Exhaustion of Source.region * string
@@ -511,9 +512,9 @@ index 033f5c5e2..03829eb5e 100644
 +
  val init : Ast.module_ -> externinst list -> moduleinst (* raises Link, Trap, Exception *)
  val invoke : funcinst -> value list -> value list (* raises Trap, Exception *)
-diff --git i/interpreter/host/env.ml w/interpreter/host/env.ml
+diff --git c/interpreter/host/env.ml w/interpreter/host/env.ml
 index 0688131a6..78e2dceb6 100644
---- i/interpreter/host/env.ml
+--- c/interpreter/host/env.ml
 +++ w/interpreter/host/env.ml
 @@ -5,39 +5,29 @@
   *)
@@ -575,11 +576,11 @@ index 0688131a6..78e2dceb6 100644
 +    Some (ExternFunc
 +      (Func.alloc_host (deftype_of_typeuse ut) (Posix.request name)))
    | _ -> None
-diff --git i/interpreter/main/main.ml w/interpreter/main/main.ml
-index cab4a5638..b22ff49e9 100644
---- i/interpreter/main/main.ml
+diff --git c/interpreter/main/main.ml w/interpreter/main/main.ml
+index cab4a5638..10c5e1b87 100644
+--- c/interpreter/main/main.ml
 +++ w/interpreter/main/main.ml
-@@ -20,6 +20,11 @@ let usage = "Usage: " ^ name ^ " [option] [file ...]"
+@@ -20,6 +20,12 @@ let usage = "Usage: " ^ name ^ " [option] [file ...]"
  let args = ref []
  let add_arg source = args := !args @ [source]
  
@@ -587,11 +588,12 @@ index cab4a5638..b22ff49e9 100644
 +let quantum = ref 10_000
 +let fail_last = ref false
 +let control_page = ref false
++let browser_schedule = ref false
 +
  let customs = ref []
  let add_custom name =
    let n = Utf8.decode name in
-@@ -42,6 +47,14 @@ let argspec = Arg.align
+@@ -42,6 +48,16 @@ let argspec = Arg.align
      " write module to file";
    "-b", Arg.Int (fun n -> Flags.budget := n),
      " configure call depth budget (default is " ^ string_of_int !Flags.budget ^ ")";
@@ -603,10 +605,12 @@ index cab4a5638..b22ff49e9 100644
 +    " report the final scheduled input as a known failure without executing it";
 +  "--control-page", Arg.Set control_page,
 +    " poll the browser SharedArrayBuffer control page at every instruction";
++  "--browser-schedule", Arg.Set browser_schedule,
++    " yield each scheduler slice to the JavaScript event loop";
    "-w", Arg.Int (fun n -> Flags.width := n),
      " configure output width (default is " ^ string_of_int !Flags.width ^ ")";
    "-c", Arg.String add_custom,
-@@ -58,20 +71,173 @@ let argspec = Arg.align
+@@ -58,20 +74,190 @@ let argspec = Arg.align
    "-v", Arg.Unit banner, " show version"
  ]
  
@@ -693,69 +697,86 @@ index cab4a5638..b22ff49e9 100644
 +      ) !blocked;
 +      blocked := List.rev !still_blocked
 +    in
-+    let wait_for_timer () =
++    let next_timer_delay () =
 +      let delays = List.filter_map (fun task -> Run.next_timer_delay_ms task.state) !blocked in
 +      match List.sort Int64.compare delays with
-+      | [] -> false
-+      | delay :: _ ->
-+        Control.sleep_ms (max 1 (min 50 (Int64.to_int delay)));
-+        true
++      | [] -> None
++      | delay :: _ -> Some (max 1 (min 50 (Int64.to_int delay)))
 +    in
-+    let run_ready_tasks () =
-+      while not (Queue.is_empty tasks) || !blocked <> [] do
++    let fail_blocked () =
++      List.iter (fun task ->
++        task.group.successful <- false;
++        task.group.live <- task.group.live - 1;
++        if task.group.live = 0 then begin
++          success := false;
++          report_task task.group.result_id false
++        end
++      ) !blocked;
++      blocked := []
++    in
++    let finished = ref false in
++    let finish () =
++      if not !finished then begin
++        finished := true;
++        Option.iter (fun task ->
++          success := false;
++          report_task task.id false
++        ) !deferred;
++        Run.restore_state initial_state;
++        Eval.set_quantum 0;
++        if !browser_schedule then
++          Printf.printf "WASTE_DONE %d\n%!" (if !success then 0 else 1)
++      end
++    in
++    let rec run_ready_tasks () =
++      if not !finished then begin
 +        wake_blocked ();
 +        if Queue.is_empty tasks then begin
-+          if wait_for_timer () then wake_blocked () else begin
-+            List.iter (fun task ->
-+              task.group.successful <- false;
-+              task.group.live <- task.group.live - 1;
-+              if task.group.live = 0 then begin
-+                success := false;
-+                report_task task.group.result_id false
-+              end
-+            ) !blocked;
-+            blocked := []
-+          end
++          match !blocked, next_timer_delay () with
++          | [], _ -> finish ()
++          | _, Some delay when !browser_schedule ->
++            Control.defer run_ready_tasks delay
++          | _, Some delay ->
++            Control.sleep_ms delay;
++            run_ready_tasks ()
++          | _, None -> fail_blocked (); finish ()
 +        end;
 +        if not (Queue.is_empty tasks) then begin
-+        let task = Queue.take tasks in
-+        Run.restore_state task.state;
-+        Eval.reset_quantum ();
-+        report_task_slice task.id;
-+        let slice =
-+          try task.resume () with exn ->
-+            flush_all ();
-+            prerr_endline
-+              (Sys.argv.(0) ^ ": task " ^ string_of_int task.id ^
-+               " uncaught exception " ^ Printexc.to_string exn);
-+            Printexc.print_backtrace stderr;
-+            Finished false
-+        in
-+        task.state <- Run.save_state ();
-+        enqueue_spawned task;
-+        match slice with
-+        | Finished ok ->
-+          task.group.successful <- task.group.successful && ok;
-+          task.group.live <- task.group.live - 1;
-+          if task.group.live = 0 then begin
-+            if not task.group.successful then success := false;
-+            report_task task.group.result_id task.group.successful
-+          end
-+        | Suspended (waiting, resume) ->
-+          task.resume <- resume;
-+          task.waiting <- waiting;
-+          begin match waiting with None -> Queue.add task tasks | Some _ -> blocked := task :: !blocked end
++          let task = Queue.take tasks in
++          Run.restore_state task.state;
++          Eval.reset_quantum ();
++          report_task_slice task.id;
++          let slice =
++            try task.resume () with exn ->
++              flush_all ();
++              prerr_endline
++                (Sys.argv.(0) ^ ": task " ^ string_of_int task.id ^
++                 " uncaught exception " ^ Printexc.to_string exn);
++              Printexc.print_backtrace stderr;
++              Finished false
++          in
++          task.state <- Run.save_state ();
++          enqueue_spawned task;
++          begin match slice with
++          | Finished ok ->
++            task.group.successful <- task.group.successful && ok;
++            task.group.live <- task.group.live - 1;
++            if task.group.live = 0 then begin
++              if not task.group.successful then success := false;
++              report_task task.group.result_id task.group.successful
++            end
++          | Suspended (waiting, resume) ->
++            task.resume <- resume;
++            task.waiting <- waiting;
++            begin match waiting with None -> Queue.add task tasks | Some _ -> blocked := task :: !blocked end
++          end;
++          if !browser_schedule then Control.defer run_ready_tasks 0
++          else run_ready_tasks ()
 +        end
-+      done
++      end
 +    in
 +    run_ready_tasks ();
-+    Option.iter (fun task ->
-+      success := false;
-+      report_task task.id false
-+    ) !deferred;
-+    Run.restore_state initial_state;
-+    Eval.set_quantum 0;
-+    !success
++    if !browser_schedule then true else !success
 +  end
 +
  let () =
@@ -782,9 +803,9 @@ index cab4a5638..b22ff49e9 100644
      flush_all ();
      prerr_endline
        (Sys.argv.(0) ^ ": uncaught exception " ^ Printexc.to_string exn);
-diff --git i/interpreter/runtime/i31.ml w/interpreter/runtime/i31.ml
+diff --git c/interpreter/runtime/i31.ml w/interpreter/runtime/i31.ml
 index 402304d26..45ae609dc 100644
---- i/interpreter/runtime/i31.ml
+--- c/interpreter/runtime/i31.ml
 +++ w/interpreter/runtime/i31.ml
 @@ -1,17 +1,16 @@
  open Types
@@ -815,9 +836,9 @@ index 402304d26..45ae609dc 100644
 -    | I31Ref i -> "(i31 " ^ string_of_int i ^ ")"
 +    | I31Ref i -> "(i31 " ^ Int32.to_string i ^ ")"
      | r -> string_of_ref' r
-diff --git i/interpreter/runtime/i31.mli w/interpreter/runtime/i31.mli
+diff --git c/interpreter/runtime/i31.mli w/interpreter/runtime/i31.mli
 index 7b5c20092..b5fc46694 100644
---- i/interpreter/runtime/i31.mli
+--- c/interpreter/runtime/i31.mli
 +++ w/interpreter/runtime/i31.mli
 @@ -1,6 +1,6 @@
  open Value
@@ -827,9 +848,9 @@ index 7b5c20092..b5fc46694 100644
  type t = i31
  
  type ref_ += I31Ref of i31
-diff --git i/interpreter/runtime/memory.ml w/interpreter/runtime/memory.ml
+diff --git c/interpreter/runtime/memory.ml w/interpreter/runtime/memory.ml
 index 7914ebecc..5f182fea1 100644
---- i/interpreter/runtime/memory.ml
+--- c/interpreter/runtime/memory.ml
 +++ w/interpreter/runtime/memory.ml
 @@ -49,6 +49,11 @@ let bound mem =
  let size mem =
@@ -843,9 +864,9 @@ index 7914ebecc..5f182fea1 100644
  let type_of mem =
    mem.ty
  
-diff --git i/interpreter/runtime/memory.mli w/interpreter/runtime/memory.mli
+diff --git c/interpreter/runtime/memory.mli w/interpreter/runtime/memory.mli
 index 5bbc8a77e..7671b85d1 100644
---- i/interpreter/runtime/memory.mli
+--- c/interpreter/runtime/memory.mli
 +++ w/interpreter/runtime/memory.mli
 @@ -17,6 +17,7 @@ exception OutOfMemory
  val page_size : int64
@@ -855,9 +876,9 @@ index 5bbc8a77e..7671b85d1 100644
  val type_of : memory -> memorytype
  val addrtype_of : memory -> addrtype
  val size : memory -> size
-diff --git i/interpreter/script/run.ml w/interpreter/script/run.ml
+diff --git c/interpreter/script/run.ml w/interpreter/script/run.ml
 index 13a759892..ac376c4c5 100644
---- i/interpreter/script/run.ml
+--- c/interpreter/script/run.ml
 +++ w/interpreter/script/run.ml
 @@ -26,6 +26,7 @@ struct
    let validate_with_custom (m, cs) =
@@ -867,9 +888,9 @@ index 13a759892..ac376c4c5 100644
  
    let instantiate m ims =
      try Ok (result Eval.init m ims) with
-diff --git i/interpreter/script/runner.ml w/interpreter/script/runner.ml
+diff --git c/interpreter/script/runner.ml w/interpreter/script/runner.ml
 index 0ff9fc0c0..bfdcf1a12 100644
---- i/interpreter/script/runner.ml
+--- c/interpreter/script/runner.ml
 +++ w/interpreter/script/runner.ml
 @@ -314,6 +314,33 @@ let modules : (Ast.module_ * Custom.section list) Map.t ref = ref Map.empty
  let instances : Engine.moduleinst Map.t ref = ref Map.empty
@@ -905,9 +926,9 @@ index 0ff9fc0c0..bfdcf1a12 100644
  let bind category map x_opt y =
    let map' =
      match x_opt with
-diff --git i/interpreter/script/runner.mli w/interpreter/script/runner.mli
+diff --git c/interpreter/script/runner.mli w/interpreter/script/runner.mli
 index 86e8ac8bd..fc0347d50 100644
---- i/interpreter/script/runner.mli
+--- c/interpreter/script/runner.mli
 +++ w/interpreter/script/runner.mli
 @@ -1,5 +1,7 @@
  module Make (Engine : Embed.Engine) :
@@ -931,9 +952,9 @@ index 86e8ac8bd..fc0347d50 100644
    (* Currently used by SpecTec AL runner, should be ported to functor *)
    val assert_message : Source.region -> string -> string -> string -> unit
    val assert_results :
-diff --git i/interpreter/valid/valid.ml w/interpreter/valid/valid.ml
+diff --git c/interpreter/valid/valid.ml w/interpreter/valid/valid.ml
 index 819a97fbf..745b83197 100644
---- i/interpreter/valid/valid.ml
+--- c/interpreter/valid/valid.ml
 +++ w/interpreter/valid/valid.ml
 @@ -385,7 +385,8 @@ let check_memop (c : context) (memop : ('t, 's) memop) ty_size get_sz at =
        check_pack sz (ty_size memop.ty) at;
@@ -945,9 +966,9 @@ index 819a97fbf..745b83197 100644
      "alignment must not be larger than natural";
    let MemoryT (at_, _lim) = memory c (0l @@ at) in
    if at_ = I32AT then
-diff --git i/interpreter/wasm.opam w/interpreter/wasm.opam
+diff --git c/interpreter/wasm.opam w/interpreter/wasm.opam
 index 9a5057611..658e30412 100644
---- i/interpreter/wasm.opam
+--- c/interpreter/wasm.opam
 +++ w/interpreter/wasm.opam
 @@ -10,10 +10,24 @@ homepage: "https://github.com/WebAssembly/spec"
  bug-reports: "https://github.com/WebAssembly/spec/issues"
@@ -1019,10 +1040,10 @@ index 000000000..d9804a636
 +}
 diff --git 1/interpreter/exec/control.ml 2/interpreter/exec/control.ml
 new file mode 100644
-index 000000000..6dff12ee0
+index 000000000..3100d9f9d
 --- /dev/null
 +++ 2/interpreter/exec/control.ml
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,61 @@
 +(* Browser-to-interpreter control page.
 +
 +   The common path performs one atomic load.  Commands are stored in a
@@ -1076,12 +1097,20 @@ index 000000000..6dff12ee0
 +
 +let pause () = if !enabled then wait_while_paused ()
 +let sleep_ms milliseconds = if milliseconds > 0 then wait_timeout milliseconds
++
++let defer callback milliseconds =
++  let set_timeout =
++    Js_of_ocaml.Js.Unsafe.get Js_of_ocaml.Js.Unsafe.global "waste_defer"
++  in
++  ignore (Js_of_ocaml.Js.Unsafe.fun_call set_timeout
++    [|Js_of_ocaml.Js.Unsafe.inject (Js_of_ocaml.Js.wrap_callback callback);
++      Js_of_ocaml.Js.Unsafe.inject milliseconds|])
 diff --git 1/interpreter/exec/control.mli 2/interpreter/exec/control.mli
 new file mode 100644
-index 000000000..a8de44ea9
+index 000000000..ff7c98b3d
 --- /dev/null
 +++ 2/interpreter/exec/control.mli
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,14 @@
 +type command = Pause | Terminate | Signal of int
 +type state
 +
@@ -1094,44 +1123,8 @@ index 000000000..a8de44ea9
 +val copy : state -> state
 +val poll : state -> command option
 +val pause : unit -> unit
++val defer : (unit -> unit) -> int -> unit
 +val sleep_ms : int -> unit
-diff --git 1/interpreter/host/control_runtime.js 2/interpreter/host/control_runtime.js
-new file mode 100644
-index 000000000..9654b335f
---- /dev/null
-+++ 2/interpreter/host/control_runtime.js
-@@ -0,0 +1,31 @@
-+//Provides: waste_control_atomic_load_js
-+function waste_control_atomic_load_js(index) {
-+  const page = globalThis.waste_control_page;
-+  return page instanceof Int32Array ? globalThis.Atomics.load(page, index) : 0;
-+}
-+
-+//Provides: waste_control_wait_while_paused_js
-+function waste_control_wait_while_paused_js() {
-+  const page = globalThis.waste_control_page;
-+  if (!(page instanceof Int32Array)) return 0;
-+  while (globalThis.Atomics.load(page, 1) === 1)
-+    globalThis.Atomics.wait(page, 1, 1);
-+  return 0;
-+}
-+
-+//Provides: waste_control_wait_timeout_js
-+function waste_control_wait_timeout_js(milliseconds) {
-+  const page = globalThis.waste_control_page;
-+  if (page instanceof Int32Array)
-+    globalThis.Atomics.wait(page, 2, globalThis.Atomics.load(page, 2), milliseconds);
-+  return 0;
-+}
-+
-+//Provides: waste_clock_part_js
-+function waste_clock_part_js(kind, index) {
-+  const milliseconds = kind === 0
-+    ? globalThis.Date.now()
-+    : globalThis.Math.floor(globalThis.performance.now());
-+  const divisor = globalThis.Math.pow(65536, index);
-+  return globalThis.Math.floor(milliseconds / divisor) % 65536;
-+}
 diff --git 1/interpreter/host/control_runtime.wat 2/interpreter/host/control_runtime.wat
 new file mode 100644
 index 000000000..1b0227641
@@ -1926,10 +1919,10 @@ index 000000000..17abebb00
 +val monotonic_ms : unit -> int64
 diff --git 1/interpreter/host/posix_kernel.ml 2/interpreter/host/posix_kernel.ml
 new file mode 100644
-index 000000000..e60caa145
+index 000000000..1ae2de1e1
 --- /dev/null
 +++ 2/interpreter/host/posix_kernel.ml
-@@ -0,0 +1,661 @@
+@@ -0,0 +1,663 @@
 +type pid = int32
 +
 +let errno_eperm = 1
@@ -2550,19 +2543,21 @@ index 000000000..e60caa145
 +  previous
 +
 +let poll_timers process =
-+  let now = now_ms process in
-+  let signals = ref [] in
-+  begin match process.alarm_deadline with
-+  | Some deadline when deadline <= now -> process.alarm_deadline <- None; signals := 14 :: !signals
-+  | _ -> ()
-+  end;
-+  begin match process.timer_deadline with
-+  | Some deadline when deadline <= now ->
-+    signals := 14 :: !signals;
-+    process.timer_deadline <- if process.timer_interval = 0L then None else Some (Int64.add now process.timer_interval)
-+  | _ -> ()
-+  end;
-+  !signals
++  if process.alarm_deadline = None && process.timer_deadline = None then [] else begin
++    let now = now_ms process in
++    let signals = ref [] in
++    begin match process.alarm_deadline with
++    | Some deadline when deadline <= now -> process.alarm_deadline <- None; signals := 14 :: !signals
++    | _ -> ()
++    end;
++    begin match process.timer_deadline with
++    | Some deadline when deadline <= now ->
++      signals := 14 :: !signals;
++      process.timer_deadline <- if process.timer_interval = 0L then None else Some (Int64.add now process.timer_interval)
++    | _ -> ()
++    end;
++    !signals
++  end
 +
 +let wait_ready process = function
 +  | Pipe_readable pipe -> pipe.length > 0 || pipe.writers = 0

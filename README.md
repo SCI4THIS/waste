@@ -32,9 +32,11 @@ build/ocaml-wasm/dist-threaded/wasm_cli.bc.wasm.js
 build/ocaml-wasm/dist-threaded/wasm_cli.bc.wasm.assets/
 ```
 
-The `dist` interpreter preserves the original direct build used by the
-sequential dashboard. The `dist-threaded` interpreter uses the CPS effect
-backend required to suspend and resume evaluator continuations.
+The `dist` interpreter preserves the original direct build. The
+`dist-threaded` interpreter uses the CPS effect backend required to suspend and
+resume evaluator continuations. Both browser dashboards embed the CPS artifact;
+the sequential dashboard still creates only one logical task in each fresh
+worker.
 
 The most recent build transcript is written to `build.log` in the repository
 root, including dependency failures and the Dune compiler output.
@@ -66,7 +68,7 @@ Useful non-interactive commands are:
 
 The **Generate embedded browser test dashboard** entry creates the self-contained
 `build/ocaml-wasm/browser-tests.html`. It embeds the compiled OCaml Wasm runtime
-and every `.wast` file under `submodules/wasm-spec/test`, groups tests by their
+and every source `.wast` file under `submodules/wasm-spec/test`, groups tests by their
 source directory, and provides Run, Test module, and Test all controls with live
 pass/fail indicators. Each result shows its elapsed time, and the header shows
 the cumulative time for completed tests. A Download results button exports a
@@ -77,7 +79,8 @@ group in order. Legacy exception groups are highlighted as unsupported and are
 excluded from Test all, while remaining available for explicit runs. All custom
 annotation handlers are enabled for browser tests. Every test gets a fresh Web
 Worker so failures remain isolated. This original dashboard explicitly uses one
-test thread.
+test thread. Generated compiler artifacts under test `_output` directories are
+excluded from discovery.
 
 The **Generate cooperative threaded browser dashboard** entry creates
 `build/ocaml-wasm/browser-tests-threaded.html`. Test all passes the 261 supported
@@ -104,11 +107,15 @@ submodules, and reapplies the patch only when the updated spec does not already
 contain it. It refuses to proceed over unmanaged submodule changes. Its latest
 transcript is stored in `update.log`.
 
-The generated dashboards expose **Pause**, **Resume**, and **Send signal**
-controls when `SharedArrayBuffer` is available. They use a versioned atomic ring
-that the interpreter checks once per guest instruction. The signal and
-non-local-jump ABI, verification commands, and remaining POSIX boundary are
-documented in [docs/posix-runtime.md](docs/posix-runtime.md).
+The generated dashboards remain single, self-contained HTML files that can be
+opened directly with `file://`. **Pause**, **Resume**, and **Send signal** use
+worker messages: the CPS interpreter returns to the worker event loop after
+each instruction quantum, then continues with the same evaluator continuation.
+Signals enter a versioned command ring which is checked once per guest
+instruction. No server, cross-origin isolation, `SharedArrayBuffer`, or browser
+flag is required. The signal and non-local-jump ABI, verification commands, and
+remaining POSIX boundary are documented in
+[docs/posix-runtime.md](docs/posix-runtime.md).
 
 The POSIX kernel integration probe runs against both generated runtimes:
 

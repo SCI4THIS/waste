@@ -588,12 +588,11 @@ generate_browser_test_html() {
   local output="$BROWSER_TEST_HTML"
   local html_log="$HTML_LOG"
   local description="sequential"
-  local loader_dist="$DIST_DIR"
+  local loader_dist="$THREADED_DIST_DIR"
   if [[ "$mode" == "threaded" ]]; then
     output="$BROWSER_THREADED_HTML"
     html_log="$THREADED_HTML_LOG"
     description="cooperative threaded"
-    loader_dist="$THREADED_DIST_DIR"
   fi
   if [[ ! "$quantum" =~ ^[1-9][0-9]*$ ]]; then
     show_message "Browser test dashboard" "Instruction quantum must be a positive integer."

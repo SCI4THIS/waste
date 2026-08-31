@@ -4,11 +4,16 @@ The POSIX layer is part of the interpreter, not a collection of JavaScript
 stubs. JavaScript supplies browser capabilities and an asynchronous control
 channel; the OCaml runtime owns process semantics.
 
-## Control-page ABI (version 1)
+## Browser control channel and control-page ABI (version 1)
 
-The controller creates a `SharedArrayBuffer` and exposes its `Int32Array` as
-`globalThis.waste_control_page` before starting the interpreter with
-`--control-page`.
+The self-contained dashboards use the CPS interpreter and yield to the worker
+event loop after each configured instruction quantum. Pause and resume are
+worker messages which gate the next continuation slice. A signal message is
+written by that same worker into a local `Int32Array` exposed as
+`globalThis.waste_control_page`; the interpreter runs with `--control-page` and
+checks the ring once per guest instruction. Because the producer and consumer
+run alternately in one worker, this static-file path does not require shared
+memory or hosting headers.
 
 | Word | Purpose |
 | ---: | --- |
@@ -22,11 +27,10 @@ A command word contains a 16-bit operation and 16-bit argument. Operations are
 `1` pause, `2` POSIX signal, and `3` terminate. The producer writes a ring slot
 before publishing word 0. The interpreter performs one atomic load of word 0
 at every guest instruction and reads a slot only when the sequence changes.
-Pause uses `Atomics.wait` in the execution worker, so resume does not depend on
-that worker's blocked JavaScript event loop.
-
-This page requires a cross-origin-isolated browser context (COOP/COEP) when the
-browser restricts `SharedArrayBuffer`.
+The same ABI also accepts a `SharedArrayBuffer` for non-dashboard controllers.
+In that mode ring publication uses atomics and pause can use `Atomics.wait`.
+The static dashboard deliberately uses scheduler yields and ordinary worker
+messages instead, preserving copy-and-open deployment and offline analysis.
 
 ## Process state
 
