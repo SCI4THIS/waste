@@ -109,3 +109,10 @@ controls when `SharedArrayBuffer` is available. They use a versioned atomic ring
 that the interpreter checks once per guest instruction. The signal and
 non-local-jump ABI, verification commands, and remaining POSIX boundary are
 documented in [docs/posix-runtime.md](docs/posix-runtime.md).
+
+The POSIX kernel integration probe runs against both generated runtimes:
+
+```sh
+node tests/posix-kernel-runtime.cjs
+node tests/posix-kernel-runtime.cjs threaded
+```

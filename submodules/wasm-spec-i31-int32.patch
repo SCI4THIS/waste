@@ -80,14 +80,15 @@ index c7cdf09fc..ad833dae4 100644
  
  module I32_ =
 diff --git i/interpreter/exec/eval.ml w/interpreter/exec/eval.ml
-index ab78027fe..6493b2fdc 100644
+index ab78027fe..72547a53d 100644
 --- i/interpreter/exec/eval.ml
 +++ w/interpreter/exec/eval.ml
-@@ -19,6 +19,27 @@ exception Crash = Crash.Error (* failure that cannot happen in valid code *)
+@@ -19,6 +19,28 @@ exception Crash = Crash.Error (* failure that cannot happen in valid code *)
  exception Exhaustion = Exhaustion.Error
  exception Exception of region * Exn.t
  
 +type _ Effect.t += Yield : unit Effect.t
++type _ Effect.t += Block : Posix.wait -> unit Effect.t
 +
 +let quantum = ref 0
 +let remaining = ref 0
@@ -111,7 +112,7 @@ index ab78027fe..6493b2fdc 100644
  let table_error at = function
    | Table.Bounds -> "out of bounds table access"
    | Table.SizeOverflow -> "table size overflow"
-@@ -69,6 +90,7 @@ and admininstr' =
+@@ -69,6 +91,7 @@ and admininstr' =
    | Label of int * instr list * code
    | Frame of int * frame * code
    | Handler of int * catch list * code
@@ -119,7 +120,7 @@ index ab78027fe..6493b2fdc 100644
  
  type config =
  {
-@@ -77,6 +99,25 @@ type config =
+@@ -77,6 +100,29 @@ type config =
    budget : int;  (* to model stack overflow *)
  }
  
@@ -136,6 +137,10 @@ index ab78027fe..6493b2fdc 100644
 +  jumps : (int32, saved_jump) Hashtbl.t;
 +}
 +
++type spawned = {spawn_state : state; spawn_config : config}
++
++let spawned = ref []
++
 +let current_state = ref {posix = Posix.create (); jumps = Hashtbl.create 16}
 +
 +let new_state () = {posix = Posix.create (); jumps = Hashtbl.create 16}
@@ -145,7 +150,7 @@ index ab78027fe..6493b2fdc 100644
  let frame inst locals = {inst; locals}
  let config inst vs es =
    {frame = frame inst []; code = vs, es; budget = !Flags.budget}
-@@ -109,6 +150,103 @@ let data (inst : moduleinst) x = lookup "data segment" inst.datas x
+@@ -109,6 +155,216 @@ let data (inst : moduleinst) x = lookup "data segment" inst.datas x
  let elem (inst : moduleinst) x = lookup "element segment" inst.elems x
  let local (frame : frame) x = lookup "local" frame.locals x
  
@@ -170,6 +175,103 @@ index ab78027fe..6493b2fdc 100644
 +and clone_config config =
 +  {config with frame = clone_frame config.frame; code = clone_code config.code}
 +
++let physical_assoc value pairs =
++  match List.find_opt (fun (source, _) -> source == value) pairs with
++  | Some (_, target) -> target
++  | None -> value
++
++type address_space_clone =
++{
++  instances : (moduleinst * moduleinst) list;
++  functions : (funcinst * funcinst) list;
++  globals : (globalinst * globalinst) list;
++}
++
++let clone_address_space (root : moduleinst) =
++  let promises = ref [] in
++  let instance_pairs = ref [] in
++  let function_pairs = ref [] in
++  let global_pairs = ref [] in
++  let memory_pairs = ref [] in
++  let table_pairs = ref [] in
++  let rec promise_for (source : moduleinst) =
++    match List.find_opt (fun (candidate, _) -> candidate == source) !promises with
++    | Some (_, promise) -> promise
++    | None ->
++      let promise = Lib.Promise.make () in
++      promises := (source, promise) :: !promises;
++      let memories = List.map Memory.clone source.memories in
++      memory_pairs := List.combine source.memories memories @ !memory_pairs;
++      let functions = List.map (function
++        | Func.AstFunc (deftype, owner, body) ->
++          Func.AstFunc (deftype, promise_for (Lib.Promise.value owner), body)
++        | Func.HostFunc (deftype, host) -> Func.HostFunc (deftype, host)
++      ) source.funcs in
++      function_pairs := List.combine source.funcs functions @ !function_pairs;
++      let map_ref = function
++        | FuncRef function_ -> FuncRef (physical_assoc function_ !function_pairs)
++        | reference -> reference in
++      let map_value = function Ref reference -> Ref (map_ref reference) | value -> value in
++      let globals = List.map (fun global ->
++        Global.alloc (Global.type_of global) (map_value (Global.load global))) source.globals in
++      let globals_here = List.combine source.globals globals in
++      global_pairs := globals_here @ !global_pairs;
++      let tables = List.map (fun table ->
++        let size = Table.size table in
++        let initial = if size = 0L then NullRef else map_ref (Table.load table 0L) in
++        let copy = Table.alloc (Table.type_of table) initial in
++        for index = 0 to Int64.to_int size - 1 do
++          Table.store copy (Int64.of_int index) (map_ref (Table.load table (Int64.of_int index)))
++        done;
++        copy
++      ) source.tables in
++      table_pairs := List.combine source.tables tables @ !table_pairs;
++      let datas = List.map (fun data ->
++        Data.alloc (Data.load_bytes data 0L (Int64.to_int (Data.size data)))) source.datas in
++      let elems = List.map (fun elem ->
++        let size = Elem.size elem in
++        Elem.alloc (List.init (Int64.to_int size)
++          (fun index -> map_ref (Elem.load elem (Int64.of_int index))))
++      ) source.elems in
++      let map_extern = function
++        | ExternGlobal global -> ExternGlobal (physical_assoc global !global_pairs)
++        | ExternMemory memory -> ExternMemory (physical_assoc memory !memory_pairs)
++        | ExternTable table -> ExternTable (physical_assoc table !table_pairs)
++        | ExternFunc function_ -> ExternFunc (physical_assoc function_ !function_pairs)
++        | ExternTag tag -> ExternTag tag
++      in
++      let target =
++        {source with globals; memories; tables; funcs = functions; datas; elems;
++         exports = List.map (fun (name, extern) -> name, map_extern extern) source.exports} in
++      instance_pairs := (source, target) :: !instance_pairs;
++      Lib.Promise.fulfill promise target;
++      promise
++  in
++  ignore (promise_for root);
++  {instances = !instance_pairs; functions = !function_pairs; globals = !global_pairs}
++
++let clone_config_in_space space config =
++  let map_value = function Ref (FuncRef function_) -> Ref (FuncRef (physical_assoc function_ space.functions)) | value -> value in
++  let rec clone_frame_in_space frame =
++    {inst = physical_assoc frame.inst space.instances;
++     locals = List.map (fun value -> ref (Option.map map_value !value)) frame.locals}
++  and clone_code_in_space (values, instructions) =
++    List.map map_value values, List.map clone_admin_in_space instructions
++  and clone_admin_in_space instruction =
++    let it = match instruction.it with
++      | Invoke function_ -> Invoke (physical_assoc function_ space.functions)
++      | ReturningInvoke (values, function_) ->
++        ReturningInvoke (List.map map_value values, physical_assoc function_ space.functions)
++      | Label (arity, continuation, code) -> Label (arity, continuation, clone_code_in_space code)
++      | Frame (arity, frame, code) -> Frame (arity, clone_frame_in_space frame, clone_code_in_space code)
++      | Handler (arity, catches, code) -> Handler (arity, catches, clone_code_in_space code)
++      | SignalFrame (mask, code) -> SignalFrame (mask, clone_code_in_space code)
++      | Refer (FuncRef function_) -> Refer (FuncRef (physical_assoc function_ space.functions))
++      | other -> other
++    in it @@ instruction.at
++  in
++  {config with frame = clone_frame_in_space config.frame; code = clone_code_in_space config.code}
++
 +let fork_state state =
 +  let jumps = Hashtbl.create (Hashtbl.length state.jumps + 1) in
 +  Hashtbl.iter (fun key saved ->
@@ -177,15 +279,29 @@ index ab78027fe..6493b2fdc 100644
 +  ) state.jumps;
 +  {posix = Posix.copy state.posix; jumps}
 +
++let fork_process_state state posix (space : address_space_clone) =
++  let jumps = Hashtbl.create (Hashtbl.length state.jumps + 1) in
++  Hashtbl.iter (fun key saved ->
++    let stack_pointer = Option.map (fun (global, value) -> physical_assoc global space.globals, value) saved.stack_pointer in
++    Hashtbl.add jumps key
++      {saved with config = clone_config_in_space space saved.config; stack_pointer}
++  ) state.jumps;
++  {posix; jumps}
++
++let take_spawned () =
++  let result = List.rev !spawned in
++  spawned := [];
++  result
++
++let spawned_state child = child.spawn_state
++let wait_ready state wait = Posix.wait_ready state.posix wait
++let next_timer_delay_ms state = Posix.next_timer_delay_ms state.posix
++
 +let signal_func frame index =
 +  match Table.load (table frame.inst (0l @@ no_region))
 +      Int64.(logand (of_int32 index) 0xffff_ffffL) with
 +  | FuncRef func -> Some func
 +  | _ -> None
-+
-+let default_ignored_signal = function
-+  | 17 | 23 | 28 -> true (* SIGCHLD, SIGURG, SIGWINCH *)
-+  | _ -> false
 +
 +let stack_pointer inst =
 +  let is_mutable_i32 global = match Global.type_of global with
@@ -207,10 +323,12 @@ index ab78027fe..6493b2fdc 100644
 +  match Posix.next_signal state.posix with
 +  | None -> config
 +  | Some (_, {Posix.disposition = Posix.Ignore; _}) -> config
-+  | Some (signal, {Posix.disposition = Posix.Default; _})
-+      when default_ignored_signal signal -> config
 +  | Some (signal, {Posix.disposition = Posix.Default; _}) ->
-+    raise (Posix.Terminated (128 + signal))
++    begin match Posix.apply_default state.posix signal with
++    | Posix.Default_ignore | Posix.Default_continue -> config
++    | Posix.Default_stop wait -> Effect.perform (Block wait); config
++    | Posix.Default_terminate -> raise (Posix.Terminated (128 + signal))
++    end
 +  | Some (signal, {Posix.disposition = Posix.Handler _; _})
 +      when config.frame.inst.tables = [] ->
 +    ignore (Posix.queue_signal state.posix signal);
@@ -249,7 +367,7 @@ index ab78027fe..6493b2fdc 100644
  let comp_type (inst : moduleinst) x = expand_deftype (type_ inst x)
  let struct_type (inst : moduleinst) x = structtype_of_comptype  (comp_type inst x)
  let array_type (inst : moduleinst) x = arraytype_of_comptype (comp_type inst x)
-@@ -175,7 +313,10 @@ let array_oob a i n =
+@@ -175,7 +431,10 @@ let array_oob a i n =
    oob (Convert.I64_.extend_i32_u i) (Convert.I64_.extend_i32_u n)
      (Convert.I64_.extend_i32_u (Aggr.array_length a))
  
@@ -260,7 +378,7 @@ index ab78027fe..6493b2fdc 100644
    let vs, es = c.code in
    let e = List.hd es in
    let vs', es' =
-@@ -1111,6 +1252,18 @@ let rec step (c : config) : config =
+@@ -1111,6 +1370,18 @@ let rec step (c : config) : config =
        let c' = step {c with code = code'} in
        vs, [Handler (n, cs, c'.code) @@ e.at]
  
@@ -279,7 +397,7 @@ index ab78027fe..6493b2fdc 100644
      | Invoke f, vs when c.budget = 0 ->
        Exhaustion.error e.at "call stack exhausted"
  
-@@ -1129,14 +1282,49 @@ let rec step (c : config) : config =
+@@ -1129,14 +1400,63 @@ let rec step (c : config) : config =
          vs', [Frame (n2, frame', ([], instr')) @@ e.at]
  
        | Func.HostFunc (_, f) ->
@@ -320,6 +438,20 @@ index ab78027fe..6493b2fdc 100644
 +              | _ -> Crash.error e.at "corrupt sigsetjmp continuation"
 +            in
 +            raise (Resume {resumed with code = values, instructions})
++          | Posix.Block wait ->
++            Effect.perform (Block wait);
++            raise (Resume c)
++          | Posix.Fork (child_posix, child_pid) ->
++            let space = clone_address_space c.frame.inst in
++            let child_state = fork_process_state !current_state child_posix space in
++            let child_config = clone_config_in_space space
++              {c with code = Num (I32 0l) :: vs', List.tl es} in
++            spawned := {spawn_state = child_state; spawn_config = child_config} :: !spawned;
++            Effect.perform Yield;
++            Num (I32 child_pid) :: vs', []
++          | Posix.Exit status ->
++            Posix.terminate (!current_state).posix (Posix_kernel.Exited status);
++            raise (Posix.Terminated status)
 +          end
 +        | Crash (_, msg) -> Crash.error e.at msg)
        )
@@ -332,60 +464,119 @@ index ab78027fe..6493b2fdc 100644
    | vs, [] ->
      vs
  
-@@ -1148,6 +1336,7 @@ let rec eval (c : config) : value stack =
+@@ -1148,6 +1468,18 @@ let rec eval (c : config) : value stack =
  
    | vs, es ->
      eval (step c)
 +  with Resume resumed -> eval resumed
++
++let run_spawned child =
++  restore_state child.spawn_state;
++  try
++    ignore (eval child.spawn_config);
++    Posix.terminate child.spawn_state.posix (Posix_kernel.Exited 0)
++  with
++  | Posix.Terminated status ->
++    let cause = if status >= 128 then Posix_kernel.Signaled (status - 128)
++      else Posix_kernel.Exited status in
++    Posix.terminate child.spawn_state.posix cause
  
  
  (* Functions & Constants *)
 diff --git i/interpreter/exec/eval.mli w/interpreter/exec/eval.mli
-index 033f5c5e2..67b5d1bd1 100644
+index 033f5c5e2..03829eb5e 100644
 --- i/interpreter/exec/eval.mli
 +++ w/interpreter/exec/eval.mli
-@@ -7,5 +7,16 @@ exception Crash of Source.region * string
+@@ -7,5 +7,23 @@ exception Crash of Source.region * string
  exception Exhaustion of Source.region * string
  exception Exception of Source.region * Exn.t
  
 +type _ Effect.t += Yield : unit Effect.t
++type _ Effect.t += Block : Posix.wait -> unit Effect.t
 +
 +val set_quantum : int -> unit
 +val reset_quantum : unit -> unit
 +
 +type state
++type spawned
 +val new_state : unit -> state
 +val save_state : unit -> state
 +val restore_state : state -> unit
 +val fork_state : state -> state
++val take_spawned : unit -> spawned list
++val spawned_state : spawned -> state
++val run_spawned : spawned -> unit
++val wait_ready : state -> Posix.wait -> bool
++val next_timer_delay_ms : state -> int64 option
 +
  val init : Ast.module_ -> externinst list -> moduleinst (* raises Link, Trap, Exception *)
  val invoke : funcinst -> value list -> value list (* raises Trap, Exception *)
 diff --git i/interpreter/host/env.ml w/interpreter/host/env.ml
-index 0688131a6..bf754b3f4 100644
+index 0688131a6..78e2dceb6 100644
 --- i/interpreter/host/env.ml
 +++ w/interpreter/host/env.ml
-@@ -39,6 +39,10 @@ let abort vs =
- let exit vs =
-   exit (int (single vs))
+@@ -5,39 +5,29 @@
+  *)
  
+ open Types
+-open Value
+ open Instance
+ 
+ 
+ let error msg = raise (Eval.Crash (Source.no_region, msg))
+ 
+-let type_error v t =
+-  error (
+-    "type error, expected " ^ string_of_valtype t ^
+-    ", got " ^ string_of_valtype (type_of_value v)
+-  )
+-
+ let empty = function
+   | [] -> ()
+   | vs -> error "type error, too many arguments"
+ 
+-let single = function
+-  | [] -> error "type error, missing arguments"
+-  | [v] -> v
+-  | vs -> error "type error, too many arguments"
+-
+-let int = function
+-  | Num (I32 i) -> Int32.to_int i
+-  | v -> type_error v (NumT I32T)
+-
+-
+ let abort vs =
+   empty vs;
+   print_endline "Abort!";
+   exit (-1)
+ 
+-let exit vs =
+-  exit (int (single vs))
 +let posix_functions =
 +  ["sigsetjmp"; "siglongjmp"; "sigemptyset"; "sigaddset"; "sigdelset";
-+   "sigismember"; "sigprocmask"; "sigaction"; "kill"; "killpg"; "raise"]
-+
++   "sigismember"; "sigprocmask"; "sigaction"; "kill"; "killpg"; "raise";
++   "getpid"; "getppid"; "getpgrp"; "setpgid"; "setsid"; "fork"; "waitpid";
++   "_exit"; "open"; "close"; "read"; "write"; "pipe"; "dup"; "dup2";
++   "fcntl"; "lseek"; "chdir"; "getcwd"; "unlink"; "rename"; "access";
++   "eaccess"; "faccessat"; "isatty"; "tcgetpgrp"; "tcsetpgrp"; "tcgetattr";
++   "tcsetattr"; "alarm"; "sleep"; "time"; "gettimeofday"; "setitimer";
++   "stat"; "lstat"; "fstat"; "fchmod"; "umask"; "getdtablesize"]
+ 
  
  let lookup name et =
-   match Utf8.encode name, et with
-@@ -46,4 +50,7 @@ let lookup name et =
+@@ -45,5 +35,9 @@ let lookup name et =
+   | "abort", ExternFuncT ut ->
      Some (ExternFunc (Func.alloc_host (deftype_of_typeuse ut) abort))
    | "exit", ExternFuncT ut ->
-     Some (ExternFunc (Func.alloc_host (deftype_of_typeuse ut) exit))
+-    Some (ExternFunc (Func.alloc_host (deftype_of_typeuse ut) exit))
++    Some (ExternFunc
++      (Func.alloc_host (deftype_of_typeuse ut) (Posix.request "exit")))
 +  | name, ExternFuncT ut when List.mem name posix_functions ->
 +    Some (ExternFunc
 +      (Func.alloc_host (deftype_of_typeuse ut) (Posix.request name)))
    | _ -> None
 diff --git i/interpreter/main/main.ml w/interpreter/main/main.ml
-index cab4a5638..9fca40cad 100644
+index cab4a5638..b22ff49e9 100644
 --- i/interpreter/main/main.ml
 +++ w/interpreter/main/main.ml
 @@ -20,6 +20,11 @@ let usage = "Usage: " ^ name ^ " [option] [file ...]"
@@ -415,19 +606,28 @@ index cab4a5638..9fca40cad 100644
    "-w", Arg.Int (fun n -> Flags.width := n),
      " configure output width (default is " ^ string_of_int !Flags.width ^ ")";
    "-c", Arg.String add_custom,
-@@ -58,20 +71,107 @@ let argspec = Arg.align
+@@ -58,20 +71,173 @@ let argspec = Arg.align
    "-v", Arg.Unit banner, " show version"
  ]
  
 +type slice =
 +  | Finished of bool
-+  | Suspended of (unit -> slice)
++  | Suspended of Posix.wait option * (unit -> slice)
++
++type task_group =
++{
++  result_id : int;
++  mutable live : int;
++  mutable successful : bool;
++}
 +
 +type task =
 +{
 +  id : int;
++  group : task_group;
 +  mutable state : Run.state;
 +  mutable resume : unit -> slice;
++  mutable waiting : Posix.wait option;
 +}
 +
 +let run_slice f =
@@ -437,7 +637,10 @@ index cab4a5638..9fca40cad 100644
 +      match eff with
 +      | Eval.Yield ->
 +        Some (fun (continuation : (a, slice) Effect.Deep.continuation) ->
-+          Suspended (fun () -> Effect.Deep.continue continuation ()))
++          Suspended (None, fun () -> Effect.Deep.continue continuation ()))
++      | Eval.Block wait ->
++        Some (fun (continuation : (a, slice) Effect.Deep.continuation) ->
++          Suspended (Some wait, fun () -> Effect.Deep.continue continuation ()))
 +      | _ -> None
 +  }
 +
@@ -455,19 +658,66 @@ index cab4a5638..9fca40cad 100644
 +    Eval.set_quantum !quantum;
 +    let initial_state = Run.save_state () in
 +    let tasks = Queue.create () in
++    let blocked = ref [] in
 +    let deferred = ref None in
 +    let last = List.length sources - 1 in
 +    List.iteri (fun id source ->
++      let group = {result_id = id; live = 1; successful = true} in
 +      let task =
-+        {id; state = Run.fork_state initial_state;
-+         resume = (fun () -> run_slice (fun () -> Finished (Run.run_string source)))}
++        {id; group; state = Run.fork_state initial_state; waiting = None;
++         resume = (fun () -> run_slice (fun () ->
++           try Finished (Run.run_string source)
++           with Posix.Terminated status -> Finished (status = 0)))}
 +      in
 +      if !fail_last && id = last then deferred := Some task else
 +      Queue.add task tasks
 +    ) sources;
 +    let success = ref true in
++    let enqueue_spawned task =
++      List.iter (fun child ->
++        task.group.live <- task.group.live + 1;
++        Queue.add
++          {id = task.id; group = task.group;
++           state = Run.with_eval_state task.state (Eval.spawned_state child);
++           resume = (fun () -> run_slice (fun () -> Eval.run_spawned child; Finished true));
++           waiting = None}
++          tasks
++      ) (Eval.take_spawned ())
++    in
++    let wake_blocked () =
++      let still_blocked = ref [] in
++      List.iter (fun task -> match task.waiting with
++        | Some wait when not (Run.wait_ready task.state wait) ->
++          still_blocked := task :: !still_blocked
++        | _ -> task.waiting <- None; Queue.add task tasks
++      ) !blocked;
++      blocked := List.rev !still_blocked
++    in
++    let wait_for_timer () =
++      let delays = List.filter_map (fun task -> Run.next_timer_delay_ms task.state) !blocked in
++      match List.sort Int64.compare delays with
++      | [] -> false
++      | delay :: _ ->
++        Control.sleep_ms (max 1 (min 50 (Int64.to_int delay)));
++        true
++    in
 +    let run_ready_tasks () =
-+      while not (Queue.is_empty tasks) do
++      while not (Queue.is_empty tasks) || !blocked <> [] do
++        wake_blocked ();
++        if Queue.is_empty tasks then begin
++          if wait_for_timer () then wake_blocked () else begin
++            List.iter (fun task ->
++              task.group.successful <- false;
++              task.group.live <- task.group.live - 1;
++              if task.group.live = 0 then begin
++                success := false;
++                report_task task.group.result_id false
++              end
++            ) !blocked;
++            blocked := []
++          end
++        end;
++        if not (Queue.is_empty tasks) then begin
 +        let task = Queue.take tasks in
 +        Run.restore_state task.state;
 +        Eval.reset_quantum ();
@@ -482,13 +732,20 @@ index cab4a5638..9fca40cad 100644
 +            Finished false
 +        in
 +        task.state <- Run.save_state ();
++        enqueue_spawned task;
 +        match slice with
 +        | Finished ok ->
-+          if not ok then success := false;
-+          report_task task.id ok
-+        | Suspended resume ->
++          task.group.successful <- task.group.successful && ok;
++          task.group.live <- task.group.live - 1;
++          if task.group.live = 0 then begin
++            if not task.group.successful then success := false;
++            report_task task.group.result_id task.group.successful
++          end
++        | Suspended (waiting, resume) ->
 +          task.resume <- resume;
-+          Queue.add task tasks
++          task.waiting <- waiting;
++          begin match waiting with None -> Queue.add task tasks | Some _ -> blocked := task :: !blocked end
++        end
 +      done
 +    in
 +    run_ready_tasks ();
@@ -570,6 +827,34 @@ index 7b5c20092..b5fc46694 100644
  type t = i31
  
  type ref_ += I31Ref of i31
+diff --git i/interpreter/runtime/memory.ml w/interpreter/runtime/memory.ml
+index 7914ebecc..5f182fea1 100644
+--- i/interpreter/runtime/memory.ml
++++ w/interpreter/runtime/memory.ml
+@@ -49,6 +49,11 @@ let bound mem =
+ let size mem =
+   Int64.(div (bound mem) page_size)
+ 
++let clone mem =
++  let content = create (size mem) in
++  Array1.blit mem.content content;
++  {ty = mem.ty; content}
++
+ let type_of mem =
+   mem.ty
+ 
+diff --git i/interpreter/runtime/memory.mli w/interpreter/runtime/memory.mli
+index 5bbc8a77e..7671b85d1 100644
+--- i/interpreter/runtime/memory.mli
++++ w/interpreter/runtime/memory.mli
+@@ -17,6 +17,7 @@ exception OutOfMemory
+ val page_size : int64
+ 
+ val alloc : memorytype -> memory (* raises Type, SizeOverflow, OutOfMemory *)
++val clone : memory -> memory
+ val type_of : memory -> memorytype
+ val addrtype_of : memory -> addrtype
+ val size : memory -> size
 diff --git i/interpreter/script/run.ml w/interpreter/script/run.ml
 index 13a759892..ac376c4c5 100644
 --- i/interpreter/script/run.ml
@@ -583,10 +868,10 @@ index 13a759892..ac376c4c5 100644
    let instantiate m ims =
      try Ok (result Eval.init m ims) with
 diff --git i/interpreter/script/runner.ml w/interpreter/script/runner.ml
-index 0ff9fc0c0..510aede1d 100644
+index 0ff9fc0c0..bfdcf1a12 100644
 --- i/interpreter/script/runner.ml
 +++ w/interpreter/script/runner.ml
-@@ -314,6 +314,30 @@ let modules : (Ast.module_ * Custom.section list) Map.t ref = ref Map.empty
+@@ -314,6 +314,33 @@ let modules : (Ast.module_ * Custom.section list) Map.t ref = ref Map.empty
  let instances : Engine.moduleinst Map.t ref = ref Map.empty
  let registry : (Ast.name -> Types.externtype -> Engine.externinst option) Map.t ref = ref Map.empty
  
@@ -605,6 +890,9 @@ index 0ff9fc0c0..510aede1d 100644
 +   instances = !instances; registry = !registry; eval = Eval.save_state ()}
 +
 +let fork_state state = {state with eval = Eval.fork_state state.eval}
++let with_eval_state state eval = {state with eval}
++let wait_ready state wait = Eval.wait_ready state.eval wait
++let next_timer_delay_ms state = Eval.next_timer_delay_ms state.eval
 +
 +let restore_state state =
 +  quote := state.quote;
@@ -618,7 +906,7 @@ index 0ff9fc0c0..510aede1d 100644
    let map' =
      match x_opt with
 diff --git i/interpreter/script/runner.mli w/interpreter/script/runner.mli
-index 86e8ac8bd..78f818710 100644
+index 86e8ac8bd..fc0347d50 100644
 --- i/interpreter/script/runner.mli
 +++ w/interpreter/script/runner.mli
 @@ -1,5 +1,7 @@
@@ -629,12 +917,15 @@ index 86e8ac8bd..78f818710 100644
    val register_instance : Ast.name -> Engine.moduleinst -> unit
    val register_virtual : Ast.name ->
      (Ast.name -> Types.externtype -> Engine.externinst option) ->
-@@ -9,6 +11,10 @@ sig
+@@ -9,6 +11,13 @@ sig
    val run_file : string -> bool
    val run_stdin : unit -> unit
  
 +  val save_state : unit -> state
 +  val fork_state : state -> state
++  val with_eval_state : state -> Eval.state -> state
++  val wait_ready : state -> Posix.wait -> bool
++  val next_timer_delay_ms : state -> int64 option
 +  val restore_state : state -> unit
 +
    (* Currently used by SpecTec AL runner, should be ported to functor *)
@@ -654,13 +945,47 @@ index 819a97fbf..745b83197 100644
      "alignment must not be larger than natural";
    let MemoryT (at_, _lim) = memory c (0l @@ at) in
    if at_ = I32AT then
+diff --git i/interpreter/wasm.opam w/interpreter/wasm.opam
+index 9a5057611..658e30412 100644
+--- i/interpreter/wasm.opam
++++ w/interpreter/wasm.opam
+@@ -10,10 +10,24 @@ homepage: "https://github.com/WebAssembly/spec"
+ bug-reports: "https://github.com/WebAssembly/spec/issues"
+ depends: [
+   "dune" {>= "2.9"}
+-  "ocaml" {>= "4.12"}
++  "ocaml" {>= "4.14"}
+   "menhir" {>= "20220210"}
+   "odoc" {with-doc}
+ ]
+-build: [make "-C" "interpreter"]
+-install: [make "-C" "interpreter" "install"]
++build: [
++  ["dune" "subst"] {dev}
++  [
++    "dune"
++    "build"
++    "-p"
++    name
++    "-j"
++    jobs
++    "--promote-install-files=false"
++    "@install"
++    "@runtest" {with-test}
++    "@doc" {with-doc}
++  ]
++  ["dune" "install" "-p" name "--create-install-files" name]
++]
+ dev-repo: "git+https://github.com/WebAssembly/spec.git"
 diff --git 1/interpreter/control_stubs.c 2/interpreter/control_stubs.c
 new file mode 100644
-index 000000000..090d7ebdf
+index 000000000..d9804a636
 --- /dev/null
 +++ 2/interpreter/control_stubs.c
-@@ -0,0 +1,14 @@
+@@ -0,0 +1,34 @@
 +#include <caml/mlvalues.h>
++#include <stdint.h>
++#include <time.h>
 +
 +/* Native reference-interpreter builds have no browser control page. */
 +CAMLprim value waste_control_atomic_load(value index)
@@ -674,12 +999,30 @@ index 000000000..090d7ebdf
 +  (void)unit;
 +  return Val_unit;
 +}
++
++CAMLprim value waste_control_wait_timeout(value milliseconds)
++{
++  int ms = Int_val(milliseconds);
++  struct timespec duration = {ms / 1000, (long)(ms % 1000) * 1000000L};
++  while (nanosleep(&duration, &duration) != 0) {}
++  return Val_unit;
++}
++
++CAMLprim value waste_clock_part(value kind, value index)
++{
++  struct timespec now;
++  clockid_t clock = Int_val(kind) == 0 ? CLOCK_REALTIME : CLOCK_MONOTONIC;
++  uint64_t milliseconds;
++  clock_gettime(clock, &now);
++  milliseconds = (uint64_t)now.tv_sec * 1000ULL + (uint64_t)now.tv_nsec / 1000000ULL;
++  return Val_int((milliseconds >> (16 * Int_val(index))) & 0xffffU);
++}
 diff --git 1/interpreter/exec/control.ml 2/interpreter/exec/control.ml
 new file mode 100644
-index 000000000..c1f077b27
+index 000000000..6dff12ee0
 --- /dev/null
 +++ 2/interpreter/exec/control.ml
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,53 @@
 +(* Browser-to-interpreter control page.
 +
 +   The common path performs one atomic load.  Commands are stored in a
@@ -703,6 +1046,7 @@ index 000000000..c1f077b27
 +
 +external atomic_load : int -> int = "waste_control_atomic_load"
 +external wait_while_paused : unit -> unit = "waste_control_wait_while_paused"
++external wait_timeout : int -> unit = "waste_control_wait_timeout"
 +
 +let enable () = enabled := true
 +let disable () = enabled := false
@@ -731,12 +1075,13 @@ index 000000000..c1f077b27
 +  end
 +
 +let pause () = if !enabled then wait_while_paused ()
++let sleep_ms milliseconds = if milliseconds > 0 then wait_timeout milliseconds
 diff --git 1/interpreter/exec/control.mli 2/interpreter/exec/control.mli
 new file mode 100644
-index 000000000..e8df7ccff
+index 000000000..a8de44ea9
 --- /dev/null
 +++ 2/interpreter/exec/control.mli
-@@ -0,0 +1,12 @@
+@@ -0,0 +1,13 @@
 +type command = Pause | Terminate | Signal of int
 +type state
 +
@@ -749,12 +1094,13 @@ index 000000000..e8df7ccff
 +val copy : state -> state
 +val poll : state -> command option
 +val pause : unit -> unit
++val sleep_ms : int -> unit
 diff --git 1/interpreter/host/control_runtime.js 2/interpreter/host/control_runtime.js
 new file mode 100644
-index 000000000..cd6a00cfc
+index 000000000..9654b335f
 --- /dev/null
 +++ 2/interpreter/host/control_runtime.js
-@@ -0,0 +1,14 @@
+@@ -0,0 +1,31 @@
 +//Provides: waste_control_atomic_load_js
 +function waste_control_atomic_load_js(index) {
 +  const page = globalThis.waste_control_page;
@@ -769,17 +1115,38 @@ index 000000000..cd6a00cfc
 +    globalThis.Atomics.wait(page, 1, 1);
 +  return 0;
 +}
++
++//Provides: waste_control_wait_timeout_js
++function waste_control_wait_timeout_js(milliseconds) {
++  const page = globalThis.waste_control_page;
++  if (page instanceof Int32Array)
++    globalThis.Atomics.wait(page, 2, globalThis.Atomics.load(page, 2), milliseconds);
++  return 0;
++}
++
++//Provides: waste_clock_part_js
++function waste_clock_part_js(kind, index) {
++  const milliseconds = kind === 0
++    ? globalThis.Date.now()
++    : globalThis.Math.floor(globalThis.performance.now());
++  const divisor = globalThis.Math.pow(65536, index);
++  return globalThis.Math.floor(milliseconds / divisor) % 65536;
++}
 diff --git 1/interpreter/host/control_runtime.wat 2/interpreter/host/control_runtime.wat
 new file mode 100644
-index 000000000..9a4ce6d1b
+index 000000000..1b0227641
 --- /dev/null
 +++ 2/interpreter/host/control_runtime.wat
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,32 @@
 +(module
 +  (import "js" "waste_control_atomic_load_js"
 +    (func $atomic_load (param i32) (result i32)))
 +  (import "js" "waste_control_wait_while_paused_js"
 +    (func $wait_while_paused (result i32)))
++  (import "js" "waste_control_wait_timeout_js"
++    (func $wait_timeout (param i32) (result i32)))
++  (import "js" "waste_clock_part_js"
++    (func $clock_part (param i32 i32) (result i32)))
 +
 +  (func (export "waste_control_atomic_load")
 +    (param $index (ref eq)) (result (ref eq))
@@ -790,19 +1157,32 @@ index 000000000..9a4ce6d1b
 +  (func (export "waste_control_wait_while_paused")
 +    (param (ref eq)) (result (ref eq))
 +    (drop (call $wait_while_paused))
-+    (ref.i31 (i32.const 0))))
++    (ref.i31 (i32.const 0)))
++
++  (func (export "waste_control_wait_timeout")
++    (param $milliseconds (ref eq)) (result (ref eq))
++    (drop (call $wait_timeout
++      (i31.get_s (ref.cast (ref i31) (local.get $milliseconds)))))
++    (ref.i31 (i32.const 0)))
++
++  (func (export "waste_clock_part")
++    (param $kind (ref eq)) (param $index (ref eq)) (result (ref eq))
++    (ref.i31 (call $clock_part
++      (i31.get_s (ref.cast (ref i31) (local.get $kind)))
++      (i31.get_s (ref.cast (ref i31) (local.get $index)))))))
 diff --git 1/interpreter/host/posix.ml 2/interpreter/host/posix.ml
 new file mode 100644
-index 000000000..009188158
+index 000000000..3207b5937
 --- /dev/null
 +++ 2/interpreter/host/posix.ml
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,678 @@
 +open Value
 +open Instance
 +
 +(* Host calls raise this request so Eval can service it with the invoking
 +   module instance and the currently selected process state. *)
 +exception Syscall of string * value list
++type wait = Posix_kernel.wait_reason
 +
 +type disposition = Default | Ignore | Handler of int32
 +
@@ -819,29 +1199,70 @@ index 000000000..009188158
 +  mutable blocked : int64;
 +  mutable pending : int64;
 +  actions : signal_action array;
-+  pid : int32;
-+  process_group : int32;
++  process : Posix_kernel.process;
++  peers : (int32, state) Hashtbl.t;
++  mutable sleep_deadline : int64 option;
++  mutable last_error : int;
 +}
 +
 +type result =
 +  | Return of value list
 +  | SaveJump of int32 * bool
 +  | RestoreJump of int32 * int32
++  | Block of Posix_kernel.wait_reason
++  | Fork of state * int32
++  | Exit of int
++
++type default_effect = Default_ignore | Default_continue | Default_stop of wait | Default_terminate
 +
 +exception Terminated of int
 +
 +let signal_max = 64
 +
 +let create () =
-+  {control = Control.create (); blocked = 0L; pending = 0L;
-+   pid = 1l; process_group = 1l;
-+   actions = Array.init (signal_max + 1)
-+     (fun _ -> {disposition = Default; mask = 0L; flags = 0l})}
++  let _, process = Posix_kernel.create ~clock:Posix_clock.monotonic_ms () in
++  let peers = Hashtbl.create 16 in
++  let state =
++    {control = Control.create (); blocked = 0L; pending = 0L; process; peers;
++     sleep_deadline = None; last_error = 0;
++     actions = Array.init (signal_max + 1)
++       (fun _ -> {disposition = Default; mask = 0L; flags = 0l})}
++  in
++  Hashtbl.add peers (Posix_kernel.pid process) state;
++  state
 +
 +let copy state =
-+  {control = Control.copy state.control; blocked = state.blocked;
-+   pending = state.pending; actions = Array.copy state.actions;
-+   pid = state.pid; process_group = state.process_group}
++  let _, process = Posix_kernel.clone_isolated state.process in
++  let peers = Hashtbl.create 16 in
++  let copied =
++    {control = Control.copy state.control; blocked = state.blocked;
++     pending = state.pending; actions = Array.copy state.actions; process; peers;
++     sleep_deadline = None; last_error = state.last_error}
++  in
++  Hashtbl.add peers (Posix_kernel.pid process) copied;
++  copied
++
++let fork state =
++  let process = Posix_kernel.fork state.process in
++  let child =
++    {control = Control.copy state.control; blocked = state.blocked; pending = 0L;
++     actions = Array.copy state.actions; process; peers = state.peers;
++     sleep_deadline = None; last_error = state.last_error}
++  in
++  Hashtbl.add state.peers (Posix_kernel.pid process) child;
++  child
++
++let pid state = Posix_kernel.pid state.process
++let terminate state cause = Posix_kernel.terminate state.process cause
++let wait_ready state wait =
++  Int64.logand state.pending (Int64.lognot state.blocked) <> 0L ||
++  Posix_kernel.wait_ready state.process wait
++let next_timer_delay_ms state =
++  let now = Posix_kernel.now_ms state.process in
++  let sleep = Option.map (fun deadline -> max 0L (Int64.sub deadline now)) state.sleep_deadline in
++  match sleep, Posix_kernel.next_timer_delay_ms state.process with
++  | None, timer | timer, None -> timer
++  | Some left, Some right -> Some (min left right)
 +
 +let blocked state = state.blocked
 +let set_blocked state mask = state.blocked <- mask
@@ -868,7 +1289,20 @@ index 000000000..009188158
 +    | _ -> find (signal + 1)
 +  in find 1
 +
++let apply_default state signal =
++  match signal with
++  | 17 | 23 | 28 -> Default_ignore (* SIGCHLD, SIGURG, SIGWINCH *)
++  | 18 -> Posix_kernel.continue state.process; Default_continue (* SIGCONT *)
++  | 19 | 20 | 21 | 22 ->
++    Posix_kernel.stop state.process signal;
++    Default_stop (Posix_kernel.stopped_wait state.process)
++  | _ ->
++    Posix_kernel.terminate state.process (Posix_kernel.Signaled signal);
++    Default_terminate
++
 +let poll_control state =
++  List.iter (fun signal -> ignore (queue_signal state signal))
++    (Posix_kernel.poll_timers state.process);
 +  match Control.poll state.control with
 +  | None -> ()
 +  | Some Control.Pause -> Control.pause ()
@@ -882,6 +1316,7 @@ index 000000000..009188158
 +  | _ -> invalid_arg "Posix.i32"
 +
 +let return_i32 value = Return [Num (I32 value)]
++let return_i64 value = Return [Num (I64 value)]
 +let memory inst = Lib.List32.nth inst.memories 0l
 +
 +let load_u32 mem address =
@@ -895,6 +1330,38 @@ index 000000000..009188158
 +    Memory.store_byte mem Int64.(add (of_int32 address) (of_int n))
 +      Int32.(to_int (logand (shift_right_logical value (n * 8)) 0xffl))
 +  done
++
++let load_u64 mem address =
++  let low = Int64.logand (Int64.of_int32 (load_u32 mem address)) 0xffff_ffffL in
++  let high = Int64.shift_left
++      (Int64.logand (Int64.of_int32 (load_u32 mem (Int32.add address 4l))) 0xffff_ffffL) 32 in
++  Int64.logor low high
++
++let store_u64 mem address value =
++  store_u32 mem address (Int64.to_int32 value);
++  store_u32 mem (Int32.add address 4l) (Int64.to_int32 (Int64.shift_right_logical value 32))
++
++let load_string mem address =
++  let buffer = Buffer.create 64 in
++  let rec loop offset =
++    let byte = Memory.load_byte mem Int64.(add (of_int32 address) (of_int offset)) in
++    if byte = 0 then Buffer.contents buffer else begin
++      Buffer.add_char buffer (Char.chr byte);
++      loop (offset + 1)
++    end
++  in loop 0
++
++let store_string mem address capacity string =
++  let capacity = Int32.to_int capacity in
++  if capacity <= String.length string then false else begin
++    Memory.store_bytes mem (Int64.of_int32 address) string;
++    Memory.store_byte mem Int64.(add (of_int32 address) (of_int (String.length string))) 0;
++    true
++  end
++
++let set_error state error = state.last_error <- error; return_i32 (-1l)
++let result_i32 state = function Ok value -> return_i32 (Int32.of_int value) | Error error -> set_error state error
++let result_unit state = function Ok () -> return_i32 0l | Error error -> set_error state error
 +
 +let load_sigset mem address =
 +  let low = Int64.logand (Int64.of_int32 (load_u32 mem address)) 0xffff_ffffL in
@@ -988,28 +1455,344 @@ index 000000000..009188158
 +  if signal = 0 then 0l
 +  else if queue_signal state signal then 0l else -1l
 +
++let deliver state target signal =
++  if signal = 0 then 0l else
++  match Hashtbl.find_opt state.peers (Posix_kernel.pid target) with
++  | Some peer when queue_signal peer signal ->
++    if signal = 18 then Posix_kernel.continue target;
++    0l
++  | Some _ -> -1l
++  | None -> -1l
++
++let deliver_all state targets signal =
++  if signal < 0 || signal > signal_max then -1l else begin
++    let delivered = List.fold_left (fun count target ->
++      if deliver state target signal = 0l then count + 1 else count) 0 targets in
++    if delivered > 0 || signal = 0 then 0l else -1l
++  end
++
 +let kill state = function
 +  | [pid_value; signal_value] ->
-+    let pid = i32 pid_value in
++    let target = i32 pid_value in
 +    let signal = Int32.to_int (i32 signal_value) in
-+    if pid = state.pid || pid = 0l || pid = -1l then
-+      return_i32 (send_current state signal)
-+    else return_i32 (-1l)
++    begin match Posix_kernel.signal_targets state.process target with
++    | Some targets -> return_i32 (deliver_all state targets signal)
++    | None -> set_error state Posix_kernel.errno_esrch
++    end
 +  | _ -> invalid_arg "kill"
 +
 +let killpg state = function
 +  | [group_value; signal_value] ->
 +    let group = i32 group_value in
 +    let signal = Int32.to_int (i32 signal_value) in
-+    if group = state.process_group || group = 0l then
-+      return_i32 (send_current state signal)
-+    else return_i32 (-1l)
++    begin match Posix_kernel.process_group_targets state.process group with
++    | Some targets -> return_i32 (deliver_all state targets signal)
++    | None -> set_error state Posix_kernel.errno_esrch
++    end
 +  | _ -> invalid_arg "killpg"
 +
 +let raise_signal state = function
 +  | [signal_value] ->
 +    return_i32 (send_current state (Int32.to_int (i32 signal_value)))
 +  | _ -> invalid_arg "raise"
++
++let getpid state = return_i32 (Posix_kernel.pid state.process)
++let getppid state = return_i32 (Posix_kernel.ppid state.process)
++let getpgrp state = return_i32 (Posix_kernel.pgid state.process)
++
++let setpgid state = function
++  | [target; group] ->
++    if Posix_kernel.setpgid state.process (i32 target) (i32 group) then return_i32 0l
++    else set_error state Posix_kernel.errno_eperm
++  | _ -> invalid_arg "setpgid"
++
++let setsid state = function
++  | [] ->
++    begin match Posix_kernel.setsid state.process with
++    | Some session -> return_i32 session
++    | None -> set_error state Posix_kernel.errno_eperm
++    end
++  | _ -> invalid_arg "setsid"
++
++let fork_process state = function
++  | [] ->
++    let child = fork state in
++    Fork (child, pid child)
++  | _ -> invalid_arg "fork"
++
++let exit_process = function
++  | [status] -> (Exit (Int32.to_int (i32 status)) : result)
++  | _ -> invalid_arg "exit"
++
++let waitpid state inst = function
++  | [target_value; status_address; options_value] ->
++    let target = i32 target_value in
++    let status_address = i32 status_address in
++    let options = i32 options_value in
++    let target =
++      if target = -1l then Posix_kernel.Any_child
++      else if target > 0l then Posix_kernel.Child target
++      else if target = 0l then Posix_kernel.Process_group (Posix_kernel.pgid state.process)
++      else Posix_kernel.Process_group (Int32.neg target) in
++    let nohang = Int32.logand options 1l <> 0l in
++    let untraced = Int32.logand options 2l <> 0l in
++    let continued = Int32.logand options 8l <> 0l in
++    begin match Posix_kernel.waitpid state.process target ~nohang ~untraced ~continued with
++    | Posix_kernel.Child_exited (child, status) ->
++      Hashtbl.remove state.peers child;
++      if status_address <> 0l then store_u32 (memory inst) status_address (Int32.of_int status);
++      return_i32 child
++    | Posix_kernel.Child_stopped (child, signal) ->
++      if status_address <> 0l then store_u32 (memory inst) status_address (Int32.of_int ((signal lsl 8) lor 0x7f));
++      return_i32 child
++    | Posix_kernel.Child_continued child ->
++      if status_address <> 0l then store_u32 (memory inst) status_address 0xffffl;
++      return_i32 child
++    | Posix_kernel.No_children -> set_error state Posix_kernel.errno_echild
++    | Posix_kernel.Would_block when nohang -> return_i32 0l
++    | Posix_kernel.Would_block -> Block Posix_kernel.child_wait
++    end
++  | _ -> invalid_arg "waitpid"
++
++let open_file state inst = function
++  | [path; flags; mode] ->
++    let path = load_string (memory inst) (i32 path) in
++    result_i32 state (Posix_kernel.open_file state.process path (i32 flags) (i32 mode))
++  | _ -> invalid_arg "open"
++
++let close_file state = function
++  | [fd] -> result_unit state (Posix_kernel.close state.process (Int32.to_int (i32 fd)))
++  | _ -> invalid_arg "close"
++
++let read_file state inst = function
++  | [fd; address; count] ->
++    let fd, address, count = Int32.to_int (i32 fd), i32 address, Int32.to_int (i32 count) in
++    begin match Posix_kernel.read state.process fd count with
++    | Posix_kernel.Done string ->
++      Memory.store_bytes (memory inst) (Int64.of_int32 address) string;
++      return_i32 (Int32.of_int (String.length string))
++    | Posix_kernel.End_of_file -> return_i32 0l
++    | Posix_kernel.Blocked wait -> Block wait
++    | Posix_kernel.Read_signal signal ->
++      ignore (queue_signal state signal);
++      set_error state Posix_kernel.errno_eintr
++    | Posix_kernel.Read_error error -> set_error state error
++    end
++  | _ -> invalid_arg "read"
++
++let write_file state inst = function
++  | [fd; address; count] ->
++    let fd, address, count = Int32.to_int (i32 fd), i32 address, Int32.to_int (i32 count) in
++    let string = Memory.load_bytes (memory inst) (Int64.of_int32 address) count in
++    begin match Posix_kernel.write state.process fd string with
++    | Posix_kernel.Written count ->
++      if fd = 1 || fd = 2 then (print_string (String.sub string 0 count); flush_all ());
++      return_i32 (Int32.of_int count)
++    | Posix_kernel.Write_blocked wait -> Block wait
++    | Posix_kernel.Write_error error ->
++      if error = Posix_kernel.errno_epipe then ignore (queue_signal state 13);
++      set_error state error
++    end
++  | _ -> invalid_arg "write"
++
++let pipe state inst = function
++  | [address] ->
++    begin match Posix_kernel.pipe state.process with
++    | Ok (read_fd, write_fd) ->
++      store_u32 (memory inst) (i32 address) (Int32.of_int read_fd);
++      store_u32 (memory inst) (Int32.add (i32 address) 4l) (Int32.of_int write_fd);
++      return_i32 0l
++    | Error error -> set_error state error
++    end
++  | _ -> invalid_arg "pipe"
++
++let dup state = function
++  | [fd] -> result_i32 state (Posix_kernel.dup state.process (Int32.to_int (i32 fd)) ~minimum:0 ~cloexec:false)
++  | _ -> invalid_arg "dup"
++
++let dup2 state = function
++  | [source; target] -> result_i32 state
++      (Posix_kernel.dup2 state.process (Int32.to_int (i32 source)) (Int32.to_int (i32 target)) ~cloexec:false)
++  | _ -> invalid_arg "dup2"
++
++let fcntl state = function
++  | [fd_value; command_value; argument_value] ->
++    let fd, command, argument = Int32.to_int (i32 fd_value), Int32.to_int (i32 command_value), i32 argument_value in
++    begin match command with
++    | 0 -> result_i32 state (Posix_kernel.dup state.process fd ~minimum:(Int32.to_int argument) ~cloexec:false)
++    | 1 -> result_i32 state (Result.map Int32.to_int (Posix_kernel.fd_flags state.process fd))
++    | 2 -> result_unit state (Posix_kernel.set_fd_flags state.process fd argument)
++    | 3 -> result_i32 state (Result.map Int32.to_int (Posix_kernel.status_flags state.process fd))
++    | 4 -> result_unit state (Posix_kernel.set_status_flags state.process fd argument)
++    | 1030 -> result_i32 state (Posix_kernel.dup state.process fd ~minimum:(Int32.to_int argument) ~cloexec:true)
++    | _ -> set_error state Posix_kernel.errno_einval
++    end
++  | _ -> invalid_arg "fcntl"
++
++let lseek state = function
++  | [fd; offset; whence] ->
++    begin match Posix_kernel.seek state.process (Int32.to_int (i32 fd))
++        (match offset with Num (I64 value) -> value | _ -> invalid_arg "lseek")
++        (Int32.to_int (i32 whence)) with
++    | Ok value -> return_i64 value
++    | Error error -> state.last_error <- error; return_i64 (-1L)
++    end
++  | _ -> invalid_arg "lseek"
++
++let chdir state inst = function
++  | [path] -> result_unit state (Posix_kernel.chdir state.process (load_string (memory inst) (i32 path)))
++  | _ -> invalid_arg "chdir"
++
++let getcwd state inst = function
++  | [address; size] ->
++    if store_string (memory inst) (i32 address) (i32 size) (Posix_kernel.getcwd state.process)
++    then Return [Num (I32 (i32 address))]
++    else set_error state Posix_kernel.errno_erange
++  | _ -> invalid_arg "getcwd"
++
++let unlink state inst = function
++  | [path] -> result_unit state (Posix_kernel.unlink state.process (load_string (memory inst) (i32 path)) ~directory:false)
++  | _ -> invalid_arg "unlink"
++
++let rename state inst = function
++  | [old_path; new_path] -> result_unit state
++      (Posix_kernel.rename state.process (load_string (memory inst) (i32 old_path)) (load_string (memory inst) (i32 new_path)))
++  | _ -> invalid_arg "rename"
++
++let access state inst = function
++  | path :: _ ->
++    if Posix_kernel.access state.process (load_string (memory inst) (i32 path)) then return_i32 0l
++    else set_error state Posix_kernel.errno_enoent
++  | _ -> invalid_arg "access"
++
++let isatty state = function
++  | [fd] -> return_i32 (if Posix_kernel.isatty state.process (Int32.to_int (i32 fd)) then 1l else 0l)
++  | _ -> invalid_arg "isatty"
++
++let tcgetpgrp state = function
++  | [fd] ->
++    begin match Posix_kernel.tty_foreground_group state.process (Int32.to_int (i32 fd)) with
++    | Ok group -> return_i32 group | Error error -> set_error state error end
++  | _ -> invalid_arg "tcgetpgrp"
++
++let tcsetpgrp state = function
++  | [fd; group] -> result_unit state
++      (Posix_kernel.tty_set_foreground_group state.process (Int32.to_int (i32 fd)) (i32 group))
++  | _ -> invalid_arg "tcsetpgrp"
++
++let tcgetattr state inst = function
++  | [fd; address] ->
++    begin match Posix_kernel.tty_get_attributes state.process (Int32.to_int (i32 fd)) with
++    | Ok attributes -> Memory.store_bytes (memory inst) (Int64.of_int32 (i32 address)) attributes; return_i32 0l
++    | Error error -> set_error state error
++    end
++  | _ -> invalid_arg "tcgetattr"
++
++let tcsetattr state inst = function
++  | [fd; _actions; address] ->
++    let attributes = Memory.load_bytes (memory inst) (Int64.of_int32 (i32 address)) 60 in
++    result_unit state (Posix_kernel.tty_set_attributes state.process (Int32.to_int (i32 fd)) attributes)
++  | _ -> invalid_arg "tcsetattr"
++
++let alarm state = function
++  | [seconds] -> return_i32 (Int64.to_int32 (Posix_kernel.set_alarm state.process (Int64.of_int32 (i32 seconds))))
++  | _ -> invalid_arg "alarm"
++
++let sleep state = function
++  | [seconds] ->
++    let now = Posix_kernel.now_ms state.process in
++    begin match state.sleep_deadline with
++    | Some deadline when deadline <= now -> state.sleep_deadline <- None; return_i32 0l
++    | Some deadline -> Block (Posix_kernel.deadline_wait deadline)
++    | None ->
++      let deadline = Int64.add now (Int64.mul (Int64.of_int32 (i32 seconds)) 1000L) in
++      state.sleep_deadline <- Some deadline;
++      if i32 seconds = 0l then (state.sleep_deadline <- None; return_i32 0l)
++      else Block (Posix_kernel.deadline_wait deadline)
++    end
++  | _ -> invalid_arg "sleep"
++
++let time state inst = function
++  | [address] ->
++    let seconds = Int64.div (Posix_clock.realtime_ms ()) 1000L in
++    if i32 address <> 0l then store_u64 (memory inst) (i32 address) seconds;
++    return_i64 seconds
++  | _ -> invalid_arg "time"
++
++let gettimeofday state inst = function
++  | [address; _timezone] ->
++    let milliseconds = Posix_clock.realtime_ms () in
++    store_u64 (memory inst) (i32 address) (Int64.div milliseconds 1000L);
++    store_u32 (memory inst) (Int32.add (i32 address) 8l)
++      (Int64.to_int32 (Int64.mul (Int64.rem milliseconds 1000L) 1000L));
++    return_i32 0l
++  | _ -> invalid_arg "gettimeofday"
++
++let setitimer state inst = function
++  | [_which; new_address; old_address] ->
++    let mem = memory inst in
++    let timeval_ms address =
++      Int64.add (Int64.mul (load_u64 mem address) 1000L)
++        (Int64.div (Int64.of_int32 (load_u32 mem (Int32.add address 8l))) 1000L) in
++    let new_address = i32 new_address in
++    let interval = timeval_ms new_address in
++    let initial = timeval_ms (Int32.add new_address 16l) in
++    let previous_initial, previous_interval =
++      Posix_kernel.set_interval_timer state.process ~initial_ms:initial ~interval_ms:interval in
++    if i32 old_address <> 0l then begin
++      let store_timeval address milliseconds =
++        store_u64 mem address (Int64.div milliseconds 1000L);
++        store_u32 mem (Int32.add address 8l) (Int64.to_int32 (Int64.mul (Int64.rem milliseconds 1000L) 1000L));
++        store_u32 mem (Int32.add address 12l) 0l in
++      store_timeval (i32 old_address) previous_interval;
++      store_timeval (Int32.add (i32 old_address) 16l) previous_initial
++    end;
++    return_i32 0l
++  | _ -> invalid_arg "setitimer"
++
++let store_stat mem address (info : Posix_kernel.node_info) =
++  store_u64 mem address info.Posix_kernel.inode;
++  store_u32 mem (Int32.add address 8l) info.Posix_kernel.mode;
++  store_u32 mem (Int32.add address 12l) info.Posix_kernel.links;
++  store_u32 mem (Int32.add address 16l) info.Posix_kernel.uid;
++  store_u32 mem (Int32.add address 20l) info.Posix_kernel.gid;
++  store_u64 mem (Int32.add address 24l) info.Posix_kernel.size;
++  let timestamp offset milliseconds =
++    store_u64 mem (Int32.add address offset) (Int64.div milliseconds 1000L);
++    store_u32 mem (Int32.add address (Int32.add offset 8l))
++      (Int64.to_int32 (Int64.mul (Int64.rem milliseconds 1000L) 1_000_000L)) in
++  timestamp 40l info.Posix_kernel.atime_ms;
++  timestamp 56l info.Posix_kernel.mtime_ms;
++  timestamp 72l info.Posix_kernel.ctime_ms
++
++let stat state inst follow = function
++  | [path; address] ->
++    begin match Posix_kernel.stat state.process (load_string (memory inst) (i32 path)) ~follow with
++    | Ok info -> store_stat (memory inst) (i32 address) info; return_i32 0l
++    | Error error -> set_error state error
++    end
++  | _ -> invalid_arg "stat"
++
++let fstat state inst = function
++  | [fd; address] ->
++    begin match Posix_kernel.fstat state.process (Int32.to_int (i32 fd)) with
++    | Ok info -> store_stat (memory inst) (i32 address) info; return_i32 0l
++    | Error error -> set_error state error
++    end
++  | _ -> invalid_arg "fstat"
++
++let fchmod state = function
++  | [fd; mode] -> result_unit state
++      (Posix_kernel.fchmod state.process (Int32.to_int (i32 fd)) (i32 mode))
++  | _ -> invalid_arg "fchmod"
++
++let umask state = function
++  | [mask] -> return_i32 (Posix_kernel.umask state.process (i32 mask))
++  | _ -> invalid_arg "umask"
++
++let getdtablesize = function
++  | [] -> return_i32 1024l
++  | _ -> invalid_arg "getdtablesize"
 +
 +let dispatch state inst name values =
 +  match name with
@@ -1032,13 +1815,51 @@ index 000000000..009188158
 +  | "kill" -> kill state values
 +  | "killpg" -> killpg state values
 +  | "raise" -> raise_signal state values
++  | "getpid" -> getpid state
++  | "getppid" -> getppid state
++  | "getpgrp" -> getpgrp state
++  | "setpgid" -> setpgid state values
++  | "setsid" -> setsid state values
++  | "fork" -> fork_process state values
++  | "waitpid" -> waitpid state inst values
++  | "exit" | "_exit" -> exit_process values
++  | "open" -> open_file state inst values
++  | "close" -> close_file state values
++  | "read" -> read_file state inst values
++  | "write" -> write_file state inst values
++  | "pipe" -> pipe state inst values
++  | "dup" -> dup state values
++  | "dup2" -> dup2 state values
++  | "fcntl" -> fcntl state values
++  | "lseek" -> lseek state values
++  | "chdir" -> chdir state inst values
++  | "getcwd" -> getcwd state inst values
++  | "unlink" -> unlink state inst values
++  | "rename" -> rename state inst values
++  | "access" | "eaccess" | "faccessat" -> access state inst values
++  | "isatty" -> isatty state values
++  | "tcgetpgrp" -> tcgetpgrp state values
++  | "tcsetpgrp" -> tcsetpgrp state values
++  | "tcgetattr" -> tcgetattr state inst values
++  | "tcsetattr" -> tcsetattr state inst values
++  | "alarm" -> alarm state values
++  | "sleep" -> sleep state values
++  | "time" -> time state inst values
++  | "gettimeofday" -> gettimeofday state inst values
++  | "setitimer" -> setitimer state inst values
++  | "stat" -> stat state inst true values
++  | "lstat" -> stat state inst false values
++  | "fstat" -> fstat state inst values
++  | "fchmod" -> fchmod state values
++  | "umask" -> umask state values
++  | "getdtablesize" -> getdtablesize values
 +  | _ -> invalid_arg ("unsupported POSIX dispatch: " ^ name)
 diff --git 1/interpreter/host/posix.mli 2/interpreter/host/posix.mli
 new file mode 100644
-index 000000000..30787ef77
+index 000000000..38c70d791
 --- /dev/null
 +++ 2/interpreter/host/posix.mli
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,40 @@
 +open Value
 +open Instance
 +
@@ -1053,10 +1874,23 @@ index 000000000..30787ef77
 +  flags : int32;
 +}
 +type state
-+type result = Return of value list | SaveJump of int32 * bool | RestoreJump of int32 * int32
++type wait = Posix_kernel.wait_reason
++type result =
++  | Return of value list
++  | SaveJump of int32 * bool
++  | RestoreJump of int32 * int32
++  | Block of wait
++  | Fork of state * int32
++  | Exit of int
++type default_effect = Default_ignore | Default_continue | Default_stop of wait | Default_terminate
 +
 +val create : unit -> state
 +val copy : state -> state
++val fork : state -> state
++val pid : state -> int32
++val terminate : state -> Posix_kernel.exit_cause -> unit
++val wait_ready : state -> wait -> bool
++val next_timer_delay_ms : state -> int64 option
 +val blocked : state -> int64
 +val set_blocked : state -> int64 -> unit
 +val reset_action : state -> int -> unit
@@ -1064,4 +1898,828 @@ index 000000000..30787ef77
 +val poll_control : state -> unit
 +val queue_signal : state -> int -> bool
 +val next_signal : state -> (int * signal_action) option
++val apply_default : state -> int -> default_effect
 +val dispatch : state -> moduleinst -> string -> value list -> result
+diff --git 1/interpreter/host/posix_clock.ml 2/interpreter/host/posix_clock.ml
+new file mode 100644
+index 000000000..a26abfc61
+--- /dev/null
++++ 2/interpreter/host/posix_clock.ml
+@@ -0,0 +1,10 @@
++external part : int -> int -> int = "waste_clock_part"
++
++let read kind =
++  let word index = Int64.of_int (part kind index land 0xffff) in
++  Int64.logor (word 0)
++    (Int64.logor (Int64.shift_left (word 1) 16)
++      (Int64.logor (Int64.shift_left (word 2) 32) (Int64.shift_left (word 3) 48)))
++
++let realtime_ms () = read 0
++let monotonic_ms () = read 1
+diff --git 1/interpreter/host/posix_clock.mli 2/interpreter/host/posix_clock.mli
+new file mode 100644
+index 000000000..17abebb00
+--- /dev/null
++++ 2/interpreter/host/posix_clock.mli
+@@ -0,0 +1,2 @@
++val realtime_ms : unit -> int64
++val monotonic_ms : unit -> int64
+diff --git 1/interpreter/host/posix_kernel.ml 2/interpreter/host/posix_kernel.ml
+new file mode 100644
+index 000000000..e60caa145
+--- /dev/null
++++ 2/interpreter/host/posix_kernel.ml
+@@ -0,0 +1,661 @@
++type pid = int32
++
++let errno_eperm = 1
++let errno_enoent = 2
++let errno_esrch = 3
++let errno_eintr = 4
++let errno_eio = 5
++let errno_ebadf = 9
++let errno_echild = 10
++let errno_eagain = 11
++let errno_enomem = 12
++let errno_eacces = 13
++let errno_efault = 14
++let errno_ebusy = 16
++let errno_eexist = 17
++let errno_enotdir = 20
++let errno_eisdir = 21
++let errno_einval = 22
++let errno_enfile = 23
++let errno_emfile = 24
++let errno_enotty = 25
++let errno_espipe = 29
++let errno_epipe = 32
++let errno_erange = 34
++let errno_enotempty = 39
++
++let o_accmode = 0x3l
++let o_rdonly = 0l
++let o_wronly = 1l
++let o_rdwr = 2l
++let o_creat = 0x40l
++let o_excl = 0x80l
++let o_trunc = 0x200l
++let o_append = 0x400l
++let o_nonblock = 0x800l
++let o_directory = 0x1_0000l
++let fd_cloexec = 1l
++
++type exit_cause = Exited of int | Signaled of int
++type process_status = Running | Stopped of int | Zombie of exit_cause
++
++type wait_target = Any_child | Child of pid | Process_group of pid
++type wait_event =
++  | Child_exited of pid * int
++  | Child_stopped of pid * int
++  | Child_continued of pid
++  | No_children
++  | Would_block
++
++type pipe_buffer =
++{
++  data : bytes;
++  mutable start : int;
++  mutable length : int;
++  mutable readers : int;
++  mutable writers : int;
++}
++
++type terminal =
++{
++  mutable foreground_group : pid;
++  controlling_session : pid;
++  input : pipe_buffer;
++  output : Buffer.t;
++  mutable attributes : string;
++}
++
++type node_kind = Directory of (string, node) Hashtbl.t | Regular of bytes ref | Terminal of terminal
++and node =
++{
++  inode : int64;
++  mutable mode : int32;
++  uid : int32;
++  gid : int32;
++  mutable links : int32;
++  mutable atime_ms : int64;
++  mutable mtime_ms : int64;
++  mutable ctime_ms : int64;
++  node_kind : node_kind;
++}
++
++type open_kind = Node of node | Pipe_read of pipe_buffer | Pipe_write of pipe_buffer
++type open_file =
++{
++  open_kind : open_kind;
++  mutable offset : int64;
++  mutable status_flags : int32;
++  mutable references : int;
++}
++
++type descriptor = {file : open_file; mutable flags : int32}
++
++type process_event = Exit_event of int | Stop_event of int | Continue_event
++
++type process =
++{
++  system : kernel;
++  id : pid;
++  mutable parent : pid;
++  mutable group : pid;
++  mutable session_ : pid;
++  mutable state : process_status;
++  mutable cwd_ : string;
++  mutable umask : int32;
++  descriptors : (int, descriptor) Hashtbl.t;
++  mutable child_events : (pid * process_event) list;
++  mutable alarm_deadline : int64 option;
++  mutable timer_deadline : int64 option;
++  mutable timer_interval : int64;
++}
++
++and kernel =
++{
++  processes_ : (pid, process) Hashtbl.t;
++  mutable next_pid : pid;
++  mutable next_inode : int64;
++  mutable next_file : int;
++  mutable next_pipe : int;
++  root : node;
++  tty : terminal;
++  clock : unit -> int64;
++}
++
++type wait_reason = Pipe_readable of pipe_buffer | Pipe_writable of pipe_buffer | Child_changed | Deadline of int64 | Process_running of process
++type io_result = Done of string | End_of_file | Blocked of wait_reason | Read_signal of int | Read_error of int
++type write_result = Written of int | Write_blocked of wait_reason | Write_error of int
++type clock = unit -> int64
++
++let now_ms process = process.system.clock ()
++
++let make_pipe id =
++  ignore id;
++  {data = Bytes.create 4096; start = 0; length = 0; readers = 0; writers = 0}
++
++let pipe_capacity pipe = Bytes.length pipe.data
++
++let pipe_compact pipe =
++  if pipe.start > 0 && pipe.length > 0 then
++    Bytes.blit pipe.data pipe.start pipe.data 0 pipe.length;
++  pipe.start <- 0
++
++let pipe_push pipe string =
++  let available = pipe_capacity pipe - pipe.length in
++  let count = min available (String.length string) in
++  if count > 0 then begin
++    if pipe.start + pipe.length + count > pipe_capacity pipe then pipe_compact pipe;
++    Bytes.blit_string string 0 pipe.data (pipe.start + pipe.length) count;
++    pipe.length <- pipe.length + count
++  end;
++  count
++
++let pipe_take pipe count =
++  let count = min count pipe.length in
++  let result = Bytes.sub_string pipe.data pipe.start count in
++  pipe.start <- pipe.start + count;
++  pipe.length <- pipe.length - count;
++  if pipe.length = 0 then pipe.start <- 0;
++  result
++
++let make_node inode mode now kind =
++  {inode; mode; uid = 0l; gid = 0l; links = 1l;
++   atime_ms = now; mtime_ms = now; ctime_ms = now; node_kind = kind}
++
++let create ?(clock = fun () -> 0L) () =
++  let input = make_pipe 0 in
++  let tty =
++    {foreground_group = 1l; controlling_session = 1l; input;
++     output = Buffer.create 4096; attributes = String.make 60 '\000'} in
++  let now = clock () in
++  let root = make_node 1L 0o040755l now (Directory (Hashtbl.create 16)) in
++  let system =
++    {processes_ = Hashtbl.create 16; next_pid = 2l; next_inode = 2L;
++     next_file = 3; next_pipe = 1; root; tty; clock} in
++  let process =
++    {system; id = 1l; parent = 0l; group = 1l; session_ = 1l; state = Running;
++     cwd_ = "/"; umask = 0o022l; descriptors = Hashtbl.create 16;
++     child_events = []; alarm_deadline = None; timer_deadline = None;
++     timer_interval = 0L} in
++  let tty_node = make_node 2L 0o020666l now (Terminal tty) in
++  system.next_inode <- 3L;
++  let root_entries = match root.node_kind with Directory entries -> entries | _ -> assert false in
++  let dev = make_node 3L 0o040755l now (Directory (Hashtbl.create 4)) in
++  let tmp = make_node 4L 0o041777l now (Directory (Hashtbl.create 8)) in
++  system.next_inode <- 5L;
++  Hashtbl.add root_entries "dev" dev;
++  Hashtbl.add root_entries "tmp" tmp;
++  begin match dev.node_kind with Directory entries -> Hashtbl.add entries "tty" tty_node | _ -> () end;
++  let terminal_file id =
++    ignore id;
++    {open_kind = Node tty_node; offset = 0L; status_flags = o_rdwr; references = 1} in
++  Hashtbl.add process.descriptors 0 {file = terminal_file 0; flags = 0l};
++  Hashtbl.add process.descriptors 1 {file = terminal_file 1; flags = 0l};
++  Hashtbl.add process.descriptors 2 {file = terminal_file 2; flags = 0l};
++  Hashtbl.add system.processes_ process.id process;
++  system, process
++
++let kernel process = process.system
++let pid process = process.id
++let ppid process = process.parent
++let pgid process = process.group
++let sid process = process.session_
++let status process = process.state
++let cwd process = process.cwd_
++let find_process system id = Hashtbl.find_opt system.processes_ id
++let processes system = Hashtbl.fold (fun _ process result -> process :: result) system.processes_ []
++let children process = List.filter (fun child -> child.parent = process.id) (processes process.system)
++
++let descriptor_copy descriptor =
++  descriptor.file.references <- descriptor.file.references + 1;
++  {file = descriptor.file; flags = descriptor.flags}
++
++let release_descriptor descriptor =
++  descriptor.file.references <- descriptor.file.references - 1;
++  if descriptor.file.references = 0 then match descriptor.file.open_kind with
++    | Pipe_read pipe -> pipe.readers <- pipe.readers - 1
++    | Pipe_write pipe -> pipe.writers <- pipe.writers - 1
++    | Node _ -> ()
++
++let fork parent =
++  let system = parent.system in
++  let id = system.next_pid in
++  system.next_pid <- Int32.succ id;
++  let descriptors = Hashtbl.create (Hashtbl.length parent.descriptors + 1) in
++  Hashtbl.iter (fun fd descriptor -> Hashtbl.add descriptors fd (descriptor_copy descriptor)) parent.descriptors;
++  let child =
++    {system; id; parent = parent.id; group = parent.group; session_ = parent.session_;
++     state = Running; cwd_ = parent.cwd_; umask = parent.umask; descriptors;
++     child_events = []; alarm_deadline = None; timer_deadline = None;
++     timer_interval = 0L} in
++  Hashtbl.add system.processes_ id child;
++  child
++
++let clone_isolated _process = create ()
++
++let notify_parent process event =
++  match find_process process.system process.parent with
++  | None -> ()
++  | Some parent -> parent.child_events <- parent.child_events @ [process.id, event]
++
++let terminate process cause =
++  match process.state with
++  | Zombie _ -> ()
++  | Running | Stopped _ ->
++    Hashtbl.iter (fun _ descriptor -> release_descriptor descriptor) process.descriptors;
++    Hashtbl.clear process.descriptors;
++    List.iter (fun child -> child.parent <- 1l) (children process);
++    process.state <- Zombie cause;
++    notify_parent process (Exit_event (match cause with Exited code -> code lsl 8 | Signaled signal -> signal land 0x7f))
++
++let stop process signal =
++  match process.state with
++  | Running -> process.state <- Stopped signal; notify_parent process (Stop_event signal)
++  | _ -> ()
++
++let continue process =
++  match process.state with
++  | Stopped _ -> process.state <- Running; notify_parent process Continue_event
++  | _ -> ()
++
++let setpgid caller target group =
++  let target = if target = 0l then caller.id else target in
++  let group = if group = 0l then target else group in
++  match find_process caller.system target with
++  | None -> false
++  | Some process when process.id <> caller.id && process.parent <> caller.id -> false
++  | Some process when process.session_ <> caller.session_ || process.id = process.session_ -> false
++  | Some process -> process.group <- group; true
++
++let setsid process =
++  if process.group = process.id then None else begin
++    process.session_ <- process.id;
++    process.group <- process.id;
++    Some process.id
++  end
++
++let target_matches parent target child =
++  child.parent = parent.id && match target with
++  | Any_child -> true
++  | Child id -> child.id = id
++  | Process_group group -> child.group = group
++
++let waitpid parent target ~nohang ~untraced ~continued =
++  let matching = List.filter (target_matches parent target) (processes parent.system) in
++  if matching = [] then No_children else
++  let rec take before = function
++    | [] -> None
++    | ((child_id, event) as item) :: rest ->
++      begin match find_process parent.system child_id with
++      | Some child when target_matches parent target child ->
++        let accepted = match event with
++          | Exit_event _ -> true | Stop_event _ -> untraced | Continue_event -> continued in
++        if accepted then begin
++          parent.child_events <- List.rev_append before rest;
++          Some (child, event)
++        end else take (item :: before) rest
++      | _ -> take (item :: before) rest
++      end
++  in
++  match take [] parent.child_events with
++  | Some (child, Exit_event status) ->
++    Hashtbl.remove parent.system.processes_ child.id;
++    Child_exited (child.id, status)
++  | Some (child, Stop_event signal) -> Child_stopped (child.id, signal)
++  | Some (child, Continue_event) -> Child_continued child.id
++  | None -> if nohang then Would_block else Would_block
++
++let components path =
++  String.split_on_char '/' path |> List.filter (fun part -> part <> "" && part <> ".")
++
++let normalize cwd path =
++  let initial = if String.length path > 0 && path.[0] = '/' then [] else components cwd in
++  let rec fold result = function
++    | [] -> result
++    | ".." :: rest -> fold (match result with [] -> [] | _ :: tail -> tail) rest
++    | part :: rest -> fold (part :: result) rest
++  in
++  "/" ^ String.concat "/" (List.rev (fold (List.rev initial) (components path)))
++
++let lookup_absolute system path =
++  let rec walk node = function
++    | [] -> Some node
++    | part :: rest ->
++      begin match node.node_kind with
++      | Directory entries -> Option.bind (Hashtbl.find_opt entries part) (fun child -> walk child rest)
++      | _ -> None
++      end
++  in walk system.root (components path)
++
++let lookup process path = lookup_absolute process.system (normalize process.cwd_ path)
++
++let parent_and_name process path =
++  let absolute = normalize process.cwd_ path in
++  match List.rev (components absolute) with
++  | [] -> None
++  | name :: reverse_parent ->
++    Option.map (fun parent -> parent, name)
++      (lookup_absolute process.system ("/" ^ String.concat "/" (List.rev reverse_parent)))
++
++let allocate_fd process minimum =
++  let rec find fd =
++    if fd >= 1024 then None
++    else if Hashtbl.mem process.descriptors fd then find (fd + 1) else Some fd
++  in find (max 0 minimum)
++
++let allocate_file system kind status_flags =
++  system.next_file <- system.next_file + 1;
++  {open_kind = kind; offset = 0L; status_flags; references = 1}
++
++let open_file process path flags mode =
++  let existing = lookup process path in
++  let node_result = match existing with
++    | Some node when Int32.logand flags o_excl <> 0l && Int32.logand flags o_creat <> 0l -> Error errno_eexist
++    | Some node -> Ok node
++    | None when Int32.logand flags o_creat = 0l -> Error errno_enoent
++    | None ->
++      begin match parent_and_name process path with
++      | Some ({node_kind = Directory entries; _}, name) ->
++        let now = now_ms process in
++        let permissions = Int32.logand mode (Int32.lognot process.umask) in
++        let node = make_node process.system.next_inode (Int32.logor 0o100000l permissions) now (Regular (ref Bytes.empty)) in
++        process.system.next_inode <- Int64.succ process.system.next_inode;
++        Hashtbl.add entries name node;
++        Ok node
++      | Some _ -> Error errno_enotdir
++      | None -> Error errno_enoent
++      end
++  in
++  match node_result with
++  | Error error -> Error error
++  | Ok ({node_kind = Directory _; _}) when Int32.logand flags o_accmode <> o_rdonly -> Error errno_eisdir
++  | Ok node when Int32.logand flags o_directory <> 0l && (match node.node_kind with Directory _ -> false | _ -> true) -> Error errno_enotdir
++  | Ok node ->
++    begin match node.node_kind with
++    | Regular contents when Int32.logand flags o_trunc <> 0l && Int32.logand flags o_accmode <> o_rdonly -> contents := Bytes.empty
++    | _ -> ()
++    end;
++    begin match allocate_fd process 0 with
++    | None -> Error errno_emfile
++    | Some fd ->
++      let file = allocate_file process.system (Node node) flags in
++      if Int32.logand flags o_append <> 0l then begin
++        match node.node_kind with Regular contents -> file.offset <- Int64.of_int (Bytes.length !contents) | _ -> ()
++      end;
++      Hashtbl.add process.descriptors fd {file; flags = 0l};
++      Ok fd
++    end
++
++let close process fd =
++  match Hashtbl.find_opt process.descriptors fd with
++  | None -> Error errno_ebadf
++  | Some descriptor -> Hashtbl.remove process.descriptors fd; release_descriptor descriptor; Ok ()
++
++let dup process fd ~minimum ~cloexec =
++  match Hashtbl.find_opt process.descriptors fd, allocate_fd process minimum with
++  | None, _ -> Error errno_ebadf
++  | _, None -> Error errno_emfile
++  | Some descriptor, Some target ->
++    let copy = descriptor_copy descriptor in
++    copy.flags <- if cloexec then fd_cloexec else 0l;
++    Hashtbl.add process.descriptors target copy;
++    Ok target
++
++let dup2 process source target ~cloexec =
++  if target < 0 || target >= 1024 then Error errno_ebadf else
++  match Hashtbl.find_opt process.descriptors source with
++  | None -> Error errno_ebadf
++  | Some _ when source = target -> Ok target
++  | Some descriptor ->
++    Option.iter release_descriptor (Hashtbl.find_opt process.descriptors target);
++    let copy = descriptor_copy descriptor in
++    copy.flags <- if cloexec then fd_cloexec else 0l;
++    Hashtbl.replace process.descriptors target copy;
++    Ok target
++
++let pipe process =
++  match allocate_fd process 0 with
++  | None -> Error errno_emfile
++  | Some read_fd ->
++    let pipe = make_pipe process.system.next_pipe in
++    process.system.next_pipe <- process.system.next_pipe + 1;
++    pipe.readers <- 1; pipe.writers <- 1;
++    let read_file = allocate_file process.system (Pipe_read pipe) o_rdonly in
++    let write_file = allocate_file process.system (Pipe_write pipe) o_wronly in
++    Hashtbl.add process.descriptors read_fd {file = read_file; flags = 0l};
++    begin match allocate_fd process 0 with
++    | Some write_fd ->
++      Hashtbl.add process.descriptors write_fd {file = write_file; flags = 0l};
++      Ok (read_fd, write_fd)
++    | None ->
++      Hashtbl.remove process.descriptors read_fd;
++      release_descriptor {file = read_file; flags = 0l};
++      Error errno_emfile
++    end
++
++let can_read descriptor = Int32.logand descriptor.file.status_flags o_accmode <> o_wronly
++let can_write descriptor = Int32.logand descriptor.file.status_flags o_accmode <> o_rdonly
++let nonblocking descriptor = Int32.logand descriptor.file.status_flags o_nonblock <> 0l
++
++let read process fd count =
++  match Hashtbl.find_opt process.descriptors fd with
++  | None -> Read_error errno_ebadf
++  | Some descriptor when not (can_read descriptor) -> Read_error errno_ebadf
++  | Some descriptor ->
++    match descriptor.file.open_kind with
++    | Pipe_write _ -> Read_error errno_ebadf
++    | Pipe_read pipe ->
++      if pipe.length > 0 then Done (pipe_take pipe count)
++      else if pipe.writers = 0 then End_of_file
++      else if nonblocking descriptor then Read_error errno_eagain
++      else Blocked (Pipe_readable pipe)
++    | Node {node_kind = Regular contents; _} ->
++      let offset = Int64.to_int descriptor.file.offset in
++      let available = max 0 (Bytes.length !contents - offset) in
++      let count = min count available in
++      descriptor.file.offset <- Int64.add descriptor.file.offset (Int64.of_int count);
++      begin match descriptor.file.open_kind with Node node -> node.atime_ms <- now_ms process | _ -> () end;
++      if count = 0 then End_of_file else Done (Bytes.sub_string !contents offset count)
++    | Node {node_kind = Directory _; _} -> Read_error errno_eisdir
++    | Node {node_kind = Terminal tty; _} ->
++      if process.group <> tty.foreground_group then Read_signal 21 (* SIGTTIN *)
++      else if tty.input.length > 0 then Done (pipe_take tty.input count)
++      else if nonblocking descriptor then Read_error errno_eagain
++      else Blocked (Pipe_readable tty.input)
++
++let write_regular process node file contents string =
++  let offset =
++    if Int32.logand file.status_flags o_append <> 0l then Bytes.length !contents
++    else Int64.to_int file.offset in
++  let required = offset + String.length string in
++  if required > Bytes.length !contents then begin
++    let grown = Bytes.make required '\000' in
++    Bytes.blit !contents 0 grown 0 (Bytes.length !contents);
++    contents := grown
++  end;
++  Bytes.blit_string string 0 !contents offset (String.length string);
++  file.offset <- Int64.of_int required;
++  let now = now_ms process in
++  node.mtime_ms <- now;
++  node.ctime_ms <- now;
++  Written (String.length string)
++
++let write process fd string =
++  match Hashtbl.find_opt process.descriptors fd with
++  | None -> Write_error errno_ebadf
++  | Some descriptor when not (can_write descriptor) -> Write_error errno_ebadf
++  | Some descriptor ->
++    match descriptor.file.open_kind with
++    | Pipe_read _ -> Write_error errno_ebadf
++    | Pipe_write pipe ->
++      if pipe.readers = 0 then Write_error errno_epipe else
++      let count = pipe_push pipe string in
++      if count > 0 then Written count
++      else if nonblocking descriptor then Write_error errno_eagain
++      else Write_blocked (Pipe_writable pipe)
++    | Node ({node_kind = Regular contents; _} as node) -> write_regular process node descriptor.file contents string
++    | Node {node_kind = Directory _; _} -> Write_error errno_eisdir
++    | Node {node_kind = Terminal tty; _} ->
++      Buffer.add_string tty.output string;
++      Written (String.length string)
++
++let seek process fd offset whence =
++  match Hashtbl.find_opt process.descriptors fd with
++  | None -> Error errno_ebadf
++  | Some {file = {open_kind = (Pipe_read _ | Pipe_write _ | Node {node_kind = Terminal _; _}); _}; _} -> Error errno_espipe
++  | Some descriptor ->
++    let size = match descriptor.file.open_kind with Node {node_kind = Regular bytes; _} -> Int64.of_int (Bytes.length !bytes) | _ -> 0L in
++    let base = match whence with 0 -> 0L | 1 -> descriptor.file.offset | 2 -> size | _ -> -1L in
++    let result = Int64.add base offset in
++    if base < 0L || result < 0L then Error errno_einval
++    else (descriptor.file.offset <- result; Ok result)
++
++let fd_flags process fd = match Hashtbl.find_opt process.descriptors fd with None -> Error errno_ebadf | Some descriptor -> Ok descriptor.flags
++let set_fd_flags process fd flags = match Hashtbl.find_opt process.descriptors fd with None -> Error errno_ebadf | Some descriptor -> descriptor.flags <- Int32.logand flags fd_cloexec; Ok ()
++let status_flags process fd = match Hashtbl.find_opt process.descriptors fd with None -> Error errno_ebadf | Some descriptor -> Ok descriptor.file.status_flags
++let set_status_flags process fd flags = match Hashtbl.find_opt process.descriptors fd with None -> Error errno_ebadf | Some descriptor -> descriptor.file.status_flags <- flags; Ok ()
++let fchmod process fd mode = match Hashtbl.find_opt process.descriptors fd with
++  | None -> Error errno_ebadf
++  | Some {file = {open_kind = Node node; _}; _} ->
++    node.mode <- Int32.logor (Int32.logand node.mode 0o170000l) (Int32.logand mode 0o7777l);
++    node.ctime_ms <- now_ms process;
++    Ok ()
++  | Some _ -> Error errno_einval
++let umask process mask = let previous = process.umask in process.umask <- Int32.logand mask 0o777l; previous
++
++let chdir process path =
++  match lookup process path with
++  | Some {node_kind = Directory _; _} -> process.cwd_ <- normalize process.cwd_ path; Ok ()
++  | Some _ -> Error errno_enotdir
++  | None -> Error errno_enoent
++
++let getcwd process = process.cwd_
++
++let mkdir process path mode =
++  if lookup process path <> None then Error errno_eexist else
++  match parent_and_name process path with
++  | Some ({node_kind = Directory entries; _}, name) ->
++    let now = now_ms process in
++    let node = make_node process.system.next_inode (Int32.logor 0o040000l (Int32.logand mode (Int32.lognot process.umask))) now (Directory (Hashtbl.create 8)) in
++    process.system.next_inode <- Int64.succ process.system.next_inode;
++    Hashtbl.add entries name node;
++    Ok ()
++  | Some _ -> Error errno_enotdir
++  | None -> Error errno_enoent
++
++let unlink process path ~directory =
++  match parent_and_name process path with
++  | Some ({node_kind = Directory entries; _}, name) ->
++    begin match Hashtbl.find_opt entries name with
++    | None -> Error errno_enoent
++    | Some {node_kind = Directory _; _} when not directory -> Error errno_eisdir
++    | Some {node_kind = Directory children; _} when Hashtbl.length children <> 0 -> Error errno_enotempty
++    | Some node -> node.links <- Int32.pred node.links; Hashtbl.remove entries name; Ok ()
++    end
++  | Some _ -> Error errno_enotdir
++  | None -> Error errno_enoent
++
++let rename process old_path new_path =
++  match parent_and_name process old_path, parent_and_name process new_path with
++  | Some ({node_kind = Directory old_entries; _}, old_name), Some ({node_kind = Directory new_entries; _}, new_name) ->
++    begin match Hashtbl.find_opt old_entries old_name with
++    | None -> Error errno_enoent
++    | Some node ->
++      node.ctime_ms <- now_ms process;
++      Hashtbl.replace new_entries new_name node;
++      Hashtbl.remove old_entries old_name;
++      Ok ()
++    end
++  | _ -> Error errno_enoent
++
++let access process path = lookup process path <> None
++
++type node_info =
++{
++  inode : int64; mode : int32; size : int64; links : int32; uid : int32; gid : int32;
++  atime_ms : int64; mtime_ms : int64; ctime_ms : int64;
++}
++
++let node_info node =
++  let size = match node.node_kind with Regular bytes -> Int64.of_int (Bytes.length !bytes) | _ -> 0L in
++  {inode = node.inode; mode = node.mode; size; links = node.links; uid = node.uid; gid = node.gid;
++   atime_ms = node.atime_ms; mtime_ms = node.mtime_ms; ctime_ms = node.ctime_ms}
++
++let stat process path ~follow:_ = match lookup process path with None -> Error errno_enoent | Some node -> Ok (node_info node)
++let fstat process fd = match Hashtbl.find_opt process.descriptors fd with
++  | None -> Error errno_ebadf
++  | Some {file = {open_kind = Node node; _}; _} -> Ok (node_info node)
++  | Some _ -> Ok {inode = 0L; mode = 0o010600l; size = 0L; links = 1l; uid = 0l; gid = 0l; atime_ms = 0L; mtime_ms = 0L; ctime_ms = 0L}
++
++let terminal_of_fd process fd = match Hashtbl.find_opt process.descriptors fd with
++  | Some {file = {open_kind = Node {node_kind = Terminal terminal; _}; _}; _} -> Some terminal
++  | _ -> None
++
++let isatty process fd = terminal_of_fd process fd <> None
++let tty_foreground_group process fd = match terminal_of_fd process fd with None -> Error errno_enotty | Some tty -> Ok tty.foreground_group
++let group_exists system group session = List.exists (fun process -> process.group = group && process.session_ = session) (processes system)
++let tty_set_foreground_group process fd group = match terminal_of_fd process fd with
++  | None -> Error errno_enotty
++  | Some tty when tty.controlling_session <> process.session_ -> Error errno_eperm
++  | Some _ when not (group_exists process.system group process.session_) -> Error errno_esrch
++  | Some tty -> tty.foreground_group <- group; Ok ()
++let tty_get_attributes process fd = match terminal_of_fd process fd with None -> Error errno_enotty | Some tty -> Ok tty.attributes
++let tty_set_attributes process fd attributes = match terminal_of_fd process fd with None -> Error errno_enotty | Some tty -> tty.attributes <- attributes; Ok ()
++let terminal_output system = Buffer.contents system.tty.output
++let terminal_feed system string = ignore (pipe_push system.tty.input string)
++
++let remaining now = function None -> 0L | Some deadline -> max 0L (Int64.sub deadline now)
++let set_alarm process seconds =
++  let now = now_ms process in
++  let previous = Int64.div (Int64.add (remaining now process.alarm_deadline) 999L) 1000L in
++  process.alarm_deadline <- if seconds = 0L then None else Some (Int64.add now (Int64.mul seconds 1000L));
++  previous
++
++let set_interval_timer process ~initial_ms ~interval_ms =
++  let now = now_ms process in
++  let previous = remaining now process.timer_deadline, process.timer_interval in
++  process.timer_deadline <- if initial_ms = 0L then None else Some (Int64.add now initial_ms);
++  process.timer_interval <- interval_ms;
++  previous
++
++let poll_timers process =
++  let now = now_ms process in
++  let signals = ref [] in
++  begin match process.alarm_deadline with
++  | Some deadline when deadline <= now -> process.alarm_deadline <- None; signals := 14 :: !signals
++  | _ -> ()
++  end;
++  begin match process.timer_deadline with
++  | Some deadline when deadline <= now ->
++    signals := 14 :: !signals;
++    process.timer_deadline <- if process.timer_interval = 0L then None else Some (Int64.add now process.timer_interval)
++  | _ -> ()
++  end;
++  !signals
++
++let wait_ready process = function
++  | Pipe_readable pipe -> pipe.length > 0 || pipe.writers = 0
++  | Pipe_writable pipe -> pipe.readers = 0 || pipe.length < pipe_capacity pipe
++  | Child_changed -> process.child_events <> []
++  | Deadline deadline -> now_ms process >= deadline
++  | Process_running stopped -> stopped.state = Running
++
++let deadline_wait deadline = Deadline deadline
++let child_wait = Child_changed
++let stopped_wait process = Process_running process
++
++let next_timer_delay_ms process =
++  let now = now_ms process in
++  let deadlines = List.filter_map (fun value -> value) [process.alarm_deadline; process.timer_deadline] in
++  match List.sort Int64.compare deadlines with [] -> None | deadline :: _ -> Some (max 0L (Int64.sub deadline now))
++
++let signal_targets caller target =
++  let all = processes caller.system in
++  if target > 0l then Option.map (fun process -> [process]) (find_process caller.system target)
++  else if target = 0l then Some (List.filter (fun process -> process.group = caller.group) all)
++  else if target = -1l then Some (List.filter (fun process -> process.id <> 1l) all)
++  else Some (List.filter (fun process -> process.group = Int32.neg target) all)
++
++let process_group_targets caller group =
++  let group = if group = 0l then caller.group else group in
++  let targets = List.filter (fun process -> process.group = group) (processes caller.system) in
++  if targets = [] then None else Some targets
+diff --git 1/interpreter/host/posix_kernel.mli 2/interpreter/host/posix_kernel.mli
+new file mode 100644
+index 000000000..f32cdda30
+--- /dev/null
++++ 2/interpreter/host/posix_kernel.mli
+@@ -0,0 +1,126 @@
++type pid = int32
++
++type exit_cause = Exited of int | Signaled of int
++type process_status = Running | Stopped of int | Zombie of exit_cause
++
++type wait_target = Any_child | Child of pid | Process_group of pid
++type wait_event =
++  | Child_exited of pid * int
++  | Child_stopped of pid * int
++  | Child_continued of pid
++  | No_children
++  | Would_block
++
++type wait_reason
++type io_result = Done of string | End_of_file | Blocked of wait_reason | Read_signal of int | Read_error of int
++type write_result = Written of int | Write_blocked of wait_reason | Write_error of int
++
++type clock = unit -> int64
++type kernel
++type process
++
++val create : ?clock:clock -> unit -> kernel * process
++val clone_isolated : process -> kernel * process
++val fork : process -> process
++
++val kernel : process -> kernel
++val pid : process -> pid
++val ppid : process -> pid
++val pgid : process -> pid
++val sid : process -> pid
++val status : process -> process_status
++val cwd : process -> string
++
++val find_process : kernel -> pid -> process option
++val processes : kernel -> process list
++val children : process -> process list
++
++val setpgid : process -> pid -> pid -> bool
++val setsid : process -> pid option
++val terminate : process -> exit_cause -> unit
++val stop : process -> int -> unit
++val continue : process -> unit
++val waitpid : process -> wait_target -> nohang:bool -> untraced:bool -> continued:bool -> wait_event
++
++val open_file : process -> string -> int32 -> int32 -> (int, int) result
++val close : process -> int -> (unit, int) result
++val dup : process -> int -> minimum:int -> cloexec:bool -> (int, int) result
++val dup2 : process -> int -> int -> cloexec:bool -> (int, int) result
++val pipe : process -> ((int * int), int) result
++val read : process -> int -> int -> io_result
++val write : process -> int -> string -> write_result
++val seek : process -> int -> int64 -> int -> (int64, int) result
++val fd_flags : process -> int -> (int32, int) result
++val set_fd_flags : process -> int -> int32 -> (unit, int) result
++val status_flags : process -> int -> (int32, int) result
++val set_status_flags : process -> int -> int32 -> (unit, int) result
++val fchmod : process -> int -> int32 -> (unit, int) result
++val umask : process -> int32 -> int32
++
++val chdir : process -> string -> (unit, int) result
++val getcwd : process -> string
++val mkdir : process -> string -> int32 -> (unit, int) result
++val unlink : process -> string -> directory:bool -> (unit, int) result
++val rename : process -> string -> string -> (unit, int) result
++val access : process -> string -> bool
++
++type node_info =
++{
++  inode : int64;
++  mode : int32;
++  size : int64;
++  links : int32;
++  uid : int32;
++  gid : int32;
++  atime_ms : int64;
++  mtime_ms : int64;
++  ctime_ms : int64;
++}
++
++val stat : process -> string -> follow:bool -> (node_info, int) result
++val fstat : process -> int -> (node_info, int) result
++
++val isatty : process -> int -> bool
++val tty_foreground_group : process -> int -> (pid, int) result
++val tty_set_foreground_group : process -> int -> pid -> (unit, int) result
++val tty_get_attributes : process -> int -> (string, int) result
++val tty_set_attributes : process -> int -> string -> (unit, int) result
++val terminal_output : kernel -> string
++val terminal_feed : kernel -> string -> unit
++
++val set_alarm : process -> int64 -> int64
++val set_interval_timer : process -> initial_ms:int64 -> interval_ms:int64 -> int64 * int64
++val poll_timers : process -> int list
++val now_ms : process -> int64
++val wait_ready : process -> wait_reason -> bool
++val deadline_wait : int64 -> wait_reason
++val child_wait : wait_reason
++val stopped_wait : process -> wait_reason
++val next_timer_delay_ms : process -> int64 option
++
++val signal_targets : process -> pid -> process list option
++val process_group_targets : process -> pid -> process list option
++
++val errno_eperm : int
++val errno_enoent : int
++val errno_esrch : int
++val errno_eintr : int
++val errno_eio : int
++val errno_ebadf : int
++val errno_echild : int
++val errno_eagain : int
++val errno_enomem : int
++val errno_eacces : int
++val errno_efault : int
++val errno_ebusy : int
++val errno_eexist : int
++val errno_enotdir : int
++val errno_eisdir : int
++val errno_einval : int
++val errno_enfile : int
++val errno_emfile : int
++val errno_enotty : int
++val errno_espipe : int
++val errno_epipe : int
++val errno_erange : int
++val errno_enotempty : int
