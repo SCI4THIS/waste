@@ -577,10 +577,10 @@ index 0688131a6..78e2dceb6 100644
 +      (Func.alloc_host (deftype_of_typeuse ut) (Posix.request name)))
    | _ -> None
 diff --git c/interpreter/main/main.ml w/interpreter/main/main.ml
-index cab4a5638..10c5e1b87 100644
+index cab4a5638..c1c2c37d5 100644
 --- c/interpreter/main/main.ml
 +++ w/interpreter/main/main.ml
-@@ -20,6 +20,12 @@ let usage = "Usage: " ^ name ^ " [option] [file ...]"
+@@ -20,6 +20,13 @@ let usage = "Usage: " ^ name ^ " [option] [file ...]"
  let args = ref []
  let add_arg source = args := !args @ [source]
  
@@ -589,11 +589,12 @@ index cab4a5638..10c5e1b87 100644
 +let fail_last = ref false
 +let control_page = ref false
 +let browser_schedule = ref false
++let max_threads = ref max_int
 +
  let customs = ref []
  let add_custom name =
    let n = Utf8.decode name in
-@@ -42,6 +48,16 @@ let argspec = Arg.align
+@@ -42,6 +49,18 @@ let argspec = Arg.align
      " write module to file";
    "-b", Arg.Int (fun n -> Flags.budget := n),
      " configure call depth budget (default is " ^ string_of_int !Flags.budget ^ ")";
@@ -607,10 +608,12 @@ index cab4a5638..10c5e1b87 100644
 +    " poll the browser SharedArrayBuffer control page at every instruction";
 +  "--browser-schedule", Arg.Set browser_schedule,
 +    " yield each scheduler slice to the JavaScript event loop";
++  "--threads", Arg.Int (fun n -> max_threads := n),
++    " limit simultaneously runnable scheduled inputs";
    "-w", Arg.Int (fun n -> Flags.width := n),
      " configure output width (default is " ^ string_of_int !Flags.width ^ ")";
    "-c", Arg.String add_custom,
-@@ -58,20 +74,190 @@ let argspec = Arg.align
+@@ -58,20 +77,214 @@ let argspec = Arg.align
    "-v", Arg.Unit banner, " show version"
  ]
  
@@ -655,27 +658,44 @@ index cab4a5638..10c5e1b87 100644
 +  Printf.printf "WASTE_TASK %d\n%!" id
 +
 +let run_scheduled sources =
-+  if !quantum <= 0 then begin
++  if !quantum <= 0 || !max_threads <= 0 then begin
++    if !max_threads <= 0 then
++      prerr_endline "option --threads: thread count must be positive"
++    else
 +    prerr_endline "option -q: instruction quantum must be positive";
 +    false
 +  end else begin
 +    Eval.set_quantum !quantum;
 +    let initial_state = Run.save_state () in
 +    let tasks = Queue.create () in
++    let pending = Queue.create () in
 +    let blocked = ref [] in
 +    let deferred = ref None in
 +    let last = List.length sources - 1 in
 +    List.iteri (fun id source ->
-+      let group = {result_id = id; live = 1; successful = true} in
-+      let task =
-+        {id; group; state = Run.fork_state initial_state; waiting = None;
-+         resume = (fun () -> run_slice (fun () ->
-+           try Finished (Run.run_string source)
-+           with Posix.Terminated status -> Finished (status = 0)))}
-+      in
-+      if !fail_last && id = last then deferred := Some task else
-+      Queue.add task tasks
++      if !fail_last && id = last then deferred := Some (id, source)
++      else Queue.add (id, source) pending
 +    ) sources;
++    let active = ref 0 in
++    let make_task id source =
++      let group = {result_id = id; live = 1; successful = true} in
++      {id; group; state = Run.fork_state initial_state; waiting = None;
++       resume = (fun () -> run_slice (fun () ->
++         try Finished (Run.run_string source)
++         with Posix.Terminated status -> Finished (status = 0)))}
++    in
++    let fill_slots () =
++      while !active < !max_threads && not (Queue.is_empty pending) do
++        let id, source = Queue.take pending in
++        Queue.add (make_task id source) tasks;
++        incr active
++      done
++    in
++    let deferred = match !deferred with
++      | None -> None
++      | Some (id, source) -> Some (make_task id source)
++    in
++    fill_slots ();
 +    let success = ref true in
 +    let enqueue_spawned task =
 +      List.iter (fun child ->
@@ -709,10 +729,12 @@ index cab4a5638..10c5e1b87 100644
 +        task.group.live <- task.group.live - 1;
 +        if task.group.live = 0 then begin
 +          success := false;
-+          report_task task.group.result_id false
++          report_task task.group.result_id false;
++          decr active
 +        end
 +      ) !blocked;
-+      blocked := []
++      blocked := [];
++      fill_slots ()
 +    in
 +    let finished = ref false in
 +    let finish () =
@@ -721,7 +743,7 @@ index cab4a5638..10c5e1b87 100644
 +        Option.iter (fun task ->
 +          success := false;
 +          report_task task.id false
-+        ) !deferred;
++        ) deferred;
 +        Run.restore_state initial_state;
 +        Eval.set_quantum 0;
 +        if !browser_schedule then
@@ -731,6 +753,7 @@ index cab4a5638..10c5e1b87 100644
 +    let rec run_ready_tasks () =
 +      if not !finished then begin
 +        wake_blocked ();
++        fill_slots ();
 +        if Queue.is_empty tasks then begin
 +          match !blocked, next_timer_delay () with
 +          | [], _ -> finish ()
@@ -739,7 +762,9 @@ index cab4a5638..10c5e1b87 100644
 +          | _, Some delay ->
 +            Control.sleep_ms delay;
 +            run_ready_tasks ()
-+          | _, None -> fail_blocked (); finish ()
++          | _, None ->
++            fail_blocked ();
++            if Queue.is_empty tasks then finish ()
 +        end;
 +        if not (Queue.is_empty tasks) then begin
 +          let task = Queue.take tasks in
@@ -763,7 +788,9 @@ index cab4a5638..10c5e1b87 100644
 +            task.group.live <- task.group.live - 1;
 +            if task.group.live = 0 then begin
 +              if not task.group.successful then success := false;
-+              report_task task.group.result_id task.group.successful
++              report_task task.group.result_id task.group.successful;
++              decr active;
++              fill_slots ()
 +            end
 +          | Suspended (waiting, resume) ->
 +            task.resume <- resume;

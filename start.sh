@@ -22,9 +22,7 @@ LOG_FILE="$REPO_ROOT/build.log"
 UPDATE_LOG="$REPO_ROOT/update.log"
 BROWSER_TEST_GENERATOR="$REPO_ROOT/tools/generate-browser-tests.py"
 BROWSER_TEST_HTML="$BUILD_ROOT/browser-tests.html"
-BROWSER_THREADED_HTML="$BUILD_ROOT/browser-tests-threaded.html"
 HTML_LOG="$REPO_ROOT/html.log"
-THREADED_HTML_LOG="$REPO_ROOT/threaded-html.log"
 
 SWITCH_NAME="${WASTE_OCAML_SWITCH:-waste-wasm}"
 OCAML_VERSION="${WASTE_OCAML_VERSION:-5.3.0}"
@@ -45,8 +43,6 @@ interpreter to WebAssembly.
   --install-deps   interactively install missing dependencies
   --compile        compile without opening the main menu
   --generate-html  generate the embedded browser test dashboard
-  --generate-threaded-html
-                   generate the cooperative threaded browser dashboard
   --patch-status   show the Wasm32 compatibility patch status
   --apply-i31      apply the Wasm32 patch (legacy option name)
   --revert-i31     revert the Wasm32 patch (legacy option name)
@@ -583,16 +579,15 @@ compile_interpreter() {
 }
 
 generate_browser_test_html() {
-  local mode="${1:-sequential}"
-  local quantum="${2:-${WASTE_INSTRUCTION_QUANTUM:-10000}}"
+  local quantum="${WASTE_INSTRUCTION_QUANTUM:-10000}"
   local output="$BROWSER_TEST_HTML"
+  local legacy_output="$BUILD_ROOT/browser-tests-threaded.html"
   local html_log="$HTML_LOG"
-  local description="sequential"
   local loader_dist="$THREADED_DIST_DIR"
-  if [[ "$mode" == "threaded" ]]; then
-    output="$BROWSER_THREADED_HTML"
-    html_log="$THREADED_HTML_LOG"
-    description="cooperative threaded"
+  if have_command whiptail && [[ -t 0 && -t 1 ]]; then
+    quantum="$(whiptail --title "Cooperative scheduler" --inputbox \
+      "Interpreter steps per test before switching:" 9 64 "$quantum" \
+      3>&1 1>&2 2>&3)" || return 1
   fi
   if [[ ! "$quantum" =~ ^[1-9][0-9]*$ ]]; then
     show_message "Browser test dashboard" "Instruction quantum must be a positive integer."
@@ -601,7 +596,7 @@ generate_browser_test_html() {
 
   : >"$html_log"
   {
-    printf 'WASTE %s browser test dashboard generation\n' "$description"
+    printf 'WASTE browser test dashboard generation\n'
     printf 'Started: %s\n' "$(date --iso-8601=seconds)"
     printf 'Output: %s\n' "$output"
     printf 'Instruction quantum: %s\n\n' "$quantum"
@@ -631,23 +626,17 @@ generate_browser_test_html() {
   fi
 
   if ! python3 "$BROWSER_TEST_GENERATOR" --repo-root "$REPO_ROOT" \
-      --mode "$mode" --quantum "$quantum" --output "$output" >>"$html_log" 2>&1; then
+      --quantum "$quantum" --output "$output" >>"$html_log" 2>&1; then
     show_message "Browser test dashboard failed" "HTML generation failed.\n\nLog: $html_log"
     return 1
   fi
+  if [[ -f "$legacy_output" ]]; then
+    rm -- "$legacy_output"
+    printf 'Removed obsolete output: %s\n' "$legacy_output" >>"$html_log"
+  fi
 
   show_message "Browser test dashboard generated" \
-    "A self-contained $description HTML dashboard was generated with the OCaml Wasm and all .wast tests embedded.\n\nOutput: $output\nLog: $html_log"
-}
-
-generate_threaded_browser_test_html() {
-  local quantum="${WASTE_INSTRUCTION_QUANTUM:-10000}"
-  if have_command whiptail && [[ -t 0 && -t 1 ]]; then
-    quantum="$(whiptail --title "Cooperative scheduler" --inputbox \
-      "Interpreter steps per test before switching:" 9 64 "$quantum" \
-      3>&1 1>&2 2>&3)" || return 1
-  fi
-  generate_browser_test_html threaded "$quantum"
+    "A self-contained HTML dashboard was generated with the OCaml Wasm and all .wast tests embedded.\n\nOutput: $output\nLog: $html_log"
 }
 
 dependency_menu() {
@@ -687,10 +676,9 @@ main_menu() {
     local choice
     patch_state="$(i31_patch_status)"
     choice="$(whiptail --title "OCaml to WebAssembly" --menu \
-      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 25 92 8 \
+      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 24 92 7 \
       compile "Compile the OCaml interpreter to Wasm" \
       html "Generate embedded browser test dashboard" \
-      threaded "Generate cooperative threaded browser dashboard" \
       patch "Manage Wasm32 compatibility patch [$patch_state]" \
       update "Safe pull/rebase and submodule update" \
       status "Show dependency status" \
@@ -700,7 +688,6 @@ main_menu() {
     case "$choice" in
       compile) compile_interpreter || true ;;
       html) generate_browser_test_html || true ;;
-      threaded) generate_threaded_browser_test_html || true ;;
       patch) i31_patch_menu ;;
       update) safe_repository_update || true ;;
       status)
@@ -739,7 +726,6 @@ main() {
     --install-deps) install_missing_dependencies ;;
     --compile) compile_interpreter ;;
     --generate-html) generate_browser_test_html ;;
-    --generate-threaded-html) generate_threaded_browser_test_html ;;
     --patch-status) i31_patch_status ;;
     --apply-i31) apply_i31_patch ;;
     --revert-i31) revert_i31_patch ;;

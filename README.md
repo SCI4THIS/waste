@@ -34,9 +34,8 @@ build/ocaml-wasm/dist-threaded/wasm_cli.bc.wasm.assets/
 
 The `dist` interpreter preserves the original direct build. The
 `dist-threaded` interpreter uses the CPS effect backend required to suspend and
-resume evaluator continuations. Both browser dashboards embed the CPS artifact;
-the sequential dashboard still creates only one logical task in each fresh
-worker.
+resume evaluator continuations. The browser dashboard embeds the CPS artifact
+and controls how many logical test tasks may be runnable at once.
 
 The most recent build transcript is written to `build.log` in the repository
 root, including dependency failures and the Dune compiler output.
@@ -59,7 +58,6 @@ Useful non-interactive commands are:
 ./start.sh --install-deps
 ./start.sh --compile
 ./start.sh --generate-html
-./start.sh --generate-threaded-html
 ./start.sh --patch-status
 ./start.sh --apply-i31
 ./start.sh --revert-i31
@@ -77,18 +75,17 @@ Test all records and displays its local start and finish times; both timestamps
 are included in the downloaded report. Test all runs each displayed directory
 group in order. Legacy exception groups are highlighted as unsupported and are
 excluded from Test all, while remaining available for explicit runs. All custom
-annotation handlers are enabled for browser tests. Every test gets a fresh Web
-Worker so failures remain isolated. This original dashboard explicitly uses one
-test thread. Generated compiler artifacts under test `_output` directories are
-excluded from discovery.
+annotation handlers are enabled for browser tests. Generated compiler artifacts
+under test `_output` directories are excluded from discovery.
 
-The **Generate cooperative threaded browser dashboard** entry creates
-`build/ocaml-wasm/browser-tests-threaded.html`. Test all passes the 261 supported
-scripts to one OCaml Wasm interpreter instance. The interpreter maintains a
-continuation and isolated runner state for every logical test, then schedules
-them round-robin. The instruction-quantum input controls how many evaluator
-steps a test receives before it yields. The default is 10,000 and can also be
-set for non-interactive generation with `WASTE_INSTRUCTION_QUANTUM`.
+The dashboard offers thread-count choices of **1**, **#tests** (currently 261),
+or a custom positive integer. Test all passes every supported script to one
+OCaml Wasm interpreter instance. The interpreter starts at most the selected
+number of isolated logical tasks and starts queued tests as earlier tasks
+finish. Each task retains its own continuation and runner state. The
+instruction-quantum input controls how many evaluator steps a runnable task
+receives before it yields. The default is 10,000 and can also be set during
+non-interactive generation with `WASTE_INSTRUCTION_QUANTUM`.
 
 This is deterministic cooperative threading on one browser execution thread,
 not multicore WebAssembly shared-memory threading. Logical tests share the
@@ -97,7 +94,7 @@ registries, stacks, and program counters remain isolated. Keeping module memory
 isolated is required for the specification tests to remain independent.
 Because `core/custom.wast` intentionally triggers the accepted `-c custom`
 handler failure, and CPS turns that recursive handler path into a non-terminating
-loop rather than a promptly catchable host stack overflow, the threaded runner
+loop rather than a promptly catchable host stack overflow, the cooperative runner
 records it as the known failure after all runnable logical threads finish. Its
 source is included in the batch, but the recursive handler is not entered.
 
@@ -107,7 +104,7 @@ submodules, and reapplies the patch only when the updated spec does not already
 contain it. It refuses to proceed over unmanaged submodule changes. Its latest
 transcript is stored in `update.log`.
 
-The generated dashboards remain single, self-contained HTML files that can be
+The generated dashboard remains a single, self-contained HTML file that can be
 opened directly with `file://`. **Pause**, **Resume**, and **Send signal** use
 worker messages: the CPS interpreter returns to the worker event loop after
 each instruction quantum, then continues with the same evaluator continuation.

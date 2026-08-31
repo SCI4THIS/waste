@@ -6,7 +6,7 @@ channel; the OCaml runtime owns process semantics.
 
 ## Browser control channel and control-page ABI (version 1)
 
-The self-contained dashboards use the CPS interpreter and yield to the worker
+The self-contained dashboard uses the CPS interpreter and yields to the worker
 event loop after each configured instruction quantum. Pause and resume are
 worker messages which gate the next continuation slice. A signal message is
 written by that same worker into a local `Int32Array` exposed as

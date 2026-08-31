@@ -130,6 +130,12 @@ HTML = r'''<!doctype html>
       color: var(--text);
       font: inherit;
     }
+    #execution-mode { display: flex; align-items: center; gap: 8px; }
+    #execution-mode label { display: inline-flex; align-items: center; gap: 3px; }
+    #custom-thread-count {
+      width: 72px; padding: 5px 7px; border: 1px solid #40506a;
+      border-radius: 6px; background: #111824; color: var(--text);
+    }
     #test-all-timing { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
     main { width: min(1180px, calc(100% - 32px)); margin: 24px auto 60px; }
     .notice {
@@ -219,15 +225,16 @@ HTML = r'''<!doctype html>
     "use strict";
     const PAYLOAD = __PAYLOAD__;
     const SUPPORTED_TESTS = PAYLOAD.tests.filter(test => !test.unsupported);
-    const EXECUTION_MODE = __EXECUTION_MODE__;
     const DEFAULT_QUANTUM = __DEFAULT_QUANTUM__;
-    const THREAD_COUNT = EXECUTION_MODE === "threaded" ? SUPPORTED_TESTS.length : 1;
     const TIMEOUT_MS = 30 * 60 * 1000;
     const results = new Map();
     const activeWorkers = new Set();
     let batchRunning = false;
     let testAllStartedAt = null;
     let testAllFinishedAt = null;
+    let threadCount = 1;
+    let lastRunThreadCount = 1;
+    let lastRunQuantum = DEFAULT_QUANTUM;
 
     const workerProgram = String.raw`
       "use strict";
@@ -310,7 +317,7 @@ HTML = r'''<!doctype html>
         if (data.tests) {
           globalThis.waste_argv = ["wasm", "-ca", "--schedule", "--browser-schedule", "--control-page"];
           if (data.failLast) globalThis.waste_argv.push("--fail-last");
-          globalThis.waste_argv.push("-q", String(data.quantum));
+          globalThis.waste_argv.push("-q", String(data.quantum), "--threads", String(data.threadCount));
           for (const test of data.tests) globalThis.waste_argv.push("-e", test.source);
         } else {
           globalThis.waste_argv = ["wasm", "-ca", "-e", data.source];
@@ -378,21 +385,67 @@ HTML = r'''<!doctype html>
         `${name} queued for ${activeWorkers.size} active runtime(s)`;
     }
 
+    function selectedThreadCount() {
+      const selected = document.querySelector('input[name="threads"]:checked').value;
+      if (selected === "all") threadCount = SUPPORTED_TESTS.length;
+      else if (selected === "custom") {
+        const custom = document.querySelector("#custom-thread-count");
+        const value = Number(custom.value);
+        if (!Number.isInteger(value) || value <= 0) {
+          custom.setCustomValidity("Thread count must be an integer greater than zero.");
+          custom.reportValidity();
+          return null;
+        }
+        custom.setCustomValidity("");
+        threadCount = value;
+      } else threadCount = 1;
+      return threadCount;
+    }
+
+    function selectedQuantum() {
+      return Math.max(1, Number(document.querySelector("#quantum").value) || DEFAULT_QUANTUM);
+    }
+
     function render() {
       const executionMode = document.querySelector("#execution-mode");
-      if (EXECUTION_MODE === "threaded") {
-        executionMode.append(`Cooperative threads: ${THREAD_COUNT} · quantum: `);
-        const quantum = document.createElement("input");
-        quantum.id = "quantum";
-        quantum.type = "number";
-        quantum.min = "1";
-        quantum.step = "1000";
-        quantum.value = String(DEFAULT_QUANTUM);
-        quantum.title = "Interpreter steps executed by a test before switching";
-        executionMode.append(quantum, " steps");
-      } else {
-        executionMode.textContent = "Sequential threads: 1";
+      executionMode.append("Threads:");
+      for (const option of [
+        {value: "1", label: "1", checked: true},
+        {value: "all", label: `${SUPPORTED_TESTS.length} (#tests)`},
+        {value: "custom", label: "custom"}
+      ]) {
+        const label = document.createElement("label");
+        const radio = document.createElement("input");
+        radio.type = "radio";
+        radio.name = "threads";
+        radio.value = option.value;
+        radio.checked = option.checked || false;
+        label.append(radio, option.label);
+        executionMode.append(label);
       }
+      const custom = document.createElement("input");
+      custom.id = "custom-thread-count";
+      custom.type = "number";
+      custom.min = "1";
+      custom.step = "1";
+      custom.value = "2";
+      custom.disabled = true;
+      custom.title = "Maximum number of simultaneously runnable test threads";
+      executionMode.append(custom, "· quantum:");
+      const quantum = document.createElement("input");
+      quantum.id = "quantum";
+      quantum.type = "number";
+      quantum.min = "1";
+      quantum.step = "1000";
+      quantum.value = String(DEFAULT_QUANTUM);
+      quantum.title = "Interpreter steps executed by a test before switching";
+      executionMode.append(quantum, "steps");
+      executionMode.addEventListener("change", event => {
+        if (event.target.name === "threads") {
+          custom.disabled = event.target.value !== "custom";
+          selectedThreadCount();
+        }
+      });
       const container = document.querySelector("#groups");
       for (const [groupName, tests] of groupedTests()) {
         const section = document.createElement("section");
@@ -557,10 +610,9 @@ HTML = r'''<!doctype html>
           downloadedAt: new Date().toISOString(),
           userAgent: navigator.userAgent,
           execution: {
-            mode: EXECUTION_MODE,
-            threadCount: THREAD_COUNT,
-            instructionQuantum: EXECUTION_MODE === "threaded" ?
-              Math.max(1, Number(document.querySelector("#quantum")?.value) || DEFAULT_QUANTUM) : null
+            mode: "cooperative",
+            threadCount: lastRunThreadCount,
+            instructionQuantum: lastRunQuantum
           },
         testAll: {
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -618,15 +670,18 @@ HTML = r'''<!doctype html>
           else if (event.data.type === "done")
             finish(taskResult || event.data);
         };
+        const quantum = selectedQuantum();
+        lastRunThreadCount = 1;
+        lastRunQuantum = quantum;
         worker.postMessage({
           loader: PAYLOAD.loader, wasm: PAYLOAD.wasm,
-          tests: [test], quantum: DEFAULT_QUANTUM,
+          tests: [test], quantum, threadCount: 1,
           failLast: test.path === "core/custom.wast"
         });
       });
     }
 
-    function executeCooperatively(tests, onResult) {
+    function executeCooperatively(tests, requestedThreads, onResult) {
       return new Promise(resolve => {
         const workerUrl = URL.createObjectURL(new Blob([workerProgram], {type: "text/javascript"}));
         const worker = new Worker(workerUrl);
@@ -651,6 +706,7 @@ HTML = r'''<!doctype html>
           else if (event.data.type === "done") finish(event.data);
         };
         const quantum = Math.max(1, Number(document.querySelector("#quantum")?.value) || DEFAULT_QUANTUM);
+        lastRunQuantum = quantum;
         const failLast = tests.some(test => test.path === "core/custom.wast");
         const ordered = failLast ? [
           ...tests.filter(test => test.path !== "core/custom.wast"),
@@ -661,16 +717,18 @@ HTML = r'''<!doctype html>
           wasm: PAYLOAD.wasm,
           tests: ordered,
           quantum,
+          threadCount: requestedThreads,
           failLast
         });
       });
     }
 
-    async function runCooperativeBatch(tests) {
+    async function runCooperativeBatch(tests, requestedThreads) {
+      lastRunThreadCount = requestedThreads;
       const startedAt = performance.now();
       const pending = new Set(tests.map(test => test.path));
       for (const test of tests) setResult(test, "running");
-      const raw = await executeCooperatively(tests, result => {
+      const raw = await executeCooperatively(tests, requestedThreads, result => {
         const test = tests.find(candidate => candidate.path === result.path);
         if (!test || !pending.delete(test.path)) return;
         const durationMs = performance.now() - startedAt;
@@ -721,13 +779,14 @@ HTML = r'''<!doctype html>
 
     async function runBatch(tests) {
       if (batchRunning) return;
+      const requestedThreads = selectedThreadCount();
+      if (requestedThreads === null) return;
       batchRunning = true;
       document.querySelectorAll("button:not(.runtime-control)").forEach(button => button.disabled = true);
       const section = tests.length ? groupFor(tests[0].group) : null;
       section?.classList.add("active");
       try {
-        if (EXECUTION_MODE === "threaded") await runCooperativeBatch(tests);
-        else for (const test of tests) await runTest(test);
+        await runCooperativeBatch(tests, requestedThreads);
       } finally {
         section?.classList.remove("active");
         batchRunning = false;
@@ -738,33 +797,21 @@ HTML = r'''<!doctype html>
 
     async function runTestAll() {
       if (batchRunning) return;
+      const requestedThreads = selectedThreadCount();
+      if (requestedThreads === null) return;
       testAllStartedAt = new Date();
       testAllFinishedAt = null;
       updateTestAllTiming();
       batchRunning = true;
       document.querySelectorAll("button:not(.runtime-control)").forEach(button => button.disabled = true);
       try {
-        if (EXECUTION_MODE === "threaded") {
-          document.querySelectorAll(".group:not(.unsupported)")
-            .forEach(section => section.classList.add("active"));
-          try {
-            await runCooperativeBatch(SUPPORTED_TESTS);
-          } finally {
-            document.querySelectorAll(".group")
-              .forEach(section => section.classList.remove("active"));
-          }
-        } else {
-          for (const [groupName, tests] of groupedTests()) {
-            const supported = tests.filter(test => !test.unsupported);
-            if (supported.length === 0) continue;
-            const section = groupFor(groupName);
-            section?.classList.add("active");
-            try {
-              for (const test of supported) await runTest(test);
-            } finally {
-              section?.classList.remove("active");
-            }
-          }
+        document.querySelectorAll(".group:not(.unsupported)")
+          .forEach(section => section.classList.add("active"));
+        try {
+          await runCooperativeBatch(SUPPORTED_TESTS, requestedThreads);
+        } finally {
+          document.querySelectorAll(".group")
+            .forEach(section => section.classList.remove("active"));
         }
       } finally {
         batchRunning = false;
@@ -786,7 +833,6 @@ def main():
     parser = argparse.ArgumentParser(description="Generate the embedded WASTE browser test dashboard")
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--mode", choices=("sequential", "threaded"), default="sequential")
     parser.add_argument("--quantum", type=int, default=10_000)
     args = parser.parse_args()
 
@@ -794,16 +840,14 @@ def main():
         parser.error("--quantum must be positive")
 
     root = args.repo_root.resolve()
-    # Both dashboards use the CPS artifact so a running interpreter can retain
-    # its continuations while yielding to a static page's worker event loop.
-    # Sequential mode still creates exactly one isolated task per worker.
+    # The dashboard uses the CPS artifact so running evaluator tasks can retain
+    # their continuations while yielding to a static page's worker event loop.
     dist_name = "dist-threaded"
     dist = root / "build" / "ocaml-wasm" / dist_name
     loader_path = dist / "wasm_cli.bc.wasm.js"
     asset_dir = dist / "wasm_cli.bc.wasm.assets"
     test_root = root / "submodules" / "wasm-spec" / "test"
-    default_name = "browser-tests-threaded.html" if args.mode == "threaded" else "browser-tests.html"
-    output = args.output or root / "build" / "ocaml-wasm" / default_name
+    output = args.output or root / "build" / "ocaml-wasm" / "browser-tests.html"
 
     if not loader_path.is_file():
         raise SystemExit(f"compiled loader not found: {loader_path}")
@@ -825,24 +869,9 @@ def main():
     supported_count = sum(not test["unsupported"] for test in tests)
     document = (
         HTML.replace("__TEST_COUNT__", str(supported_count))
-        .replace(
-            "__EXECUTION_NOTICE__",
-            (
-                "Test all runs every supported test as a cooperative thread inside one compiled OCaml WebAssembly interpreter instance. Logical threads switch after the configured instruction quantum."
-                if args.mode == "threaded"
-                else "Each test runs in a fresh Web Worker containing the compiled OCaml reference interpreter. Thread count is fixed at 1."
-            ),
-        )
-        .replace(
-            "__TIMEOUT_NOTICE__",
-            (
-                "Individual runs and cooperative batches time out after 30 minutes."
-                if args.mode == "threaded"
-                else "A test times out after 30 minutes."
-            ),
-        )
+        .replace("__EXECUTION_NOTICE__", "Tests run as isolated cooperative tasks inside one compiled OCaml WebAssembly interpreter instance. Choose the maximum number of simultaneously runnable threads.")
+        .replace("__TIMEOUT_NOTICE__", "Individual runs and cooperative batches time out after 30 minutes.")
         .replace("__PAYLOAD__", script_json(payload))
-        .replace("__EXECUTION_MODE__", script_json(args.mode))
         .replace("__DEFAULT_QUANTUM__", str(args.quantum))
     )
     output.parent.mkdir(parents=True, exist_ok=True)
