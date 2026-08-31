@@ -104,7 +104,8 @@ submodules, and reapplies the patch only when the updated spec does not already
 contain it. It refuses to proceed over unmanaged submodule changes. Its latest
 transcript is stored in `update.log`.
 
-The generated loader and Wasm assets are the compiled command-line reference
-interpreter. A browser API for supplying WAT, presenting output, and controlling
-execution still needs to be added; compilation alone does not provide pause and
-resume semantics.
+The generated dashboards expose **Pause**, **Resume**, and **Send signal**
+controls when `SharedArrayBuffer` is available. They use a versioned atomic ring
+that the interpreter checks once per guest instruction. The signal and
+non-local-jump ABI, verification commands, and remaining POSIX boundary are
+documented in [docs/posix-runtime.md](docs/posix-runtime.md).

@@ -472,17 +472,19 @@ prepare_overlay() {
   sed -i 's/(modules :standard \\ main wasm wast smallint)/(modules :standard \\ main wasm_cli wast smallint)/' "$STAGING_DIR/dune"
   sed -i '/^(executable$/ { n; s/^  (public_name wasm)$/  (name wasm_cli)\n  (public_name wasm)/; }' "$STAGING_DIR/dune"
   sed -i '0,/^  (modules wasm)$/s//  (modules wasm_cli)\n  (modes exe wasm)/' "$STAGING_DIR/dune"
+  sed -i '0,/^  (libraries wasm)$/s//  (libraries wasm)\n  (wasm_of_ocaml (javascript_files host\/control_runtime.js host\/control_runtime.wat))/' "$STAGING_DIR/dune"
   sed -i 's/(targets wasm\.ml)/(targets wasm_cli.ml)/' "$STAGING_DIR/dune"
   sed -i 's/wasm\.ml))$/wasm_cli.ml))/' "$STAGING_DIR/dune"
 
   grep -Fqx '(lang dune 3.17)' "$STAGING_DIR/dune-project" &&
     grep -Fqx '  (modes exe wasm)' "$STAGING_DIR/dune" &&
-    grep -Fqx '  (name wasm_cli)' "$STAGING_DIR/dune"
+    grep -Fqx '  (name wasm_cli)' "$STAGING_DIR/dune" &&
+    grep -Fqx '  (wasm_of_ocaml (javascript_files host/control_runtime.js host/control_runtime.wat))' "$STAGING_DIR/dune"
 }
 
 enable_threaded_overlay() {
-  sed -i '0,/^  (libraries wasm)$/s//  (libraries wasm)\n  (wasm_of_ocaml (flags (:standard --effects cps)))/' "$STAGING_DIR/dune"
-  grep -Fqx '  (wasm_of_ocaml (flags (:standard --effects cps)))' "$STAGING_DIR/dune"
+  sed -i 's#(wasm_of_ocaml (javascript_files host/control_runtime.js host/control_runtime.wat))#(wasm_of_ocaml (flags (:standard --effects cps)) (javascript_files host/control_runtime.js host/control_runtime.wat))#' "$STAGING_DIR/dune"
+  grep -Fqx '  (wasm_of_ocaml (flags (:standard --effects cps)) (javascript_files host/control_runtime.js host/control_runtime.wat))' "$STAGING_DIR/dune"
 }
 
 compile_interpreter() {

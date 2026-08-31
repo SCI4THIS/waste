@@ -111,6 +111,11 @@ HTML = r'''<!doctype html>
     button:disabled { cursor: wait; opacity: .55; }
     #test-all { background: #14568a; border-color: #2580bd; font-weight: 650; }
     #download-results { background: #26374d; }
+    #runtime-controls { display: flex; gap: 6px; align-items: center; }
+    #runtime-controls select {
+      border: 1px solid #40506a; border-radius: 6px; padding: 6px;
+      background: #111824; color: var(--text); font: inherit;
+    }
     #summary { min-width: 235px; color: var(--muted); font-variant-numeric: tabular-nums; }
     #execution-mode { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
     #quantum {
@@ -185,6 +190,16 @@ HTML = r'''<!doctype html>
     <div id="execution-mode"></div>
     <div id="summary">0 / __TEST_COUNT__ completed</div>
     <div id="test-all-timing">Started at: — · Finished at: —</div>
+    <div id="runtime-controls">
+      <button class="runtime-control" id="pause-runtime" type="button">Pause</button>
+      <button class="runtime-control" id="resume-runtime" type="button">Resume</button>
+      <select class="runtime-control" id="signal-number" title="POSIX signal number">
+        <option value="2">SIGINT</option><option value="15">SIGTERM</option>
+        <option value="1">SIGHUP</option><option value="14">SIGALRM</option>
+        <option value="28">SIGWINCH</option>
+      </select>
+      <button class="runtime-control" id="send-signal" type="button">Send signal</button>
+    </div>
     <button id="download-results" type="button" disabled>Download results</button>
     <button id="test-all" type="button">Test all</button>
   </header>
@@ -205,6 +220,7 @@ HTML = r'''<!doctype html>
     const THREAD_COUNT = EXECUTION_MODE === "threaded" ? SUPPORTED_TESTS.length : 1;
     const TIMEOUT_MS = 120000;
     const results = new Map();
+    const activeControlPages = new Set();
     let batchRunning = false;
     let testAllStartedAt = null;
     let testAllFinishedAt = null;
@@ -243,6 +259,7 @@ HTML = r'''<!doctype html>
         };
         console.log = (...values) => capture(values);
         console.error = (...values) => capture(values);
+        if (data.controlPage) globalThis.waste_control_page = new Int32Array(data.controlPage);
         if (data.tests) {
           globalThis.waste_argv = ["wasm", "-ca", "--schedule"];
           if (data.failLast) globalThis.waste_argv.push("--fail-last");
@@ -251,6 +268,7 @@ HTML = r'''<!doctype html>
         } else {
           globalThis.waste_argv = ["wasm", "-ca", "-e", data.source];
         }
+        if (data.controlPage) globalThis.waste_argv.push("--control-page");
         globalThis.waste_exit_code = 0;
         const binary = atob(data.wasm);
         const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
@@ -288,6 +306,40 @@ HTML = r'''<!doctype html>
         groups.get(test.group).push(test);
       }
       return groups;
+    }
+
+    function createControlPage() {
+      if (typeof SharedArrayBuffer !== "function") return null;
+      const page = new Int32Array(new SharedArrayBuffer((4 + 256) * 4));
+      page[3] = 1; // control ABI version
+      return page;
+    }
+
+    function sendControl(page, operation, argument = 0) {
+      const sequence = Atomics.load(page, 0) + 1;
+      const slot = 4 + (sequence & 255);
+      Atomics.store(page, slot, (operation << 16) | (argument & 0xffff));
+      Atomics.store(page, 0, sequence);
+      Atomics.notify(page, 0);
+    }
+
+    function pauseRuntimes() {
+      for (const page of activeControlPages) {
+        Atomics.store(page, 1, 1);
+        sendControl(page, 1);
+      }
+    }
+
+    function resumeRuntimes() {
+      for (const page of activeControlPages) {
+        Atomics.store(page, 1, 0);
+        Atomics.notify(page, 1);
+      }
+    }
+
+    function signalRuntimes() {
+      const signal = Number(document.querySelector("#signal-number").value);
+      for (const page of activeControlPages) sendControl(page, 2, signal);
     }
 
     function render() {
@@ -365,6 +417,15 @@ HTML = r'''<!doctype html>
       }
       document.querySelector("#test-all").addEventListener("click", runTestAll);
       document.querySelector("#download-results").addEventListener("click", downloadResults);
+      document.querySelector("#pause-runtime").addEventListener("click", pauseRuntimes);
+      document.querySelector("#resume-runtime").addEventListener("click", resumeRuntimes);
+      document.querySelector("#send-signal").addEventListener("click", signalRuntimes);
+      if (typeof SharedArrayBuffer !== "function") {
+        document.querySelectorAll(".runtime-control").forEach(control => control.disabled = true);
+        document.querySelector(".notice").append(
+          " Shared memory controls require a cross-origin-isolated page (COOP/COEP)."
+        );
+      }
       updateSummary();
     }
 
@@ -506,19 +567,25 @@ HTML = r'''<!doctype html>
       return new Promise(resolve => {
         const workerUrl = URL.createObjectURL(new Blob([workerProgram], {type: "text/javascript"}));
         const worker = new Worker(workerUrl);
+        const controlPage = createControlPage();
+        if (controlPage) activeControlPages.add(controlPage);
         let finished = false;
         const finish = result => {
           if (finished) return;
           finished = true;
           clearTimeout(timer);
           worker.terminate();
+          if (controlPage) activeControlPages.delete(controlPage);
           URL.revokeObjectURL(workerUrl);
           resolve(result);
         };
         const timer = setTimeout(() => finish({ok: false, error: `Timed out after ${TIMEOUT_MS / 1000} seconds`}), TIMEOUT_MS);
         worker.onerror = event => finish({ok: false, error: event.message || "Worker error"});
         worker.onmessage = event => finish(event.data);
-        worker.postMessage({loader: PAYLOAD.loader, wasm: PAYLOAD.wasm, source: test.source});
+        worker.postMessage({
+          loader: PAYLOAD.loader, wasm: PAYLOAD.wasm, source: test.source,
+          controlPage: controlPage?.buffer
+        });
       });
     }
 
@@ -526,12 +593,15 @@ HTML = r'''<!doctype html>
       return new Promise(resolve => {
         const workerUrl = URL.createObjectURL(new Blob([workerProgram], {type: "text/javascript"}));
         const worker = new Worker(workerUrl);
+        const controlPage = createControlPage();
+        if (controlPage) activeControlPages.add(controlPage);
         let finished = false;
         const finish = result => {
           if (finished) return;
           finished = true;
           clearTimeout(timer);
           worker.terminate();
+          if (controlPage) activeControlPages.delete(controlPage);
           URL.revokeObjectURL(workerUrl);
           resolve(result);
         };
@@ -555,7 +625,8 @@ HTML = r'''<!doctype html>
           wasm: PAYLOAD.wasm,
           tests: ordered,
           quantum,
-          failLast
+          failLast,
+          controlPage: controlPage?.buffer
         });
       });
     }
@@ -616,7 +687,7 @@ HTML = r'''<!doctype html>
     async function runBatch(tests) {
       if (batchRunning) return;
       batchRunning = true;
-      document.querySelectorAll("button").forEach(button => button.disabled = true);
+      document.querySelectorAll("button:not(.runtime-control)").forEach(button => button.disabled = true);
       const section = tests.length ? groupFor(tests[0].group) : null;
       section?.classList.add("active");
       try {
@@ -625,7 +696,7 @@ HTML = r'''<!doctype html>
       } finally {
         section?.classList.remove("active");
         batchRunning = false;
-        document.querySelectorAll("button").forEach(button => button.disabled = false);
+        document.querySelectorAll("button:not(.runtime-control)").forEach(button => button.disabled = false);
         updateSummary();
       }
     }
@@ -636,7 +707,7 @@ HTML = r'''<!doctype html>
       testAllFinishedAt = null;
       updateTestAllTiming();
       batchRunning = true;
-      document.querySelectorAll("button").forEach(button => button.disabled = true);
+      document.querySelectorAll("button:not(.runtime-control)").forEach(button => button.disabled = true);
       try {
         if (EXECUTION_MODE === "threaded") {
           document.querySelectorAll(".group:not(.unsupported)")
@@ -664,7 +735,7 @@ HTML = r'''<!doctype html>
         batchRunning = false;
         testAllFinishedAt = new Date();
         updateTestAllTiming();
-        document.querySelectorAll("button").forEach(button => button.disabled = false);
+        document.querySelectorAll("button:not(.runtime-control)").forEach(button => button.disabled = false);
         updateSummary();
       }
     }

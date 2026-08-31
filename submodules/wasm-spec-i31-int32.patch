@@ -1,57 +1,17 @@
-diff --git a/interpreter/runtime/i31.ml b/interpreter/runtime/i31.ml
---- a/interpreter/runtime/i31.ml
-+++ b/interpreter/runtime/i31.ml
-@@ -1,17 +1,16 @@
- open Types
- open Value
+diff --git i/interpreter/binary/decode.ml w/interpreter/binary/decode.ml
+index f817ff260..1d1c270c4 100644
+--- i/interpreter/binary/decode.ml
++++ w/interpreter/binary/decode.ml
+@@ -101,7 +101,7 @@ let rec sN n s =
+   else Int64.(logor x (shift_left (sN (n - 7) s) 7))
  
--type i31 = int
-+type i31 = int32
- type t = i31
- 
- type ref_ += I31Ref of i31
- 
--let of_i32 i = Int32.to_int i land 0x7fff_ffff
-+let of_i32 i = Int32.logand i 0x7fff_ffffl
- let to_i32 sx i =
--  let i' = Int32.of_int i in
-   match sx with
--  | Pack.U -> i'
--  | Pack.S -> Int32.(shift_right (shift_left i' 1) 1)
-+  | Pack.U -> i
-+  | Pack.S -> Int32.(shift_right (shift_left i 1) 1)
- 
- let () =
-   let eq_ref' = !Value.eq_ref' in
-@@ -29,5 +28,5 @@ let () =
- let () =
-   let string_of_ref' = !Value.string_of_ref' in
-   Value.string_of_ref' := function
--    | I31Ref i -> "(i31 " ^ string_of_int i ^ ")"
-+    | I31Ref i -> "(i31 " ^ Int32.to_string i ^ ")"
-     | r -> string_of_ref' r
-diff --git a/interpreter/runtime/i31.mli b/interpreter/runtime/i31.mli
---- a/interpreter/runtime/i31.mli
-+++ b/interpreter/runtime/i31.mli
-@@ -1,6 +1,6 @@
- open Value
- 
--type i31 = int
-+type i31 = int32
- type t = i31
- 
- type ref_ += I31Ref of i31
-diff --git a/interpreter/binary/decode.ml b/interpreter/binary/decode.ml
---- a/interpreter/binary/decode.ml
-+++ b/interpreter/binary/decode.ml
-@@ -103,5 +103,5 @@ let rec sN n s =
  let u8 s = I8.of_int_u (I64.to_int_u (uN 8 s))
 -let u32 s = I32.of_int_u (I64.to_int_u (uN 32 s))
 +let u32 s = Int64.to_int32 (uN 32 s)
  let u64 s = uN 64 s
  let s7 s = I64.to_int_s (sN 7 s)
  let s32 s = I32.of_int_s (I64.to_int_s (sN 32 s))
-@@ -346,6 +346,8 @@ let locals s =
+@@ -347,7 +347,9 @@ let locals s =
    let pos = pos s in
    let nts = vec local s in
    let ns = List.map (fun (n, _) -> Convert.I64_.extend_i32_u n) nts in
@@ -61,21 +21,23 @@ diff --git a/interpreter/binary/decode.ml b/interpreter/binary/decode.ml
 +      List.for_all (fun (n, _) -> Int32.compare n 0l >= 0) nts)
      s pos "too many locals";
    List.flatten (List.map (Lib.Fun.uncurry Lib.List32.make) nts)
-diff --git a/interpreter/valid/valid.ml b/interpreter/valid/valid.ml
---- a/interpreter/valid/valid.ml
-+++ b/interpreter/valid/valid.ml
-@@ -385,6 +385,7 @@ let check_memop (c : context) (memop : ('t, 's) memop) ty_size get_sz at =
-       Pack.packed_size sz
-   in
--  require (1 lsl memop.align >= 1 && 1 lsl memop.align <= size) at
-+  require (memop.align >= 0 && memop.align < Sys.int_size &&
-+    1 lsl memop.align <= size) at
-     "alignment must not be larger than natural";
-   let MemoryT (at_, _lim) = memory c (0l @@ at) in
-   if at_ = I32AT then
-diff --git a/interpreter/exec/convert.ml b/interpreter/exec/convert.ml
---- a/interpreter/exec/convert.ml
-+++ b/interpreter/exec/convert.ml
+ 
+diff --git i/interpreter/dune w/interpreter/dune
+index fc6206248..fb8a79453 100644
+--- i/interpreter/dune
++++ w/interpreter/dune
+@@ -3,6 +3,7 @@
+ (library
+   (public_name wasm)
+   (modules :standard \ main wasm wast smallint)
++  (foreign_stubs (language c) (names control_stubs))
+ )
+ 
+ (executable
+diff --git i/interpreter/exec/convert.ml w/interpreter/exec/convert.ml
+index c7cdf09fc..ad833dae4 100644
+--- i/interpreter/exec/convert.ml
++++ w/interpreter/exec/convert.ml
 @@ -4,6 +4,8 @@ module I8_ =
  struct
    let sat_s x = min (max x (-0x80)) 0x7f
@@ -117,20 +79,10 @@ diff --git a/interpreter/exec/convert.ml b/interpreter/exec/convert.ml
  end
  
  module I32_ =
-diff --git a/interpreter/script/run.ml b/interpreter/script/run.ml
---- a/interpreter/script/run.ml
-+++ b/interpreter/script/run.ml
-@@ -26,6 +26,7 @@ struct
-   let validate_with_custom (m, cs) =
-     try Ok (Valid.check_module_with_custom (m, cs)) with
-     | Valid.Invalid (at, msg) -> Error (at, msg)
-+    | Custom.Invalid (at, msg) -> Error (at, msg)
- 
-   let instantiate m ims =
-     try Ok (result Eval.init m ims) with
-diff --git a/interpreter/exec/eval.ml b/interpreter/exec/eval.ml
---- a/interpreter/exec/eval.ml
-+++ b/interpreter/exec/eval.ml
+diff --git i/interpreter/exec/eval.ml w/interpreter/exec/eval.ml
+index ab78027fe..6493b2fdc 100644
+--- i/interpreter/exec/eval.ml
++++ w/interpreter/exec/eval.ml
 @@ -19,6 +19,27 @@ exception Crash = Crash.Error (* failure that cannot happen in valid code *)
  exception Exhaustion = Exhaustion.Error
  exception Exception of region * Exn.t
@@ -147,7 +99,7 @@ diff --git a/interpreter/exec/eval.ml b/interpreter/exec/eval.ml
 +
 +let reset_quantum () = remaining := !quantum
 +
-+let checkpoint () =
++let quantum_checkpoint () =
 +  if !quantum > 0 then begin
 +    if !remaining <= 1 then begin
 +      remaining := !quantum;
@@ -159,18 +111,240 @@ diff --git a/interpreter/exec/eval.ml b/interpreter/exec/eval.ml
  let table_error at = function
    | Table.Bounds -> "out of bounds table access"
    | Table.SizeOverflow -> "table size overflow"
-@@ -176,6 +197,7 @@ let array_oob a i n =
+@@ -69,6 +90,7 @@ and admininstr' =
+   | Label of int * instr list * code
+   | Frame of int * frame * code
+   | Handler of int * catch list * code
++  | SignalFrame of int64 * code
+ 
+ type config =
+ {
+@@ -77,6 +99,25 @@ type config =
+   budget : int;  (* to model stack overflow *)
+ }
+ 
++and saved_jump =
++{
++  config : config;
++  signal_mask : int64 option;
++  stack_pointer : (Global.t * value) option;
++}
++
++type state =
++{
++  posix : Posix.state;
++  jumps : (int32, saved_jump) Hashtbl.t;
++}
++
++let current_state = ref {posix = Posix.create (); jumps = Hashtbl.create 16}
++
++let new_state () = {posix = Posix.create (); jumps = Hashtbl.create 16}
++let save_state () = !current_state
++let restore_state state = current_state := state
++
+ let frame inst locals = {inst; locals}
+ let config inst vs es =
+   {frame = frame inst []; code = vs, es; budget = !Flags.budget}
+@@ -109,6 +150,103 @@ let data (inst : moduleinst) x = lookup "data segment" inst.datas x
+ let elem (inst : moduleinst) x = lookup "element segment" inst.elems x
+ let local (frame : frame) x = lookup "local" frame.locals x
+ 
++let rec clone_frame frame =
++  {frame with locals = List.map (fun value -> ref !value) frame.locals}
++
++and clone_code (values, instructions) =
++  values, List.map clone_admininstr instructions
++
++and clone_admininstr instruction =
++  let it = match instruction.it with
++    | Label (arity, continuation, code) ->
++      Label (arity, continuation, clone_code code)
++    | Frame (arity, frame, code) ->
++      Frame (arity, clone_frame frame, clone_code code)
++    | Handler (arity, catches, code) ->
++      Handler (arity, catches, clone_code code)
++    | SignalFrame (mask, code) -> SignalFrame (mask, clone_code code)
++    | other -> other
++  in it @@ instruction.at
++
++and clone_config config =
++  {config with frame = clone_frame config.frame; code = clone_code config.code}
++
++let fork_state state =
++  let jumps = Hashtbl.create (Hashtbl.length state.jumps + 1) in
++  Hashtbl.iter (fun key saved ->
++    Hashtbl.add jumps key {saved with config = clone_config saved.config}
++  ) state.jumps;
++  {posix = Posix.copy state.posix; jumps}
++
++let signal_func frame index =
++  match Table.load (table frame.inst (0l @@ no_region))
++      Int64.(logand (of_int32 index) 0xffff_ffffL) with
++  | FuncRef func -> Some func
++  | _ -> None
++
++let default_ignored_signal = function
++  | 17 | 23 | 28 -> true (* SIGCHLD, SIGURG, SIGWINCH *)
++  | _ -> false
++
++let stack_pointer inst =
++  let is_mutable_i32 global = match Global.type_of global with
++    | GlobalT (Var, NumT I32T) -> true
++    | _ -> false
++  in
++  match Instance.export inst (Utf8.decode "__stack_pointer") with
++  | Some (ExternGlobal global) when is_mutable_i32 global -> Some global
++  | _ ->
++    begin match List.filter is_mutable_i32 inst.globals with
++    | [global] -> Some global
++    | _ -> None
++    end
++
++let checkpoint config =
++  quantum_checkpoint ();
++  let state = !current_state in
++  Posix.poll_control state.posix;
++  match Posix.next_signal state.posix with
++  | None -> config
++  | Some (_, {Posix.disposition = Posix.Ignore; _}) -> config
++  | Some (signal, {Posix.disposition = Posix.Default; _})
++      when default_ignored_signal signal -> config
++  | Some (signal, {Posix.disposition = Posix.Default; _}) ->
++    raise (Posix.Terminated (128 + signal))
++  | Some (signal, {Posix.disposition = Posix.Handler _; _})
++      when config.frame.inst.tables = [] ->
++    ignore (Posix.queue_signal state.posix signal);
++    config
++  | Some (signal, action) ->
++    let index = match action.Posix.disposition with
++      | Posix.Handler index -> index | _ -> assert false in
++    begin match signal_func config.frame index with
++    | None -> raise (Posix.Terminated (128 + signal))
++    | Some func ->
++      let old_mask = Posix.blocked state.posix in
++      let signal_mask = Int64.shift_left 1L (signal - 1) in
++      let handler_mask = Int64.logor old_mask action.Posix.mask in
++      let handler_mask =
++        if Int32.logand action.Posix.flags 0x4000_0000l <> 0l then handler_mask
++        else Int64.logor handler_mask signal_mask in
++      Posix.set_blocked state.posix handler_mask;
++      if Int32.logand action.Posix.flags 0x8000_0000l <> 0l then
++        Posix.reset_action state.posix signal;
++      let values, instructions = config.code in
++      let parameter_count =
++        let ts, _ = functype_of_comptype (expand_deftype (Func.type_of func)) in
++        List.length ts in
++      let handler_values = match parameter_count with
++        | 1 -> [Num (I32 (Int32.of_int signal))]
++        | 3 -> [Num (I32 0l); Num (I32 0l); Num (I32 (Int32.of_int signal))]
++        | _ -> raise (Posix.Terminated (128 + signal)) in
++      let handler_code = [Invoke func @@ no_region] in
++      {config with code =
++        (values,
++         (SignalFrame (old_mask,
++            (handler_values, handler_code)) @@ no_region)
++         :: instructions)}
++    end
++
+ let comp_type (inst : moduleinst) x = expand_deftype (type_ inst x)
+ let struct_type (inst : moduleinst) x = structtype_of_comptype  (comp_type inst x)
+ let array_type (inst : moduleinst) x = arraytype_of_comptype (comp_type inst x)
+@@ -175,7 +313,10 @@ let array_oob a i n =
+   oob (Convert.I64_.extend_i32_u i) (Convert.I64_.extend_i32_u n)
      (Convert.I64_.extend_i32_u (Aggr.array_length a))
  
++exception Resume of config
++
  let rec step (c : config) : config =
-+  checkpoint ();
++  let c = checkpoint c in
    let vs, es = c.code in
    let e = List.hd es in
    let vs', es' =
-diff --git a/interpreter/exec/eval.mli b/interpreter/exec/eval.mli
---- a/interpreter/exec/eval.mli
-+++ b/interpreter/exec/eval.mli
-@@ -7,5 +7,10 @@ exception Crash of Source.region * string
+@@ -1111,6 +1252,18 @@ let rec step (c : config) : config =
+       let c' = step {c with code = code'} in
+       vs, [Handler (n, cs, c'.code) @@ e.at]
+ 
++    | SignalFrame (old_mask, (vs', [])), vs ->
++      Posix.set_blocked (!current_state).posix old_mask;
++      vs' @ vs, []
++
++    | SignalFrame (old_mask, (vs', e' :: _)), vs when is_jumping e' ->
++      Posix.set_blocked (!current_state).posix old_mask;
++      vs, [e']
++
++    | SignalFrame (old_mask, code'), vs ->
++      let c' = step {c with code = code'} in
++      vs, [SignalFrame (old_mask, c'.code) @@ e.at]
++
+     | Invoke f, vs when c.budget = 0 ->
+       Exhaustion.error e.at "call stack exhausted"
+ 
+@@ -1129,14 +1282,49 @@ let rec step (c : config) : config =
+         vs', [Frame (n2, frame', ([], instr')) @@ e.at]
+ 
+       | Func.HostFunc (_, f) ->
+-        (try List.rev (f (List.rev args)) @ vs', []
+-        with Crash (_, msg) -> Crash.error e.at msg)
++        (try List.rev (f (List.rev args)) @ vs', [] with
++        | Posix.Syscall (name, arguments) ->
++          begin match Posix.dispatch (!current_state).posix c.frame.inst name arguments with
++          | Posix.Return values -> List.rev values @ vs', []
++          | Posix.SaveJump (buffer, save_mask) ->
++            let resumed =
++              {c with code = Num (I32 0l) :: vs', List.tl es}
++              |> clone_config
++            in
++            let signal_mask =
++              if save_mask then Some (Posix.blocked (!current_state).posix) else None
++            in
++            let stack_pointer = Option.map
++              (fun global -> global, Global.load global)
++              (stack_pointer c.frame.inst) in
++            Hashtbl.replace (!current_state).jumps buffer
++              {config = resumed; signal_mask; stack_pointer};
++            Num (I32 0l) :: vs', []
++          | Posix.RestoreJump (buffer, value) ->
++            let saved = match Hashtbl.find_opt (!current_state).jumps buffer with
++              | Some saved -> saved
++              | None -> Crash.error e.at "siglongjmp called with an invalid jump buffer"
++            in
++            Option.iter (Posix.set_blocked (!current_state).posix) saved.signal_mask;
++            Option.iter (fun (global, stack_pointer) ->
++              Global.store global stack_pointer
++            ) saved.stack_pointer;
++            let resumed = clone_config saved.config in
++            let values, instructions = resumed.code in
++            let result = if value = 0l then 1l else value in
++            let values = match values with
++              | Num (I32 _) :: rest -> Num (I32 result) :: rest
++              | _ -> Crash.error e.at "corrupt sigsetjmp continuation"
++            in
++            raise (Resume {resumed with code = values, instructions})
++          end
++        | Crash (_, msg) -> Crash.error e.at msg)
+       )
+   in {c with code = vs', es' @ List.tl es}
+ 
+ 
+ let rec eval (c : config) : value stack =
+-  match c.code with
++  try match c.code with
+   | vs, [] ->
+     vs
+ 
+@@ -1148,6 +1336,7 @@ let rec eval (c : config) : value stack =
+ 
+   | vs, es ->
+     eval (step c)
++  with Resume resumed -> eval resumed
+ 
+ 
+ (* Functions & Constants *)
+diff --git i/interpreter/exec/eval.mli w/interpreter/exec/eval.mli
+index 033f5c5e2..67b5d1bd1 100644
+--- i/interpreter/exec/eval.mli
++++ w/interpreter/exec/eval.mli
+@@ -7,5 +7,16 @@ exception Crash of Source.region * string
  exception Exhaustion of Source.region * string
  exception Exception of Source.region * Exn.t
  
@@ -179,23 +353,54 @@ diff --git a/interpreter/exec/eval.mli b/interpreter/exec/eval.mli
 +val set_quantum : int -> unit
 +val reset_quantum : unit -> unit
 +
++type state
++val new_state : unit -> state
++val save_state : unit -> state
++val restore_state : state -> unit
++val fork_state : state -> state
++
  val init : Ast.module_ -> externinst list -> moduleinst (* raises Link, Trap, Exception *)
  val invoke : funcinst -> value list -> value list (* raises Trap, Exception *)
-diff --git a/interpreter/main/main.ml b/interpreter/main/main.ml
---- a/interpreter/main/main.ml
-+++ b/interpreter/main/main.ml
-@@ -20,6 +20,10 @@ let usage = "Usage: " ^ name ^ " [option] [file ...]"
+diff --git i/interpreter/host/env.ml w/interpreter/host/env.ml
+index 0688131a6..bf754b3f4 100644
+--- i/interpreter/host/env.ml
++++ w/interpreter/host/env.ml
+@@ -39,6 +39,10 @@ let abort vs =
+ let exit vs =
+   exit (int (single vs))
+ 
++let posix_functions =
++  ["sigsetjmp"; "siglongjmp"; "sigemptyset"; "sigaddset"; "sigdelset";
++   "sigismember"; "sigprocmask"; "sigaction"; "kill"; "killpg"; "raise"]
++
+ 
+ let lookup name et =
+   match Utf8.encode name, et with
+@@ -46,4 +50,7 @@ let lookup name et =
+     Some (ExternFunc (Func.alloc_host (deftype_of_typeuse ut) abort))
+   | "exit", ExternFuncT ut ->
+     Some (ExternFunc (Func.alloc_host (deftype_of_typeuse ut) exit))
++  | name, ExternFuncT ut when List.mem name posix_functions ->
++    Some (ExternFunc
++      (Func.alloc_host (deftype_of_typeuse ut) (Posix.request name)))
+   | _ -> None
+diff --git i/interpreter/main/main.ml w/interpreter/main/main.ml
+index cab4a5638..9fca40cad 100644
+--- i/interpreter/main/main.ml
++++ w/interpreter/main/main.ml
+@@ -20,6 +20,11 @@ let usage = "Usage: " ^ name ^ " [option] [file ...]"
  let args = ref []
  let add_arg source = args := !args @ [source]
  
 +let schedule = ref false
 +let quantum = ref 10_000
 +let fail_last = ref false
++let control_page = ref false
 +
  let customs = ref []
  let add_custom name =
    let n = Utf8.decode name in
-@@ -42,6 +46,12 @@ let argspec = Arg.align
+@@ -42,6 +47,14 @@ let argspec = Arg.align
      " write module to file";
    "-b", Arg.Int (fun n -> Flags.budget := n),
      " configure call depth budget (default is " ^ string_of_int !Flags.budget ^ ")";
@@ -205,10 +410,12 @@ diff --git a/interpreter/main/main.ml b/interpreter/main/main.ml
 +    " run all inputs as isolated cooperative threads";
 +  "--fail-last", Arg.Set fail_last,
 +    " report the final scheduled input as a known failure without executing it";
++  "--control-page", Arg.Set control_page,
++    " poll the browser SharedArrayBuffer control page at every instruction";
    "-w", Arg.Int (fun n -> Flags.width := n),
      " configure output width (default is " ^ string_of_int !Flags.width ^ ")";
    "-c", Arg.String add_custom,
-@@ -58,13 +68,98 @@ let argspec = Arg.align
+@@ -58,20 +71,107 @@ let argspec = Arg.align
    "-v", Arg.Unit banner, " show version"
  ]
  
@@ -252,7 +459,7 @@ diff --git a/interpreter/main/main.ml b/interpreter/main/main.ml
 +    let last = List.length sources - 1 in
 +    List.iteri (fun id source ->
 +      let task =
-+        {id; state = initial_state;
++        {id; state = Run.fork_state initial_state;
 +         resume = (fun () -> run_slice (fun () -> Finished (Run.run_string source)))}
 +      in
 +      if !fail_last && id = last then deferred := Some task else
@@ -299,6 +506,7 @@ diff --git a/interpreter/main/main.ml b/interpreter/main/main.ml
    try
      Arg.parse argspec
        (fun file -> add_arg ("(input " ^ quote file ^ ")")) usage;
++    if !control_page then Control.enable () else Control.disable ();
      configure !customs;
 -    List.iter (fun arg -> if not (Run.run_string arg) then exit 1) !args;
 +    if !schedule then begin
@@ -308,10 +516,77 @@ diff --git a/interpreter/main/main.ml b/interpreter/main/main.ml
      if !args = [] then Flags.interactive := true;
      if !Flags.interactive then begin
        Flags.print_sig := true;
-diff --git a/interpreter/script/runner.ml b/interpreter/script/runner.ml
---- a/interpreter/script/runner.ml
-+++ b/interpreter/script/runner.ml
-@@ -314,6 +314,26 @@ let modules : (Ast.module_ * Custom.section list) Map.t ref = ref Map.empty
+       banner ();
+       Run.run_stdin ()
+     end
+-  with exn ->
++  with Posix.Terminated status -> exit status
++  | exn ->
+     flush_all ();
+     prerr_endline
+       (Sys.argv.(0) ^ ": uncaught exception " ^ Printexc.to_string exn);
+diff --git i/interpreter/runtime/i31.ml w/interpreter/runtime/i31.ml
+index 402304d26..45ae609dc 100644
+--- i/interpreter/runtime/i31.ml
++++ w/interpreter/runtime/i31.ml
+@@ -1,17 +1,16 @@
+ open Types
+ open Value
+ 
+-type i31 = int
++type i31 = int32
+ type t = i31
+ 
+ type ref_ += I31Ref of i31
+ 
+-let of_i32 i = Int32.to_int i land 0x7fff_ffff
++let of_i32 i = Int32.logand i 0x7fff_ffffl
+ let to_i32 sx i =
+-  let i' = Int32.of_int i in
+   match sx with
+-  | Pack.U -> i'
+-  | Pack.S -> Int32.(shift_right (shift_left i' 1) 1)
++  | Pack.U -> i
++  | Pack.S -> Int32.(shift_right (shift_left i 1) 1)
+ 
+ let () =
+   let eq_ref' = !Value.eq_ref' in
+@@ -29,5 +28,5 @@ let () =
+ let () =
+   let string_of_ref' = !Value.string_of_ref' in
+   Value.string_of_ref' := function
+-    | I31Ref i -> "(i31 " ^ string_of_int i ^ ")"
++    | I31Ref i -> "(i31 " ^ Int32.to_string i ^ ")"
+     | r -> string_of_ref' r
+diff --git i/interpreter/runtime/i31.mli w/interpreter/runtime/i31.mli
+index 7b5c20092..b5fc46694 100644
+--- i/interpreter/runtime/i31.mli
++++ w/interpreter/runtime/i31.mli
+@@ -1,6 +1,6 @@
+ open Value
+ 
+-type i31 = int
++type i31 = int32
+ type t = i31
+ 
+ type ref_ += I31Ref of i31
+diff --git i/interpreter/script/run.ml w/interpreter/script/run.ml
+index 13a759892..ac376c4c5 100644
+--- i/interpreter/script/run.ml
++++ w/interpreter/script/run.ml
+@@ -26,6 +26,7 @@ struct
+   let validate_with_custom (m, cs) =
+     try Ok (Valid.check_module_with_custom (m, cs)) with
+     | Valid.Invalid (at, msg) -> Error (at, msg)
++    | Custom.Invalid (at, msg) -> Error (at, msg)
+ 
+   let instantiate m ims =
+     try Ok (result Eval.init m ims) with
+diff --git i/interpreter/script/runner.ml w/interpreter/script/runner.ml
+index 0ff9fc0c0..510aede1d 100644
+--- i/interpreter/script/runner.ml
++++ w/interpreter/script/runner.ml
+@@ -314,6 +314,30 @@ let modules : (Ast.module_ * Custom.section list) Map.t ref = ref Map.empty
  let instances : Engine.moduleinst Map.t ref = ref Map.empty
  let registry : (Ast.name -> Types.externtype -> Engine.externinst option) Map.t ref = ref Map.empty
  
@@ -322,25 +597,30 @@ diff --git a/interpreter/script/runner.ml b/interpreter/script/runner.ml
 +  modules : (Ast.module_ * Custom.section list) Map.t;
 +  instances : Engine.moduleinst Map.t;
 +  registry : (Ast.name -> Types.externtype -> Engine.externinst option) Map.t;
++  eval : Eval.state;
 +}
 +
 +let save_state () =
 +  {quote = !quote; scripts = !scripts; modules = !modules;
-+   instances = !instances; registry = !registry}
++   instances = !instances; registry = !registry; eval = Eval.save_state ()}
++
++let fork_state state = {state with eval = Eval.fork_state state.eval}
 +
 +let restore_state state =
 +  quote := state.quote;
 +  scripts := state.scripts;
 +  modules := state.modules;
 +  instances := state.instances;
-+  registry := state.registry
++  registry := state.registry;
++  Eval.restore_state state.eval
 +
  let bind category map x_opt y =
    let map' =
      match x_opt with
-diff --git a/interpreter/script/runner.mli b/interpreter/script/runner.mli
---- a/interpreter/script/runner.mli
-+++ b/interpreter/script/runner.mli
+diff --git i/interpreter/script/runner.mli w/interpreter/script/runner.mli
+index 86e8ac8bd..78f818710 100644
+--- i/interpreter/script/runner.mli
++++ w/interpreter/script/runner.mli
 @@ -1,5 +1,7 @@
  module Make (Engine : Embed.Engine) :
  sig
@@ -349,13 +629,439 @@ diff --git a/interpreter/script/runner.mli b/interpreter/script/runner.mli
    val register_instance : Ast.name -> Engine.moduleinst -> unit
    val register_virtual : Ast.name ->
      (Ast.name -> Types.externtype -> Engine.externinst option) ->
-@@ -9,6 +11,9 @@ sig
+@@ -9,6 +11,10 @@ sig
    val run_file : string -> bool
    val run_stdin : unit -> unit
  
 +  val save_state : unit -> state
++  val fork_state : state -> state
 +  val restore_state : state -> unit
 +
    (* Currently used by SpecTec AL runner, should be ported to functor *)
    val assert_message : Source.region -> string -> string -> string -> unit
    val assert_results :
+diff --git i/interpreter/valid/valid.ml w/interpreter/valid/valid.ml
+index 819a97fbf..745b83197 100644
+--- i/interpreter/valid/valid.ml
++++ w/interpreter/valid/valid.ml
+@@ -385,7 +385,8 @@ let check_memop (c : context) (memop : ('t, 's) memop) ty_size get_sz at =
+       check_pack sz (ty_size memop.ty) at;
+       Pack.packed_size sz
+   in
+-  require (1 lsl memop.align >= 1 && 1 lsl memop.align <= size) at
++  require (memop.align >= 0 && memop.align < Sys.int_size &&
++    1 lsl memop.align <= size) at
+     "alignment must not be larger than natural";
+   let MemoryT (at_, _lim) = memory c (0l @@ at) in
+   if at_ = I32AT then
+diff --git 1/interpreter/control_stubs.c 2/interpreter/control_stubs.c
+new file mode 100644
+index 000000000..090d7ebdf
+--- /dev/null
++++ 2/interpreter/control_stubs.c
+@@ -0,0 +1,14 @@
++#include <caml/mlvalues.h>
++
++/* Native reference-interpreter builds have no browser control page. */
++CAMLprim value waste_control_atomic_load(value index)
++{
++  (void)index;
++  return Val_int(0);
++}
++
++CAMLprim value waste_control_wait_while_paused(value unit)
++{
++  (void)unit;
++  return Val_unit;
++}
+diff --git 1/interpreter/exec/control.ml 2/interpreter/exec/control.ml
+new file mode 100644
+index 000000000..c1f077b27
+--- /dev/null
++++ 2/interpreter/exec/control.ml
+@@ -0,0 +1,51 @@
++(* Browser-to-interpreter control page.
++
++   The common path performs one atomic load.  Commands are stored in a
++   single-producer ring and published by incrementing the write sequence only
++   after the payload has been written.  Keeping the read sequence in the
++   interpreter makes control state part of a schedulable process, rather than
++   hidden mutable state in JavaScript. *)
++
++type command =
++  | Pause
++  | Terminate
++  | Signal of int
++
++type state = {mutable read_sequence : int}
++
++let header_words = 4
++let ring_words = 256
++let ring_mask = ring_words - 1
++
++let enabled = ref false
++
++external atomic_load : int -> int = "waste_control_atomic_load"
++external wait_while_paused : unit -> unit = "waste_control_wait_while_paused"
++
++let enable () = enabled := true
++let disable () = enabled := false
++let is_enabled () = !enabled
++let create () = {read_sequence = 0}
++let copy state = {read_sequence = state.read_sequence}
++
++let decode word =
++  let operation = word lsr 16 in
++  let argument = word land 0xffff in
++  match operation with
++  | 1 -> Some Pause
++  | 2 -> Some (Signal argument)
++  | 3 -> Some Terminate
++  | _ -> None
++
++let poll state =
++  if not !enabled then None else
++  let published = atomic_load 0 in
++  if published = state.read_sequence then None else begin
++    let next = state.read_sequence + 1 in
++    let slot = header_words + (next land ring_mask) in
++    let command = decode (atomic_load slot) in
++    state.read_sequence <- next;
++    command
++  end
++
++let pause () = if !enabled then wait_while_paused ()
+diff --git 1/interpreter/exec/control.mli 2/interpreter/exec/control.mli
+new file mode 100644
+index 000000000..e8df7ccff
+--- /dev/null
++++ 2/interpreter/exec/control.mli
+@@ -0,0 +1,12 @@
++type command = Pause | Terminate | Signal of int
++type state
++
++val header_words : int
++val ring_words : int
++val enable : unit -> unit
++val disable : unit -> unit
++val is_enabled : unit -> bool
++val create : unit -> state
++val copy : state -> state
++val poll : state -> command option
++val pause : unit -> unit
+diff --git 1/interpreter/host/control_runtime.js 2/interpreter/host/control_runtime.js
+new file mode 100644
+index 000000000..cd6a00cfc
+--- /dev/null
++++ 2/interpreter/host/control_runtime.js
+@@ -0,0 +1,14 @@
++//Provides: waste_control_atomic_load_js
++function waste_control_atomic_load_js(index) {
++  const page = globalThis.waste_control_page;
++  return page instanceof Int32Array ? globalThis.Atomics.load(page, index) : 0;
++}
++
++//Provides: waste_control_wait_while_paused_js
++function waste_control_wait_while_paused_js() {
++  const page = globalThis.waste_control_page;
++  if (!(page instanceof Int32Array)) return 0;
++  while (globalThis.Atomics.load(page, 1) === 1)
++    globalThis.Atomics.wait(page, 1, 1);
++  return 0;
++}
+diff --git 1/interpreter/host/control_runtime.wat 2/interpreter/host/control_runtime.wat
+new file mode 100644
+index 000000000..9a4ce6d1b
+--- /dev/null
++++ 2/interpreter/host/control_runtime.wat
+@@ -0,0 +1,16 @@
++(module
++  (import "js" "waste_control_atomic_load_js"
++    (func $atomic_load (param i32) (result i32)))
++  (import "js" "waste_control_wait_while_paused_js"
++    (func $wait_while_paused (result i32)))
++
++  (func (export "waste_control_atomic_load")
++    (param $index (ref eq)) (result (ref eq))
++    (ref.i31
++      (call $atomic_load
++        (i31.get_s (ref.cast (ref i31) (local.get $index))))))
++
++  (func (export "waste_control_wait_while_paused")
++    (param (ref eq)) (result (ref eq))
++    (drop (call $wait_while_paused))
++    (ref.i31 (i32.const 0))))
+diff --git 1/interpreter/host/posix.ml 2/interpreter/host/posix.ml
+new file mode 100644
+index 000000000..009188158
+--- /dev/null
++++ 2/interpreter/host/posix.ml
+@@ -0,0 +1,236 @@
++open Value
++open Instance
++
++(* Host calls raise this request so Eval can service it with the invoking
++   module instance and the currently selected process state. *)
++exception Syscall of string * value list
++
++type disposition = Default | Ignore | Handler of int32
++
++type signal_action =
++{
++  disposition : disposition;
++  mask : int64;
++  flags : int32;
++}
++
++type state =
++{
++  control : Control.state;
++  mutable blocked : int64;
++  mutable pending : int64;
++  actions : signal_action array;
++  pid : int32;
++  process_group : int32;
++}
++
++type result =
++  | Return of value list
++  | SaveJump of int32 * bool
++  | RestoreJump of int32 * int32
++
++exception Terminated of int
++
++let signal_max = 64
++
++let create () =
++  {control = Control.create (); blocked = 0L; pending = 0L;
++   pid = 1l; process_group = 1l;
++   actions = Array.init (signal_max + 1)
++     (fun _ -> {disposition = Default; mask = 0L; flags = 0l})}
++
++let copy state =
++  {control = Control.copy state.control; blocked = state.blocked;
++   pending = state.pending; actions = Array.copy state.actions;
++   pid = state.pid; process_group = state.process_group}
++
++let blocked state = state.blocked
++let set_blocked state mask = state.blocked <- mask
++let reset_action state signal =
++  state.actions.(signal) <- {disposition = Default; mask = 0L; flags = 0l}
++
++let bit signal =
++  if signal < 1 || signal > signal_max then None else
++  Some Int64.(shift_left 1L (signal - 1))
++
++let queue_signal state signal =
++  match bit signal with
++  | None -> false
++  | Some mask -> state.pending <- Int64.logor state.pending mask; true
++
++let next_signal state =
++  let ready = Int64.logand state.pending (Int64.lognot state.blocked) in
++  let rec find signal =
++    if signal > signal_max then None else
++    match bit signal with
++    | Some mask when Int64.logand ready mask <> 0L ->
++      state.pending <- Int64.logand state.pending (Int64.lognot mask);
++      Some (signal, state.actions.(signal))
++    | _ -> find (signal + 1)
++  in find 1
++
++let poll_control state =
++  match Control.poll state.control with
++  | None -> ()
++  | Some Control.Pause -> Control.pause ()
++  | Some (Control.Signal signal) -> ignore (queue_signal state signal)
++  | Some Control.Terminate -> raise (Terminated 143)
++
++let request name values = raise (Syscall (name, values))
++
++let i32 = function
++  | Num (I32 value) -> value
++  | _ -> invalid_arg "Posix.i32"
++
++let return_i32 value = Return [Num (I32 value)]
++let memory inst = Lib.List32.nth inst.memories 0l
++
++let load_u32 mem address =
++  let byte n = Int32.of_int (Memory.load_byte mem Int64.(add (of_int32 address) (of_int n))) in
++  Int32.logor (byte 0)
++    (Int32.logor (Int32.shift_left (byte 1) 8)
++      (Int32.logor (Int32.shift_left (byte 2) 16) (Int32.shift_left (byte 3) 24)))
++
++let store_u32 mem address value =
++  for n = 0 to 3 do
++    Memory.store_byte mem Int64.(add (of_int32 address) (of_int n))
++      Int32.(to_int (logand (shift_right_logical value (n * 8)) 0xffl))
++  done
++
++let load_sigset mem address =
++  let low = Int64.logand (Int64.of_int32 (load_u32 mem address)) 0xffff_ffffL in
++  let high = Int64.shift_left
++      (Int64.logand (Int64.of_int32 (load_u32 mem (Int32.add address 4l))) 0xffff_ffffL) 32 in
++  Int64.logor low high
++
++let store_sigset mem address set =
++  for n = 0 to 127 do
++    let value =
++      if n < 8 then Int64.(to_int (logand (shift_right_logical set (n * 8)) 0xffL))
++      else 0
++    in
++    Memory.store_byte mem Int64.(add (of_int32 address) (of_int n)) value
++  done
++
++let valid_signal signal = signal >= 1 && signal <= signal_max
++
++let sigemptyset inst = function
++  | [set] -> store_sigset (memory inst) (i32 set) 0L; return_i32 0l
++  | _ -> invalid_arg "sigemptyset"
++
++let sigaddset operation inst = function
++  | [set; signal_value] ->
++    let address, signal = i32 set, Int32.to_int (i32 signal_value) in
++    if not (valid_signal signal) then return_i32 (-1l) else
++    let mem = memory inst in
++    let mask = Option.get (bit signal) in
++    let old = load_sigset mem address in
++    let value = if operation = `Add then Int64.logor old mask
++      else Int64.logand old (Int64.lognot mask) in
++    store_sigset mem address value;
++    return_i32 0l
++  | _ -> invalid_arg "sigaddset"
++
++let sigismember inst = function
++  | [set; signal_value] ->
++    let signal = Int32.to_int (i32 signal_value) in
++    if not (valid_signal signal) then return_i32 (-1l) else
++    let mask = Option.get (bit signal) in
++    return_i32 (if Int64.logand (load_sigset (memory inst) (i32 set)) mask <> 0L
++      then 1l else 0l)
++  | _ -> invalid_arg "sigismember"
++
++let sigprocmask state inst = function
++  | [how_value; set_value; old_value] ->
++    let how, set, old = i32 how_value, i32 set_value, i32 old_value in
++    let mem = memory inst in
++    if old <> 0l then store_sigset mem old state.blocked;
++    if set = 0l then return_i32 0l else
++    let requested = load_sigset mem set in
++    begin match how with
++    | 0l -> state.blocked <- Int64.logor state.blocked requested
++    | 1l -> state.blocked <- Int64.logand state.blocked (Int64.lognot requested)
++    | 2l -> state.blocked <- requested
++    | _ -> ()
++    end;
++    if how < 0l || how > 2l then return_i32 (-1l) else return_i32 0l
++  | _ -> invalid_arg "sigprocmask"
++
++(* wasm32 glibc layout used by src/bash.wat:
++   sa_handler +0, sa_mask +4 (128 bytes), sa_flags +132. *)
++let sigaction state inst = function
++  | [signal_value; action_value; old_value] ->
++    let signal = Int32.to_int (i32 signal_value) in
++    let action, old = i32 action_value, i32 old_value in
++    if not (valid_signal signal) || signal = 9 || signal = 19 then return_i32 (-1l) else
++    let mem = memory inst in
++    if old <> 0l then begin
++      let previous = state.actions.(signal) in
++      let handler = match previous.disposition with
++        | Default -> 0l | Ignore -> 1l | Handler index -> index in
++      store_u32 mem old handler;
++      store_sigset mem (Int32.add old 4l) previous.mask;
++      store_u32 mem (Int32.add old 132l) previous.flags
++    end;
++    if action <> 0l then begin
++      let handler = load_u32 mem action in
++      let disposition =
++        if handler = 0l || handler = -1l then Default
++        else if handler = 1l || handler = -2l then Ignore
++        else Handler handler in
++      state.actions.(signal) <-
++        {disposition; mask = load_sigset mem (Int32.add action 4l);
++         flags = load_u32 mem (Int32.add action 132l)}
++    end;
++    return_i32 0l
++  | _ -> invalid_arg "sigaction"
++
++let send_current state signal =
++  if signal = 0 then 0l
++  else if queue_signal state signal then 0l else -1l
++
++let kill state = function
++  | [pid_value; signal_value] ->
++    let pid = i32 pid_value in
++    let signal = Int32.to_int (i32 signal_value) in
++    if pid = state.pid || pid = 0l || pid = -1l then
++      return_i32 (send_current state signal)
++    else return_i32 (-1l)
++  | _ -> invalid_arg "kill"
++
++let killpg state = function
++  | [group_value; signal_value] ->
++    let group = i32 group_value in
++    let signal = Int32.to_int (i32 signal_value) in
++    if group = state.process_group || group = 0l then
++      return_i32 (send_current state signal)
++    else return_i32 (-1l)
++  | _ -> invalid_arg "killpg"
++
++let raise_signal state = function
++  | [signal_value] ->
++    return_i32 (send_current state (Int32.to_int (i32 signal_value)))
++  | _ -> invalid_arg "raise"
++
++let dispatch state inst name values =
++  match name with
++  | "sigsetjmp" ->
++    begin match values with
++    | [buffer; save_mask] -> SaveJump (i32 buffer, i32 save_mask <> 0l)
++    | _ -> invalid_arg name
++    end
++  | "siglongjmp" ->
++    begin match values with
++    | [buffer; value] -> RestoreJump (i32 buffer, i32 value)
++    | _ -> invalid_arg name
++    end
++  | "sigemptyset" -> sigemptyset inst values
++  | "sigaddset" -> sigaddset `Add inst values
++  | "sigdelset" -> sigaddset `Delete inst values
++  | "sigismember" -> sigismember inst values
++  | "sigprocmask" -> sigprocmask state inst values
++  | "sigaction" -> sigaction state inst values
++  | "kill" -> kill state values
++  | "killpg" -> killpg state values
++  | "raise" -> raise_signal state values
++  | _ -> invalid_arg ("unsupported POSIX dispatch: " ^ name)
+diff --git 1/interpreter/host/posix.mli 2/interpreter/host/posix.mli
+new file mode 100644
+index 000000000..30787ef77
+--- /dev/null
++++ 2/interpreter/host/posix.mli
+@@ -0,0 +1,26 @@
++open Value
++open Instance
++
++exception Syscall of string * value list
++exception Terminated of int
++
++type disposition = Default | Ignore | Handler of int32
++type signal_action =
++{
++  disposition : disposition;
++  mask : int64;
++  flags : int32;
++}
++type state
++type result = Return of value list | SaveJump of int32 * bool | RestoreJump of int32 * int32
++
++val create : unit -> state
++val copy : state -> state
++val blocked : state -> int64
++val set_blocked : state -> int64 -> unit
++val reset_action : state -> int -> unit
++val request : string -> value list -> value list
++val poll_control : state -> unit
++val queue_signal : state -> int -> bool
++val next_signal : state -> (int * signal_action) option
++val dispatch : state -> moduleinst -> string -> value list -> result
