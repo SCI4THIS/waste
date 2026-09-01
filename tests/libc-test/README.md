@@ -1,9 +1,9 @@
 # libc-test
 
-These are WASTE's guest-libc regression tests. `allocator.wast` is generated
-from the actual `libc/waste-libc.wat` module and
-`allocator-client.wast.inc`, preventing the browser tests from exercising a
-copy of the allocator.
+These are WASTE's guest-libc regression tests. The checked-in `*.wast.inc`
+clients are combined with the actual merged guest-libc module under
+`build/waste-libc/tests/`. The browser therefore exercises the same binary ABI
+as the standalone build without checking in four copies of generated WAT.
 
 Build the module and regenerate the test fixture with:
 
@@ -19,5 +19,5 @@ node tests/libc-test/libc-runtime.cjs threaded
 node tests/libc-test/allocator-native.cjs
 ```
 
-The generated `.wast` fixture is embedded in the `libc-test` group of the
+The generated `.wast` fixtures are embedded in the `libc-test` group of the
 offline browser dashboard.

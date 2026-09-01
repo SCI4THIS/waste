@@ -169,9 +169,17 @@ when a request needs multiple pages. This supplies the MORECORE behavior needed
 to substitute dlmalloc later without exposing allocator metadata to OCaml or
 JavaScript.
 
-The generated `tests/libc-test/allocator.wast` instantiates a client module
-against the allocator's exported memory, so its assertions exercise real
-cross-module pointer sharing. It is included in the offline dashboard.
+`libc/waste-libc-helpers.c` is compiled with clang's wasm32 ABI and merged with
+that allocator. It supplies memory-backed `FILE` streams and variadic integer,
+string, and pointer formatting; UTF-8 multibyte/wide conversion and width
+handling; a C.UTF-8 locale with identity gettext/iconv behavior; and
+loader-configurable identity, passwd, group, supplementary-group, service, and
+hostname records. `fopen` returns `ENOSYS` until libc is connected to the OCaml
+VFS. This is intentional: libc must not maintain a second pathname namespace.
+
+The generated fixtures under `build/waste-libc/tests/` instantiate client modules
+against libc's exported memory, so their assertions exercise real cross-module
+pointer sharing. They are included in the offline dashboard.
 
 The next kernel work is mount backends and permissions, directory streams,
 symlinks, terminal line discipline and window sizing, descriptor readiness for

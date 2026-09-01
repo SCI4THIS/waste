@@ -45,7 +45,7 @@ interpreter to WebAssembly.
   --check          print dependency status and exit
   --install-deps   interactively install missing dependencies
   --compile        compile without opening the main menu
-  --build-libc     build waste-libc.wasm and its allocator tests
+  --build-libc     build waste-libc.wasm and its libc tests
   --generate-html  generate the embedded browser test dashboard
   --patch-status   show the Wasm32 compatibility patch status
   --apply-i31      apply the Wasm32 patch (legacy option name)
@@ -78,6 +78,10 @@ binaryen_is_usable() {
   [[ -n "$version" ]] && ((version >= 119))
 }
 
+wasm_ld_is_usable() {
+  have_command wasm-ld || [[ -x "$REPO_ROOT/build/toolchain/usr/bin/wasm-ld" ]]
+}
+
 switch_exists() {
   have_command opam &&
     opam switch list --short 2>/dev/null | grep -Fqx -- "$SWITCH_NAME"
@@ -93,11 +97,14 @@ check_dependencies() {
   MISSING_OPAM=()
 
   local command_name
-  for command_name in git cc make opam bwrap whiptail wasm-as; do
+  for command_name in git cc clang make opam bwrap whiptail wasm-as wasm-merge wasm-dis; do
     if ! have_command "$command_name"; then
       MISSING_SYSTEM+=("$command_name")
     fi
   done
+  if ! wasm_ld_is_usable; then
+    MISSING_SYSTEM+=("wasm-ld")
+  fi
   if ! binaryen_is_usable; then
     MISSING_SYSTEM+=("wasm-opt>=119")
   fi
@@ -160,11 +167,11 @@ package_manager() {
 
 system_install_command() {
   case "$(package_manager)" in
-    pacman) printf '%s\n' "sudo pacman -S --needed git opam bubblewrap base-devel binaryen libnewt" ;;
-    apt) printf '%s\n' "sudo apt-get install git opam bubblewrap build-essential binaryen whiptail" ;;
-    dnf) printf '%s\n' "sudo dnf install git opam bubblewrap gcc make binaryen newt" ;;
-    zypper) printf '%s\n' "sudo zypper install git opam bubblewrap gcc make binaryen newt" ;;
-    *) printf '%s\n' "Install: opam, a C compiler, make, Binaryen 119+, and whiptail" ;;
+    pacman) printf '%s\n' "sudo pacman -S --needed git opam bubblewrap base-devel clang lld binaryen libnewt" ;;
+    apt) printf '%s\n' "sudo apt-get install git opam bubblewrap build-essential clang lld binaryen whiptail" ;;
+    dnf) printf '%s\n' "sudo dnf install git opam bubblewrap gcc clang lld make binaryen newt" ;;
+    zypper) printf '%s\n' "sudo zypper install git opam bubblewrap gcc clang lld make binaryen newt" ;;
+    *) printf '%s\n' "Install: opam, clang/lld, a C compiler, make, Binaryen 119+, and whiptail" ;;
   esac
 }
 
@@ -593,10 +600,11 @@ build_waste_libc() {
     printf 'Output: %s\n\n' "$LIBC_OUTPUT"
   } >>"$LIBC_LOG"
 
-  if ! have_command python3 || ! have_command wasm-as; then
-    printf 'error: Python 3 and Binaryen wasm-as are required\n' >>"$LIBC_LOG"
+  if ! have_command python3 || ! have_command clang || ! wasm_ld_is_usable || ! have_command wasm-as ||
+     ! have_command wasm-merge || ! have_command wasm-dis; then
+    printf 'error: Python 3, clang, wasm-as, wasm-merge, and wasm-dis are required\n' >>"$LIBC_LOG"
     if [[ "$quiet" != true ]]; then
-      show_message "Guest libc build failed" "Python 3 and Binaryen wasm-as are required.\n\nLog: $LIBC_LOG"
+      show_message "Guest libc build failed" "Python 3, clang, and Binaryen are required.\n\nLog: $LIBC_LOG"
     fi
     return 1
   fi
@@ -609,7 +617,7 @@ build_waste_libc() {
   printf 'Completed: %s\n' "$(date --iso-8601=seconds)" >>"$LIBC_LOG"
   if [[ "$quiet" != true ]]; then
     show_message "Guest libc build complete" \
-      "The shared-memory allocator module and browser fixture were generated.\n\nOutput: $LIBC_OUTPUT\nLog: $LIBC_LOG"
+      "The shared-memory guest libc module and browser fixtures were generated.\n\nOutput: $LIBC_OUTPUT\nLog: $LIBC_LOG"
   fi
 }
 
@@ -718,7 +726,7 @@ main_menu() {
     choice="$(whiptail --title "OCaml to WebAssembly" --menu \
       "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 25 92 8 \
       compile "Compile the OCaml interpreter to Wasm" \
-      libc "Build waste-libc.wasm allocator core" \
+      libc "Build waste-libc.wasm and tests" \
       html "Generate embedded browser test dashboard" \
       patch "Manage Wasm32 compatibility patch [$patch_state]" \
       update "Safe pull/rebase and submodule update" \

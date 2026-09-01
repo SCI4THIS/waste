@@ -52,8 +52,8 @@ fixtures as regression probes. Broader conformance work should trace tests to
 The Open Group suites. Revisit LTP's `testcases/open_posix_testsuite` after a
 guest C compiler works; then record upstream revisions and keep licensing and
 Wasm-adaptation patches separate.
-Generate `tests/libc-test/allocator.wast` from the allocator source; do not edit
-the generated fixture directly.
+Keep libc test clients in `tests/libc-test/*.wast.inc`; generated fixtures
+belong under `build/waste-libc/tests/`.
 
 ## Commit & Pull Request Guidelines
 

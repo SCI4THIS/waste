@@ -853,7 +853,7 @@ def main():
     asset_dir = dist / "wasm_cli.bc.wasm.assets"
     test_root = root / "submodules" / "wasm-spec" / "test"
     diy_posix_root = root / "tests" / "diy-posix-test"
-    libc_test_root = root / "tests" / "libc-test"
+    libc_test_root = root / "build" / "waste-libc" / "tests"
     output = args.output or root / "build" / "ocaml-wasm" / "browser-tests.html"
 
     if not loader_path.is_file():

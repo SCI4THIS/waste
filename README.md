@@ -81,12 +81,18 @@ under test `_output` directories are excluded from discovery.
 
 ## Guest libc allocator
 
-`libc/waste-libc.wat` is the beginning of the guest-side libc used by Bash. It
-owns and exports the application linear memory so future application modules
-can import the same memory as libc. Its `sbrk` implementation provides a
-dlmalloc-compatible MORECORE boundary and deliberately performs expansion as a
-series of `memory.grow 1` calls. The current boundary-tag allocator exports
-`malloc`, `calloc`, `realloc`, `free`, `sbrk`, and `__errno_location`.
+`libc/waste-libc.wat` and `libc/waste-libc-helpers.c` form the guest-side libc
+used by Bash. The merged module owns and exports application linear memory. Its
+`sbrk` implementation provides a dlmalloc-compatible MORECORE boundary and
+expands through a series of `memory.grow 1` calls. The current boundary-tag
+allocator exports `malloc`, `calloc`, `realloc`, `free`, `sbrk`, and
+`__errno_location`.
+
+The helper layer adds memory-backed `FILE` streams, wasm32 variadic formatting,
+UTF-8 multibyte and wide-character conversion, C.UTF-8 locale behavior, and
+configurable in-memory identity, passwd, group, and service records. `fopen`
+currently returns `ENOSYS`; pathname opening must eventually cross the selected
+OCaml VFS integration boundary rather than introducing another filesystem.
 
 Build `build/waste-libc/waste-libc.wasm` and regenerate its WAST fixture with:
 
@@ -94,7 +100,7 @@ Build `build/waste-libc/waste-libc.wasm` and regenerate its WAST fixture with:
 ./start.sh --build-libc
 ```
 
-Allocator tests appear in the dashboard's `libc-test` group and can also run
+Libc tests appear in the dashboard's `libc-test` group and can also run
 against both generated interpreters:
 
 ```sh
