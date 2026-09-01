@@ -79,7 +79,7 @@ excluded from Test all, while remaining available for explicit runs. All custom
 annotation handlers are enabled for browser tests. Generated compiler artifacts
 under test `_output` directories are excluded from discovery.
 
-## Guest libc allocator
+## Guest libc
 
 `libc/waste-libc.wat` and `libc/waste-libc-helpers.c` form the guest-side libc
 used by Bash. The merged module owns and exports application linear memory. Its
@@ -90,9 +90,18 @@ allocator exports `malloc`, `calloc`, `realloc`, `free`, `sbrk`, and
 
 The helper layer adds memory-backed `FILE` streams, wasm32 variadic formatting,
 UTF-8 multibyte and wide-character conversion, C.UTF-8 locale behavior, and
-configurable in-memory identity, passwd, group, and service records. `fopen`
-currently returns `ENOSYS`; pathname opening must eventually cross the selected
-OCaml VFS integration boundary rather than introducing another filesystem.
+configurable in-memory identity, passwd, group, and service records. It also
+provides Bash's string, conversion, compiler-runtime, sorting, matching, basic
+regex, resource-limit, UTC time-formatting, terminal, and diagnostic helpers.
+Together with the OCaml host, its exports cover every named import currently in
+`src/bash.wat`. Relinking and module namespaces remain integration work.
+
+Operations that require evaluator state deliberately return `ENOSYS` here,
+including directory traversal, `execve`, descriptor readiness, dynamic loading,
+and direct socket creation. They must cross the existing OCaml process/VFS layer
+or the optional WebSocket broker rather than create a second, inconsistent OS
+model inside libc. The deterministic entropy generator is for repeatable tests;
+a production adapter must seed it from browser cryptography.
 
 Build `build/waste-libc/waste-libc.wasm` and regenerate its WAST fixture with:
 

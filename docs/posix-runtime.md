@@ -137,11 +137,10 @@ Implemented imports now cover the signal functions plus `getpid`, `getppid`,
 `fchmod`, `umask`, terminal group/attribute calls, `time`, `gettimeofday`,
 `alarm`, `sleep`, and `setitimer`.
 
-This is not yet enough to instantiate `src/bash.wat`: that module has 231
-imports and still needs stdio, directory streams, locale and wide-character
-functions, command execution, resource limits, networking, and several libc
-helpers. The allocator core now lives in `libc/waste-libc.wat`, but Bash has
-not yet been relinked to import its memory and functions. The current `stat`
+The OCaml host and guest-libc exports now cover all 231 named imports in
+`src/bash.wat`. Bash still cannot be treated as integrated: it has not been
+relinked to import libc's memory and functions, and environment-dependent libc
+calls must be routed into the OCaml kernel or broker namespace. The current `stat`
 encoder uses this runtime's documented wasm32 layout rather than guessing
 compatibility with an unidentified libc; the libc shim must own and test that
 ABI before Bash relies on it.
@@ -169,17 +168,26 @@ when a request needs multiple pages. This supplies the MORECORE behavior needed
 to substitute dlmalloc later without exposing allocator metadata to OCaml or
 JavaScript.
 
-`libc/waste-libc-helpers.c` is compiled with clang's wasm32 ABI and merged with
-that allocator. It supplies memory-backed `FILE` streams and variadic integer,
-string, and pointer formatting; UTF-8 multibyte/wide conversion and width
-handling; a C.UTF-8 locale with identity gettext/iconv behavior; and
-loader-configurable identity, passwd, group, supplementary-group, service, and
-hostname records. `fopen` returns `ENOSYS` until libc is connected to the OCaml
-VFS. This is intentional: libc must not maintain a second pathname namespace.
+`libc/waste-libc-helpers.c` and `libc/waste-libc-extra.c` are compiled with
+clang's wasm32 ABI and merged with that allocator. They supply memory-backed
+`FILE` streams and formatting; UTF-8 multibyte/wide conversion; C.UTF-8 locale
+behavior; configurable identity databases; memory/string and numeric helpers;
+compiler ABI arithmetic; sorting, glob and basic regex matching; resource
+limits; UTC calendar formatting; terminal helpers; and deterministic test
+entropy. The latter must be seeded through a browser-cryptography adapter before
+security-sensitive use.
+
+Calls that require process, descriptor, pathname, loader, or network state
+currently fail explicitly (`ENOSYS`, or the matching address-info error). This
+is intentional: they must be connected to the OCaml VFS/process kernel and the
+optional WebSocket broker instead of maintaining a second namespace in libc.
 
 The generated fixtures under `build/waste-libc/tests/` instantiate client modules
 against libc's exported memory, so their assertions exercise real cross-module
-pointer sharing. They are included in the offline dashboard.
+pointer sharing and indirect callback table. They cover allocator growth,
+stdio, locale/wide characters, identity databases, memory/conversion/compiler
+helpers, sorting/matching, resources/time, terminal behavior, entropy/messages,
+and explicit environment boundaries. They are included in the offline dashboard.
 
 The next kernel work is mount backends and permissions, directory streams,
 symlinks, terminal line discipline and window sizing, descriptor readiness for

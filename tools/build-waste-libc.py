@@ -50,6 +50,7 @@ def main() -> None:
             [
                 "clang", "--target=wasm32", "-O2", "-nostdlib", "-fno-builtin",
                 str(root / "libc" / "waste-libc-helpers.c"),
+                str(root / "libc" / "waste-libc-extra.c"),
                 "-Wl,--no-entry", "-Wl,--import-memory", "-Wl,--initial-memory=262144",
                 "-Wl,--allow-undefined", "-Wl,--export-all", "-Wl,--strip-all",
                 "-o", str(helpers_path),
