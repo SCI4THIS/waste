@@ -2,6 +2,7 @@
 /build.log
 /update.log
 /html.log
+/bash-html.log
 /threaded-html.log
 /test.log
 __pycache__/

@@ -26,14 +26,15 @@ self-contained `file://` document; broker use is optional.
 - `./start.sh --compile`: build direct and CPS OCaml-to-Wasm artifacts.
 - `./start.sh --build-libc`: build the guest allocator module and test fixture.
 - `./start.sh --generate-html`: generate the offline dashboard.
+- `./start.sh --generate-bash-html`: generate the offline WASTE Bash page.
 - `./build.sh`: build the C implementation.
 - `node tests/diy-posix-test/posix-{kernel,control}-runtime.cjs [threaded]`:
   run DIY POSIX probes.
 - `node tests/libc-test/libc-runtime.cjs [threaded]`: run guest allocator probes.
 - `node tests/libc-test/allocator-native.cjs`: stress the built allocator natively.
 
-Before submitting shell or Python changes, run `bash -n start.sh`,
-`python3 -m py_compile tools/generate-browser-tests.py`, and `git diff --check`.
+Before submitting shell or Python changes, run `bash -n start.sh`, Python bytecode
+checks for changed tools, and `git diff --check`.
 
 ## Coding Style & Naming Conventions
 

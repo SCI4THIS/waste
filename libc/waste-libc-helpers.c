@@ -8,9 +8,16 @@ typedef signed long long i64;
 extern void *malloc(u32 size);
 extern void free(void *pointer);
 extern i32 *__errno_location(void);
+#ifdef WASTE_POSIX_IO
+extern i32 open(const char *path, i32 flags, i32 mode);
+extern i32 close(i32 descriptor);
+extern i32 read(i32 descriptor, void *buffer, u32 count);
+extern i32 write(i32 descriptor, const void *buffer, u32 count);
+#endif
 
 static u32 c_length(const char *text) {
   u32 length = 0;
+  if ((u32)text >= __builtin_wasm_memory_size(0) * 65536U) return 0;
   if (text) while (text[length]) length++;
   return length;
 }
@@ -111,19 +118,47 @@ FILE *fdopen(i32 descriptor, const char *mode) {
 }
 
 FILE *fopen(const char *path, const char *mode) {
+#ifdef WASTE_POSIX_IO
+  i32 flags = mode && mode[0] == 'r' ? 0 : 65;
+  if (mode && mode[0] == 'a') flags |= 1024;
+  if (mode && mode[0] == 'w') flags |= 512;
+  i32 descriptor = open(path, flags, 0666);
+  return descriptor < 0 ? 0 : fdopen(descriptor, mode);
+#else
   (void)path; (void)mode;
   *__errno_location() = 38; /* ENOSYS until the VFS syscall ABI is linked. */
   return 0;
+#endif
 }
 
 u32 fwrite(const void *pointer, u32 size, u32 members, FILE *file) {
-  if (!file || file->magic != FILE_MAGIC || !(file->flags & FILE_WRITE) || !size) {
-    if (file) file->error = 1;
+  if (!file || !size) {
     return 0;
   }
   u64 wanted64 = (u64)size * members;
-  if (wanted64 > 0xffffffffULL) { file->error = 1; return 0; }
+  if (wanted64 > 0xffffffffULL) return 0;
   u32 wanted = (u32)wanted64;
+#ifdef WASTE_POSIX_IO
+  /* bash.wat was compiled against an opaque FILE layout that is not present
+     in the imported libc module. Its non-null stdout/stderr handles are still
+     valid stream tokens; route those writes through the process stdout until
+     the original libc's FILE layout can be identified. */
+  if (file->magic != FILE_MAGIC) {
+    i32 written = write(1, pointer, wanted);
+    return written < 0 ? 0 : (u32)written / size;
+  }
+#endif
+  if (file->magic != FILE_MAGIC || !(file->flags & FILE_WRITE)) {
+    if (file->magic == FILE_MAGIC) file->error = 1;
+    return 0;
+  }
+#ifdef WASTE_POSIX_IO
+  if (file->descriptor >= 0) {
+    i32 written = write(file->descriptor, pointer, wanted);
+    if (written < 0) { file->error = 1; return 0; }
+    return (u32)written / size;
+  }
+#endif
   u32 position = (file->flags & FILE_APPEND) ? file->length : file->position;
   u32 available = position < file->capacity ? file->capacity - position : 0;
   u32 copied = wanted < available ? wanted : available;
@@ -152,7 +187,12 @@ i32 puts(const char *text) {
 
 i32 putchar(i32 character) { return fputc(character, standard_output); }
 i32 fflush(FILE *file) { (void)file; return 0; }
-i32 fileno(FILE *file) { return file && file->magic == FILE_MAGIC ? file->descriptor : -1; }
+i32 fileno(FILE *file) {
+#ifdef WASTE_POSIX_IO
+  if (file && file->magic != FILE_MAGIC) return 1;
+#endif
+  return file && file->magic == FILE_MAGIC ? file->descriptor : -1;
+}
 i32 ferror(FILE *file) { return file ? file->error : 1; }
 void clearerr(FILE *file) { if (file) { file->error = 0; file->end_of_file = 0; } }
 i32 fpurge(FILE *file) { if (!file) return -1; file->length = file->position = 0; return 0; }
@@ -169,6 +209,14 @@ i32 setvbuf(FILE *file, char *buffer, i32 mode, u32 size) {
 
 char *fgets(char *destination, i32 count, FILE *file) {
   if (!destination || count <= 0 || !file || !(file->flags & FILE_READ)) return 0;
+#ifdef WASTE_POSIX_IO
+  if (file->position >= file->length && file->descriptor >= 0) {
+    i32 received = read(file->descriptor, file->data, file->capacity);
+    if (received < 0) { file->error = 1; return 0; }
+    file->position = 0;
+    file->length = (u32)received;
+  }
+#endif
   if (file->position >= file->length) { file->end_of_file = 1; return 0; }
   i32 written = 0;
   while (written + 1 < count && file->position < file->length) {
@@ -183,6 +231,9 @@ char *fgets(char *destination, i32 count, FILE *file) {
 i32 fclose(FILE *file) {
   if (!file || file->magic != FILE_MAGIC || (file->flags & FILE_CLOSED)) return -1;
   file->flags |= FILE_CLOSED;
+#ifdef WASTE_POSIX_IO
+  if (file->descriptor > 2 && close(file->descriptor) < 0) file->error = 1;
+#endif
   if (file->flags & FILE_OWN_BUFFER) free(file->data);
   file->magic = 0;
   free(file);

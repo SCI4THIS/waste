@@ -138,12 +138,19 @@ Implemented imports now cover the signal functions plus `getpid`, `getppid`,
 `alarm`, `sleep`, and `setitimer`.
 
 The OCaml host and guest-libc exports now cover all 231 named imports in
-`src/bash.wat`. Bash still cannot be treated as integrated: it has not been
-relinked to import libc's memory and functions, and environment-dependent libc
-calls must be routed into the OCaml kernel or broker namespace. The current `stat`
+`src/bash.wat`. The Bash launch relinker gives Bash and libc a shared memory and
+function table owned by the neutral `waste-runtime` module. Registering libc as
+`env` overlays its exports on the OCaml host namespace, so unresolved process,
+descriptor, VFS, signal, and clock imports continue to reach the kernel. The current `stat`
 encoder uses this runtime's documented wasm32 layout rather than guessing
 compatibility with an unidentified libc; the libc shim must own and test that
 ABI before Bash relies on it.
+
+The static Bash page launches `bash --norc --noediting -i` as a persistent
+scheduled process. Browser input is encoded into the control ring and fed to
+the virtual terminal; blocked reads remain scheduled until input or a signal
+arrives. Control polling occurs at quantum boundaries rather than on every
+guest instruction, with blocked terminal reads polling independently.
 
 `sys.js` is retained as a behavioral reference for libc-style memory helpers
 and browser output. It currently overlaps 26 of the 231 `env` imports in

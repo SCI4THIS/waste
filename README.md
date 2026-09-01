@@ -59,6 +59,7 @@ Useful non-interactive commands are:
 ./start.sh --compile
 ./start.sh --build-libc
 ./start.sh --generate-html
+./start.sh --generate-bash-html
 ./start.sh --patch-status
 ./start.sh --apply-i31
 ./start.sh --revert-i31
@@ -79,6 +80,29 @@ excluded from Test all, while remaining available for explicit runs. All custom
 annotation handlers are enabled for browser tests. Generated compiler artifacts
 under test `_output` directories are excluded from discovery.
 
+The **Generate self-contained WASTE Bash page** entry creates
+`build/ocaml-wasm/bash.html`. It embeds the CPS interpreter, the relinked Bash
+and waste-libc binaries, and their shared runtime namespace in one file that can
+be opened directly with `file://`. It starts one persistent
+`bash --norc --noediting -i` process and feeds submitted lines into the OCaml
+virtual terminal, so shell state such as the current directory survives between
+commands. The page provides instruction-quantum control, terminal output,
+pause/resume, signal, restart, and worker-stop controls. Set
+`WASTE_BASH_INSTRUCTION_QUANTUM` to change the generator's default quantum.
+Startup is intentionally visible and can be slow: the browser is decoding,
+validating, and interpreting Bash inside the OCaml interpreter; restarting the
+worker repeats that work. Enable **profile startup phases** before restarting to
+print cumulative millisecond timestamps for parsing, decoding, validation,
+import resolution, detailed evaluator initialization, registration, and
+invocation directly in the terminal. Browser markers additionally report the
+first-prompt duration from both `Date.now()` and `performance.now()`, plus their
+difference and the browser's local timestamp.
+
+The patched evaluator executes `memory.fill`, `memory.copy`, `memory.init`,
+`table.fill`, `table.copy`, and `table.init` as bounds-checked runtime loops.
+Each remains one scheduler-visible guest instruction; overlapping copies retain
+memmove behavior without allocating recursive interpreter instruction lists.
+
 ## Guest libc
 
 `libc/waste-libc.wat` and `libc/waste-libc-helpers.c` form the guest-side libc
@@ -94,7 +118,9 @@ configurable in-memory identity, passwd, group, and service records. It also
 provides Bash's string, conversion, compiler-runtime, sorting, matching, basic
 regex, resource-limit, UTC time-formatting, terminal, and diagnostic helpers.
 Together with the OCaml host, its exports cover every named import currently in
-`src/bash.wat`. Relinking and module namespaces remain integration work.
+`src/bash.wat`. `tools/build-bash-runtime.py` relinks Bash and libc to a neutral
+`waste-runtime` owner for their shared memory and function table, then registers
+libc as an overlay on the OCaml host's `env` namespace.
 
 Operations that require evaluator state deliberately return `ENOSYS` here,
 including directory traversal, `execve`, descriptor readiness, dynamic loading,

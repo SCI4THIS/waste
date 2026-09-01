@@ -23,6 +23,11 @@ UPDATE_LOG="$REPO_ROOT/update.log"
 BROWSER_TEST_GENERATOR="$REPO_ROOT/tools/generate-browser-tests.py"
 BROWSER_TEST_HTML="$BUILD_ROOT/browser-tests.html"
 HTML_LOG="$REPO_ROOT/html.log"
+BASH_RUNTIME_BUILDER="$REPO_ROOT/tools/build-bash-runtime.py"
+BASH_HTML_GENERATOR="$REPO_ROOT/tools/generate-bash-html.py"
+BASH_RUNTIME_WAST="$REPO_ROOT/build/bash/bash-runtime.wast"
+BASH_HTML="$BUILD_ROOT/bash.html"
+BASH_HTML_LOG="$REPO_ROOT/bash-html.log"
 LIBC_BUILDER="$REPO_ROOT/tools/build-waste-libc.py"
 LIBC_OUTPUT="$REPO_ROOT/build/waste-libc/waste-libc.wasm"
 LIBC_LOG="$REPO_ROOT/build/waste-libc/build.log"
@@ -47,6 +52,8 @@ interpreter to WebAssembly.
   --compile        compile without opening the main menu
   --build-libc     build waste-libc.wasm and its libc tests
   --generate-html  generate the embedded browser test dashboard
+  --generate-bash-html
+                   generate the self-contained WASTE Bash page
   --patch-status   show the Wasm32 compatibility patch status
   --apply-i31      apply the Wasm32 patch (legacy option name)
   --revert-i31     revert the Wasm32 patch (legacy option name)
@@ -58,6 +65,8 @@ Environment overrides:
   WASTE_OCAML_VERSION  OCaml version for a new switch (default: $OCAML_VERSION)
   WASTE_INSTRUCTION_QUANTUM
                        threaded scheduler quantum (default: 10000)
+  WASTE_BASH_INSTRUCTION_QUANTUM
+                       WASTE Bash scheduler quantum (default: 1000000)
 EOF
 }
 
@@ -687,6 +696,63 @@ generate_browser_test_html() {
     "A self-contained HTML dashboard was generated with the OCaml Wasm and all .wast tests embedded.\n\nOutput: $output\nLog: $html_log"
 }
 
+generate_bash_html() {
+  local quantum="${WASTE_BASH_INSTRUCTION_QUANTUM:-1000000}"
+  if have_command whiptail && [[ -t 0 && -t 1 ]]; then
+    quantum="$(whiptail --title "WASTE Bash" --inputbox \
+      "Interpreter steps before yielding to the browser:" 9 64 "$quantum" \
+      3>&1 1>&2 2>&3)" || return 1
+  fi
+  if [[ ! "$quantum" =~ ^[1-9][0-9]*$ ]]; then
+    show_message "WASTE Bash" "Instruction quantum must be a positive integer."
+    return 1
+  fi
+
+  : >"$BASH_HTML_LOG"
+  {
+    printf 'WASTE Bash static HTML generation\n'
+    printf 'Started: %s\n' "$(date --iso-8601=seconds)"
+    printf 'Output: %s\n' "$BASH_HTML"
+    printf 'Instruction quantum: %s\n\n' "$quantum"
+  } >>"$BASH_HTML_LOG"
+
+  if ! have_command python3 || ! have_command clang || ! have_command wasm-as ||
+     ! have_command wasm-merge || ! have_command wasm-dis || ! wasm_ld_is_usable; then
+    printf 'error: Python 3, clang/lld, and Binaryen are required\n' >>"$BASH_HTML_LOG"
+    show_message "WASTE Bash" "Python 3, clang/lld, and Binaryen are required.\n\nLog: $BASH_HTML_LOG"
+    return 1
+  fi
+  if [[ ! -f "$THREADED_DIST_DIR/wasm_cli.bc.wasm.js" ]]; then
+    printf 'error: CPS interpreter loader is missing\n' >>"$BASH_HTML_LOG"
+    show_message "WASTE Bash" "Compile the OCaml interpreter first.\n\nLog: $BASH_HTML_LOG"
+    return 1
+  fi
+  if [[ ! -f "$REPO_ROOT/src/bash.wat" || ! -f "$BASH_RUNTIME_BUILDER" ||
+        ! -f "$BASH_HTML_GENERATOR" ]]; then
+    printf 'error: Bash source or generator is missing\n' >>"$BASH_HTML_LOG"
+    show_message "WASTE Bash" "Bash source or a generation tool is missing.\n\nLog: $BASH_HTML_LOG"
+    return 1
+  fi
+
+  if have_command whiptail && [[ -t 0 && -t 1 ]]; then
+    whiptail --title "WASTE Bash" --infobox \
+      "Relinking Bash and libc, then embedding the CPS interpreter...\n\nLog: $BASH_HTML_LOG" 9 78
+  else
+    printf 'Generating self-contained WASTE Bash page...\n'
+  fi
+  if ! python3 "$BASH_RUNTIME_BUILDER" --repo-root "$REPO_ROOT" \
+      --interactive --output "$BASH_RUNTIME_WAST" >>"$BASH_HTML_LOG" 2>&1 ||
+     ! python3 "$BASH_HTML_GENERATOR" --repo-root "$REPO_ROOT" \
+      --launch "$BASH_RUNTIME_WAST" --output "$BASH_HTML" --quantum "$quantum" \
+      >>"$BASH_HTML_LOG" 2>&1; then
+    show_message "WASTE Bash generation failed" "Could not generate the static page.\n\nLog: $BASH_HTML_LOG"
+    return 1
+  fi
+  printf 'Completed: %s\n' "$(date --iso-8601=seconds)" >>"$BASH_HTML_LOG"
+  show_message "WASTE Bash generated" \
+    "The static page embeds the CPS interpreter, shared runtime, waste-libc, and Bash. It can be opened directly with file:// and requires no server.\n\nOutput: $BASH_HTML\nLog: $BASH_HTML_LOG"
+}
+
 dependency_menu() {
   while true; do
     check_dependencies && return 0
@@ -724,10 +790,11 @@ main_menu() {
     local choice
     patch_state="$(i31_patch_status)"
     choice="$(whiptail --title "OCaml to WebAssembly" --menu \
-      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 25 92 8 \
+      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 27 92 9 \
       compile "Compile the OCaml interpreter to Wasm" \
       libc "Build waste-libc.wasm and tests" \
       html "Generate embedded browser test dashboard" \
+      bash "Generate self-contained WASTE Bash page" \
       patch "Manage Wasm32 compatibility patch [$patch_state]" \
       update "Safe pull/rebase and submodule update" \
       status "Show dependency status" \
@@ -738,6 +805,7 @@ main_menu() {
       compile) compile_interpreter || true ;;
       libc) build_waste_libc || true ;;
       html) generate_browser_test_html || true ;;
+      bash) generate_bash_html || true ;;
       patch) i31_patch_menu ;;
       update) safe_repository_update || true ;;
       status)
@@ -777,6 +845,7 @@ main() {
     --compile) compile_interpreter ;;
     --build-libc) build_waste_libc ;;
     --generate-html) generate_browser_test_html ;;
+    --generate-bash-html) generate_bash_html ;;
     --patch-status) i31_patch_status ;;
     --apply-i31) apply_i31_patch ;;
     --revert-i31) revert_i31_patch ;;
