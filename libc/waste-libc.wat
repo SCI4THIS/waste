@@ -1,0 +1,573 @@
+(module
+  ;; WASTE guest libc core.  This module owns the linear memory that an
+  ;; application imports, allowing libc and the application to share pointers.
+  ;; The allocator is deliberately self-contained and calls memory.grow with
+  ;; exactly one 64-KiB page per operation.
+  (memory (export "memory") 4)
+
+  (global $initialized (mut i32) (i32.const 0))
+  (global $errno_address (mut i32) (i32.const 0))
+  (global $heap_base (mut i32) (i32.const 0))
+  (global $program_break (mut i32) (i32.const 0))
+  (global $free_head (mut i32) (i32.const 0))
+  (global $grow_calls (mut i32) (i32.const 0))
+
+  ;; Blocks are 16-byte aligned and contain a 16-byte header plus a four-byte
+  ;; boundary tag.  Bit zero of the size is the allocated flag.
+  (func $align16 (param $value i32) (result i32)
+    local.get $value
+    i32.const 15
+    i32.add
+    i32.const -16
+    i32.and)
+
+  (func $set_errno (param $value i32)
+    global.get $errno_address
+    i32.eqz
+    if
+      return
+    end
+    global.get $errno_address
+    local.get $value
+    i32.store)
+
+  (func (export "__errno_location") (result i32)
+    global.get $errno_address)
+
+  (func $ensure_capacity (param $end i32) (result i32)
+    (local $bound i64)
+    loop $grow
+      memory.size
+      i64.extend_i32_u
+      i64.const 65536
+      i64.mul
+      local.set $bound
+      local.get $bound
+      local.get $end
+      i64.extend_i32_u
+      i64.ge_u
+      if
+        i32.const 1
+        return
+      end
+      i32.const 1
+      memory.grow
+      i32.const -1
+      i32.eq
+      if
+        i32.const 12 ;; ENOMEM
+        call $set_errno
+        i32.const 0
+        return
+      end
+      global.get $grow_calls
+      i32.const 1
+      i32.add
+      global.set $grow_calls
+      br $grow
+    end
+    unreachable)
+
+  ;; Initialize once after the application module's __heap_base is known.
+  ;; Four bytes at the supplied base hold errno; allocations start at the next
+  ;; 16-byte boundary.
+  (func (export "waste_allocator_init") (param $base i32) (result i32)
+    (local $errno i32)
+    (local $first i32)
+    local.get $base
+    i32.const 3
+    i32.add
+    i32.const -4
+    i32.and
+    local.tee $errno
+    i32.const 4
+    i32.add
+    call $align16
+    local.set $first
+    local.get $first
+    local.get $base
+    i32.lt_u
+    if
+      i32.const 0
+      return
+    end
+    local.get $first
+    call $ensure_capacity
+    i32.eqz
+    if
+      i32.const 0
+      return
+    end
+    local.get $errno
+    global.set $errno_address
+    local.get $first
+    global.set $heap_base
+    local.get $first
+    global.set $program_break
+    i32.const 0
+    global.set $free_head
+    i32.const 0
+    global.set $grow_calls
+    global.get $errno_address
+    i32.const 0
+    i32.store
+    i32.const 1
+    global.set $initialized
+    i32.const 1)
+
+  ;; dlmalloc-compatible MORECORE primitive.  It returns the previous break or
+  ;; -1 on failure.  Memory is never physically shrunk.
+  (func $sbrk (export "sbrk") (param $increment i32) (result i32)
+    (local $old i32)
+    (local $next i64)
+    global.get $initialized
+    i32.eqz
+    if
+      i32.const 22 ;; EINVAL
+      call $set_errno
+      i32.const -1
+      return
+    end
+    global.get $program_break
+    local.tee $old
+    i64.extend_i32_u
+    local.get $increment
+    i64.extend_i32_s
+    i64.add
+    local.tee $next
+    global.get $heap_base
+    i64.extend_i32_u
+    i64.lt_s
+    if
+      i32.const 12
+      call $set_errno
+      i32.const -1
+      return
+    end
+    local.get $next
+    i64.const 0xffffffff
+    i64.gt_u
+    if
+      i32.const 12
+      call $set_errno
+      i32.const -1
+      return
+    end
+    local.get $next
+    i32.wrap_i64
+    call $ensure_capacity
+    i32.eqz
+    if
+      i32.const -1
+      return
+    end
+    local.get $next
+    i32.wrap_i64
+    global.set $program_break
+    local.get $old)
+
+  (func $write_block (param $block i32) (param $size i32) (param $allocated i32)
+    (local $tag i32)
+    local.get $size
+    local.get $allocated
+    i32.or
+    local.set $tag
+    local.get $block
+    local.get $tag
+    i32.store
+    local.get $block
+    local.get $size
+    i32.add
+    i32.const 4
+    i32.sub
+    local.get $tag
+    i32.store)
+
+  (func $remove_free (param $block i32)
+    (local $previous i32)
+    (local $next i32)
+    local.get $block
+    i32.load offset=4
+    local.set $previous
+    local.get $block
+    i32.load offset=8
+    local.set $next
+    local.get $previous
+    if
+      local.get $previous
+      local.get $next
+      i32.store offset=8
+    else
+      local.get $next
+      global.set $free_head
+    end
+    local.get $next
+    if
+      local.get $next
+      local.get $previous
+      i32.store offset=4
+    end)
+
+  (func $insert_free (param $block i32)
+    local.get $block
+    i32.const 0
+    i32.store offset=4
+    local.get $block
+    global.get $free_head
+    i32.store offset=8
+    global.get $free_head
+    if
+      global.get $free_head
+      local.get $block
+      i32.store offset=4
+    end
+    local.get $block
+    global.set $free_head)
+
+  (func $release_block (param $block i32)
+    (local $size i32)
+    (local $next i32)
+    (local $previous_size i32)
+    (local $previous i32)
+    local.get $block
+    i32.load
+    i32.const -2
+    i32.and
+    local.set $size
+
+    local.get $block
+    local.get $size
+    i32.add
+    local.tee $next
+    global.get $program_break
+    i32.lt_u
+    if
+      local.get $next
+      i32.load
+      i32.const 1
+      i32.and
+      i32.eqz
+      if
+        local.get $next
+        call $remove_free
+        local.get $size
+        local.get $next
+        i32.load
+        i32.const -2
+        i32.and
+        i32.add
+        local.set $size
+      end
+    end
+
+    local.get $block
+    global.get $heap_base
+    i32.gt_u
+    if
+      local.get $block
+      i32.const 4
+      i32.sub
+      i32.load
+      i32.const -2
+      i32.and
+      local.tee $previous_size
+      i32.const 32
+      i32.ge_u
+      if
+        local.get $block
+        local.get $previous_size
+        i32.sub
+        local.tee $previous
+        global.get $heap_base
+        i32.ge_u
+        if
+          local.get $previous
+          i32.load
+          i32.const 1
+          i32.and
+          i32.eqz
+          if
+            local.get $previous
+            call $remove_free
+            local.get $previous
+            local.set $block
+            local.get $size
+            local.get $previous_size
+            i32.add
+            local.set $size
+          end
+        end
+      end
+    end
+
+    local.get $block
+    local.get $size
+    i32.const 0
+    call $write_block
+    local.get $block
+    call $insert_free)
+
+  (func $malloc (export "malloc") (param $requested i32) (result i32)
+    (local $total i32)
+    (local $block i32)
+    (local $block_size i32)
+    (local $remaining i32)
+    (local $old_break i32)
+    (local $aligned_break i32)
+    global.get $initialized
+    i32.eqz
+    if
+      i32.const 22
+      call $set_errno
+      i32.const 0
+      return
+    end
+    local.get $requested
+    i32.const 0xffffffe0
+    i32.gt_u
+    if
+      i32.const 12
+      call $set_errno
+      i32.const 0
+      return
+    end
+    local.get $requested
+    i32.eqz
+    if
+      i32.const 1
+      local.set $requested
+    end
+    local.get $requested
+    i32.const 20
+    i32.add
+    call $align16
+    local.tee $total
+    i32.const 32
+    i32.lt_u
+    if
+      i32.const 32
+      local.set $total
+    end
+
+    global.get $free_head
+    local.set $block
+    block $not_found
+      loop $search
+        local.get $block
+        i32.eqz
+        br_if $not_found
+        local.get $block
+        i32.load
+        i32.const -2
+        i32.and
+        local.tee $block_size
+        local.get $total
+        i32.ge_u
+        if
+          local.get $block
+          call $remove_free
+          local.get $block_size
+          local.get $total
+          i32.sub
+          local.tee $remaining
+          i32.const 32
+          i32.ge_u
+          if
+            local.get $block
+            local.get $total
+            i32.const 1
+            call $write_block
+            local.get $block
+            local.get $total
+            i32.add
+            local.get $remaining
+            i32.const 0
+            call $write_block
+            local.get $block
+            local.get $total
+            i32.add
+            call $insert_free
+          else
+            local.get $block
+            local.get $block_size
+            i32.const 1
+            call $write_block
+          end
+          local.get $block
+          i32.const 16
+          i32.add
+          return
+        end
+        local.get $block
+        i32.load offset=8
+        local.set $block
+        br $search
+      end
+    end
+
+    global.get $program_break
+    call $align16
+    local.set $aligned_break
+    local.get $aligned_break
+    global.get $program_break
+    i32.sub
+    local.get $total
+    i32.add
+    call $sbrk
+    local.tee $old_break
+    i32.const -1
+    i32.eq
+    if
+      i32.const 0
+      return
+    end
+    local.get $aligned_break
+    local.get $total
+    i32.const 1
+    call $write_block
+    local.get $aligned_break
+    i32.const 16
+    i32.add)
+
+  (func $free (export "free") (param $pointer i32)
+    (local $block i32)
+    local.get $pointer
+    i32.eqz
+    if
+      return
+    end
+    local.get $pointer
+    i32.const 16
+    i32.sub
+    local.tee $block
+    global.get $heap_base
+    i32.lt_u
+    if
+      i32.const 22
+      call $set_errno
+      return
+    end
+    local.get $block
+    global.get $program_break
+    i32.ge_u
+    if
+      i32.const 22
+      call $set_errno
+      return
+    end
+    local.get $block
+    i32.load
+    i32.const 1
+    i32.and
+    i32.eqz
+    if
+      i32.const 22
+      call $set_errno
+      return
+    end
+    local.get $block
+    call $release_block)
+
+  (func (export "calloc") (param $count i32) (param $size i32) (result i32)
+    (local $bytes64 i64)
+    (local $pointer i32)
+    local.get $count
+    i64.extend_i32_u
+    local.get $size
+    i64.extend_i32_u
+    i64.mul
+    local.tee $bytes64
+    i64.const 0xffffffff
+    i64.gt_u
+    if
+      i32.const 12
+      call $set_errno
+      i32.const 0
+      return
+    end
+    local.get $bytes64
+    i32.wrap_i64
+    call $malloc
+    local.tee $pointer
+    if
+      local.get $pointer
+      i32.const 0
+      local.get $bytes64
+      i32.wrap_i64
+      memory.fill
+    end
+    local.get $pointer)
+
+  (func (export "realloc") (param $pointer i32) (param $requested i32) (result i32)
+    (local $block i32)
+    (local $old_capacity i32)
+    (local $copy_size i32)
+    (local $replacement i32)
+    local.get $pointer
+    i32.eqz
+    if
+      local.get $requested
+      call $malloc
+      return
+    end
+    local.get $requested
+    i32.eqz
+    if
+      local.get $pointer
+      call $free
+      i32.const 0
+      return
+    end
+    local.get $pointer
+    i32.const 16
+    i32.sub
+    local.tee $block
+    i32.load
+    i32.const -2
+    i32.and
+    i32.const 20
+    i32.sub
+    local.set $old_capacity
+    local.get $requested
+    call $malloc
+    local.tee $replacement
+    i32.eqz
+    if
+      i32.const 0
+      return
+    end
+    local.get $old_capacity
+    local.get $requested
+    local.get $old_capacity
+    local.get $requested
+    i32.lt_u
+    select
+    local.set $copy_size
+    local.get $replacement
+    local.get $pointer
+    local.get $copy_size
+    memory.copy
+    local.get $pointer
+    call $free
+    local.get $replacement)
+
+  (func (export "waste_malloc_usable_size") (param $pointer i32) (result i32)
+    local.get $pointer
+    i32.eqz
+    if (result i32)
+      i32.const 0
+    else
+      local.get $pointer
+      i32.const 16
+      i32.sub
+      i32.load
+      i32.const -2
+      i32.and
+      i32.const 20
+      i32.sub
+    end)
+
+  (func (export "waste_heap_base") (result i32) global.get $heap_base)
+  (func (export "waste_heap_end") (result i32) global.get $program_break)
+  (func (export "waste_memory_pages") (result i32) memory.size)
+  (func (export "waste_memory_grow_calls") (result i32) global.get $grow_calls))

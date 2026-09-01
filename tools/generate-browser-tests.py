@@ -853,6 +853,7 @@ def main():
     asset_dir = dist / "wasm_cli.bc.wasm.assets"
     test_root = root / "submodules" / "wasm-spec" / "test"
     diy_posix_root = root / "tests" / "diy-posix-test"
+    libc_test_root = root / "tests" / "libc-test"
     output = args.output or root / "build" / "ocaml-wasm" / "browser-tests.html"
 
     if not loader_path.is_file():
@@ -864,6 +865,8 @@ def main():
         raise SystemExit(f"spec test directory not found: {test_root}")
     if not diy_posix_root.is_dir():
         raise SystemExit(f"DIY POSIX test directory not found: {diy_posix_root}")
+    if not libc_test_root.is_dir():
+        raise SystemExit(f"libc test directory not found: {libc_test_root}")
 
     tests = [
         *collect_tests(test_root, suite="wasm-spec"),
@@ -871,6 +874,11 @@ def main():
             diy_posix_root,
             suite="diy-posix-test",
             path_prefix="diy-posix-test",
+        ),
+        *collect_tests(
+            libc_test_root,
+            suite="libc-test",
+            path_prefix="libc-test",
         ),
     ]
     if not tests:

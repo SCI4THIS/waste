@@ -23,6 +23,9 @@ UPDATE_LOG="$REPO_ROOT/update.log"
 BROWSER_TEST_GENERATOR="$REPO_ROOT/tools/generate-browser-tests.py"
 BROWSER_TEST_HTML="$BUILD_ROOT/browser-tests.html"
 HTML_LOG="$REPO_ROOT/html.log"
+LIBC_BUILDER="$REPO_ROOT/tools/build-waste-libc.py"
+LIBC_OUTPUT="$REPO_ROOT/build/waste-libc/waste-libc.wasm"
+LIBC_LOG="$REPO_ROOT/build/waste-libc/build.log"
 
 SWITCH_NAME="${WASTE_OCAML_SWITCH:-waste-wasm}"
 OCAML_VERSION="${WASTE_OCAML_VERSION:-5.3.0}"
@@ -42,6 +45,7 @@ interpreter to WebAssembly.
   --check          print dependency status and exit
   --install-deps   interactively install missing dependencies
   --compile        compile without opening the main menu
+  --build-libc     build waste-libc.wasm and its allocator tests
   --generate-html  generate the embedded browser test dashboard
   --patch-status   show the Wasm32 compatibility patch status
   --apply-i31      apply the Wasm32 patch (legacy option name)
@@ -89,7 +93,7 @@ check_dependencies() {
   MISSING_OPAM=()
 
   local command_name
-  for command_name in git cc make opam bwrap whiptail; do
+  for command_name in git cc make opam bwrap whiptail wasm-as; do
     if ! have_command "$command_name"; then
       MISSING_SYSTEM+=("$command_name")
     fi
@@ -578,6 +582,37 @@ compile_interpreter() {
     "The spec interpreter was compiled using Wasm32 patch state: $compile_patch_state. The compilation itself did not modify the submodule.\n\nSequential: $DIST_DIR/wasm_cli.bc.wasm.js\nThreaded CPS: $THREADED_DIST_DIR/wasm_cli.bc.wasm.js\nLog: $LOG_FILE"
 }
 
+build_waste_libc() {
+  local quiet="${1:-false}"
+  mkdir -p -- "$(dirname -- "$LIBC_OUTPUT")"
+  : >"$LIBC_LOG"
+  {
+    printf 'WASTE guest libc build\n'
+    printf 'Started: %s\n' "$(date --iso-8601=seconds)"
+    printf 'Source: %s\n' "$REPO_ROOT/libc/waste-libc.wat"
+    printf 'Output: %s\n\n' "$LIBC_OUTPUT"
+  } >>"$LIBC_LOG"
+
+  if ! have_command python3 || ! have_command wasm-as; then
+    printf 'error: Python 3 and Binaryen wasm-as are required\n' >>"$LIBC_LOG"
+    if [[ "$quiet" != true ]]; then
+      show_message "Guest libc build failed" "Python 3 and Binaryen wasm-as are required.\n\nLog: $LIBC_LOG"
+    fi
+    return 1
+  fi
+  if ! python3 "$LIBC_BUILDER" --repo-root "$REPO_ROOT" >>"$LIBC_LOG" 2>&1; then
+    if [[ "$quiet" != true ]]; then
+      show_message "Guest libc build failed" "Could not build waste-libc.wasm.\n\nLog: $LIBC_LOG"
+    fi
+    return 1
+  fi
+  printf 'Completed: %s\n' "$(date --iso-8601=seconds)" >>"$LIBC_LOG"
+  if [[ "$quiet" != true ]]; then
+    show_message "Guest libc build complete" \
+      "The shared-memory allocator module and browser fixture were generated.\n\nOutput: $LIBC_OUTPUT\nLog: $LIBC_LOG"
+  fi
+}
+
 generate_browser_test_html() {
   local quantum="${WASTE_INSTRUCTION_QUANTUM:-10000}"
   local output="$BROWSER_TEST_HTML"
@@ -615,6 +650,11 @@ generate_browser_test_html() {
   if [[ ! -f "$BROWSER_TEST_GENERATOR" ]]; then
     printf 'error: generator is missing: %s\n' "$BROWSER_TEST_GENERATOR" >>"$html_log"
     show_message "Browser test dashboard" "The HTML generator is missing.\n\nLog: $html_log"
+    return 1
+  fi
+  if ! build_waste_libc true; then
+    printf 'error: waste-libc build failed; see %s\n' "$LIBC_LOG" >>"$html_log"
+    show_message "Browser test dashboard" "The guest libc must build before its tests can be embedded.\n\nLog: $LIBC_LOG"
     return 1
   fi
 
@@ -676,8 +716,9 @@ main_menu() {
     local choice
     patch_state="$(i31_patch_status)"
     choice="$(whiptail --title "OCaml to WebAssembly" --menu \
-      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 24 92 7 \
+      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 25 92 8 \
       compile "Compile the OCaml interpreter to Wasm" \
+      libc "Build waste-libc.wasm allocator core" \
       html "Generate embedded browser test dashboard" \
       patch "Manage Wasm32 compatibility patch [$patch_state]" \
       update "Safe pull/rebase and submodule update" \
@@ -687,6 +728,7 @@ main_menu() {
 
     case "$choice" in
       compile) compile_interpreter || true ;;
+      libc) build_waste_libc || true ;;
       html) generate_browser_test_html || true ;;
       patch) i31_patch_menu ;;
       update) safe_repository_update || true ;;
@@ -725,6 +767,7 @@ main() {
       return 1 ;;
     --install-deps) install_missing_dependencies ;;
     --compile) compile_interpreter ;;
+    --build-libc) build_waste_libc ;;
     --generate-html) generate_browser_test_html ;;
     --patch-status) i31_patch_status ;;
     --apply-i31) apply_i31_patch ;;

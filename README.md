@@ -57,6 +57,7 @@ Useful non-interactive commands are:
 ./start.sh --check
 ./start.sh --install-deps
 ./start.sh --compile
+./start.sh --build-libc
 ./start.sh --generate-html
 ./start.sh --patch-status
 ./start.sh --apply-i31
@@ -77,6 +78,30 @@ group in order. Legacy exception groups are highlighted as unsupported and are
 excluded from Test all, while remaining available for explicit runs. All custom
 annotation handlers are enabled for browser tests. Generated compiler artifacts
 under test `_output` directories are excluded from discovery.
+
+## Guest libc allocator
+
+`libc/waste-libc.wat` is the beginning of the guest-side libc used by Bash. It
+owns and exports the application linear memory so future application modules
+can import the same memory as libc. Its `sbrk` implementation provides a
+dlmalloc-compatible MORECORE boundary and deliberately performs expansion as a
+series of `memory.grow 1` calls. The current boundary-tag allocator exports
+`malloc`, `calloc`, `realloc`, `free`, `sbrk`, and `__errno_location`.
+
+Build `build/waste-libc/waste-libc.wasm` and regenerate its WAST fixture with:
+
+```sh
+./start.sh --build-libc
+```
+
+Allocator tests appear in the dashboard's `libc-test` group and can also run
+against both generated interpreters:
+
+```sh
+node tests/libc-test/libc-runtime.cjs
+node tests/libc-test/libc-runtime.cjs threaded
+node tests/libc-test/allocator-native.cjs
+```
 
 The dashboard offers thread-count choices of **1**, **#tests** (derived from
 all supported embedded suites), or a custom positive integer. Test all passes

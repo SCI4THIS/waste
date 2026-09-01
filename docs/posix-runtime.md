@@ -138,11 +138,13 @@ Implemented imports now cover the signal functions plus `getpid`, `getppid`,
 `alarm`, `sleep`, and `setitimer`.
 
 This is not yet enough to instantiate `src/bash.wat`: that module has 231
-imports and still needs the allocator/stdio ABI, directory streams, locale and
-wide-character functions, command execution, resource limits, networking, and
-several libc helpers. The current `stat` encoder uses this runtime's documented
-wasm32 layout rather than guessing compatibility with an unidentified libc;
-the libc shim must own and test that ABI before Bash relies on it.
+imports and still needs stdio, directory streams, locale and wide-character
+functions, command execution, resource limits, networking, and several libc
+helpers. The allocator core now lives in `libc/waste-libc.wat`, but Bash has
+not yet been relinked to import its memory and functions. The current `stat`
+encoder uses this runtime's documented wasm32 layout rather than guessing
+compatibility with an unidentified libc; the libc shim must own and test that
+ABI before Bash relies on it.
 
 `sys.js` is retained as a behavioral reference for libc-style memory helpers
 and browser output. It currently overlaps 26 of the 231 `env` imports in
@@ -154,6 +156,22 @@ interpreter `Memory` API. Browser capabilities (terminal rendering, persistent
 storage, clocks, entropy, and networking) should use narrow JavaScript adapters
 whose results are copied through the OCaml syscall layer. This keeps process,
 descriptor, permission, blocking, and signal semantics in one place.
+
+## Guest libc and allocator
+
+`libc/waste-libc.wat` owns and exports a linear memory intended to be imported
+by a relinked application module. Its boundary-tag allocator provides
+`malloc`, `calloc`, `realloc`, `free`, `sbrk`, and `__errno_location`.
+Initialization receives the application's exported `__heap_base`; `errno`
+occupies the first aligned word and allocations begin at the following
+16-byte boundary. Capacity expansion always loops over `memory.grow 1`, even
+when a request needs multiple pages. This supplies the MORECORE behavior needed
+to substitute dlmalloc later without exposing allocator metadata to OCaml or
+JavaScript.
+
+The generated `tests/libc-test/allocator.wast` instantiates a client module
+against the allocator's exported memory, so its assertions exercise real
+cross-module pointer sharing. It is included in the offline dashboard.
 
 The next kernel work is mount backends and permissions, directory streams,
 symlinks, terminal line discipline and window sizing, descriptor readiness for
