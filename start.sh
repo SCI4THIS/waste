@@ -13,6 +13,7 @@ else
 fi
 SPEC_DIR="$REPO_ROOT/submodules/wasm-spec"
 INTERPRETER_DIR="$SPEC_DIR/interpreter"
+NATIVE_INTERPRETER="$INTERPRETER_DIR/_build/default/wasm.exe"
 I31_PATCH_FILE="$REPO_ROOT/submodules/wasm-spec-i31-int32.patch"
 BUILD_ROOT="$REPO_ROOT/build/ocaml-wasm"
 STAGING_DIR="$BUILD_ROOT/staging/interpreter"
@@ -717,10 +718,10 @@ generate_bash_html() {
     printf 'Instruction quantum: %s\n\n' "$quantum"
   } >>"$BASH_HTML_LOG"
 
-  if ! have_command python3 || ! have_command clang || ! have_command wasm-as ||
+  if ! have_command python3 || ! have_command opam || ! have_command clang || ! have_command wasm-as ||
      ! have_command wasm-merge || ! have_command wasm-dis || ! wasm_ld_is_usable; then
-    printf 'error: Python 3, clang/lld, and Binaryen are required\n' >>"$BASH_HTML_LOG"
-    show_message "WASTE Bash" "Python 3, clang/lld, and Binaryen are required.\n\nLog: $BASH_HTML_LOG"
+    printf 'error: Python 3, opam, clang/lld, and Binaryen are required\n' >>"$BASH_HTML_LOG"
+    show_message "WASTE Bash" "Python 3, opam, clang/lld, and Binaryen are required.\n\nLog: $BASH_HTML_LOG"
     return 1
   fi
   if [[ ! -f "$THREADED_DIST_DIR/wasm_cli.bc.wasm.js" ]]; then
@@ -737,14 +738,18 @@ generate_bash_html() {
 
   if have_command whiptail && [[ -t 0 && -t 1 ]]; then
     whiptail --title "WASTE Bash" --infobox \
-      "Relinking Bash and libc, then embedding the CPS interpreter...\n\nLog: $BASH_HTML_LOG" 9 78
+      "Relinking and validating Bash, then embedding the CPS interpreter...\n\nLog: $BASH_HTML_LOG" 9 78
   else
     printf 'Generating self-contained WASTE Bash page...\n'
   fi
   if ! python3 "$BASH_RUNTIME_BUILDER" --repo-root "$REPO_ROOT" \
       --interactive --output "$BASH_RUNTIME_WAST" >>"$BASH_HTML_LOG" 2>&1 ||
+     ! (cd -- "$INTERPRETER_DIR" &&
+       opam exec --switch="$SWITCH_NAME" -- dune build ./wasm.exe) \
+      >>"$BASH_HTML_LOG" 2>&1 ||
      ! python3 "$BASH_HTML_GENERATOR" --repo-root "$REPO_ROOT" \
       --launch "$BASH_RUNTIME_WAST" --output "$BASH_HTML" --quantum "$quantum" \
+      --validator "$NATIVE_INTERPRETER" \
       >>"$BASH_HTML_LOG" 2>&1; then
     show_message "WASTE Bash generation failed" "Could not generate the static page.\n\nLog: $BASH_HTML_LOG"
     return 1
@@ -761,10 +766,28 @@ run_logged_test() {
   "$@" >>"$TEST_LOG" 2>&1
 }
 
+run_official_core_tests() {
+  printf '\n== Official WebAssembly core suite ==\n' >>"$TEST_LOG"
+  if ! (cd -- "$INTERPRETER_DIR" &&
+      opam exec --switch="$SWITCH_NAME" -- dune build ./wasm.exe) \
+      >>"$TEST_LOG" 2>&1; then
+    return 1
+  fi
+  python3 "$SPEC_DIR/test/core/run.py" \
+    --wasm "$INTERPRETER_DIR/_build/default/wasm.exe" \
+    >>"$TEST_LOG" 2>&1
+}
+
 run_test_group() {
   local group="$1"
-  if ! have_command node; then
+  if [[ "$group" != spec ]] && ! have_command node; then
     show_message "Runtime tests" "Node.js is required to run the runtime test suites."
+    return 1
+  fi
+  if [[ "$group" == spec || "$group" == all ]] &&
+      { ! have_command opam || ! have_command python3; }; then
+    show_message "Runtime tests" \
+      "opam and Python 3 are required to run the official interpreter suite."
     return 1
   fi
 
@@ -780,6 +803,9 @@ run_test_group() {
 
   local status=0
   case "$group" in
+    spec)
+      run_official_core_tests || status=1
+      ;;
     posix)
       run_logged_test "POSIX control (sequential)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" || status=1
       run_logged_test "POSIX control (threaded)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" threaded || status=1
@@ -795,6 +821,7 @@ run_test_group() {
       run_logged_test "Bash interactive smoke test" node "$REPO_ROOT/tests/bash-interactive-runtime.cjs" || status=1
       ;;
     all)
+      run_official_core_tests || status=1
       run_logged_test "POSIX control (sequential)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" || status=1
       run_logged_test "POSIX control (threaded)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" threaded || status=1
       run_logged_test "POSIX kernel (sequential)" node "$REPO_ROOT/tests/diy-posix-test/posix-kernel-runtime.cjs" || status=1
@@ -821,16 +848,17 @@ test_suite_menu() {
   while true; do
     local choice
     choice="$(whiptail --title "Runtime test suites" --menu \
-      "Tests run locally against the compiled sequential and CPS interpreters." \
-      22 88 6 \
-      all "Run DIY POSIX, libc, and Bash suites" \
+      "Tests run locally against the native, sequential, and CPS interpreters." \
+      23 88 7 \
+      all "Run official core, DIY POSIX, libc, and Bash suites" \
+      spec "Run the official WebAssembly core suite" \
       posix "Run DIY POSIX control and kernel suites" \
       libc "Run waste-libc and native allocator suites" \
       bash "Run the interactive Bash smoke test" \
       log "Show the last test log" \
       back "Return to the main menu" 3>&1 1>&2 2>&3)" || return 0
     case "$choice" in
-      all|posix|libc|bash) run_test_group "$choice" || true ;;
+      all|spec|posix|libc|bash) run_test_group "$choice" || true ;;
       log)
         if [[ -s "$TEST_LOG" ]]; then
           whiptail --title "Last test log" --textbox "$TEST_LOG" 28 100

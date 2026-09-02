@@ -89,6 +89,10 @@ virtual terminal, so shell state such as the current directory survives between
 commands. The page provides instruction-quantum control, terminal output,
 pause/resume, signal, restart, and worker-stop controls. Set
 `WASTE_BASH_INSTRUCTION_QUANTUM` to change the generator's default quantum.
+Generation validates the complete relinked launch script with the native OCaml
+reference interpreter and embeds SHA-256 identities for the launch source, CPS
+loader, and interpreter Wasm. The browser skips duplicate runtime validation
+only when all three identities match; otherwise it validates normally.
 Startup is intentionally visible and can be slow: the browser is decoding,
 validating, and interpreting Bash inside the OCaml interpreter; restarting the
 worker repeats that work. Enable **profile startup phases** before restarting to
@@ -196,8 +200,9 @@ node tests/diy-posix-test/posix-kernel-runtime.cjs
 node tests/diy-posix-test/posix-kernel-runtime.cjs threaded
 ```
 
-The **Run runtime test suites** wizard entry runs the sequential and threaded
-DIY POSIX and libc probes plus the Bash smoke test. It records every suite in
+The **Run runtime test suites** wizard entry runs the official WebAssembly core
+suite against the native interpreter, the sequential and threaded DIY POSIX
+and libc probes, and the CPS Bash smoke test. It records every suite in
 `test.log` and continues through later suites after a failure.
 
 The `diy-posix-test` suite validates WASTE's interpreter ABI and is embedded in

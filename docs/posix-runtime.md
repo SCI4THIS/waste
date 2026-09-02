@@ -43,9 +43,24 @@ event loop after each configured instruction quantum. Pause and resume are
 worker messages which gate the next continuation slice. A signal message is
 written by that same worker into a local `Int32Array` exposed as
 `globalThis.waste_control_page`; the interpreter runs with `--control-page` and
-checks the ring once per guest instruction. Because the producer and consumer
-run alternately in one worker, this static-file path does not require shared
-memory or hosting headers.
+checks the ring when the current scheduler quantum expires. Signals produced
+or unmasked by a guest syscall are delivered before guest execution resumes,
+without waiting for another quantum. Because the producer and consumer run
+alternately in one worker, this static-file path does not require shared memory
+or hosting headers.
+
+The quantum counts decoded guest opcodes. Evaluator-only transitions for call,
+label, exception, and signal frames do not consume instruction fuel. Executable
+bodies are cached as immutable arrays, while each task owns numeric PCs that are
+cloned for process forks and non-local-jump snapshots.
+
+The Bash HTML generator validates its complete relinked launch script with the
+native reference interpreter. It records SHA-256 identities for that exact
+source and for the embedded CPS loader and interpreter Wasm. The worker passes
+`-u` only after recomputing and matching all three identities. A missing Web
+Crypto implementation or any mismatch falls back to ordinary runtime
+validation, so the cache cannot turn an unverified replacement into trusted
+input.
 
 | Word | Purpose |
 | ---: | --- |
@@ -57,10 +72,11 @@ memory or hosting headers.
 
 A command word contains a 16-bit operation and 16-bit argument. Operations are
 `1` pause, `2` POSIX signal, and `3` terminate. The producer writes a ring slot
-before publishing word 0. The interpreter performs one atomic load of word 0
-at every guest instruction and reads a slot only when the sequence changes.
-The same ABI also accepts a `SharedArrayBuffer` for non-dashboard controllers.
-In that mode ring publication uses atomics and pause can use `Atomics.wait`.
+before publishing word 0. The interpreter performs one load of word 0 at each
+quantum boundary and reads a slot only when the sequence changes. The same ABI
+also accepts a `SharedArrayBuffer` for non-dashboard controllers. In that mode
+ring publication uses atomics and pause can use `Atomics.wait`; the running
+interpreter still observes commands only at a cooperative scheduler boundary.
 The static dashboard deliberately uses scheduler yields and ordinary worker
 messages instead, preserving copy-and-open deployment and offline analysis.
 

@@ -2,7 +2,9 @@
 
 import argparse
 import base64
+import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 def browser_loader(source: str) -> str:
@@ -104,6 +106,12 @@ HTML = r'''<!doctype html>
         page[4 + (sequence & 255)] = (operation << 16) | (argument & 0xffff);
         page[0] = sequence;
       };
+      const sha256Hex = async bytes => {
+        if (!globalThis.crypto?.subtle) return null;
+        const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+        return Array.from(new Uint8Array(digest), byte =>
+          byte.toString(16).padStart(2,"0")).join("");
+      };
       self.onmessage = async ({data}) => {
         if (data.type === "control") {
           if (data.operation === 1) globalThis.waste_runtime_paused = true;
@@ -142,12 +150,35 @@ HTML = r'''<!doctype html>
           if (milliseconds > 0) globalThis.setTimeout(resume, milliseconds);
           else { deferred.push(resume); channel.port2.postMessage(0); }
         };
-        globalThis.waste_argv = ["wasm","-ca","--schedule","--browser-schedule","--control-page"];
-        if (data.profile) globalThis.waste_argv.push("-t");
-        globalThis.waste_argv.push("-q",String(data.quantum),"--threads","1","-e",data.source);
-        globalThis.waste_exit_code = 0;
         const binary = atob(data.wasm);
         const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+        let validationCacheMatched = false;
+        try {
+          if (data.validation?.schema === 1) {
+            const encoder = new TextEncoder();
+            const [launchHash,loaderHash,wasmHash] = await Promise.all([
+              sha256Hex(encoder.encode(data.source)),
+              sha256Hex(encoder.encode(data.loader)),
+              sha256Hex(bytes),
+            ]);
+            validationCacheMatched = launchHash !== null &&
+              launchHash === data.validation.launch_sha256 &&
+              loaderHash === data.validation.loader_sha256 &&
+              wasmHash === data.validation.wasm_sha256;
+          }
+        } catch (_) {
+          validationCacheMatched = false;
+        }
+        globalThis.waste_argv = ["wasm","-ca","--schedule","--browser-schedule","--control-page"];
+        if (validationCacheMatched) globalThis.waste_argv.push("-u");
+        if (data.profile) {
+          globalThis.waste_argv.push("-t");
+          sendLine([validationCacheMatched
+            ? "-- generation-time validation cache matched; runtime validation disabled"
+            : "-- validation cache unavailable or mismatched; runtime validation enabled"]);
+        }
+        globalThis.waste_argv.push("-q",String(data.quantum),"--threads","1","-e",data.source);
+        globalThis.waste_exit_code = 0;
         globalThis.fetch = async () => new Response(bytes, {headers:{"Content-Type":"application/wasm"}});
         try {
           const completion = (0,eval)(data.loader);
@@ -243,7 +274,8 @@ HTML = r'''<!doctype html>
           }
         };
         worker.onerror = event => { append(event.message || "worker error"); finish("failed"); };
-        worker.postMessage({loader:PAYLOAD.loader, wasm:PAYLOAD.wasm, source, quantum, profile});
+        worker.postMessage({loader:PAYLOAD.loader, wasm:PAYLOAD.wasm, source,
+          validation:PAYLOAD.validation, quantum, profile});
       } catch (error) { status.textContent = error.message || String(error); }
     }
     document.querySelector("#start-form").addEventListener("submit", startShell);
@@ -280,6 +312,7 @@ def main() -> None:
     parser.add_argument("--launch", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--quantum", type=int, default=10_000)
+    parser.add_argument("--validator", type=Path)
     args = parser.parse_args()
     if args.quantum <= 0:
         parser.error("--quantum must be positive")
@@ -290,6 +323,7 @@ def main() -> None:
     asset_dir = dist / "wasm_cli.bc.wasm.assets"
     launch_path = args.launch or root / "build" / "bash" / "bash-runtime.wast"
     output = args.output or root / "build" / "ocaml-wasm" / "bash.html"
+    validator = args.validator or root / "submodules" / "wasm-spec" / "interpreter" / "_build" / "default" / "wasm.exe"
     wasm_files = sorted(asset_dir.glob("*.wasm"))
     if not loader_path.is_file():
         raise SystemExit(f"compiled CPS loader not found: {loader_path}")
@@ -297,11 +331,27 @@ def main() -> None:
         raise SystemExit(f"expected one Wasm asset in {asset_dir}, found {len(wasm_files)}")
     if not launch_path.is_file():
         raise SystemExit(f"Bash launch script not found: {launch_path}")
+    if not validator.is_file():
+        raise SystemExit(f"native validation interpreter not found: {validator}")
 
+    launch_bytes = launch_path.read_bytes()
+    subprocess.run([str(validator), "-ca", "-d", str(launch_path)], check=True)
+    if launch_path.read_bytes() != launch_bytes:
+        raise SystemExit("Bash launch script changed while it was being validated")
+    loader = browser_loader(loader_path.read_text(encoding="utf-8"))
+    wasm = wasm_files[0].read_bytes()
     payload = {
-        "loader": browser_loader(loader_path.read_text(encoding="utf-8")),
-        "wasm": base64.b64encode(wasm_files[0].read_bytes()).decode("ascii"),
-        "launch": launch_path.read_text(encoding="utf-8"),
+        "loader": loader,
+        "wasm": base64.b64encode(wasm).decode("ascii"),
+        "launch": launch_bytes.decode("utf-8"),
+        "validation": {
+            "schema": 1,
+            "algorithm": "SHA-256",
+            "launch_sha256": hashlib.sha256(launch_bytes).hexdigest(),
+            "loader_sha256": hashlib.sha256(loader.encode("utf-8")).hexdigest(),
+            "wasm_sha256": hashlib.sha256(wasm).hexdigest(),
+            "validator_sha256": hashlib.sha256(validator.read_bytes()).hexdigest(),
+        },
     }
     document = (
         HTML.replace("__DEFAULT_QUANTUM__", str(args.quantum))
@@ -311,6 +361,8 @@ def main() -> None:
     output.write_text(document, encoding="utf-8")
     print(f"Generated {output}")
     print(f"Output size: {output.stat().st_size} bytes")
+    print(f"Validated launch SHA-256: {payload['validation']['launch_sha256']}")
+    print(f"Validator SHA-256: {payload['validation']['validator_sha256']}")
 
 
 if __name__ == "__main__":

@@ -81,7 +81,7 @@ index c7cdf09fc..ad833dae4 100644
 
  module I32_ =
 diff --git c/interpreter/exec/eval.ml w/interpreter/exec/eval.ml
-index ab78027fe..81ddc8f5c 100644
+index ab78027fe..2640c79d4 100644
 --- c/interpreter/exec/eval.ml
 +++ w/interpreter/exec/eval.ml
 @@ -19,6 +19,100 @@ exception Crash = Crash.Error (* failure that cannot happen in valid code *)
@@ -185,15 +185,42 @@ index ab78027fe..81ddc8f5c 100644
  let table_error at = function
    | Table.Bounds -> "out of bounds table access"
    | Table.SizeOverflow -> "table size overflow"
-@@ -69,6 +163,7 @@ and admininstr' =
-   | Label of int * instr list * code
+@@ -54,7 +148,21 @@ type frame =
+   locals : value option ref list;
+ }
+
+-type code = value stack * admininstr list
++(* Executable instruction bodies are immutable arrays. Each logical execution
++   owns the chunk records containing numeric PCs; continuation snapshots and
++   fork clone those records before either execution can advance them. *)
++type code = value stack * instructions
++
++and instructions =
++  | Done
++  | Chunk of instruction_chunk
++
++and instruction_chunk =
++{
++  body : admininstr array;
++  mutable pc : int;
++  next : instructions;
++}
+
+ and admininstr = admininstr' phrase
+ and admininstr' =
+@@ -66,9 +174,10 @@ and admininstr' =
+   | ReturningInvoke of value stack * funcinst
+   | Throwing of Tag.t * value stack
+   | Trapping of string
+-  | Label of int * instr list * code
++  | Label of int * admininstr array * code
    | Frame of int * frame * code
    | Handler of int * catch list * code
 +  | SignalFrame of int64 * code
 
  type config =
  {
-@@ -77,6 +172,29 @@ type config =
+@@ -77,11 +186,103 @@ type config =
    budget : int;  (* to model stack overflow *)
  }
 
@@ -221,9 +248,84 @@ index ab78027fe..81ddc8f5c 100644
 +let restore_state state = current_state := state
 +
  let frame inst locals = {inst; locals}
++let instructions_of_array instructions =
++  if Array.length instructions = 0 then Done
++  else Chunk {body = instructions; pc = 0; next = Done}
++let instructions_of_list instructions =
++  instructions_of_array (Array.of_list instructions)
++let code_of_list values instructions = values, instructions_of_list instructions
++let code_of_array values instructions = values, instructions_of_array instructions
++
++let rec instruction_next = function
++  | Done -> None
++  | Chunk chunk when chunk.pc >= Array.length chunk.body ->
++    instruction_next chunk.next
++  | Chunk chunk -> Some chunk.body.(chunk.pc)
++
++let rec instruction_take = function
++  | Done -> None
++  | Chunk chunk when chunk.pc >= Array.length chunk.body ->
++    instruction_take chunk.next
++  | (Chunk chunk as instructions) ->
++    let instruction = chunk.body.(chunk.pc) in
++    chunk.pc <- chunk.pc + 1;
++    let tail =
++      if chunk.pc >= Array.length chunk.body then chunk.next else instructions
++    in
++    Some (instruction, tail)
++
++let prepend_array prefix tail =
++  if Array.length prefix = 0 then tail
++  else Chunk {body = prefix; pc = 0; next = tail}
++let prepend_list prefix tail = prepend_array (Array.of_list prefix) tail
++let code_next (values, instructions) =
++  match instruction_next instructions with
++  | None -> values, None
++  | Some instruction -> values, Some instruction
++
  let config inst vs es =
-   {frame = frame inst []; code = vs, es; budget = !Flags.budget}
-@@ -95,6 +213,49 @@ let is_jumping e =
+-  {frame = frame inst []; code = vs, es; budget = !Flags.budget}
++  {frame = frame inst []; code = code_of_list vs es; budget = !Flags.budget}
++let config_array inst vs es =
++  {frame = frame inst []; code = code_of_array vs es; budget = !Flags.budget}
+
+ let plain e = Plain e.it @@ e.at
++let plain_array instructions = Array.map plain (Array.of_list instructions)
++
++module PhysicalAdmininstr = Hashtbl.Make (struct
++  type t = admininstr
++  let equal left right = left == right
++  let hash instruction = Hashtbl.hash instruction.at
++end)
++
++module PhysicalFunc = Hashtbl.Make (struct
++  type t = func
++  let equal left right = left == right
++  let hash func = Hashtbl.hash func.at
++end)
++
++let nested_instruction_cache = PhysicalAdmininstr.create 256
++let function_instruction_cache = PhysicalFunc.create 256
++
++let nested_instruction_arrays instruction bodies =
++  match PhysicalAdmininstr.find_opt nested_instruction_cache instruction with
++  | Some compiled -> compiled
++  | None ->
++    let compiled = Array.of_list (List.map plain_array bodies) in
++    PhysicalAdmininstr.add nested_instruction_cache instruction compiled;
++    compiled
++
++let function_instructions func body =
++  match PhysicalFunc.find_opt function_instruction_cache func with
++  | Some compiled -> compiled
++  | None ->
++    let compiled = plain_array body in
++    PhysicalFunc.add function_instruction_cache func compiled;
++    compiled
+
+ let admininstr_of_value (v : value) at : admininstr' =
+   match v with
+@@ -95,6 +296,49 @@ let is_jumping e =
    | Throwing _ | Trapping _ -> true
    | _ -> false
 
@@ -273,7 +375,7 @@ index ab78027fe..81ddc8f5c 100644
  let lookup category list x =
    try Lib.List32.nth list x.it with Failure _ ->
      Crash.error x.at ("undefined " ^ category ^ " " ^ Int32.to_string x.it)
-@@ -109,6 +270,237 @@ let data (inst : moduleinst) x = lookup "data segment" inst.datas x
+@@ -109,6 +353,255 @@ let data (inst : moduleinst) x = lookup "data segment" inst.datas x
  let elem (inst : moduleinst) x = lookup "element segment" inst.elems x
  let local (frame : frame) x = lookup "local" frame.locals x
 
@@ -281,12 +383,20 @@ index ab78027fe..81ddc8f5c 100644
 +  {frame with locals = List.map (fun value -> ref !value) frame.locals}
 +
 +and clone_code (values, instructions) =
-+  values, List.map clone_admininstr instructions
++  values, clone_instructions instructions
++
++and clone_instructions = function
++  | Done -> Done
++  | Chunk chunk ->
++    Chunk
++      {body = Array.map clone_admininstr chunk.body;
++       pc = chunk.pc;
++       next = clone_instructions chunk.next}
 +
 +and clone_admininstr instruction =
 +  let it = match instruction.it with
 +    | Label (arity, continuation, code) ->
-+      Label (arity, continuation, clone_code code)
++      Label (arity, Array.map clone_admininstr continuation, clone_code code)
 +    | Frame (arity, frame, code) ->
 +      Frame (arity, clone_frame frame, clone_code code)
 +    | Handler (arity, catches, code) ->
@@ -379,13 +489,23 @@ index ab78027fe..81ddc8f5c 100644
 +    {inst = physical_assoc frame.inst space.instances;
 +     locals = List.map (fun value -> ref (Option.map map_value !value)) frame.locals}
 +  and clone_code_in_space (values, instructions) =
-+    List.map map_value values, List.map clone_admin_in_space instructions
++    List.map map_value values, clone_instructions_in_space instructions
++  and clone_instructions_in_space = function
++    | Done -> Done
++    | Chunk chunk ->
++      Chunk
++        {body = Array.map clone_admin_in_space chunk.body;
++         pc = chunk.pc;
++         next = clone_instructions_in_space chunk.next}
 +  and clone_admin_in_space instruction =
 +    let it = match instruction.it with
 +      | Invoke function_ -> Invoke (physical_assoc function_ space.functions)
 +      | ReturningInvoke (values, function_) ->
 +        ReturningInvoke (List.map map_value values, physical_assoc function_ space.functions)
-+      | Label (arity, continuation, code) -> Label (arity, continuation, clone_code_in_space code)
++      | Label (arity, continuation, code) ->
++        Label
++          (arity, Array.map clone_admin_in_space continuation,
++           clone_code_in_space code)
 +      | Frame (arity, frame, code) -> Frame (arity, clone_frame_in_space frame, clone_code_in_space code)
 +      | Handler (arity, catches, code) -> Handler (arity, catches, clone_code_in_space code)
 +      | SignalFrame (mask, code) -> SignalFrame (mask, clone_code_in_space code)
@@ -483,20 +603,20 @@ index ab78027fe..81ddc8f5c 100644
 +        | 1 -> [Num (I32 (Int32.of_int signal))]
 +        | 3 -> [Num (I32 0l); Num (I32 0l); Num (I32 (Int32.of_int signal))]
 +        | _ -> raise (Posix.Terminated (128 + signal)) in
-+      let handler_code = [Invoke func @@ no_region] in
++      let handler_code = code_of_array handler_values [|Invoke func @@ no_region|] in
 +      {config with code =
-+        (values,
-+         (SignalFrame (old_mask,
-+            (handler_values, handler_code)) @@ no_region)
-+         :: instructions)}
++        (values, prepend_array
++          [|SignalFrame (old_mask, handler_code) @@ no_region|]
++          instructions)}
 +    end
 +
 +let checkpoint config =
 +  let yielded = quantum_checkpoint () in
 +  if yielded then begin
 +    if !Flags.trace then begin
-+      let _, instructions = config.code in
-+      record_transition (List.hd instructions)
++      match code_next config.code with
++      | _, Some instruction -> record_transition instruction
++      | _, None -> ()
 +    end
 +  end;
 +  let state = !current_state in
@@ -511,18 +631,112 @@ index ab78027fe..81ddc8f5c 100644
  let comp_type (inst : moduleinst) x = expand_deftype (type_ inst x)
  let struct_type (inst : moduleinst) x = structtype_of_comptype  (comp_type inst x)
  let array_type (inst : moduleinst) x = arraytype_of_comptype (comp_type inst x)
-@@ -175,7 +567,10 @@ let array_oob a i n =
+@@ -175,9 +668,18 @@ let array_oob a i n =
    oob (Convert.I64_.extend_i32_u i) (Convert.I64_.extend_i32_u n)
      (Convert.I64_.extend_i32_u (Aggr.array_length a))
 
 +exception Resume of config
 +
  let rec step (c : config) : config =
-+  let c = checkpoint c in
-   let vs, es = c.code in
-   let e = List.hd es in
+-  let vs, es = c.code in
+-  let e = List.hd es in
++  let c = match code_next c.code with
++    | _, Some {it = Plain _; _} -> checkpoint c
++    | _ -> c
++  in
++  let vs, instructions = c.code in
++  let e, tail = match instruction_take instructions with
++    | Some current -> current
++    | None -> assert false
++  in
    let vs', es' =
-@@ -378,19 +773,10 @@ let rec step (c : config) : config =
+     match e.it, vs with
+     | Plain e', vs ->
+@@ -202,19 +704,24 @@ let rec step (c : config) : config =
+         let n1 = List.length ts1 in
+         let n2 = List.length ts2 in
+         let args, vs' = split n1 vs e.at in
+-        vs', [Label (n2, [], (args, List.map plain es')) @@ e.at]
++        let body = (nested_instruction_arrays e [es']).(0) in
++        vs', [Label (n2, [||], code_of_array args body) @@ e.at]
+
+       | Loop (bt, es'), vs ->
+         let InstrT (ts1, ts2, _xs) = blocktype c.frame.inst bt e.at in
+         let n1 = List.length ts1 in
+         let args, vs' = split n1 vs e.at in
+-        vs', [Label (n1, [e' @@ e.at], (args, List.map plain es')) @@ e.at]
++        let body = (nested_instruction_arrays e [es']).(0) in
++        vs', [Label (n1, [|e|], code_of_array args body) @@ e.at]
+
+       | If (bt, es1, es2), Num (I32 i) :: vs' ->
+-        if i = 0l then
+-          vs', [Plain (Block (bt, es2)) @@ e.at]
+-        else
+-          vs', [Plain (Block (bt, es1)) @@ e.at]
++        let InstrT (ts1, ts2, _xs) = blocktype c.frame.inst bt e.at in
++        let n1 = List.length ts1 in
++        let n2 = List.length ts2 in
++        let args, vs' = split n1 vs' e.at in
++        let bodies = nested_instruction_arrays e [es1; es2] in
++        let body = if i = 0l then bodies.(1) else bodies.(0) in
++        vs', [Label (n2, [||], code_of_array args body) @@ e.at]
+
+       | Br x, vs ->
+         [], [Breaking (x.it, vs) @@ e.at]
+@@ -280,8 +787,10 @@ let rec step (c : config) : config =
+             string_of_deftype (Func.type_of f)) @@ e.at]
+
+       | ReturnCall x, vs ->
+-        (match (step {c with code = (vs, [Plain (Call x) @@ e.at])}).code with
+-        | vs', [{it = Invoke a; at}] -> vs', [ReturningInvoke (vs', a) @@ at]
++        (match code_next
++          (step {c with code = code_of_array vs [|Plain (Call x) @@ e.at|]}).code with
++        | vs', Some {it = Invoke a; at} ->
++          vs', [ReturningInvoke (vs', a) @@ at]
+         | _ -> assert false
+         )
+
+@@ -289,18 +798,22 @@ let rec step (c : config) : config =
+         vs, [Trapping "null function reference" @@ e.at]
+
+       | ReturnCallRef x, vs ->
+-        (match (step {c with code = (vs, [Plain (CallRef x) @@ e.at])}).code with
+-        | vs', [{it = Invoke a; at}] -> vs', [ReturningInvoke (vs', a) @@ at]
+-        | vs', [{it = Trapping s; at}] -> vs', [Trapping s @@ at]
++        (match code_next
++          (step {c with code = code_of_array vs [|Plain (CallRef x) @@ e.at|]}).code with
++        | vs', Some {it = Invoke a; at} ->
++          vs', [ReturningInvoke (vs', a) @@ at]
++        | vs', Some {it = Trapping s; at} -> vs', [Trapping s @@ at]
+         | _ -> assert false
+         )
+
+       | ReturnCallIndirect (x, y), vs ->
+         (match
+-          (step {c with code = (vs, [Plain (CallIndirect (x, y)) @@ e.at])}).code
++          code_next (step {c with code =
++            code_of_array vs [|Plain (CallIndirect (x, y)) @@ e.at|]}).code
+         with
+-        | vs', [{it = Invoke a; at}] -> vs', [ReturningInvoke (vs', a) @@ at]
+-        | vs', [{it = Trapping s; at}] -> vs', [Trapping s @@ at]
++        | vs', Some {it = Invoke a; at} ->
++          vs', [ReturningInvoke (vs', a) @@ at]
++        | vs', Some {it = Trapping s; at} -> vs', [Trapping s @@ at]
+         | _ -> assert false
+         )
+
+@@ -324,7 +837,9 @@ let rec step (c : config) : config =
+         let n1 = List.length ts1 in
+         let n2 = List.length ts2 in
+         let args, vs' = split n1 vs e.at in
+-        vs', [Handler (n2, cs, ([], [Label (n2, [], (args, List.map plain es')) @@ e.at])) @@ e.at]
++        let body = (nested_instruction_arrays e [es']).(0) in
++        let label = Label (n2, [||], code_of_array args body) @@ e.at in
++        vs', [Handler (n2, cs, code_of_array [] [|label|]) @@ e.at]
+
+       | LocalGet x, vs ->
+         (match !(local c.frame x) with
+@@ -378,19 +893,10 @@ let rec step (c : config) : config =
          let i_64 = addr_of_num i in
          if table_oob c.frame x i n then
            vs', [Trapping (table_error e.at Table.Bounds) @@ e.at]
@@ -545,7 +759,7 @@ index ab78027fe..81ddc8f5c 100644
 
        | TableCopy (x, y), Num n :: Num s :: Num d :: vs' ->
          let n_64 = addr_of_num n in
-@@ -398,50 +784,23 @@ let rec step (c : config) : config =
+@@ -398,50 +904,23 @@ let rec step (c : config) : config =
          let d_64 = addr_of_num d in
          if table_oob c.frame x d n || table_oob c.frame y s n then
            vs', [Trapping (table_error e.at Table.Bounds) @@ e.at]
@@ -605,7 +819,7 @@ index ab78027fe..81ddc8f5c 100644
 
        | ElemDrop x, vs ->
          let seg = elem c.frame.inst x in
-@@ -550,19 +909,11 @@ let rec step (c : config) : config =
+@@ -550,19 +1029,11 @@ let rec step (c : config) : config =
          let n_64 = addr_of_num n in
          if mem_oob c.frame x i n then
            vs', [Trapping (memory_error e.at Memory.Bounds) @@ e.at]
@@ -629,7 +843,7 @@ index ab78027fe..81ddc8f5c 100644
 
        | MemoryCopy (x, y), Num n :: Num s :: Num d :: vs' ->
          let n_64 = addr_of_num n in
-@@ -570,56 +921,23 @@ let rec step (c : config) : config =
+@@ -570,56 +1041,23 @@ let rec step (c : config) : config =
          let d_64 = addr_of_num d in
          if mem_oob c.frame x d n || mem_oob c.frame y s n then
            vs', [Trapping (memory_error e.at Memory.Bounds) @@ e.at]
@@ -695,7 +909,7 @@ index ab78027fe..81ddc8f5c 100644
 
        | DataDrop x, vs ->
          let seg = data c.frame.inst x in
-@@ -1047,69 +1365,68 @@ let rec step (c : config) : config =
+@@ -1047,69 +1485,68 @@ let rec step (c : config) : config =
      | Throwing _, _ ->
        assert false
 
@@ -727,14 +941,14 @@ index ab78027fe..81ddc8f5c 100644
 -
 -    | Frame (n, frame', (vs', e' :: es')), vs when is_jumping e' ->
 -      vs, [e']
-+      let rec run = function
-+        | vs', [] -> vs' @ vs, []
-+        | _, {it = Breaking (0l, vs0); _} :: _ ->
-+          take n vs0 e.at @ vs, List.map plain es0
-+        | _, {it = Breaking (k, vs0); at} :: _ ->
++      let rec run code = match code_next code with
++        | vs', None -> vs' @ vs, []
++        | _, Some {it = Breaking (0l, vs0); _} ->
++          take n vs0 e.at @ vs, Array.to_list es0
++        | _, Some {it = Breaking (k, vs0); at} ->
 +          vs, [Breaking (Int32.sub k 1l, vs0) @@ at]
-+        | _, e' :: _ when is_jumping e' -> vs, [e']
-+        | code -> run (step {c with code}).code
++        | _, Some e' when is_jumping e' -> vs, [e']
++        | _ -> run (step {c with code}).code
 +      in run code'
 
      | Frame (n, frame', code'), vs ->
@@ -767,63 +981,70 @@ index ab78027fe..81ddc8f5c 100644
 -
 -    | Handler (n, cs, (vs', e' :: es')), vs when is_jumping e' ->
 -      vs, [e']
-+      let rec run = function
-+        | vs', [] -> vs' @ vs, []
-+        | _, {it = Returning vs0; _} :: _ -> take n vs0 e.at @ vs, []
-+        | _, {it = ReturningInvoke (vs0, f); at} :: _ ->
++      let rec run code = match code_next code with
++        | vs', None -> vs' @ vs, []
++        | _, Some {it = Returning vs0; _} -> take n vs0 e.at @ vs, []
++        | _, Some {it = ReturningInvoke (vs0, f); at} ->
 +          let ts1, _ = functype_of_comptype (expand_deftype (Func.type_of f)) in
 +          take (List.length ts1) vs0 e.at @ vs, [Invoke f @@ at]
-+        | _, e' :: _ when is_jumping e' -> vs, [e']
-+        | code ->
++        | _, Some e' when is_jumping e' -> vs, [e']
++        | _ ->
 +          run (step {frame = frame'; code; budget = c.budget - 1}).code
 +      in run code'
 
      | Handler (n, cs, code'), vs ->
 -      let c' = step {c with code = code'} in
 -      vs, [Handler (n, cs, c'.code) @@ e.at]
-+      let rec run catches = function
-+        | vs', [] -> vs' @ vs, []
-+        | vs', ({it = Throwing (a, vs0); at} as thrown) :: _ ->
++      let rec run catches code = match code_next code with
++        | vs', None -> vs' @ vs, []
++        | vs', Some ({it = Throwing (a, vs0); at} as thrown) ->
 +          begin match catches with
 +          | {it = Catch (x1, x2); _} :: rest ->
 +            if a == tag c.frame.inst x1 then
 +              vs0 @ vs, [Plain (Br x2) @@ e.at]
-+            else run rest (vs', [thrown])
++            else run rest (code_of_array vs' [|thrown|])
 +          | {it = CatchRef (x1, x2); _} :: rest ->
 +            if a == tag c.frame.inst x1 then
 +              Ref Exn.(ExnRef (Exn (a, vs0))) :: vs0 @ vs,
 +                [Plain (Br x2) @@ e.at]
-+            else run rest (vs', [thrown])
++            else run rest (code_of_array vs' [|thrown|])
 +          | {it = CatchAll x; _} :: _ -> vs, [Plain (Br x) @@ e.at]
 +          | {it = CatchAllRef x; _} :: _ ->
 +            Ref Exn.(ExnRef (Exn (a, vs0))) :: vs, [Plain (Br x) @@ e.at]
 +          | [] -> vs, [Throwing (a, vs0) @@ at]
 +          end
-+        | _, e' :: _ when is_jumping e' -> vs, [e']
-+        | code -> run catches (step {c with code}).code
++        | _, Some e' when is_jumping e' -> vs, [e']
++        | _ -> run catches (step {c with code}).code
 +      in run cs code'
 +
 +    | SignalFrame (old_mask, code'), vs ->
-+      let rec run = function
-+        | vs', [] ->
++      let rec run code = match code_next code with
++        | vs', None ->
 +          Posix.set_blocked (!current_state).posix old_mask;
-+          let values, instructions = vs' @ vs, List.tl es in
++          let values, instructions = vs' @ vs, tail in
 +          if Posix.signal_pending (!current_state).posix then
 +            raise (Resume (deliver_signal {c with code = values, instructions}))
 +          else values, []
-+        | _, e' :: _ when is_jumping e' ->
++        | _, Some e' when is_jumping e' ->
 +          Posix.set_blocked (!current_state).posix old_mask;
-+          let instructions = e' :: List.tl es in
++          let instructions = prepend_array [|e'|] tail in
 +          if Posix.signal_pending (!current_state).posix then
 +            raise (Resume (deliver_signal {c with code = vs, instructions}))
 +          else vs, [e']
-+        | code -> run (step {c with code}).code
++        | _ -> run (step {c with code}).code
 +      in run code'
 
      | Invoke f, vs when c.budget = 0 ->
        Exhaustion.error e.at "call stack exhausted"
-@@ -1129,14 +1446,69 @@ let rec step (c : config) : config =
-         vs', [Frame (n2, frame', ([], instr')) @@ e.at]
+@@ -1125,29 +1562,100 @@ let rec step (c : config) : config =
+         let ts = List.map (fun {it = Local t; _} -> t) ls in
+         let lvs = List.(rev (map Option.some args) @ map default_value ts) in
+         let frame' = {inst = m; locals = List.map ref lvs} in
+-        let instr' = [Label (n2, [], ([], List.map plain es)) @@ func.at] in
+-        vs', [Frame (n2, frame', ([], instr')) @@ e.at]
++        let instr' = Label
++          (n2, [||], code_of_array [] (function_instructions func es)) @@ func.at in
++        vs', [Frame (n2, frame', code_of_array [] [|instr'|]) @@ e.at]
 
        | Func.HostFunc (_, f) ->
 -        (try List.rev (f (List.rev args)) @ vs', []
@@ -835,11 +1056,11 @@ index ab78027fe..81ddc8f5c 100644
 +            let values = List.rev values @ vs' in
 +            if Posix.signal_pending (!current_state).posix then
 +              raise (Resume
-+                (deliver_signal {c with code = values, List.tl es}))
++                (deliver_signal {c with code = values, tail}))
 +            else values, []
 +          | Posix.SaveJump (buffer, save_mask) ->
 +            let resumed =
-+              {c with code = Num (I32 0l) :: vs', List.tl es}
++              {c with code = Num (I32 0l) :: vs', tail}
 +              |> clone_config
 +            in
 +            let signal_mask =
@@ -870,12 +1091,13 @@ index ab78027fe..81ddc8f5c 100644
 +            raise (Resume {resumed with code = values, instructions})
 +          | Posix.Block wait ->
 +            Effect.perform (Block wait);
-+            raise (Resume c)
++            raise (Resume
++              {c with code = vs, prepend_array [|e|] tail})
 +          | Posix.Fork (child_posix, child_pid) ->
 +            let space = clone_address_space c.frame.inst in
 +            let child_state = fork_process_state !current_state child_posix space in
 +            let child_config = clone_config_in_space space
-+              {c with code = Num (I32 0l) :: vs', List.tl es} in
++              {c with code = Num (I32 0l) :: vs', tail} in
 +            spawned := {spawn_state = child_state; spawn_config = child_config} :: !spawned;
 +            Effect.perform Yield;
 +            Num (I32 child_pid) :: vs', []
@@ -887,18 +1109,26 @@ index ab78027fe..81ddc8f5c 100644
        )
 -  in {c with code = vs', es' @ List.tl es}
 +  in
-+  {c with code = vs', es' @ List.tl es}
++  {c with code = vs', prepend_list es' tail}
 
 
  let rec eval (c : config) : value stack =
 -  match c.code with
-+  try match c.code with
-   | vs, [] ->
+-  | vs, [] ->
++  try match code_next c.code with
++  | vs, None ->
      vs
 
-@@ -1148,6 +1520,20 @@ let rec eval (c : config) : value stack =
+-  | vs, {it = Trapping msg; at} :: _ ->
++  | _, Some {it = Trapping msg; at} ->
+     Trap.error at msg
 
-   | vs, es ->
+-  | vs, {it = Throwing (a, args); at} :: _ ->
++  | _, Some {it = Throwing (a, args); at} ->
+     raise (Exception (at, Exn.Exn (a, args)))
+
+-  | vs, es ->
++  | _, Some _ ->
      eval (step c)
 +  with Resume resumed ->
 +    let state = !current_state in
@@ -917,7 +1147,16 @@ index ab78027fe..81ddc8f5c 100644
 
 
  (* Functions & Constants *)
-@@ -1303,24 +1689,40 @@ let init_list2 f xs ys (inst : moduleinst) : moduleinst =
+@@ -1168,7 +1676,7 @@ let invoke (func : funcinst) (vs : value list) : value list =
+     Exhaustion.error at "call stack exhausted"
+
+ let eval_const (inst : moduleinst) (const : const) : value =
+-  let c = config inst [] (List.map plain const.it) in
++  let c = config_array inst [] (plain_array const.it) in
+   match eval c with
+   | [v] -> v
+   | vs -> Crash.error const.at "wrong number of results on stack"
+@@ -1303,24 +1811,41 @@ let init_list2 f xs ys (inst : moduleinst) : moduleinst =
    List.fold_left2 f inst xs ys
 
  let init (m : module_) (exts : externinst list) : moduleinst =
@@ -967,8 +1206,10 @@ index ab78027fe..81ddc8f5c 100644
    let es_data = List.concat (Lib.List32.mapi run_data m.it.datas) in
    let es_elem = List.concat (Lib.List32.mapi run_elem m.it.elems) in
    let es_start = Lib.Option.get (Lib.Option.map run_start m.it.start) [] in
+-  ignore (eval (config inst [] (List.map plain (es_elem @ es_data @ es_start))));
 +  profile "initialization instructions prepared";
-   ignore (eval (config inst [] (List.map plain (es_elem @ es_data @ es_start))));
++  ignore (eval
++    (config_array inst [] (plain_array (es_elem @ es_data @ es_start))));
 +  profile "segments and start applied";
    inst
 diff --git c/interpreter/exec/eval.mli w/interpreter/exec/eval.mli
@@ -1067,7 +1308,7 @@ index 0688131a6..78e2dceb6 100644
 +      (Func.alloc_host (deftype_of_typeuse ut) (Posix.request name)))
    | _ -> None
 diff --git c/interpreter/main/main.ml w/interpreter/main/main.ml
-index cab4a5638..6530c7952 100644
+index cab4a5638..70b1a4286 100644
 --- c/interpreter/main/main.ml
 +++ w/interpreter/main/main.ml
 @@ -20,6 +20,13 @@ let usage = "Usage: " ^ name ^ " [option] [file ...]"
@@ -1095,7 +1336,7 @@ index cab4a5638..6530c7952 100644
 +  "--fail-last", Arg.Set fail_last,
 +    " report the final scheduled input as a known failure without executing it";
 +  "--control-page", Arg.Set control_page,
-+    " poll the browser SharedArrayBuffer control page at every instruction";
++    " poll the browser control page at scheduler quantum boundaries";
 +  "--browser-schedule", Arg.Set browser_schedule,
 +    " yield each scheduler slice to the JavaScript event loop";
 +  "--threads", Arg.Int (fun n -> max_threads := n),
@@ -1725,6 +1966,19 @@ index 9a5057611..658e30412 100644
 +  ["dune" "install" "-p" name "--create-install-files" name]
 +]
  dev-repo: "git+https://github.com/WebAssembly/spec.git"
+diff --git c/test/core/run.py w/test/core/run.py
+index bc107b519..29d2dc0d7 100755
+--- c/test/core/run.py
++++ w/test/core/run.py
+@@ -37,7 +37,7 @@ relaxed_simd_test_files = glob.glob(os.path.join(inputDir, "relaxed-simd", "*.wa
+ gc_test_files = glob.glob(os.path.join(inputDir, "gc", "*.wast"))
+ memory64_test_files = glob.glob(os.path.join(inputDir, "memory64", "*.wast"))
+ multi_memory_test_files = glob.glob(os.path.join(inputDir, "multi-memory", "*.wast"))
+-exception_test_files = glob.glob(os.path.join(inputDir, "exception", "*.wast"))
++exception_test_files = glob.glob(os.path.join(inputDir, "exceptions", "*.wast"))
+ bulk_memory_test_files = glob.glob(os.path.join(inputDir, "bulk-memory", "*.wast"))
+ all_test_files = \
+   main_test_files + \
 diff --git c/interpreter/control_stubs.c w/interpreter/control_stubs.c
 new file mode 100644
 index 000000000..d9804a636
@@ -1767,10 +2021,10 @@ index 000000000..d9804a636
 +}
 diff --git c/interpreter/exec/control.ml w/interpreter/exec/control.ml
 new file mode 100644
-index 000000000..079911665
+index 000000000..75bc38170
 --- /dev/null
 +++ w/interpreter/exec/control.ml
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,72 @@
 +(* Browser-to-interpreter control page.
 +
 +   The common path performs one atomic load.  Commands are stored in a
@@ -1827,13 +2081,22 @@ index 000000000..079911665
 +let pause () = if !enabled then wait_while_paused ()
 +let sleep_ms milliseconds = if milliseconds > 0 then wait_timeout milliseconds
 +
++(* Keep browser callbacks behind low-level primitives instead of linking the
++   Js_of_ocaml.Js module into the native reference interpreter. Js initializes
++   browser constants at module load time, which aborts a native process before
++   it can run a test. These primitives are reached only by --browser-schedule. *)
++type js_value
++external js_global : string -> js_value = "caml_pure_js_expr"
++external js_get : js_value -> string -> js_value = "caml_js_get"
++external js_fun_call : js_value -> js_value array -> js_value = "caml_js_fun_call"
++external js_wrap_callback : (unit -> unit) -> js_value = "caml_js_wrap_callback"
++external js_inject : 'a -> js_value = "%identity"
++
 +let defer callback milliseconds =
-+  let set_timeout =
-+    Js_of_ocaml.Js.Unsafe.get Js_of_ocaml.Js.Unsafe.global "waste_defer"
-+  in
-+  ignore (Js_of_ocaml.Js.Unsafe.fun_call set_timeout
-+    [|Js_of_ocaml.Js.Unsafe.inject (Js_of_ocaml.Js.wrap_callback callback);
-+      Js_of_ocaml.Js.Unsafe.inject milliseconds|])
++  let global = js_global "globalThis" in
++  let set_timeout = js_get global "waste_defer" in
++  ignore (js_fun_call set_timeout
++    [|js_wrap_callback callback; js_inject milliseconds|])
 diff --git c/interpreter/exec/control.mli w/interpreter/exec/control.mli
 new file mode 100644
 index 000000000..800685464
