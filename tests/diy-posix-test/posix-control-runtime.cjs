@@ -60,7 +60,10 @@ const controller = new Worker(`
   sleep(25);
   Atomics.store(page, 1, 1);
   send(1);
-  sleep(100);
+  // Loading the OCaml interpreter itself can take longer than the original
+  // 100 ms window. Keep the evaluator paused long enough to reach and consume
+  // the pause command before allowing the module start function to proceed.
+  sleep(2000);
   Atomics.store(page, 1, 0);
   Atomics.notify(page, 1);
   sleep(50);

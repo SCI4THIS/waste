@@ -31,6 +31,7 @@ BASH_HTML_LOG="$REPO_ROOT/bash-html.log"
 LIBC_BUILDER="$REPO_ROOT/tools/build-waste-libc.py"
 LIBC_OUTPUT="$REPO_ROOT/build/waste-libc/waste-libc.wasm"
 LIBC_LOG="$REPO_ROOT/build/waste-libc/build.log"
+TEST_LOG="$REPO_ROOT/test.log"
 
 SWITCH_NAME="${WASTE_OCAML_SWITCH:-waste-wasm}"
 OCAML_VERSION="${WASTE_OCAML_VERSION:-5.3.0}"
@@ -753,6 +754,94 @@ generate_bash_html() {
     "The static page embeds the CPS interpreter, shared runtime, waste-libc, and Bash. It can be opened directly with file:// and requires no server.\n\nOutput: $BASH_HTML\nLog: $BASH_HTML_LOG"
 }
 
+run_logged_test() {
+  local label="$1"
+  shift
+  printf '\n== %s ==\n' "$label" >>"$TEST_LOG"
+  "$@" >>"$TEST_LOG" 2>&1
+}
+
+run_test_group() {
+  local group="$1"
+  if ! have_command node; then
+    show_message "Runtime tests" "Node.js is required to run the runtime test suites."
+    return 1
+  fi
+
+  : >"$TEST_LOG"
+  {
+    printf 'WASTE runtime tests\n'
+    printf 'Group: %s\n' "$group"
+    printf 'Started: %s\n\n' "$(date --iso-8601=seconds)"
+  } >>"$TEST_LOG"
+
+  whiptail --title "Runtime tests" --infobox \
+    "Running $group tests...\n\nLog: $TEST_LOG" 9 78
+
+  local status=0
+  case "$group" in
+    posix)
+      run_logged_test "POSIX control (sequential)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" || status=1
+      run_logged_test "POSIX control (threaded)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" threaded || status=1
+      run_logged_test "POSIX kernel (sequential)" node "$REPO_ROOT/tests/diy-posix-test/posix-kernel-runtime.cjs" || status=1
+      run_logged_test "POSIX kernel (threaded)" node "$REPO_ROOT/tests/diy-posix-test/posix-kernel-runtime.cjs" threaded || status=1
+      ;;
+    libc)
+      run_logged_test "libc (sequential)" node "$REPO_ROOT/tests/libc-test/libc-runtime.cjs" || status=1
+      run_logged_test "libc (threaded)" node "$REPO_ROOT/tests/libc-test/libc-runtime.cjs" threaded || status=1
+      run_logged_test "allocator (native)" node "$REPO_ROOT/tests/libc-test/allocator-native.cjs" || status=1
+      ;;
+    bash)
+      run_logged_test "Bash interactive smoke test" node "$REPO_ROOT/tests/bash-interactive-runtime.cjs" || status=1
+      ;;
+    all)
+      run_logged_test "POSIX control (sequential)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" || status=1
+      run_logged_test "POSIX control (threaded)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" threaded || status=1
+      run_logged_test "POSIX kernel (sequential)" node "$REPO_ROOT/tests/diy-posix-test/posix-kernel-runtime.cjs" || status=1
+      run_logged_test "POSIX kernel (threaded)" node "$REPO_ROOT/tests/diy-posix-test/posix-kernel-runtime.cjs" threaded || status=1
+      run_logged_test "libc (sequential)" node "$REPO_ROOT/tests/libc-test/libc-runtime.cjs" || status=1
+      run_logged_test "libc (threaded)" node "$REPO_ROOT/tests/libc-test/libc-runtime.cjs" threaded || status=1
+      run_logged_test "allocator (native)" node "$REPO_ROOT/tests/libc-test/allocator-native.cjs" || status=1
+      run_logged_test "Bash interactive smoke test" node "$REPO_ROOT/tests/bash-interactive-runtime.cjs" || status=1
+      ;;
+    *) return 2 ;;
+  esac
+
+  printf '\nFinished: %s\nExit status: %d\n' \
+    "$(date --iso-8601=seconds)" "$status" >>"$TEST_LOG"
+  if ((status == 0)); then
+    show_message "Runtime tests passed" "$group tests completed successfully.\n\nLog: $TEST_LOG"
+  else
+    show_message "Runtime tests failed" "$group tests exited with status $status.\n\nLog: $TEST_LOG"
+  fi
+  return "$status"
+}
+
+test_suite_menu() {
+  while true; do
+    local choice
+    choice="$(whiptail --title "Runtime test suites" --menu \
+      "Tests run locally against the compiled sequential and CPS interpreters." \
+      22 88 6 \
+      all "Run DIY POSIX, libc, and Bash suites" \
+      posix "Run DIY POSIX control and kernel suites" \
+      libc "Run waste-libc and native allocator suites" \
+      bash "Run the interactive Bash smoke test" \
+      log "Show the last test log" \
+      back "Return to the main menu" 3>&1 1>&2 2>&3)" || return 0
+    case "$choice" in
+      all|posix|libc|bash) run_test_group "$choice" || true ;;
+      log)
+        if [[ -s "$TEST_LOG" ]]; then
+          whiptail --title "Last test log" --textbox "$TEST_LOG" 28 100
+        else
+          show_message "Last test log" "No test log exists yet."
+        fi ;;
+      back) return 0 ;;
+    esac
+  done
+}
+
 dependency_menu() {
   while true; do
     check_dependencies && return 0
@@ -790,11 +879,12 @@ main_menu() {
     local choice
     patch_state="$(i31_patch_status)"
     choice="$(whiptail --title "OCaml to WebAssembly" --menu \
-      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 27 92 9 \
+      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 28 92 10 \
       compile "Compile the OCaml interpreter to Wasm" \
       libc "Build waste-libc.wasm and tests" \
       html "Generate embedded browser test dashboard" \
       bash "Generate self-contained WASTE Bash page" \
+      tests "Run runtime test suites" \
       patch "Manage Wasm32 compatibility patch [$patch_state]" \
       update "Safe pull/rebase and submodule update" \
       status "Show dependency status" \
@@ -806,6 +896,7 @@ main_menu() {
       libc) build_waste_libc || true ;;
       html) generate_browser_test_html || true ;;
       bash) generate_bash_html || true ;;
+      tests) test_suite_menu ;;
       patch) i31_patch_menu ;;
       update) safe_repository_update || true ;;
       status)

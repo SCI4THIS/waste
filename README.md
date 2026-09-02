@@ -94,9 +94,17 @@ validating, and interpreting Bash inside the OCaml interpreter; restarting the
 worker repeats that work. Enable **profile startup phases** before restarting to
 print cumulative millisecond timestamps for parsing, decoding, validation,
 import resolution, detailed evaluator initialization, registration, and
-invocation directly in the terminal. Browser markers additionally report the
-first-prompt duration from both `Date.now()` and `performance.now()`, plus their
-difference and the browser's local timestamp.
+invocation directly in the terminal. It also reports exact evaluator-step and
+slice timings plus an opcode-category sample taken at each completed quantum;
+sampling adds no branch to the ordinary instruction path. Browser markers
+additionally report the first-prompt duration from both `Date.now()` and
+`performance.now()`, plus their difference and the browser's local timestamp.
+
+The CPS evaluator keeps execution focused inside active labels, call frames,
+exception handlers, and signal frames until they complete or the scheduler
+quantum expires. This avoids rebuilding and revisiting the same administrative
+wrapper for every inner guest instruction while preserving pause, resume, and
+signal delivery at quantum boundaries.
 
 The patched evaluator executes `memory.fill`, `memory.copy`, `memory.init`,
 `table.fill`, `table.copy`, and `table.init` as bounds-checked runtime loops.
@@ -174,8 +182,9 @@ The generated dashboard remains a single, self-contained HTML file that can be
 opened directly with `file://`. **Pause**, **Resume**, and **Send signal** use
 worker messages: the CPS interpreter returns to the worker event loop after
 each instruction quantum, then continues with the same evaluator continuation.
-Signals enter a versioned command ring which is checked once per guest
-instruction. No server, cross-origin isolation, `SharedArrayBuffer`, or browser
+Signals enter a versioned command ring at quantum boundaries. Signals produced
+or unmasked by a guest syscall are injected directly before guest execution
+continues. No server, cross-origin isolation, `SharedArrayBuffer`, or browser
 flag is required. The signal and non-local-jump ABI, verification commands, and
 remaining POSIX boundary are documented in
 [docs/posix-runtime.md](docs/posix-runtime.md).
@@ -186,6 +195,10 @@ The POSIX kernel integration probe runs against both generated runtimes:
 node tests/diy-posix-test/posix-kernel-runtime.cjs
 node tests/diy-posix-test/posix-kernel-runtime.cjs threaded
 ```
+
+The **Run runtime test suites** wizard entry runs the sequential and threaded
+DIY POSIX and libc probes plus the Bash smoke test. It records every suite in
+`test.log` and continues through later suites after a failure.
 
 The `diy-posix-test` suite validates WASTE's interpreter ABI and is embedded in
 the browser dashboard alongside the WebAssembly spec tests. It is not an
