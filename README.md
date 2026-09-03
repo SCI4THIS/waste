@@ -31,6 +31,28 @@ receive private address spaces (copied by `fork` until COW is implemented),
 while threads within a process share memory. Explicit WebAssembly imports may
 still alias memory between modules inside one address space.
 
+### C tail-call proof of concept
+
+The first C execution slice is under `src/c-engine/`. It deliberately supports
+only enough binary decoding and execution for direct and reference tail-call
+counters. Tail transfers replace the current function, argument, and numeric PC
+without pushing a frame or allocating in the run loop.
+
+Run the native five-million-transfer gate and generate its static browser page:
+
+```sh
+./start.sh --c-tail-poc
+```
+
+The output page is `build/c-tail-poc/tail-call-poc.html`. This proof is not a
+general Wasm implementation and must not be used to bypass the staged feature
+and conformance gates in the C port plan.
+
+The first Firefox run sustained 4.46 million `return_call` and 10.75 million
+`return_call_ref` transfers per second with one frame and no run-loop
+allocations. See [docs/c-engine-handoff.md](docs/c-engine-handoff.md) for the
+measured baseline, current limitations, and next implementation sequence.
+
 ## Compile the OCaml interpreter to WebAssembly
 
 This remains the current runnable implementation and the reference used to

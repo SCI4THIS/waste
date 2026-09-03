@@ -33,6 +33,10 @@ LIBC_BUILDER="$REPO_ROOT/tools/build-waste-libc.py"
 LIBC_OUTPUT="$REPO_ROOT/build/waste-libc/waste-libc.wasm"
 LIBC_LOG="$REPO_ROOT/build/waste-libc/build.log"
 TEST_LOG="$REPO_ROOT/test.log"
+C_TAIL_POC="$REPO_ROOT/tests/c-tail-poc/run.sh"
+C_TAIL_BUILD="$REPO_ROOT/build/c-tail-poc"
+C_TAIL_GENERATOR="$REPO_ROOT/tools/generate-c-tail-poc.py"
+C_TAIL_HTML="$C_TAIL_BUILD/tail-call-poc.html"
 
 SWITCH_NAME="${WASTE_OCAML_SWITCH:-waste-wasm}"
 OCAML_VERSION="${WASTE_OCAML_VERSION:-5.3.0}"
@@ -56,6 +60,7 @@ interpreter to WebAssembly.
   --generate-html  generate the embedded browser test dashboard
   --generate-bash-html
                    generate the self-contained WASTE Bash page
+  --c-tail-poc     build native/browser C tail-call proofs and run native benchmark
   --patch-status   show the Wasm32 compatibility patch status
   --apply-i31      apply the Wasm32 patch (legacy option name)
   --revert-i31     revert the Wasm32 patch (legacy option name)
@@ -69,6 +74,8 @@ Environment overrides:
                        threaded scheduler quantum (default: 10000)
   WASTE_BASH_INSTRUCTION_QUANTUM
                        WASTE Bash scheduler quantum (default: 1000000)
+  WASTE_C_TAIL_ITERATIONS
+                       C tail-call proof transfers per export (default: 5000000)
 EOF
 }
 
@@ -853,10 +860,31 @@ run_sandbox_isolation_tests() {
     "${contamination_args[@]}" >>"$TEST_LOG" 2>&1
 }
 
+run_c_tail_poc() {
+  local iterations="${WASTE_C_TAIL_ITERATIONS:-5000000}"
+  if [[ ! "$iterations" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'error: WASTE_C_TAIL_ITERATIONS must be a positive integer\n' >>"$TEST_LOG"
+    return 2
+  fi
+  if ! have_command cc || ! have_command clang || ! have_command make ||
+      ! have_command wasm-as || ! have_command python3 || ! wasm_ld_is_usable; then
+    printf 'error: cc, clang, make, wasm-ld, wasm-as, and Python 3 are required for the C tail-call proof\n' >>"$TEST_LOG"
+    return 1
+  fi
+  printf '\n== Native C tail-call proof (%s transfers) ==\n' "$iterations" >>"$TEST_LOG"
+  "$C_TAIL_POC" "$iterations" >>"$TEST_LOG" 2>&1 || return 1
+  make -C "$REPO_ROOT/src/c-engine" BUILD_DIR="$C_TAIL_BUILD" browser \
+    >>"$TEST_LOG" 2>&1 || return 1
+  python3 "$C_TAIL_GENERATOR" \
+    --engine "$C_TAIL_BUILD/waste-tail-poc.wasm" \
+    --guest "$C_TAIL_BUILD/tail-call.wasm" \
+    --output "$C_TAIL_HTML" >>"$TEST_LOG" 2>&1
+}
+
 run_test_group() {
   local group="$1"
   if [[ "$group" != spec && "$group" != tail && "$group" != tail-smoke &&
-        "$group" != isolation ]] && ! have_command node; then
+        "$group" != isolation && "$group" != c-tail ]] && ! have_command node; then
     show_message "Runtime tests" "Node.js is required to run the runtime test suites."
     return 1
   fi
@@ -874,8 +902,12 @@ run_test_group() {
     printf 'Started: %s\n\n' "$(date --iso-8601=seconds)"
   } >>"$TEST_LOG"
 
-  whiptail --title "Runtime tests" --infobox \
-    "Running $group tests...\n\nLog: $TEST_LOG" 9 78
+  if have_command whiptail && [[ -t 0 && -t 1 ]]; then
+    whiptail --title "Runtime tests" --infobox \
+      "Running $group tests...\n\nLog: $TEST_LOG" 9 78
+  else
+    printf 'Running %s tests; log: %s\n' "$group" "$TEST_LOG"
+  fi
 
   local status=0
   case "$group" in
@@ -890,6 +922,9 @@ run_test_group() {
       ;;
     isolation)
       run_sandbox_isolation_tests || status=1
+      ;;
+    c-tail)
+      run_c_tail_poc || status=1
       ;;
     posix)
       run_logged_test "POSIX control (sequential)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" || status=1
@@ -906,6 +941,7 @@ run_test_group() {
       run_logged_test "Bash interactive smoke test" node "$REPO_ROOT/tests/bash-interactive-runtime.cjs" || status=1
       ;;
     all)
+      run_c_tail_poc || status=1
       run_official_core_tests || status=1
       run_sandbox_isolation_tests || status=1
       run_logged_test "POSIX control (sequential)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" || status=1
@@ -935,8 +971,9 @@ test_suite_menu() {
     local choice
     choice="$(whiptail --title "Runtime test suites" --menu \
       "Tests run locally against the native, sequential, and CPS interpreters." \
-      27 88 10 \
+      28 88 11 \
       all "Run official core, DIY POSIX, libc, and Bash suites" \
+      c-tail "Build native/browser C tail-call proof and benchmark" \
       spec "Run the official WebAssembly core suite" \
       isolation "Run scheduled test-sandbox isolation regressions" \
       tail "Run the three official tail-call tests" \
@@ -947,7 +984,7 @@ test_suite_menu() {
       log "Show the last test log" \
       back "Return to the main menu" 3>&1 1>&2 2>&3)" || return 0
     case "$choice" in
-      all|spec|isolation|tail|tail-smoke|posix|libc|bash) run_test_group "$choice" || true ;;
+      all|c-tail|spec|isolation|tail|tail-smoke|posix|libc|bash) run_test_group "$choice" || true ;;
       log)
         if [[ -s "$TEST_LOG" ]]; then
           whiptail --title "Last test log" --textbox "$TEST_LOG" 28 100
@@ -996,8 +1033,9 @@ main_menu() {
     local choice
     patch_state="$(i31_patch_status)"
     choice="$(whiptail --title "OCaml to WebAssembly" --menu \
-      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 28 92 10 \
+      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 29 92 11 \
       compile "Compile the OCaml interpreter to Wasm" \
+      c-tail "Build native/browser C tail-call proof and benchmark" \
       libc "Build waste-libc.wasm and tests" \
       html "Generate embedded browser test dashboard" \
       bash "Generate self-contained WASTE Bash page" \
@@ -1010,6 +1048,7 @@ main_menu() {
 
     case "$choice" in
       compile) compile_interpreter || true ;;
+      c-tail) run_test_group c-tail || true ;;
       libc) build_waste_libc || true ;;
       html) generate_browser_test_html || true ;;
       bash) generate_bash_html || true ;;
@@ -1054,6 +1093,7 @@ main() {
     --build-libc) build_waste_libc ;;
     --generate-html) generate_browser_test_html ;;
     --generate-bash-html) generate_bash_html ;;
+    --c-tail-poc) run_test_group c-tail ;;
     --patch-status) i31_patch_status ;;
     --apply-i31) apply_i31_patch ;;
     --revert-i31) revert_i31_patch ;;

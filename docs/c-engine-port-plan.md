@@ -47,6 +47,30 @@ src/
 Generated Flex/Bison files belong under `build/`, not source control. Grammar,
 scanner, opcode metadata, and generation scripts remain repository sources.
 
+## Tail-Call Proof Status
+
+The first bounded execution slice now lives in `src/c-engine/`. It loads an
+actual Wasm binary and supports only the types, structured conditional, integer
+operations, function references, exports, `return_call`, and `return_call_ref`
+needed by `tests/c-tail-poc/tail-call.wat`. Both tail instructions reset the
+active function, argument, value-stack cursor, and numeric PC in a single frame;
+the run loop performs no allocation.
+
+`./start.sh --c-tail-poc` runs a five-million-transfer native gate for each
+instruction and emits the self-contained
+`build/c-tail-poc/tail-call-poc.html`, which embeds the same C interpreter
+compiled to Wasm and the guest counter module. This is evidence for the dispatch
+architecture, not completion of the minimal-executor phase. The next expansion
+must retain bounded decoding, structured errors, one-frame tail transfers, and
+native/browser differential fixtures.
+
+The first Firefox browser baseline confirmed constant frame depth and zero
+run-loop allocation: five million `return_call` transfers took 1,122 ms
+(4,456,328/s), while five million `return_call_ref` transfers took 465 ms
+(10,752,688/s). Preserve the environment and raw values when comparing future
+changes; the concise continuation notes are in
+[c-engine-handoff.md](c-engine-handoff.md).
+
 ## Ownership Hierarchy
 
 Do not use scheduler tasks, POSIX processes, and guest threads as synonyms. The
