@@ -2,9 +2,11 @@
 
 ## Project Structure & Module Organization
 
-The C interpreter is in `src/`, including `src/bash.wat`; generated reference
-material is under `src/gen/`. The official OCaml interpreter is the
-`submodules/wasm-spec` submodule. Represent repository-owned OCaml changes in
+The developing C engine is in `src/`, including `src/bash.wat`; generated
+reference material is under `src/gen/`. Follow `docs/c-engine-port-plan.md`: C
+is the planned browser runtime, while the official OCaml interpreter in
+`submodules/wasm-spec` remains the differential oracle during migration.
+Represent repository-owned OCaml changes in
 `submodules/wasm-spec-i31-int32.patch`, never in submodule history. Dashboard
 code is in `tools/`, the guest libc is in `libc/`, architecture notes are in
 `docs/`, and project-specific probes are in `tests/diy-posix-test/` and
@@ -12,12 +14,14 @@ code is in `tools/`, the guest libc is in `libc/`, architecture notes are in
 
 ## POSIX Capability Policy
 
-Use browser primitives when faithful and emulate practical OS semantics in
-OCaml. Route unavailable capabilities such as raw sockets through an optional
-WebSocket POSIX broker. Keep POSIX state in OCaml and make the broker versioned,
-asynchronous, capability-scoped, and explicit about `errno`, cancellation, and
-readiness. Without it, return an unsupported error. The dashboard must remain a
-self-contained `file://` document; broker use is optional.
+Use browser primitives when faithful and emulate practical OS semantics in the
+engine-owned kernel. During migration, keep the OCaml and C implementations
+behaviorally aligned. Route unavailable capabilities such as raw sockets
+through an optional WebSocket POSIX broker. Keep POSIX state in the engine—not
+the broker—and make the protocol versioned, asynchronous, capability-scoped,
+and explicit about `errno`, cancellation, and readiness. Without it, return an
+unsupported error. The dashboard must remain a self-contained `file://`
+document; broker use is optional.
 
 ## Build, Test, and Development Commands
 
@@ -27,7 +31,8 @@ self-contained `file://` document; broker use is optional.
 - `./start.sh --build-libc`: build the guest allocator module and test fixture.
 - `./start.sh --generate-html`: generate the offline dashboard.
 - `./start.sh --generate-bash-html`: generate the offline WASTE Bash page.
-- `./build.sh`: build the C implementation.
+- `./build.sh`: extract legacy grammar fragments into `gen/`.
+- `(cd src && ./m.sh)`: build the current native C prototype.
 - `node tests/diy-posix-test/posix-{kernel,control}-runtime.cjs [threaded]`:
   run DIY POSIX probes.
 - `node tests/libc-test/libc-runtime.cjs [threaded]`: run guest allocator probes.
@@ -40,7 +45,11 @@ checks for changed tools, and `git diff --check`.
 
 Match surrounding indentation. Use `snake_case` for functions, uppercase shell
 constants, and kebab-case dashboard/log names. Quote shell expansions. Do not
-edit generated files or upstream submodule history directly.
+edit generated Flex/Bison files, build artifacts, or upstream submodule history
+directly. New C code must use bounded readers, structured errors, explicit
+ownership, and integer handles across the JavaScript boundary. Keep hot
+execution paths allocation-free and place optional counters behind
+`WASTE_PROFILE`.
 
 ## Testing Guidelines
 
@@ -55,6 +64,14 @@ guest C compiler works; then record upstream revisions and keep licensing and
 Wasm-adaptation patches separate.
 Keep libc test clients in `tests/libc-test/*.wast.inc`; generated fixtures
 belong under `build/waste-libc/tests/`.
+Compare new C behavior with the OCaml oracle for every supported official test.
+Run C decoder/executor tests natively with warnings-as-errors, AddressSanitizer,
+and UndefinedBehaviorSanitizer, then exercise the same artifact through the
+offline dashboard. Do not claim a browser speedup from native OCaml timings.
+Keep engine-global data immutable. Give each scheduled test an isolated host
+store and kernel; model processes with private address spaces and threads with
+shared process memory. Preserve explicit imported-memory aliasing within one
+test sandbox.
 
 ## Commit & Pull Request Guidelines
 

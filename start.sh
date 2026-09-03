@@ -778,13 +778,89 @@ run_official_core_tests() {
     >>"$TEST_LOG" 2>&1
 }
 
+run_official_tail_call_tests() {
+  local -a files=(
+    "$SPEC_DIR/test/core/return_call.wast"
+    "$SPEC_DIR/test/core/return_call_indirect.wast"
+    "$SPEC_DIR/test/core/return_call_ref.wast"
+  )
+  printf '\n== Official WebAssembly tail-call tests ==\n' >>"$TEST_LOG"
+  printf 'Files:\n' >>"$TEST_LOG"
+  printf '  %s\n' "${files[@]}" >>"$TEST_LOG"
+  if ! (cd -- "$INTERPRETER_DIR" &&
+      opam exec --switch="$SWITCH_NAME" -- dune build ./wasm.exe) \
+      >>"$TEST_LOG" 2>&1; then
+    return 1
+  fi
+  local file status=0 started
+  for file in "${files[@]}"; do
+    started=$SECONDS
+    printf '\n-- %s --\n' "${file##*/}" >>"$TEST_LOG"
+    if ! python3 "$SPEC_DIR/test/core/run.py" \
+        --wasm "$INTERPRETER_DIR/_build/default/wasm.exe" \
+        "$file" >>"$TEST_LOG" 2>&1; then
+      status=1
+    fi
+    printf 'Duration: %ds\n' "$((SECONDS - started))" >>"$TEST_LOG"
+  done
+  return "$status"
+}
+
+run_tail_call_smoke() {
+  local build_started=$SECONDS started
+  printf '\n== Short tail-call smoke benchmark ==\n' >>"$TEST_LOG"
+  if ! (cd -- "$INTERPRETER_DIR" &&
+      opam exec --switch="$SWITCH_NAME" -- dune build ./wasm.exe) \
+      >>"$TEST_LOG" 2>&1; then
+    return 1
+  fi
+  printf 'Build duration: %ds\n' "$((SECONDS - build_started))" >>"$TEST_LOG"
+  started=$SECONDS
+  "$NATIVE_INTERPRETER" "$REPO_ROOT/tests/tail-call-smoke.wast" \
+    >>"$TEST_LOG" 2>&1
+  local status=$?
+  printf 'Execution duration: %ds\n' "$((SECONDS - started))" >>"$TEST_LOG"
+  return "$status"
+}
+
+run_sandbox_isolation_tests() {
+  local -a isolation_files=(
+    "$REPO_ROOT/tests/diy-posix-test/spectest-isolation-a.wast"
+    "$REPO_ROOT/tests/diy-posix-test/spectest-isolation-b.wast"
+  )
+  local -a contamination_files=(
+    "$SPEC_DIR/test/core/data.wast"
+    "$SPEC_DIR/test/core/imports.wast"
+  )
+  local -a isolation_args=()
+  local -a contamination_args=()
+  local file
+  for file in "${isolation_files[@]}"; do
+    isolation_args+=(-i "$file")
+  done
+  for file in "${contamination_files[@]}"; do
+    contamination_args+=(-i "$file")
+  done
+  printf '\n== Scheduled test-sandbox isolation ==\n' >>"$TEST_LOG"
+  if ! (cd -- "$INTERPRETER_DIR" &&
+      opam exec --switch="$SWITCH_NAME" -- dune build ./wasm.exe) \
+      >>"$TEST_LOG" 2>&1; then
+    return 1
+  fi
+  "$NATIVE_INTERPRETER" -ca --schedule --threads 2 -q 1 \
+    "${isolation_args[@]}" >>"$TEST_LOG" 2>&1 || return 1
+  "$NATIVE_INTERPRETER" -ca --schedule --threads 2 -q 10000 \
+    "${contamination_args[@]}" >>"$TEST_LOG" 2>&1
+}
+
 run_test_group() {
   local group="$1"
-  if [[ "$group" != spec ]] && ! have_command node; then
+  if [[ "$group" != spec && "$group" != tail && "$group" != tail-smoke &&
+        "$group" != isolation ]] && ! have_command node; then
     show_message "Runtime tests" "Node.js is required to run the runtime test suites."
     return 1
   fi
-  if [[ "$group" == spec || "$group" == all ]] &&
+  if [[ "$group" == spec || "$group" == tail || "$group" == tail-smoke || "$group" == isolation || "$group" == all ]] &&
       { ! have_command opam || ! have_command python3; }; then
     show_message "Runtime tests" \
       "opam and Python 3 are required to run the official interpreter suite."
@@ -806,6 +882,15 @@ run_test_group() {
     spec)
       run_official_core_tests || status=1
       ;;
+    tail)
+      run_official_tail_call_tests || status=1
+      ;;
+    tail-smoke)
+      run_tail_call_smoke || status=1
+      ;;
+    isolation)
+      run_sandbox_isolation_tests || status=1
+      ;;
     posix)
       run_logged_test "POSIX control (sequential)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" || status=1
       run_logged_test "POSIX control (threaded)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" threaded || status=1
@@ -822,6 +907,7 @@ run_test_group() {
       ;;
     all)
       run_official_core_tests || status=1
+      run_sandbox_isolation_tests || status=1
       run_logged_test "POSIX control (sequential)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" || status=1
       run_logged_test "POSIX control (threaded)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" threaded || status=1
       run_logged_test "POSIX kernel (sequential)" node "$REPO_ROOT/tests/diy-posix-test/posix-kernel-runtime.cjs" || status=1
@@ -849,16 +935,19 @@ test_suite_menu() {
     local choice
     choice="$(whiptail --title "Runtime test suites" --menu \
       "Tests run locally against the native, sequential, and CPS interpreters." \
-      23 88 7 \
+      27 88 10 \
       all "Run official core, DIY POSIX, libc, and Bash suites" \
       spec "Run the official WebAssembly core suite" \
+      isolation "Run scheduled test-sandbox isolation regressions" \
+      tail "Run the three official tail-call tests" \
+      tail-smoke "Run a short tail-call performance smoke test" \
       posix "Run DIY POSIX control and kernel suites" \
       libc "Run waste-libc and native allocator suites" \
       bash "Run the interactive Bash smoke test" \
       log "Show the last test log" \
       back "Return to the main menu" 3>&1 1>&2 2>&3)" || return 0
     case "$choice" in
-      all|spec|posix|libc|bash) run_test_group "$choice" || true ;;
+      all|spec|isolation|tail|tail-smoke|posix|libc|bash) run_test_group "$choice" || true ;;
       log)
         if [[ -s "$TEST_LOG" ]]; then
           whiptail --title "Last test log" --textbox "$TEST_LOG" 28 100

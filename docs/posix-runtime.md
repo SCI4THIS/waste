@@ -1,8 +1,42 @@
 # Browser POSIX runtime architecture
 
-The POSIX layer is part of the interpreter, not a collection of JavaScript
-stubs. JavaScript supplies browser capabilities and an asynchronous control
-channel; the OCaml runtime owns process semantics.
+The POSIX layer is part of the engine, not a collection of JavaScript stubs.
+JavaScript supplies browser capabilities and an asynchronous control channel.
+The current OCaml runtime owns process semantics; ownership will move to the C
+kernel described in [c-engine-port-plan.md](c-engine-port-plan.md) subsystem by
+subsystem, with the same observable ABI and tests.
+
+## C engine migration
+
+The browser harness, guest libc, capability tiers, module namespace, and
+control-page ABI survive the engine change. The C implementation must own
+complete execution slices and POSIX state rather than call back into OCaml for
+each instruction or syscall. During migration, OCaml is the behavioral oracle
+and generated pages may select one engine before starting a guest. A running
+process never changes engines.
+
+The C scheduler represents PCs, stacks, wait objects, signals, and process
+relationships explicitly in linear-memory structures. That makes pause,
+resume, `fork`, non-local jumps, and blocked syscalls snapshot or clone engine
+state directly. Integer handles cross into JavaScript; browser objects and C
+pointers do not become part of guest-visible kernel state. Each POSIX subsystem
+moves only after its DIY POSIX, libc, and Bash regression tests pass against
+both implementations.
+
+An engine may cache immutable decoded modules across all work. Each independent
+`.wast` file or launched application instead owns a sandbox/store containing a
+fresh host-import environment, module-instance registry, and kernel namespace.
+Processes live inside that sandbox; threads live inside a process. Threads share
+their process address space, while `fork` creates a logically private copy of
+memory, mutable globals, and tables. Explicit imports may still alias a memory
+or table between modules in one address space.
+
+The OCaml cooperative scheduler now applies this boundary to tests. Its runner
+reconstructs virtual host imports for every scheduled script. In particular,
+`spectest` memory and tables are sandbox-local, so data-segment initialization
+in one specification file cannot change another file. The dashboard's existing
+thread-count control therefore limits concurrently runnable test sandboxes; it
+does not create guest threads.
 
 ## Capability tiers
 
@@ -13,8 +47,9 @@ tiers:
 1. **Browser-backed:** use a browser primitive when it can faithfully supply a
    capability, such as clocks, cryptographic entropy, terminal presentation,
    or an optional persistence backend.
-2. **Interpreter-emulated:** keep OS semantics in the shared OCaml kernel when
-   they can be modeled locally. This includes processes, signals, timers,
+2. **Interpreter-emulated:** keep OS semantics in the engine-owned kernel when
+   they can be modeled locally. This currently means OCaml and will move to C
+   under the port plan. It includes processes, signals, timers,
    pipes, descriptor state, terminal job control, and a virtual filesystem
    whose files, directories, permissions, timestamps, and mutations live in
    memory.
@@ -24,7 +59,7 @@ tiers:
    the privileged operation and returns data or a POSIX error.
 
 The broker is a capability transport, not the owner of guest process state.
-The OCaml layer must retain descriptor identity, blocking/readiness behavior,
+The active engine must retain descriptor identity, blocking/readiness behavior,
 signal interruption, validation, and errno translation. The protocol should be
 versioned and include request IDs, operation names, typed arguments, result or
 `errno`, cancellation, and readiness notifications. Connections should be

@@ -4,7 +4,37 @@ This repository is exploring a browser-hosted WebAssembly execution environment.
 The official WebAssembly specification and its OCaml reference interpreter live
 in `submodules/wasm-spec`.
 
+## Runtime direction
+
+The OCaml interpreter established the specification oracle, cooperative
+scheduler, POSIX model, and browser testing harness. WASTE is now incrementally
+porting the production execution path to a repository-owned C engine compiled
+to WebAssembly. The C engine will use predecoded fixed-width instructions,
+numeric PCs, reusable frames, explicit instruction fuel, and an allocation-free
+tail-call path. OCaml remains available for differential testing until the C
+engine passes each declared compatibility gate.
+
+The same migration adds a reentrant Flex/Bison front end. It will translate WAT
+to canonical binary in two passes, initially into a separate arena and later
+with guarded in-place compaction. Known assets such as `src/bash.wat` can be
+assembled while generating the static HTML; runtime parsing remains available
+for uploaded input. The architecture, delivery phases, test gates, cutover, and
+rollback rules are defined in
+[docs/c-engine-port-plan.md](docs/c-engine-port-plan.md).
+The current `src/` code provides binary decoding, lookup, validation, and
+disassembly foundations; its `execute.c` does not yet execute guest opcodes.
+
+The C design distinguishes engine-global immutable code, isolated test or
+application sandboxes, POSIX processes, and threads. Independently scheduled
+`.wast` files receive fresh host imports and mutable module stores. Processes
+receive private address spaces (copied by `fork` until COW is implemented),
+while threads within a process share memory. Explicit WebAssembly imports may
+still alias memory between modules inside one address space.
+
 ## Compile the OCaml interpreter to WebAssembly
+
+This remains the current runnable implementation and the reference used to
+evaluate the C port.
 
 Run the dependency-first terminal wizard:
 
@@ -73,6 +103,8 @@ source directory, and provides Run, Test module, and Test all controls with live
 pass/fail indicators. Each result shows its elapsed time, and the header shows
 the cumulative time for completed tests. A Download results button exports a
 JSON report with the summary, timings, exit codes, captured output, and errors.
+If the shared cooperative worker aborts, tests it never reported are marked
+aborted with no invented duration rather than counted as individual failures.
 Test all records and displays its local start and finish times; both timestamps
 are included in the downloaded report. Test all runs each displayed directory
 group in order. Legacy exception groups are highlighted as unsupported and are
@@ -159,21 +191,23 @@ node tests/libc-test/allocator-native.cjs
 The dashboard offers thread-count choices of **1**, **#tests** (derived from
 all supported embedded suites), or a custom positive integer. Test all passes
 every supported script to one OCaml Wasm interpreter instance. The interpreter
-starts at most the selected number of isolated logical tasks and backfills from
-the ordered queue as tasks finish. Each task retains its own continuation and
+starts at most the selected number of isolated test sandboxes and backfills from
+the ordered queue as they finish. Each sandbox retains its own continuation and
 runner state. The instruction-quantum input controls how many evaluator steps
 a runnable task receives before it yields. The default is 10,000 and can also be set during
 non-interactive generation with `WASTE_INSTRUCTION_QUANTUM`.
 
-This is deterministic cooperative threading on one browser execution thread,
-not multicore WebAssembly shared-memory threading. Logical tests share the
-OCaml runtime heap, while their WebAssembly module instances, memories, script
-registries, stacks, and program counters remain isolated. Keeping module memory
-isolated is required for the specification tests to remain independent.
+This is deterministic cooperative scheduling on one browser execution thread,
+not multicore WebAssembly shared-memory threading. The thread-count control is
+currently a concurrency limit for isolated test sandboxes. Logical tests share
+only the OCaml implementation heap and immutable interpreter code; their host
+imports, WebAssembly module instances, memories, tables, script registries,
+POSIX kernels, stacks, and program counters remain isolated. Modules within one
+test may still share explicitly imported memory as required by the specification.
 Because `core/custom.wast` intentionally triggers the accepted `-c custom`
 handler failure, and CPS turns that recursive handler path into a non-terminating
 loop rather than a promptly catchable host stack overflow, the cooperative runner
-records it as the known failure after all runnable logical threads finish. Its
+records it as the known failure after all runnable test sandboxes finish. Its
 source is included in the batch, but the recursive handler is not entered.
 
 The **Safe pull/rebase and submodule update** menu entry temporarily removes the

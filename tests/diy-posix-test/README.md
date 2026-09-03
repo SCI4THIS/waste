@@ -11,6 +11,9 @@ or complete POSIX conformance suite.
 - `posix-control-runtime.cjs` is a Node harness for externally timed pause,
   resume, and signal delivery. It remains a harness rather than a dashboard
   WAST test because it coordinates a second host worker.
+- `spectest-isolation-{a,b}.wast` verify that modules within one script share
+  their imported host memory while independently scheduled scripts receive
+  fresh host environments.
 
 Run both compiled variants with:
 

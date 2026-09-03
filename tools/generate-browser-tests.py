@@ -310,7 +310,19 @@ HTML = r'''<!doctype html>
           const resume = () => {
             if (globalThis.waste_runtime_paused)
               globalThis.setTimeout(resume, 10);
-            else callback();
+            else {
+              try {
+                callback();
+              } catch (error) {
+                self.postMessage({
+                  type: "done",
+                  ok: false,
+                  output: output.join("\n"),
+                  error: error && (error.stack || error.message) || String(error),
+                  exitCode: error && error.wasteExitCode
+                });
+              }
+            }
           };
           if (milliseconds > 0) globalThis.setTimeout(resume, milliseconds);
           else {
@@ -412,7 +424,7 @@ HTML = r'''<!doctype html>
 
     function render() {
       const executionMode = document.querySelector("#execution-mode");
-      executionMode.append("Threads:");
+      executionMode.append("Concurrent sandboxes:");
       for (const option of [
         {value: "1", label: "1", checked: true},
         {value: "all", label: `${SUPPORTED_TESTS.length} (#tests)`},
@@ -434,7 +446,7 @@ HTML = r'''<!doctype html>
       custom.step = "1";
       custom.value = "2";
       custom.disabled = true;
-      custom.title = "Maximum number of simultaneously runnable test threads";
+      custom.title = "Maximum number of simultaneously runnable test sandboxes";
       executionMode.append(custom, "· quantum:");
       const quantum = document.createElement("input");
       quantum.id = "quantum";
@@ -591,14 +603,17 @@ HTML = r'''<!doctype html>
     function updateSummary() {
       let passed = 0;
       let failed = 0;
+      let aborted = 0;
       let totalDuration = 0;
       const supportedResults = [...results.values()].filter(result => !result.unsupported);
       for (const result of supportedResults) {
-        result.state === "pass" ? passed++ : failed++;
+        if (result.state === "pass") passed++;
+        else if (result.aborted) aborted++;
+        else failed++;
         totalDuration += result.durationMs;
       }
       document.querySelector("#summary").textContent =
-        `${supportedResults.length} / ${SUPPORTED_TESTS.length} supported completed · ${passed} passed · ${failed} failed · ${formatDuration(totalDuration)} · ${PAYLOAD.tests.length - SUPPORTED_TESTS.length} unsupported excluded`;
+        `${supportedResults.length} / ${SUPPORTED_TESTS.length} supported reported · ${passed} passed · ${failed} failed · ${aborted} aborted · ${formatDuration(totalDuration)} · ${PAYLOAD.tests.length - SUPPORTED_TESTS.length} unsupported excluded`;
       document.querySelector("#download-results").disabled = results.size === 0 || batchRunning;
     }
 
@@ -609,13 +624,15 @@ HTML = r'''<!doctype html>
         .filter(Boolean);
       const supportedResults = orderedResults.filter(result => !result.unsupported);
       const passed = supportedResults.filter(result => result.state === "pass").length;
-      const failed = supportedResults.length - passed;
+      const aborted = supportedResults.filter(result => result.aborted).length;
+      const failed = supportedResults.length - passed - aborted;
         const report = {
           format: "waste-spec-test-results-v1",
           downloadedAt: new Date().toISOString(),
           userAgent: navigator.userAgent,
           execution: {
             mode: "cooperative",
+            unit: "test-sandbox",
             threadCount: lastRunThreadCount,
             instructionQuantum: lastRunQuantum
           },
@@ -636,6 +653,7 @@ HTML = r'''<!doctype html>
           completedSupported: supportedResults.length,
           passed,
           failed,
+          aborted,
           durationMs: supportedResults.reduce((sum, result) => sum + result.durationMs, 0)
         },
         results: orderedResults
@@ -752,10 +770,11 @@ HTML = r'''<!doctype html>
         const detail = raw.error || raw.output || "The cooperative interpreter stopped before reporting this test.";
         for (const test of tests) {
           if (!pending.has(test.path)) continue;
-          setResult(test, "fail", detail, performance.now() - startedAt, {
+          setResult(test, "fail", detail, null, {
             exitCode: raw.exitCode ?? null,
             output: raw.output || "",
-            error: raw.error || ""
+            error: raw.error || "",
+            aborted: true
           });
         }
       }
@@ -892,7 +911,7 @@ def main():
     supported_count = sum(not test["unsupported"] for test in tests)
     document = (
         HTML.replace("__TEST_COUNT__", str(supported_count))
-        .replace("__EXECUTION_NOTICE__", "Tests run as isolated cooperative tasks inside one compiled OCaml WebAssembly interpreter instance. Choose the maximum number of simultaneously runnable threads.")
+        .replace("__EXECUTION_NOTICE__", "Tests run as isolated cooperative sandboxes inside one compiled OCaml WebAssembly interpreter instance. The concurrency setting does not create guest threads.")
         .replace("__TIMEOUT_NOTICE__", "Individual runs and cooperative batches time out after 30 minutes.")
         .replace("__PAYLOAD__", script_json(payload))
         .replace("__DEFAULT_QUANTUM__", str(args.quantum))

@@ -1,6 +1,6 @@
-diff --git c/interpreter/binary/decode.ml w/interpreter/binary/decode.ml
+diff --git i/interpreter/binary/decode.ml w/interpreter/binary/decode.ml
 index f817ff260..1d1c270c4 100644
---- c/interpreter/binary/decode.ml
+--- i/interpreter/binary/decode.ml
 +++ w/interpreter/binary/decode.ml
 @@ -101,7 +101,7 @@ let rec sN n s =
    else Int64.(logor x (shift_left (sN (n - 7) s) 7))
@@ -22,9 +22,9 @@ index f817ff260..1d1c270c4 100644
      s pos "too many locals";
    List.flatten (List.map (Lib.Fun.uncurry Lib.List32.make) nts)
 
-diff --git c/interpreter/dune w/interpreter/dune
+diff --git i/interpreter/dune w/interpreter/dune
 index fc6206248..a16be0b45 100644
---- c/interpreter/dune
+--- i/interpreter/dune
 +++ w/interpreter/dune
 @@ -3,6 +3,8 @@
  (library
@@ -35,9 +35,9 @@ index fc6206248..a16be0b45 100644
  )
 
  (executable
-diff --git c/interpreter/exec/convert.ml w/interpreter/exec/convert.ml
+diff --git i/interpreter/exec/convert.ml w/interpreter/exec/convert.ml
 index c7cdf09fc..ad833dae4 100644
---- c/interpreter/exec/convert.ml
+--- i/interpreter/exec/convert.ml
 +++ w/interpreter/exec/convert.ml
 @@ -4,6 +4,8 @@ module I8_ =
  struct
@@ -80,9 +80,9 @@ index c7cdf09fc..ad833dae4 100644
  end
 
  module I32_ =
-diff --git c/interpreter/exec/eval.ml w/interpreter/exec/eval.ml
-index ab78027fe..2640c79d4 100644
---- c/interpreter/exec/eval.ml
+diff --git i/interpreter/exec/eval.ml w/interpreter/exec/eval.ml
+index ab78027fe..6809434e3 100644
+--- i/interpreter/exec/eval.ml
 +++ w/interpreter/exec/eval.ml
 @@ -19,6 +19,100 @@ exception Crash = Crash.Error (* failure that cannot happen in valid code *)
  exception Exhaustion = Exhaustion.Error
@@ -201,7 +201,7 @@ index ab78027fe..2640c79d4 100644
 +
 +and instruction_chunk =
 +{
-+  body : admininstr array;
++  mutable body : admininstr array;
 +  mutable pc : int;
 +  next : instructions;
 +}
@@ -213,14 +213,15 @@ index ab78027fe..2640c79d4 100644
    | Throwing of Tag.t * value stack
    | Trapping of string
 -  | Label of int * instr list * code
+-  | Frame of int * frame * code
 +  | Label of int * admininstr array * code
-   | Frame of int * frame * code
++  | Frame of int * funcinst * frame * code
    | Handler of int * catch list * code
 +  | SignalFrame of int64 * code
 
  type config =
  {
-@@ -77,11 +186,103 @@ type config =
+@@ -77,11 +186,132 @@ type config =
    budget : int;  (* to model stack overflow *)
  }
 
@@ -304,8 +305,18 @@ index ab78027fe..2640c79d4 100644
 +  let hash func = Hashtbl.hash func.at
 +end)
 +
++module PhysicalFuncinst = Hashtbl.Make (struct
++  type t = funcinst
++  let equal left right = left == right
++  let hash = function
++    | Func.AstFunc (_, _, func) -> Hashtbl.hash func.at
++    | Func.HostFunc _ -> 0
++end)
++
 +let nested_instruction_cache = PhysicalAdmininstr.create 256
 +let function_instruction_cache = PhysicalFunc.create 256
++let function_activation_cache = PhysicalFunc.create 256
++let function_arity_cache = PhysicalFuncinst.create 256
 +
 +let nested_instruction_arrays instruction bodies =
 +  match PhysicalAdmininstr.find_opt nested_instruction_cache instruction with
@@ -322,10 +333,29 @@ index ab78027fe..2640c79d4 100644
 +    let compiled = plain_array body in
 +    PhysicalFunc.add function_instruction_cache func compiled;
 +    compiled
++
++let function_activation func locals body =
++  match PhysicalFunc.find_opt function_activation_cache func with
++  | Some compiled -> compiled
++  | None ->
++    let defaults = List.map (fun {it = Local t; _} -> default_value t) locals in
++    let compiled = defaults, function_instructions func body in
++    PhysicalFunc.add function_activation_cache func compiled;
++    compiled
++
++let function_arities f =
++  match PhysicalFuncinst.find_opt function_arity_cache f with
++  | Some arities -> arities
++  | None ->
++    let parameters, results =
++      functype_of_comptype (expand_deftype (Func.type_of f)) in
++    let arities = List.length parameters, List.length results in
++    PhysicalFuncinst.add function_arity_cache f arities;
++    arities
 
  let admininstr_of_value (v : value) at : admininstr' =
    match v with
-@@ -95,6 +296,49 @@ let is_jumping e =
+@@ -95,6 +325,49 @@ let is_jumping e =
    | Throwing _ | Trapping _ -> true
    | _ -> false
 
@@ -375,7 +405,7 @@ index ab78027fe..2640c79d4 100644
  let lookup category list x =
    try Lib.List32.nth list x.it with Failure _ ->
      Crash.error x.at ("undefined " ^ category ^ " " ^ Int32.to_string x.it)
-@@ -109,6 +353,255 @@ let data (inst : moduleinst) x = lookup "data segment" inst.datas x
+@@ -109,6 +382,258 @@ let data (inst : moduleinst) x = lookup "data segment" inst.datas x
  let elem (inst : moduleinst) x = lookup "element segment" inst.elems x
  let local (frame : frame) x = lookup "local" frame.locals x
 
@@ -397,8 +427,8 @@ index ab78027fe..2640c79d4 100644
 +  let it = match instruction.it with
 +    | Label (arity, continuation, code) ->
 +      Label (arity, Array.map clone_admininstr continuation, clone_code code)
-+    | Frame (arity, frame, code) ->
-+      Frame (arity, clone_frame frame, clone_code code)
++    | Frame (arity, function_, frame, code) ->
++      Frame (arity, function_, clone_frame frame, clone_code code)
 +    | Handler (arity, catches, code) ->
 +      Handler (arity, catches, clone_code code)
 +    | SignalFrame (mask, code) -> SignalFrame (mask, clone_code code)
@@ -506,7 +536,10 @@ index ab78027fe..2640c79d4 100644
 +        Label
 +          (arity, Array.map clone_admin_in_space continuation,
 +           clone_code_in_space code)
-+      | Frame (arity, frame, code) -> Frame (arity, clone_frame_in_space frame, clone_code_in_space code)
++      | Frame (arity, function_, frame, code) ->
++        Frame
++          (arity, physical_assoc function_ space.functions,
++           clone_frame_in_space frame, clone_code_in_space code)
 +      | Handler (arity, catches, code) -> Handler (arity, catches, clone_code_in_space code)
 +      | SignalFrame (mask, code) -> SignalFrame (mask, clone_code_in_space code)
 +      | Refer (FuncRef function_) -> Refer (FuncRef (physical_assoc function_ space.functions))
@@ -620,7 +653,7 @@ index ab78027fe..2640c79d4 100644
 +    end
 +  end;
 +  let state = !current_state in
-+  let poll = yielded || !quantum = 0 in
++  let poll = yielded || (!quantum = 0 && Posix.poll_required state.posix) in
 +  if poll then Posix.poll_control state.posix;
 +  if poll then begin
 +    if !Flags.trace then
@@ -631,7 +664,101 @@ index ab78027fe..2640c79d4 100644
  let comp_type (inst : moduleinst) x = expand_deftype (type_ inst x)
  let struct_type (inst : moduleinst) x = structtype_of_comptype  (comp_type inst x)
  let array_type (inst : moduleinst) x = arraytype_of_comptype (comp_type inst x)
-@@ -175,9 +668,18 @@ let array_oob a i n =
+@@ -144,6 +669,93 @@ let drop n (vs : 'a stack) at =
+
+ let split n (vs : 'a stack) at = take n vs at, drop n vs at
+
++type tail_request =
++{
++  mutable arguments : value stack;
++  mutable function_ : funcinst;
++  mutable at : region;
++}
++
++exception TailInvoke
++
++let pending_tail_request = ref None
++
++let tail_invoke (f : funcinst) vs at =
++  let n1, _ = function_arities f in
++  let arguments = if List.length vs = n1 then vs else take n1 vs at in
++  begin match !pending_tail_request with
++  | Some request ->
++    request.arguments <- arguments;
++    request.function_ <- f;
++    request.at <- at
++  | None ->
++    pending_tail_request := Some {arguments; function_ = f; at}
++  end;
++  raise TailInvoke
++
++let tail_request () =
++  match !pending_tail_request with
++  | Some request -> request.arguments, request.function_, request.at
++  | None -> assert false
++
++let reset_frame frame inst values =
++  if frame.inst != inst || List.length frame.locals <> List.length values then
++    None
++  else begin
++    List.iter2 (fun slot value -> slot := value) frame.locals values;
++    Some frame
++  end
++
++let ast_activation ?reuse (f : funcinst) args =
++  match f with
++  | Func.AstFunc (_, inst', func) ->
++    let Func (_x, ls, es) = func.it in
++    let m = Lib.Promise.value inst' in
++    let _, n2 = function_arities f in
++    let defaults, body = function_activation func ls es in
++    let lvs = List.(rev (map Option.some args) @ defaults) in
++    let frame' = match Option.bind reuse (fun frame -> reset_frame frame m lvs) with
++      | Some frame -> frame
++      | None -> {inst = m; locals = List.map ref lvs} in
++    Some (n2, frame', code_of_array [] body)
++  | Func.HostFunc _ -> None
++
++let reset_tail_frame f args frame =
++  match f with
++  | Func.AstFunc (_, inst', func) ->
++    let Func (_x, locals, body) = func.it in
++    let defaults, instructions = function_activation func locals body in
++    let inst = Lib.Promise.value inst' in
++    if frame.inst != inst ||
++       List.length frame.locals <> List.length args + List.length defaults then
++      None
++    else begin
++      let rec write_arguments slots = function
++        | [] -> slots
++        | argument :: arguments ->
++          match write_arguments slots arguments with
++          | slot :: rest -> slot := Some argument; rest
++          | [] -> assert false in
++      let rec write_defaults slots values =
++        match slots, values with
++        | [], [] -> ()
++        | slot :: slots, value :: values ->
++          slot := value;
++          write_defaults slots values
++        | _ -> assert false in
++      write_defaults (write_arguments frame.locals args) defaults;
++      Some (frame, instructions)
++    end
++  | Func.HostFunc _ -> None
++
++let restart_activation body (_, instructions) =
++  match instructions with
++  | Chunk chunk ->
++    chunk.body <- body;
++    chunk.pc <- 0;
++    [], instructions
++  | Done -> code_of_array [] body
++
+
+ (* Evaluation *)
+
+@@ -175,9 +787,18 @@ let array_oob a i n =
    oob (Convert.I64_.extend_i32_u i) (Convert.I64_.extend_i32_u n)
      (Convert.I64_.extend_i32_u (Aggr.array_length a))
 
@@ -652,7 +779,7 @@ index ab78027fe..2640c79d4 100644
    let vs', es' =
      match e.it, vs with
      | Plain e', vs ->
-@@ -202,19 +704,24 @@ let rec step (c : config) : config =
+@@ -202,19 +823,24 @@ let rec step (c : config) : config =
          let n1 = List.length ts1 in
          let n2 = List.length ts2 in
          let args, vs' = split n1 vs e.at in
@@ -683,49 +810,49 @@ index ab78027fe..2640c79d4 100644
 
        | Br x, vs ->
          [], [Breaking (x.it, vs) @@ e.at]
-@@ -280,8 +787,10 @@ let rec step (c : config) : config =
+@@ -280,29 +906,23 @@ let rec step (c : config) : config =
              string_of_deftype (Func.type_of f)) @@ e.at]
 
        | ReturnCall x, vs ->
 -        (match (step {c with code = (vs, [Plain (Call x) @@ e.at])}).code with
 -        | vs', [{it = Invoke a; at}] -> vs', [ReturningInvoke (vs', a) @@ at]
-+        (match code_next
-+          (step {c with code = code_of_array vs [|Plain (Call x) @@ e.at|]}).code with
-+        | vs', Some {it = Invoke a; at} ->
-+          vs', [ReturningInvoke (vs', a) @@ at]
-         | _ -> assert false
-         )
+-        | _ -> assert false
+-        )
++        tail_invoke (func c.frame.inst x) vs e.at
 
-@@ -289,18 +798,22 @@ let rec step (c : config) : config =
+       | ReturnCallRef _x, Ref NullRef :: vs ->
          vs, [Trapping "null function reference" @@ e.at]
 
-       | ReturnCallRef x, vs ->
+-      | ReturnCallRef x, vs ->
 -        (match (step {c with code = (vs, [Plain (CallRef x) @@ e.at])}).code with
 -        | vs', [{it = Invoke a; at}] -> vs', [ReturningInvoke (vs', a) @@ at]
 -        | vs', [{it = Trapping s; at}] -> vs', [Trapping s @@ at]
-+        (match code_next
-+          (step {c with code = code_of_array vs [|Plain (CallRef x) @@ e.at|]}).code with
-+        | vs', Some {it = Invoke a; at} ->
-+          vs', [ReturningInvoke (vs', a) @@ at]
-+        | vs', Some {it = Trapping s; at} -> vs', [Trapping s @@ at]
-         | _ -> assert false
-         )
+-        | _ -> assert false
+-        )
++      | ReturnCallRef _x, Ref (FuncRef f) :: vs ->
++        tail_invoke f vs e.at
 
-       | ReturnCallIndirect (x, y), vs ->
-         (match
+-      | ReturnCallIndirect (x, y), vs ->
+-        (match
 -          (step {c with code = (vs, [Plain (CallIndirect (x, y)) @@ e.at])}).code
-+          code_next (step {c with code =
-+            code_of_array vs [|Plain (CallIndirect (x, y)) @@ e.at|]}).code
-         with
+-        with
 -        | vs', [{it = Invoke a; at}] -> vs', [ReturningInvoke (vs', a) @@ at]
 -        | vs', [{it = Trapping s; at}] -> vs', [Trapping s @@ at]
-+        | vs', Some {it = Invoke a; at} ->
-+          vs', [ReturningInvoke (vs', a) @@ at]
-+        | vs', Some {it = Trapping s; at} -> vs', [Trapping s @@ at]
-         | _ -> assert false
-         )
+-        | _ -> assert false
+-        )
++      | ReturnCallIndirect (x, y), Num i :: vs ->
++        let i_64 = addr_of_num i in
++        let f = func_ref c.frame.inst x i_64 e.at in
++        if Match.match_deftype [] (Func.type_of f) (type_ c.frame.inst y) then
++          tail_invoke f vs e.at
++        else
++          vs, [Trapping ("indirect call type mismatch, expected " ^
++            string_of_deftype (type_ c.frame.inst y) ^ " but got " ^
++            string_of_deftype (Func.type_of f)) @@ e.at]
 
-@@ -324,7 +837,9 @@ let rec step (c : config) : config =
+       | Throw x, vs ->
+         let t = tag c.frame.inst x in
+@@ -324,7 +944,9 @@ let rec step (c : config) : config =
          let n1 = List.length ts1 in
          let n2 = List.length ts2 in
          let args, vs' = split n1 vs e.at in
@@ -736,7 +863,7 @@ index ab78027fe..2640c79d4 100644
 
        | LocalGet x, vs ->
          (match !(local c.frame x) with
-@@ -378,19 +893,10 @@ let rec step (c : config) : config =
+@@ -378,19 +1000,10 @@ let rec step (c : config) : config =
          let i_64 = addr_of_num i in
          if table_oob c.frame x i n then
            vs', [Trapping (table_error e.at Table.Bounds) @@ e.at]
@@ -759,7 +886,7 @@ index ab78027fe..2640c79d4 100644
 
        | TableCopy (x, y), Num n :: Num s :: Num d :: vs' ->
          let n_64 = addr_of_num n in
-@@ -398,50 +904,23 @@ let rec step (c : config) : config =
+@@ -398,50 +1011,23 @@ let rec step (c : config) : config =
          let d_64 = addr_of_num d in
          if table_oob c.frame x d n || table_oob c.frame y s n then
            vs', [Trapping (table_error e.at Table.Bounds) @@ e.at]
@@ -819,7 +946,7 @@ index ab78027fe..2640c79d4 100644
 
        | ElemDrop x, vs ->
          let seg = elem c.frame.inst x in
-@@ -550,19 +1029,11 @@ let rec step (c : config) : config =
+@@ -550,19 +1136,11 @@ let rec step (c : config) : config =
          let n_64 = addr_of_num n in
          if mem_oob c.frame x i n then
            vs', [Trapping (memory_error e.at Memory.Bounds) @@ e.at]
@@ -843,7 +970,7 @@ index ab78027fe..2640c79d4 100644
 
        | MemoryCopy (x, y), Num n :: Num s :: Num d :: vs' ->
          let n_64 = addr_of_num n in
-@@ -570,56 +1041,23 @@ let rec step (c : config) : config =
+@@ -570,56 +1148,23 @@ let rec step (c : config) : config =
          let d_64 = addr_of_num d in
          if mem_oob c.frame x d n || mem_oob c.frame y s n then
            vs', [Trapping (memory_error e.at Memory.Bounds) @@ e.at]
@@ -909,7 +1036,7 @@ index ab78027fe..2640c79d4 100644
 
        | DataDrop x, vs ->
          let seg = data c.frame.inst x in
-@@ -1047,69 +1485,68 @@ let rec step (c : config) : config =
+@@ -1047,69 +1592,107 @@ let rec step (c : config) : config =
      | Throwing _, _ ->
        assert false
 
@@ -928,7 +1055,16 @@ index ab78027fe..2640c79d4 100644
      | Label (n, es0, code'), vs ->
 -      let c' = step {c with code = code'} in
 -      vs, [Label (n, es0, c'.code) @@ e.at]
--
++      let rec run code = match code_next code with
++        | vs', None -> vs' @ vs, []
++        | _, Some {it = Breaking (0l, vs0); _} ->
++          take n vs0 e.at @ vs, Array.to_list es0
++        | _, Some {it = Breaking (k, vs0); at} ->
++          vs, [Breaking (Int32.sub k 1l, vs0) @@ at]
++        | _, Some e' when is_jumping e' -> vs, [e']
++        | _ -> run (step {c with code}).code
++      in run code'
+
 -    | Frame (n, frame', (vs', [])), vs ->
 -      vs' @ vs, []
 -
@@ -941,17 +1077,8 @@ index ab78027fe..2640c79d4 100644
 -
 -    | Frame (n, frame', (vs', e' :: es')), vs when is_jumping e' ->
 -      vs, [e']
-+      let rec run code = match code_next code with
-+        | vs', None -> vs' @ vs, []
-+        | _, Some {it = Breaking (0l, vs0); _} ->
-+          take n vs0 e.at @ vs, Array.to_list es0
-+        | _, Some {it = Breaking (k, vs0); at} ->
-+          vs, [Breaking (Int32.sub k 1l, vs0) @@ at]
-+        | _, Some e' when is_jumping e' -> vs, [e']
-+        | _ -> run (step {c with code}).code
-+      in run code'
-
-     | Frame (n, frame', code'), vs ->
+-
+-    | Frame (n, frame', code'), vs ->
 -      let c' = step {frame = frame'; code = code'; budget = c.budget - 1} in
 -      vs, [Frame (n, frame', c'.code) @@ e.at]
 -
@@ -981,16 +1108,56 @@ index ab78027fe..2640c79d4 100644
 -
 -    | Handler (n, cs, (vs', e' :: es')), vs when is_jumping e' ->
 -      vs, [e']
-+      let rec run code = match code_next code with
-+        | vs', None -> vs' @ vs, []
-+        | _, Some {it = Returning vs0; _} -> take n vs0 e.at @ vs, []
-+        | _, Some {it = ReturningInvoke (vs0, f); at} ->
-+          let ts1, _ = functype_of_comptype (expand_deftype (Func.type_of f)) in
-+          take (List.length ts1) vs0 e.at @ vs, [Invoke f @@ at]
-+        | _, Some e' when is_jumping e' -> vs, [e']
-+        | _ ->
-+          run (step {frame = frame'; code; budget = c.budget - 1}).code
-+      in run code'
++    | Frame (n, function', frame', code'), vs ->
++      let active_function = ref function' in
++      let active_frame = ref frame' in
++      let activation = ref code' in
++      let code = ref code' in
++      let result = ref None in
++      let finish value = result := Some value in
++      while Option.is_none !result do
++        let tail_invoked =
++          try
++            while Option.is_none !result do
++              match code_next !code with
++              | vs', None -> finish (take n vs' e.at @ vs, [])
++              | _, Some {it = Returning vs0; _} ->
++                finish (take n vs0 e.at @ vs, [])
++              | _, Some {it = Breaking (0l, vs0); _} ->
++                finish (take n vs0 e.at @ vs, [])
++              | _, Some {it = Breaking (k, vs0); at} ->
++                finish (vs, [Breaking (Int32.sub k 1l, vs0) @@ at])
++              | _, Some {it = ReturningInvoke (args, f); at} ->
++                begin match ast_activation f args with
++                | Some (_n2, next_frame, next_code) ->
++                  active_function := f;
++                  active_frame := next_frame;
++                  activation := next_code;
++                  code := next_code
++                | None -> finish (args @ vs, [Invoke f @@ at])
++                end
++              | _, Some e' when is_jumping e' -> finish (vs, [e'])
++              | _ ->
++                code := (step
++                  {frame = !active_frame; code = !code;
++                   budget = c.budget - 1}).code
++            done;
++            false
++          with TailInvoke -> true
++        in
++        if tail_invoked then begin
++          let args, f, at = tail_request () in
++          begin match reset_tail_frame f args !active_frame with
++          | Some (frame, body) ->
++            let restarted = restart_activation body !activation in
++            active_function := f;
++            active_frame := frame;
++            code := restarted
++          | None -> finish (args @ vs, [Invoke f @@ at])
++          end
++        end
++      done;
++      Option.get !result
 
      | Handler (n, cs, code'), vs ->
 -      let c' = step {c with code = code'} in
@@ -1036,15 +1203,21 @@ index ab78027fe..2640c79d4 100644
 
      | Invoke f, vs when c.budget = 0 ->
        Exhaustion.error e.at "call stack exhausted"
-@@ -1125,29 +1562,100 @@ let rec step (c : config) : config =
-         let ts = List.map (fun {it = Local t; _} -> t) ls in
-         let lvs = List.(rev (map Option.some args) @ map default_value ts) in
-         let frame' = {inst = m; locals = List.map ref lvs} in
+@@ -1119,35 +1702,100 @@ let rec step (c : config) : config =
+       let n1, n2 = List.length ts1, List.length ts2 in
+       let args, vs' = split n1 vs e.at in
+       (match f with
+-      | Func.AstFunc (_, inst', func) ->
+-        let Func (_x, ls, es) = func.it in
+-        let m = Lib.Promise.value inst' in
+-        let ts = List.map (fun {it = Local t; _} -> t) ls in
+-        let lvs = List.(rev (map Option.some args) @ map default_value ts) in
+-        let frame' = {inst = m; locals = List.map ref lvs} in
 -        let instr' = [Label (n2, [], ([], List.map plain es)) @@ func.at] in
 -        vs', [Frame (n2, frame', ([], instr')) @@ e.at]
-+        let instr' = Label
-+          (n2, [||], code_of_array [] (function_instructions func es)) @@ func.at in
-+        vs', [Frame (n2, frame', code_of_array [] [|instr'|]) @@ e.at]
++      | Func.AstFunc _ ->
++        let _, frame', code = Option.get (ast_activation f args) in
++        vs', [Frame (n2, f, frame', code) @@ e.at]
 
        | Func.HostFunc (_, f) ->
 -        (try List.rev (f (List.rev args)) @ vs', []
@@ -1147,7 +1320,7 @@ index ab78027fe..2640c79d4 100644
 
 
  (* Functions & Constants *)
-@@ -1168,7 +1676,7 @@ let invoke (func : funcinst) (vs : value list) : value list =
+@@ -1168,7 +1816,7 @@ let invoke (func : funcinst) (vs : value list) : value list =
      Exhaustion.error at "call stack exhausted"
 
  let eval_const (inst : moduleinst) (const : const) : value =
@@ -1156,7 +1329,38 @@ index ab78027fe..2640c79d4 100644
    match eval c with
    | [v] -> v
    | vs -> Crash.error const.at "wrong number of results on stack"
-@@ -1303,24 +1811,41 @@ let init_list2 f xs ys (inst : moduleinst) : moduleinst =
+@@ -1227,10 +1875,9 @@ let init_table (inst : moduleinst) (tab : table) : moduleinst =
+   let tab = Table.alloc tt' r in
+   {inst with tables = inst.tables @ [tab]}
+
+-let init_func (inst : moduleinst) (f : func) : moduleinst =
++let alloc_func (inst : moduleinst) (f : func) : funcinst =
+   let Func (x, _, _) = f.it in
+-  let func = Func.alloc (type_ inst x) (Lib.Promise.make ()) f in
+-  {inst with funcs = inst.funcs @ [func]}
++  Func.alloc (type_ inst x) (Lib.Promise.make ()) f
+
+ let init_data (inst : moduleinst) (data : data) : moduleinst =
+   let Data (bs, _dmode) = data.it in
+@@ -1242,7 +1889,7 @@ let init_elem (inst : moduleinst) (elem : elem) : moduleinst =
+   let elem = Elem.alloc (List.map (fun c -> as_ref (eval_const inst c)) cs) in
+   {inst with elems = inst.elems @ [elem]}
+
+-let init_export (inst : moduleinst) (ex : export) : moduleinst =
++let resolve_export (inst : moduleinst) (ex : export) : name * externinst =
+   let Export (name, xx) = ex.it in
+   let ext =
+     match xx.it with
+@@ -1252,7 +1899,7 @@ let init_export (inst : moduleinst) (ex : export) : moduleinst =
+     | TableX x -> ExternTable (table inst x)
+     | FuncX x -> ExternFunc (func inst x)
+   in
+-  {inst with exports = inst.exports @ [(name, ext)]}
++  name, ext
+
+
+ let init_funcinst (inst : moduleinst) (func : funcinst) =
+@@ -1303,24 +1950,42 @@ let init_list2 f xs ys (inst : moduleinst) : moduleinst =
    List.fold_left2 f inst xs ys
 
  let init (m : module_) (exts : externinst list) : moduleinst =
@@ -1187,7 +1391,8 @@ index ab78027fe..2640c79d4 100644
 +  profile "imports linked";
 +  let inst = init_list init_tag m.it.tags inst in
 +  profile "tags allocated";
-+  let inst = init_list init_func m.it.funcs inst in
++  let funcs = List.map (alloc_func inst) m.it.funcs in
++  let inst = {inst with funcs = inst.funcs @ funcs} in
 +  profile "functions allocated";
 +  let inst = init_list init_global m.it.globals inst in
 +  profile "globals initialized";
@@ -1199,7 +1404,7 @@ index ab78027fe..2640c79d4 100644
 +  profile "data segments allocated";
 +  let inst = init_list init_elem m.it.elems inst in
 +  profile "element segments allocated";
-+  let inst = init_list init_export m.it.exports inst in
++  let inst = {inst with exports = List.map (resolve_export inst) m.it.exports} in
 +  profile "exports linked";
    List.iter (init_funcinst inst) inst.funcs;
 +  profile "function owners linked";
@@ -1212,9 +1417,9 @@ index ab78027fe..2640c79d4 100644
 +    (config_array inst [] (plain_array (es_elem @ es_data @ es_start))));
 +  profile "segments and start applied";
    inst
-diff --git c/interpreter/exec/eval.mli w/interpreter/exec/eval.mli
+diff --git i/interpreter/exec/eval.mli w/interpreter/exec/eval.mli
 index 033f5c5e2..855e652c2 100644
---- c/interpreter/exec/eval.mli
+--- i/interpreter/exec/eval.mli
 +++ w/interpreter/exec/eval.mli
 @@ -7,5 +7,26 @@ exception Crash of Source.region * string
  exception Exhaustion of Source.region * string
@@ -1243,9 +1448,9 @@ index 033f5c5e2..855e652c2 100644
 +
  val init : Ast.module_ -> externinst list -> moduleinst (* raises Link, Trap, Exception *)
  val invoke : funcinst -> value list -> value list (* raises Trap, Exception *)
-diff --git c/interpreter/host/env.ml w/interpreter/host/env.ml
+diff --git i/interpreter/host/env.ml w/interpreter/host/env.ml
 index 0688131a6..78e2dceb6 100644
---- c/interpreter/host/env.ml
+--- i/interpreter/host/env.ml
 +++ w/interpreter/host/env.ml
 @@ -5,39 +5,29 @@
   *)
@@ -1307,10 +1512,97 @@ index 0688131a6..78e2dceb6 100644
 +    Some (ExternFunc
 +      (Func.alloc_host (deftype_of_typeuse ut) (Posix.request name)))
    | _ -> None
-diff --git c/interpreter/main/main.ml w/interpreter/main/main.ml
-index cab4a5638..70b1a4286 100644
---- c/interpreter/main/main.ml
+diff --git i/interpreter/host/spectest.ml w/interpreter/host/spectest.ml
+index ec29602cc..be60ecd45 100644
+--- i/interpreter/host/spectest.ml
++++ w/interpreter/host/spectest.ml
+@@ -19,15 +19,15 @@ let global (GlobalT (_, t) as gt) =
+     | BotT -> assert false
+   in Some (ExternGlobal (Global.alloc gt v))
+
+-let table =
++let alloc_table () =
+   let tt = TableT (I32AT, {min = 10L; max = Some 20L}, (Null, FuncHT)) in
+   Some (ExternTable (Table.alloc tt NullRef))
+
+-let table64 =
++let alloc_table64 () =
+   let tt = TableT (I64AT, {min = 10L; max = Some 20L}, (Null, FuncHT)) in
+   Some (ExternTable (Table.alloc tt NullRef))
+
+-let memory =
++let alloc_memory () =
+   let mt = MemoryT (I32AT, {min = 1L; max = Some 2L}) in
+   Some (ExternMemory (Memory.alloc mt))
+
+@@ -45,20 +45,35 @@ let print _ts1 _ts2 vs =
+   []
+
+
+-let lookup name t =
+-  match Utf8.encode name, t with
+-  | "print", _ -> func print [] []
+-  | "print_i32", _ -> func print [NumT I32T] []
+-  | "print_i64", _ -> func print [NumT I64T] []
+-  | "print_f32", _ -> func print [NumT F32T] []
+-  | "print_f64", _ -> func print [NumT F64T] []
+-  | "print_i32_f32", _ -> func print [NumT I32T; NumT F32T] []
+-  | "print_f64_f64", _ -> func print [NumT F64T; NumT F64T] []
+-  | "global_i32", _ -> global (GlobalT (Cons, NumT I32T))
+-  | "global_i64", _ -> global (GlobalT (Cons, NumT I64T))
+-  | "global_f32", _ -> global (GlobalT (Cons, NumT F32T))
+-  | "global_f64", _ -> global (GlobalT (Cons, NumT F64T))
+-  | "table", _ -> table
+-  | "table64", _ -> table64
+-  | "memory", _ -> memory
+-  | _ -> None
++let create () =
++  let table = alloc_table () in
++  let table64 = alloc_table64 () in
++  let memory = alloc_memory () in
++  let print_ = func print [] [] in
++  let print_i32 = func print [NumT I32T] [] in
++  let print_i64 = func print [NumT I64T] [] in
++  let print_f32 = func print [NumT F32T] [] in
++  let print_f64 = func print [NumT F64T] [] in
++  let print_i32_f32 = func print [NumT I32T; NumT F32T] [] in
++  let print_f64_f64 = func print [NumT F64T; NumT F64T] [] in
++  let global_i32 = global (GlobalT (Cons, NumT I32T)) in
++  let global_i64 = global (GlobalT (Cons, NumT I64T)) in
++  let global_f32 = global (GlobalT (Cons, NumT F32T)) in
++  let global_f64 = global (GlobalT (Cons, NumT F64T)) in
++  fun name t ->
++    match Utf8.encode name, t with
++    | "print", _ -> print_
++    | "print_i32", _ -> print_i32
++    | "print_i64", _ -> print_i64
++    | "print_f32", _ -> print_f32
++    | "print_f64", _ -> print_f64
++    | "print_i32_f32", _ -> print_i32_f32
++    | "print_f64_f64", _ -> print_f64_f64
++    | "global_i32", _ -> global_i32
++    | "global_i64", _ -> global_i64
++    | "global_f32", _ -> global_f32
++    | "global_f64", _ -> global_f64
++    | "table", _ -> table
++    | "table64", _ -> table64
++    | "memory", _ -> memory
++    | _ -> None
+diff --git i/interpreter/main/main.ml w/interpreter/main/main.ml
+index cab4a5638..d1031d4ae 100644
+--- i/interpreter/main/main.ml
 +++ w/interpreter/main/main.ml
+@@ -8,8 +8,8 @@ let all_handlers = [
+ ]
+
+ let configure custom_handlers =
+-  Run.register_virtual (Utf8.decode "spectest") Spectest.lookup;
+-  Run.register_virtual (Utf8.decode "env") Env.lookup;
++  Run.register_virtual_factory (Utf8.decode "spectest") Spectest.create;
++  Run.register_virtual_factory (Utf8.decode "env") (fun () -> Env.lookup);
+   List.iter Custom.register custom_handlers
+
+ let banner () =
 @@ -20,6 +20,13 @@ let usage = "Usage: " ^ name ^ " [option] [file ...]"
  let args = ref []
  let add_arg source = args := !args @ [source]
@@ -1332,7 +1624,7 @@ index cab4a5638..70b1a4286 100644
 +  "-q", Arg.Int (fun n -> quantum := n),
 +    " configure cooperative scheduler instruction quantum (default is 10000)";
 +  "--schedule", Arg.Set schedule,
-+    " run all inputs as isolated cooperative threads";
++    " run all inputs as isolated cooperative test sandboxes";
 +  "--fail-last", Arg.Set fail_last,
 +    " report the final scheduled input as a known failure without executing it";
 +  "--control-page", Arg.Set control_page,
@@ -1340,7 +1632,7 @@ index cab4a5638..70b1a4286 100644
 +  "--browser-schedule", Arg.Set browser_schedule,
 +    " yield each scheduler slice to the JavaScript event loop";
 +  "--threads", Arg.Int (fun n -> max_threads := n),
-+    " limit simultaneously runnable scheduled inputs";
++    " limit simultaneously runnable test sandboxes (compatibility name)";
    "-w", Arg.Int (fun n -> Flags.width := n),
      " configure output width (default is " ^ string_of_int !Flags.width ^ ")";
    "-c", Arg.String add_custom,
@@ -1426,7 +1718,7 @@ index cab4a5638..70b1a4286 100644
 +    let active = ref 0 in
 +    let make_task id source =
 +      let group = {result_id = id; live = 1; successful = true} in
-+      {id; group; state = Run.fork_state initial_state; waiting = None;
++      {id; group; state = Run.isolate_state initial_state; waiting = None;
 +       resume = (fun () -> run_slice (fun () ->
 +         try Finished (Run.run_string source)
 +         with Posix.Terminated status -> Finished (status = 0)))}
@@ -1587,9 +1879,9 @@ index cab4a5638..70b1a4286 100644
      flush_all ();
      prerr_endline
        (Sys.argv.(0) ^ ": uncaught exception " ^ Printexc.to_string exn);
-diff --git c/interpreter/runtime/elem.ml w/interpreter/runtime/elem.ml
+diff --git i/interpreter/runtime/elem.ml w/interpreter/runtime/elem.ml
 index 101474f97..d0b5be451 100644
---- c/interpreter/runtime/elem.ml
+--- i/interpreter/runtime/elem.ml
 +++ w/interpreter/runtime/elem.ml
 @@ -10,4 +10,9 @@ let load seg i =
    if i < 0L || i >= Lib.List64.length !seg then raise Bounds;
@@ -1601,9 +1893,9 @@ index 101474f97..d0b5be451 100644
 +  Lib.List64.take len (Lib.List64.drop offset !seg)
 +
  let drop seg = seg := []
-diff --git c/interpreter/runtime/elem.mli w/interpreter/runtime/elem.mli
+diff --git i/interpreter/runtime/elem.mli w/interpreter/runtime/elem.mli
 index d61442907..be613aa98 100644
---- c/interpreter/runtime/elem.mli
+--- i/interpreter/runtime/elem.mli
 +++ w/interpreter/runtime/elem.mli
 @@ -8,4 +8,5 @@ exception Bounds
  val alloc : ref_ list -> elem
@@ -1611,9 +1903,9 @@ index d61442907..be613aa98 100644
  val load : elem -> address -> ref_ (* raises Bounds *)
 +val load_range : elem -> address -> int64 -> ref_ list (* raises Bounds *)
  val drop : elem -> unit
-diff --git c/interpreter/runtime/i31.ml w/interpreter/runtime/i31.ml
+diff --git i/interpreter/runtime/i31.ml w/interpreter/runtime/i31.ml
 index 402304d26..45ae609dc 100644
---- c/interpreter/runtime/i31.ml
+--- i/interpreter/runtime/i31.ml
 +++ w/interpreter/runtime/i31.ml
 @@ -1,17 +1,16 @@
  open Types
@@ -1644,9 +1936,9 @@ index 402304d26..45ae609dc 100644
 -    | I31Ref i -> "(i31 " ^ string_of_int i ^ ")"
 +    | I31Ref i -> "(i31 " ^ Int32.to_string i ^ ")"
      | r -> string_of_ref' r
-diff --git c/interpreter/runtime/i31.mli w/interpreter/runtime/i31.mli
+diff --git i/interpreter/runtime/i31.mli w/interpreter/runtime/i31.mli
 index 7b5c20092..b5fc46694 100644
---- c/interpreter/runtime/i31.mli
+--- i/interpreter/runtime/i31.mli
 +++ w/interpreter/runtime/i31.mli
 @@ -1,6 +1,6 @@
  open Value
@@ -1656,9 +1948,9 @@ index 7b5c20092..b5fc46694 100644
  type t = i31
 
  type ref_ += I31Ref of i31
-diff --git c/interpreter/runtime/memory.ml w/interpreter/runtime/memory.ml
+diff --git i/interpreter/runtime/memory.ml w/interpreter/runtime/memory.ml
 index 7914ebecc..c423c6369 100644
---- c/interpreter/runtime/memory.ml
+--- i/interpreter/runtime/memory.ml
 +++ w/interpreter/runtime/memory.ml
 @@ -49,6 +49,11 @@ let bound mem =
  let size mem =
@@ -1713,9 +2005,9 @@ index 7914ebecc..c423c6369 100644
 
  (* Typed accessors *)
 
-diff --git c/interpreter/runtime/memory.mli w/interpreter/runtime/memory.mli
+diff --git i/interpreter/runtime/memory.mli w/interpreter/runtime/memory.mli
 index 5bbc8a77e..be906df0d 100644
---- c/interpreter/runtime/memory.mli
+--- i/interpreter/runtime/memory.mli
 +++ w/interpreter/runtime/memory.mli
 @@ -17,6 +17,7 @@ exception OutOfMemory
  val page_size : int64
@@ -1735,9 +2027,9 @@ index 5bbc8a77e..be906df0d 100644
 
 
  (* Typed accessors *)
-diff --git c/interpreter/runtime/table.ml w/interpreter/runtime/table.ml
+diff --git i/interpreter/runtime/table.ml w/interpreter/runtime/table.ml
 index 7708bcab4..d4895da2a 100644
---- c/interpreter/runtime/table.ml
+--- i/interpreter/runtime/table.ml
 +++ w/interpreter/runtime/table.ml
 @@ -73,7 +73,41 @@ let store tab i r =
    Lib.Array64.set tab.content i r
@@ -1784,9 +2076,9 @@ index 7708bcab4..d4895da2a 100644
 +      i := Int64.add !i 1L
 +    done
 +  end
-diff --git c/interpreter/runtime/table.mli w/interpreter/runtime/table.mli
+diff --git i/interpreter/runtime/table.mli w/interpreter/runtime/table.mli
 index f5d2d84c1..ba5e9b548 100644
---- c/interpreter/runtime/table.mli
+--- i/interpreter/runtime/table.mli
 +++ w/interpreter/runtime/table.mli
 @@ -24,3 +24,6 @@ val grow : table -> size -> ref_ -> unit
  val load : table -> address -> ref_ (* raises Bounds *)
@@ -1795,9 +2087,9 @@ index f5d2d84c1..ba5e9b548 100644
 +val fill : table -> address -> int64 -> ref_ -> unit (* raises Type, Bounds *)
 +val copy : table -> address -> table -> address -> int64 -> unit
 +  (* raises Bounds *)
-diff --git c/interpreter/script/run.ml w/interpreter/script/run.ml
+diff --git i/interpreter/script/run.ml w/interpreter/script/run.ml
 index 13a759892..ac376c4c5 100644
---- c/interpreter/script/run.ml
+--- i/interpreter/script/run.ml
 +++ w/interpreter/script/run.ml
 @@ -26,6 +26,7 @@ struct
    let validate_with_custom (m, cs) =
@@ -1807,9 +2099,9 @@ index 13a759892..ac376c4c5 100644
 
    let instantiate m ims =
      try Ok (result Eval.init m ims) with
-diff --git c/interpreter/script/runner.ml w/interpreter/script/runner.ml
-index 0ff9fc0c0..39c55d94a 100644
---- c/interpreter/script/runner.ml
+diff --git i/interpreter/script/runner.ml w/interpreter/script/runner.ml
+index 0ff9fc0c0..9dcd3aab2 100644
+--- i/interpreter/script/runner.ml
 +++ w/interpreter/script/runner.ml
 @@ -28,7 +28,11 @@ exception Crash = Crash.Error
  exception Exception = Exception.Error
@@ -1833,25 +2125,41 @@ index 0ff9fc0c0..39c55d94a 100644
    let lexbuf = Lexing.from_string string in
    trace "Parsing...";
    input_script "string" lexbuf run
-@@ -314,6 +318,33 @@ let modules : (Ast.module_ * Custom.section list) Map.t ref = ref Map.empty
+@@ -312,7 +316,48 @@ let quote : script ref = ref []
+ let scripts : script Map.t ref = ref Map.empty
+ let modules : (Ast.module_ * Custom.section list) Map.t ref = ref Map.empty
  let instances : Engine.moduleinst Map.t ref = ref Map.empty
- let registry : (Ast.name -> Types.externtype -> Engine.externinst option) Map.t ref = ref Map.empty
-
+-let registry : (Ast.name -> Types.externtype -> Engine.externinst option) Map.t ref = ref Map.empty
++type virtual_lookup = Ast.name -> Types.externtype -> Engine.externinst option
++type virtual_factory = unit -> virtual_lookup
++let registry : virtual_lookup Map.t ref = ref Map.empty
++let virtuals : virtual_factory Map.t ref = ref Map.empty
++
 +type state =
 +{
 +  quote : script;
 +  scripts : script Map.t;
 +  modules : (Ast.module_ * Custom.section list) Map.t;
 +  instances : Engine.moduleinst Map.t;
-+  registry : (Ast.name -> Types.externtype -> Engine.externinst option) Map.t;
++  registry : virtual_lookup Map.t;
++  virtuals : virtual_factory Map.t;
 +  eval : Eval.state;
 +}
 +
 +let save_state () =
 +  {quote = !quote; scripts = !scripts; modules = !modules;
-+   instances = !instances; registry = !registry; eval = Eval.save_state ()}
++   instances = !instances; registry = !registry; virtuals = !virtuals;
++   eval = Eval.save_state ()}
 +
-+let fork_state state = {state with eval = Eval.fork_state state.eval}
++let instantiate_virtuals factories =
++  Map.fold (fun name factory result -> Map.add name (factory ()) result)
++    factories Map.empty
++
++let isolate_state state =
++  {quote = []; scripts = Map.empty; modules = Map.empty; instances = Map.empty;
++   registry = instantiate_virtuals state.virtuals; virtuals = state.virtuals;
++   eval = Eval.fork_state state.eval}
++
 +let with_eval_state state eval = {state with eval}
 +let wait_ready state wait = Eval.wait_ready state.eval wait
 +let next_timer_delay_ms state = Eval.next_timer_delay_ms state.eval
@@ -1862,14 +2170,20 @@ index 0ff9fc0c0..39c55d94a 100644
 +  modules := state.modules;
 +  instances := state.instances;
 +  registry := state.registry;
++  virtuals := state.virtuals;
 +  Eval.restore_state state.eval
-+
+
  let bind category map x_opt y =
    let map' =
-     match x_opt with
-@@ -353,8 +384,12 @@ let register_virtual name lookup =
+@@ -352,9 +397,18 @@ let lookup_import (Types.ImportT (module_name, item_name, xt)) at =
+ let register_virtual name lookup =
    registry := Map.add (Utf8.encode name) lookup !registry
 
++let register_virtual_factory name factory =
++  let encoded_name = Utf8.encode name in
++  virtuals := Map.add encoded_name factory !virtuals;
++  registry := Map.add encoded_name (factory ()) !registry
++
  let register_instance name inst =
 -  register_virtual name
 -    (fun item_name _xt -> Engine.module_export inst item_name)
@@ -1882,7 +2196,7 @@ index 0ff9fc0c0..39c55d94a 100644
 
 
  (* Running *)
-@@ -393,8 +428,10 @@ let rec run_definition def : Ast.module_ * Custom.section list =
+@@ -393,8 +447,10 @@ let rec run_definition def : Ast.module_ * Custom.section list =
      run_definition def'
 
  let run_instantiation m =
@@ -1894,11 +2208,11 @@ index 0ff9fc0c0..39c55d94a 100644
    match Engine.instantiate m imports with
    | Ok r -> result r
    | Error (at, msg) -> Link.error at msg
-diff --git c/interpreter/script/runner.mli w/interpreter/script/runner.mli
-index 86e8ac8bd..fc0347d50 100644
---- c/interpreter/script/runner.mli
+diff --git i/interpreter/script/runner.mli w/interpreter/script/runner.mli
+index 86e8ac8bd..b920c9a06 100644
+--- i/interpreter/script/runner.mli
 +++ w/interpreter/script/runner.mli
-@@ -1,5 +1,7 @@
+@@ -1,14 +1,26 @@
  module Make (Engine : Embed.Engine) :
  sig
 +  type state
@@ -1906,12 +2220,17 @@ index 86e8ac8bd..fc0347d50 100644
    val register_instance : Ast.name -> Engine.moduleinst -> unit
    val register_virtual : Ast.name ->
      (Ast.name -> Types.externtype -> Engine.externinst option) ->
-@@ -9,6 +11,13 @@ sig
+     unit
++  val register_virtual_factory : Ast.name ->
++    (unit -> Ast.name -> Types.externtype -> Engine.externinst option) ->
++    unit
+
+   val run_string : string -> bool
    val run_file : string -> bool
    val run_stdin : unit -> unit
 
 +  val save_state : unit -> state
-+  val fork_state : state -> state
++  val isolate_state : state -> state
 +  val with_eval_state : state -> Eval.state -> state
 +  val wait_ready : state -> Posix.wait -> bool
 +  val next_timer_delay_ms : state -> int64 option
@@ -1920,9 +2239,30 @@ index 86e8ac8bd..fc0347d50 100644
    (* Currently used by SpecTec AL runner, should be ported to functor *)
    val assert_message : Source.region -> string -> string -> string -> unit
    val assert_results :
-diff --git c/interpreter/valid/valid.ml w/interpreter/valid/valid.ml
+diff --git i/interpreter/util/lib.ml w/interpreter/util/lib.ml
+index 0d9308994..207eeef0c 100644
+--- i/interpreter/util/lib.ml
++++ w/interpreter/util/lib.ml
+@@ -90,10 +90,12 @@ struct
+     | _::xs -> last xs
+     | [] -> failwith "last"
+
+-  let rec split_last = function
+-    | x::[] -> [], x
+-    | x::xs -> let ys, y = split_last xs in x::ys, y
+-    | [] -> failwith "split_last"
++  let split_last xs =
++    let rec split rev = function
++      | x::[] -> Stdlib.List.rev rev, x
++      | x::xs' -> split (x::rev) xs'
++      | [] -> failwith "split_last"
++    in split [] xs
+
+   let rec index_where p xs = index_where' p xs 0
+   and index_where' p xs i =
+diff --git i/interpreter/valid/valid.ml w/interpreter/valid/valid.ml
 index 819a97fbf..745b83197 100644
---- c/interpreter/valid/valid.ml
+--- i/interpreter/valid/valid.ml
 +++ w/interpreter/valid/valid.ml
 @@ -385,7 +385,8 @@ let check_memop (c : context) (memop : ('t, 's) memop) ty_size get_sz at =
        check_pack sz (ty_size memop.ty) at;
@@ -1934,9 +2274,9 @@ index 819a97fbf..745b83197 100644
      "alignment must not be larger than natural";
    let MemoryT (at_, _lim) = memory c (0l @@ at) in
    if at_ = I32AT then
-diff --git c/interpreter/wasm.opam w/interpreter/wasm.opam
+diff --git i/interpreter/wasm.opam w/interpreter/wasm.opam
 index 9a5057611..658e30412 100644
---- c/interpreter/wasm.opam
+--- i/interpreter/wasm.opam
 +++ w/interpreter/wasm.opam
 @@ -10,10 +10,24 @@ homepage: "https://github.com/WebAssembly/spec"
  bug-reports: "https://github.com/WebAssembly/spec/issues"
@@ -1966,9 +2306,9 @@ index 9a5057611..658e30412 100644
 +  ["dune" "install" "-p" name "--create-install-files" name]
 +]
  dev-repo: "git+https://github.com/WebAssembly/spec.git"
-diff --git c/test/core/run.py w/test/core/run.py
+diff --git i/test/core/run.py w/test/core/run.py
 index bc107b519..29d2dc0d7 100755
---- c/test/core/run.py
+--- i/test/core/run.py
 +++ w/test/core/run.py
 @@ -37,7 +37,7 @@ relaxed_simd_test_files = glob.glob(os.path.join(inputDir, "relaxed-simd", "*.wa
  gc_test_files = glob.glob(os.path.join(inputDir, "gc", "*.wast"))
@@ -2160,7 +2500,7 @@ new file mode 100644
 index 000000000..6e6acabf5
 --- /dev/null
 +++ w/interpreter/host/posix.ml
-@@ -0,0 +1,699 @@
+@@ -0,0 +1,702 @@
 +open Value
 +open Instance
 +
@@ -2273,6 +2613,9 @@ index 000000000..6e6acabf5
 +    true
 +
 +let signal_pending state = state.deliverable
++
++let poll_required state =
++  state.deliverable || Control.is_enabled () || Posix_kernel.has_timers state.process
 +
 +let next_signal state =
 +  if not state.deliverable then None else
@@ -2865,7 +3208,7 @@ new file mode 100644
 index 000000000..c62089934
 --- /dev/null
 +++ w/interpreter/host/posix.mli
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,42 @@
 +open Value
 +open Instance
 +
@@ -2904,6 +3247,7 @@ index 000000000..c62089934
 +val poll_control : state -> unit
 +val queue_signal : state -> int -> bool
 +val signal_pending : state -> bool
++val poll_required : state -> bool
 +val next_signal : state -> (int * signal_action) option
 +val apply_default : state -> int -> default_effect
 +val dispatch : state -> moduleinst -> string -> value list -> result
@@ -2936,7 +3280,7 @@ new file mode 100644
 index 000000000..67fec267b
 --- /dev/null
 +++ w/interpreter/host/posix_kernel.ml
-@@ -0,0 +1,664 @@
+@@ -0,0 +1,667 @@
 +type pid = int32
 +
 +let errno_eperm = 1
@@ -3574,6 +3918,9 @@ index 000000000..67fec267b
 +    !signals
 +  end
 +
++let has_timers process =
++  process.alarm_deadline <> None || process.timer_deadline <> None
++
 +let wait_ready process = function
 +  | Pipe_readable pipe -> pipe.length > 0 || pipe.writers = 0
 +  | Pipe_writable pipe -> pipe.readers = 0 || pipe.length < pipe_capacity pipe
@@ -3606,7 +3953,7 @@ new file mode 100644
 index 000000000..1b1cd6159
 --- /dev/null
 +++ w/interpreter/host/posix_kernel.mli
-@@ -0,0 +1,127 @@
+@@ -0,0 +1,128 @@
 +type pid = int32
 +
 +type exit_cause = Exited of int | Signaled of int
@@ -3701,6 +4048,7 @@ index 000000000..1b1cd6159
 +val set_alarm : process -> int64 -> int64
 +val set_interval_timer : process -> initial_ms:int64 -> interval_ms:int64 -> int64 * int64
 +val poll_timers : process -> int list
++val has_timers : process -> bool
 +val now_ms : process -> int64
 +val wait_ready : process -> wait_reason -> bool
 +val deadline_wait : int64 -> wait_reason
