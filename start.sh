@@ -37,6 +37,13 @@ C_TAIL_POC="$REPO_ROOT/tests/c-tail-poc/run.sh"
 C_TAIL_BUILD="$REPO_ROOT/build/c-tail-poc"
 C_TAIL_GENERATOR="$REPO_ROOT/tools/generate-c-tail-poc.py"
 C_TAIL_HTML="$C_TAIL_BUILD/tail-call-poc.html"
+C_ENGINE_BUILD="$REPO_ROOT/build/c-engine"
+C_ENGINE_RUNNER="$C_ENGINE_BUILD/waste-wast"
+C_ENGINE_WASM="$C_ENGINE_BUILD/waste-wast.wasm"
+C_ENGINE_GENERATOR="$REPO_ROOT/tools/generate-c-engine-tests.py"
+C_ENGINE_HTML="$C_ENGINE_BUILD/browser-tests-c-engine.html"
+C_ENGINE_RELAXED_SIMD_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/relaxed-simd"
+C_ENGINE_DIY_POSIX_TESTS="$REPO_ROOT/tests/diy-posix-test"
 
 SWITCH_NAME="${WASTE_OCAML_SWITCH:-waste-wasm}"
 OCAML_VERSION="${WASTE_OCAML_VERSION:-5.3.0}"
@@ -61,6 +68,7 @@ interpreter to WebAssembly.
   --generate-bash-html
                    generate the self-contained WASTE Bash page
   --c-tail-poc     build native/browser C tail-call proofs and run native benchmark
+  --c-engine-tests build C engine and run relaxed-SIMD spec tests, generate HTML report
   --patch-status   show the Wasm32 compatibility patch status
   --apply-i31      apply the Wasm32 patch (legacy option name)
   --revert-i31     revert the Wasm32 patch (legacy option name)
@@ -115,7 +123,7 @@ check_dependencies() {
   MISSING_OPAM=()
 
   local command_name
-  for command_name in git cc clang make opam bwrap whiptail wasm-as wasm-merge wasm-dis; do
+  for command_name in git cc clang make opam bwrap whiptail wasm-as wasm-merge wasm-dis flex bison; do
     if ! have_command "$command_name"; then
       MISSING_SYSTEM+=("$command_name")
     fi
@@ -881,10 +889,38 @@ run_c_tail_poc() {
     --output "$C_TAIL_HTML" >>"$TEST_LOG" 2>&1
 }
 
+generate_c_engine_tests() {
+  if ! have_command cc || ! have_command make || ! have_command flex ||
+      ! have_command bison || ! have_command python3; then
+    printf 'error: cc, make, flex, bison, and python3 are required for C engine tests\n' >>"$TEST_LOG"
+    return 1
+  fi
+  if [[ ! -d "$C_ENGINE_RELAXED_SIMD_TESTS" ]]; then
+    printf 'error: relaxed-simd tests not found at %s (run: git submodule update --init)\n' \
+      "$C_ENGINE_RELAXED_SIMD_TESTS" >>"$TEST_LOG"
+    return 1
+  fi
+  printf '\n== C engine browser tests (relaxed-SIMD and DIY POSIX) ==\n' >>"$TEST_LOG"
+  make -C "$REPO_ROOT/src/c-engine" \
+    BUILD_DIR="$C_ENGINE_BUILD" \
+    WAST_BUILD_DIR="$C_ENGINE_BUILD" \
+    wast-native >>"$TEST_LOG" 2>&1 || return 1
+  make -C "$REPO_ROOT/src/c-engine" \
+    BUILD_DIR="$C_ENGINE_BUILD" \
+    WAST_BUILD_DIR="$C_ENGINE_BUILD" \
+    wast-browser >>"$TEST_LOG" 2>&1 || return 1
+  python3 "$C_ENGINE_GENERATOR" \
+    --runner "$C_ENGINE_RUNNER" \
+    --wasm "$C_ENGINE_WASM" \
+    --tests "$C_ENGINE_RELAXED_SIMD_TESTS" \
+    --tests "$C_ENGINE_DIY_POSIX_TESTS" \
+    --output "$C_ENGINE_HTML" >>"$TEST_LOG" 2>&1
+}
+
 run_test_group() {
   local group="$1"
   if [[ "$group" != spec && "$group" != tail && "$group" != tail-smoke &&
-        "$group" != isolation && "$group" != c-tail ]] && ! have_command node; then
+        "$group" != isolation && "$group" != c-tail && "$group" != c-engine ]] && ! have_command node; then
     show_message "Runtime tests" "Node.js is required to run the runtime test suites."
     return 1
   fi
@@ -926,6 +962,9 @@ run_test_group() {
     c-tail)
       run_c_tail_poc || status=1
       ;;
+    c-engine)
+      generate_c_engine_tests || status=1
+      ;;
     posix)
       run_logged_test "POSIX control (sequential)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" || status=1
       run_logged_test "POSIX control (threaded)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" threaded || status=1
@@ -942,6 +981,7 @@ run_test_group() {
       ;;
     all)
       run_c_tail_poc || status=1
+      generate_c_engine_tests || status=1
       run_official_core_tests || status=1
       run_sandbox_isolation_tests || status=1
       run_logged_test "POSIX control (sequential)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" || status=1
@@ -971,9 +1011,10 @@ test_suite_menu() {
     local choice
     choice="$(whiptail --title "Runtime test suites" --menu \
       "Tests run locally against the native, sequential, and CPS interpreters." \
-      28 88 11 \
+      28 88 12 \
       all "Run official core, DIY POSIX, libc, and Bash suites" \
       c-tail "Build native/browser C tail-call proof and benchmark" \
+      c-engine "Build C engine and run relaxed-SIMD spec tests" \
       spec "Run the official WebAssembly core suite" \
       isolation "Run scheduled test-sandbox isolation regressions" \
       tail "Run the three official tail-call tests" \
@@ -984,7 +1025,7 @@ test_suite_menu() {
       log "Show the last test log" \
       back "Return to the main menu" 3>&1 1>&2 2>&3)" || return 0
     case "$choice" in
-      all|c-tail|spec|isolation|tail|tail-smoke|posix|libc|bash) run_test_group "$choice" || true ;;
+      all|c-tail|c-engine|spec|isolation|tail|tail-smoke|posix|libc|bash) run_test_group "$choice" || true ;;
       log)
         if [[ -s "$TEST_LOG" ]]; then
           whiptail --title "Last test log" --textbox "$TEST_LOG" 28 100
@@ -1033,9 +1074,10 @@ main_menu() {
     local choice
     patch_state="$(i31_patch_status)"
     choice="$(whiptail --title "OCaml to WebAssembly" --menu \
-      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 29 92 11 \
+      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 29 92 12 \
       compile "Compile the OCaml interpreter to Wasm" \
       c-tail "Build native/browser C tail-call proof and benchmark" \
+      c-engine "Build C engine and run relaxed-SIMD spec tests" \
       libc "Build waste-libc.wasm and tests" \
       html "Generate embedded browser test dashboard" \
       bash "Generate self-contained WASTE Bash page" \
@@ -1049,6 +1091,7 @@ main_menu() {
     case "$choice" in
       compile) compile_interpreter || true ;;
       c-tail) run_test_group c-tail || true ;;
+      c-engine) generate_c_engine_tests || true ;;
       libc) build_waste_libc || true ;;
       html) generate_browser_test_html || true ;;
       bash) generate_bash_html || true ;;
@@ -1094,6 +1137,10 @@ main() {
     --generate-html) generate_browser_test_html ;;
     --generate-bash-html) generate_bash_html ;;
     --c-tail-poc) run_test_group c-tail ;;
+    --c-engine-tests)
+      : >"$TEST_LOG"
+      generate_c_engine_tests
+      printf '\nFinished: %s\n' "$(date --iso-8601=seconds)" >>"$TEST_LOG" ;;
     --patch-status) i31_patch_status ;;
     --apply-i31) apply_i31_patch ;;
     --revert-i31) revert_i31_patch ;;
