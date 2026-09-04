@@ -44,6 +44,7 @@ C_ENGINE_GENERATOR="$REPO_ROOT/tools/generate-c-engine-tests.py"
 C_ENGINE_HTML="$C_ENGINE_BUILD/browser-tests-c-engine.html"
 C_ENGINE_RELAXED_SIMD_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/relaxed-simd"
 C_ENGINE_DIY_POSIX_TESTS="$REPO_ROOT/tests/diy-posix-test"
+C_ENGINE_BROWSER_TEST="$REPO_ROOT/tests/c-engine-browser-runtime.cjs"
 
 SWITCH_NAME="${WASTE_OCAML_SWITCH:-waste-wasm}"
 OCAML_VERSION="${WASTE_OCAML_VERSION:-5.3.0}"
@@ -891,8 +892,8 @@ run_c_tail_poc() {
 
 generate_c_engine_tests() {
   if ! have_command cc || ! have_command make || ! have_command flex ||
-      ! have_command bison || ! have_command python3; then
-    printf 'error: cc, make, flex, bison, and python3 are required for C engine tests\n' >>"$TEST_LOG"
+      ! have_command bison || ! have_command python3 || ! have_command node; then
+    printf 'error: cc, make, flex, bison, python3, and node are required for C engine tests\n' >>"$TEST_LOG"
     return 1
   fi
   if [[ ! -d "$C_ENGINE_RELAXED_SIMD_TESTS" ]]; then
@@ -914,7 +915,8 @@ generate_c_engine_tests() {
     --wasm "$C_ENGINE_WASM" \
     --tests "$C_ENGINE_RELAXED_SIMD_TESTS" \
     --tests "$C_ENGINE_DIY_POSIX_TESTS" \
-    --output "$C_ENGINE_HTML" >>"$TEST_LOG" 2>&1
+    --output "$C_ENGINE_HTML" >>"$TEST_LOG" 2>&1 || return 1
+  node "$C_ENGINE_BROWSER_TEST" "$C_ENGINE_HTML" >>"$TEST_LOG" 2>&1
 }
 
 run_test_group() {
@@ -1139,8 +1141,10 @@ main() {
     --c-tail-poc) run_test_group c-tail ;;
     --c-engine-tests)
       : >"$TEST_LOG"
-      generate_c_engine_tests
-      printf '\nFinished: %s\n' "$(date --iso-8601=seconds)" >>"$TEST_LOG" ;;
+      c_engine_status=0
+      generate_c_engine_tests || c_engine_status=$?
+      printf '\nFinished: %s\n' "$(date --iso-8601=seconds)" >>"$TEST_LOG"
+      return "$c_engine_status" ;;
     --patch-status) i31_patch_status ;;
     --apply-i31) apply_i31_patch ;;
     --revert-i31) revert_i31_patch ;;

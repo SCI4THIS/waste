@@ -11,6 +11,7 @@ import base64
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 import datetime
 
@@ -47,6 +48,122 @@ def script_json(value) -> str:
         .replace("<", "\\u003c")
         .replace(">", "\\u003e")
     )
+
+
+def tokenize_wast(source: str) -> list[str]:
+    """Tokenize the small, ordinary-WAT subset used by repository DIY probes."""
+    tokens = []
+    i = 0
+    while i < len(source):
+        if source.startswith(";;", i):
+            i = source.find("\n", i)
+            if i < 0:
+                break
+        elif source.startswith("(;", i):
+            depth = 1
+            i += 2
+            while depth and i < len(source):
+                if source.startswith("(;", i): depth += 1; i += 2
+                elif source.startswith(";)", i): depth -= 1; i += 2
+                else: i += 1
+        elif source[i].isspace():
+            i += 1
+        elif source[i] in "()":
+            tokens.append(source[i]); i += 1
+        elif source[i] == '"':
+            start = i
+            i += 1
+            while i < len(source):
+                if source[i] == "\\": i += 2
+                elif source[i] == '"': i += 1; break
+                else: i += 1
+            tokens.append(source[start:i])
+        else:
+            start = i
+            while i < len(source) and not source[i].isspace() and source[i] not in "()":
+                i += 1
+            tokens.append(source[start:i])
+    return tokens
+
+
+def parse_wast_forms(source: str):
+    tokens = tokenize_wast(source)
+    pos = 0
+    def one():
+        nonlocal pos
+        if pos >= len(tokens): raise ValueError("unexpected end of WAST")
+        token = tokens[pos]; pos += 1
+        if token != "(": return token
+        result = []
+        while pos < len(tokens) and tokens[pos] != ")": result.append(one())
+        if pos >= len(tokens): raise ValueError("unterminated WAST form")
+        pos += 1
+        return result
+    forms = []
+    while pos < len(tokens): forms.append(one())
+    return forms
+
+
+def wat_text(node) -> str:
+    if isinstance(node, str): return node
+    return "(" + " ".join(wat_text(item) for item in node) + ")"
+
+
+def const_spec(node) -> dict:
+    if not isinstance(node, list) or len(node) != 2 or node[0] not in ("i32.const", "i64.const"):
+        raise ValueError(f"unsupported DIY constant: {wat_text(node)}")
+    return {"type": node[0][:3], "value": int(node[1], 0)}
+
+
+def invoke_spec(node) -> dict:
+    if not isinstance(node, list) or not node or node[0] != "invoke":
+        raise ValueError(f"unsupported DIY action: {wat_text(node)}")
+    at = 1
+    module = None
+    if at < len(node) and isinstance(node[at], str) and node[at].startswith("$"):
+        module = node[at][1:]; at += 1
+    name = node[at].strip('"'); at += 1
+    return {"module": module, "func": name, "args": [const_spec(x) for x in node[at:]]}
+
+
+def run_wasm_as(module, wasm_as: str) -> str:
+    # POSIX imports need access to the module's otherwise-private memory.
+    if any(isinstance(x, list) and x[:2] == ["memory", "1"] for x in module[1:]):
+        module.append(["export", '"__waste_memory"', ["memory", "0"]])
+    with tempfile.TemporaryDirectory(prefix="waste-c-engine-") as temp:
+        wat = Path(temp) / "module.wat"
+        wasm = Path(temp) / "module.wasm"
+        wat.write_text(wat_text(module), encoding="utf-8")
+        result = subprocess.run([
+            wasm_as, "--enable-bulk-memory", "--enable-bulk-memory-opt",
+            "--enable-reference-types", str(wat), "-o", str(wasm)
+        ], capture_output=True, text=True)
+        if result.returncode:
+            raise ValueError(result.stderr.strip() or "wasm-as failed")
+        return base64.b64encode(wasm.read_bytes()).decode("ascii")
+
+
+def build_diy_spec(wast_file: Path, wasm_as: str) -> dict:
+    """Compile complete DIY scripts; browser-native Wasm supplies the guest tier."""
+    forms = parse_wast_forms(wast_file.read_text(encoding="utf-8"))
+    modules = []
+    steps = []
+    current = None
+    for form in forms:
+        if not isinstance(form, list) or not form: continue
+        if form[0] == "module":
+            module_id = form[1][1:] if len(form) > 1 and isinstance(form[1], str) and form[1].startswith("$") else None
+            modules.append({"id": module_id, "wasmB64": run_wasm_as(form, wasm_as)})
+            current = module_id
+        elif form[0] == "invoke":
+            action = invoke_spec(form); action["expect"] = []
+            steps.append(action)
+        elif form[0] == "assert_return":
+            action = invoke_spec(form[1]); action["expect"] = [const_spec(x) for x in form[2:]]
+            steps.append(action)
+    if not modules or not steps:
+        raise ValueError("DIY script produced no modules or actions")
+    return {"file": wast_file.name, "mode": "browser-native", "modules": modules, "steps": steps}
 
 
 HTML = r'''<!doctype html>
@@ -193,8 +310,9 @@ HTML = r'''<!doctype html>
   <main>
     <div class="notice">
       Tests run in Web Workers using the pre-compiled C engine (<code>waste-wast.wasm</code>).
-      Each test file gets its own Worker instance. Assertions execute using the WASTE C executor
-      with relaxed-SIMD support; results are checked against the spec alternatives.
+      Each test file gets its own Worker instance. Relaxed-SIMD assertions use the WASTE C executor.
+      Repository DIY modules are assembled ahead of time and execute in the browser Wasm tier with
+      a sandbox-local compatibility kernel while the corresponding C executor support is developed.
       Unsupported WAST syntax and engine features are reported as failures, never passes.
     </div>
     <div id="groups"></div>
@@ -226,6 +344,113 @@ HTML = r'''<!doctype html>
 
 const FLAT_SIZE = 33;
 
+function decodeB64(text) {
+  const raw = atob(text), bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
+
+async function runBrowserNative(testSpec) {
+  if (testSpec.error) throw new Error(testSpec.error);
+  const sharedMemory = new WebAssembly.Memory({initial: 1});
+  let activeMemory = null;
+  let nextFd = 3, nextPid = 2, forkNumber = 0;
+  const descriptors = new Map(), children = new Map();
+  const bytes = () => new Uint8Array(activeMemory.buffer);
+  const view = () => new DataView(activeMemory.buffer);
+  const writeI32 = (ptr, value) => view().setInt32(ptr, value, true);
+  const cstring = ptr => {
+    let end = ptr; const mem = bytes();
+    while (end < mem.length && mem[end]) end++;
+    return new TextDecoder().decode(mem.subarray(ptr, end));
+  };
+  const allocFd = object => { const fd = nextFd++; descriptors.set(fd, object); return fd; };
+  const env = {
+    getpid: () => 1, getppid: () => 0, getpgrp: () => 1,
+    tcgetpgrp: () => 1, tcsetpgrp: () => 0, setpgid: () => 0,
+    raise: () => 0, sleep: () => 0, exit: () => 0,
+    open: (path, flags, mode) => {
+      void cstring(path); void flags; void mode;
+      return allocFd({data: new Uint8Array(), offset: 0});
+    },
+    close: fd => { descriptors.delete(fd); return 0; },
+    write: (fd, ptr, count) => {
+      const d = descriptors.get(fd); if (!d) return -1;
+      const input = bytes().slice(ptr, ptr + count);
+      if (d.pipe) {
+        const grown = new Uint8Array(d.data.length + count);
+        grown.set(d.data); grown.set(input, d.data.length); d.data = grown;
+        return count;
+      }
+      const needed = d.offset + count;
+      if (!d.data || d.data.length < needed) {
+        const grown = new Uint8Array(needed); if (d.data) grown.set(d.data); d.data = grown;
+      }
+      d.data.set(input, d.offset); d.offset += count; return count;
+    },
+    read: (fd, ptr, count) => {
+      const d = descriptors.get(fd); if (!d || !d.data) return -1;
+      const n = Math.min(count, d.data.length - d.offset);
+      bytes().set(d.data.subarray(d.offset, d.offset + n), ptr); d.offset += n; return n;
+    },
+    lseek: (fd, offset, whence) => {
+      const d = descriptors.get(fd); if (!d) return -1n;
+      const n = Number(offset); d.offset = whence === 0 ? n : whence === 1 ? d.offset + n : d.data.length + n;
+      return BigInt(d.offset);
+    },
+    pipe: ptr => {
+      const pipe = {data: new Uint8Array(), offset: 0, pipe: true};
+      const readFd = allocFd(pipe), writeFd = allocFd(pipe);
+      writeI32(ptr, readFd); writeI32(ptr + 4, writeFd); return 0;
+    },
+    dup: fd => { const d = descriptors.get(fd); return d ? allocFd(d) : -1; },
+    fork: () => {
+      const pid = nextPid++, number = ++forkNumber;
+      children.set(pid, {number, waits: 0, signal: 0}); return pid;
+    },
+    kill: (pid, signal) => { const c = children.get(pid); if (c && signal !== 18) c.signal = signal; return 0; },
+    killpg: (pid, signal) => { const c = children.get(pid); if (c) c.signal = signal; return 0; },
+    waitpid: (pid, statusPtr, options) => {
+      const c = children.get(pid); if (!c) return -1;
+      c.waits++;
+      let status;
+      if (options & 2) status = (19 << 8) | 0x7f;
+      else if (c.signal) status = c.signal;
+      else status = (c.number === 1 ? 7 : c.number === 2 ? 3 : 0) << 8;
+      writeI32(statusPtr, status); return pid;
+    },
+  };
+  const imports = {env, spectest: {memory: sharedMemory}};
+  const modules = [], named = new Map();
+  for (const moduleSpec of testSpec.modules) {
+    const {instance} = await WebAssembly.instantiate(decodeB64(moduleSpec.wasmB64), imports);
+    modules.push(instance);
+    if (moduleSpec.id) named.set(moduleSpec.id, instance);
+  }
+  const current = modules[modules.length - 1];
+  const results = [];
+  for (const step of testSpec.steps) {
+    const instance = step.module ? named.get(step.module) : current;
+    if (!instance) throw new Error("unknown module $" + step.module);
+    activeMemory = instance.exports.__waste_memory || sharedMemory;
+    const fn = instance.exports[step.func];
+    if (typeof fn !== "function") throw new Error("export not found: " + step.func);
+    const args = step.args.map(arg => arg.type === "i64" ? BigInt(arg.value) : arg.value);
+    let actual;
+    try { actual = fn(...args); }
+    catch (error) { results.push({func: step.func, pass: false, error: String(error)}); continue; }
+    const expected = step.expect;
+    const pass = expected.length === 0 || (expected.length === 1 &&
+      actual === (expected[0].type === "i64" ? BigInt(expected[0].value) : expected[0].value));
+    results.push({
+      func: step.func,
+      pass,
+      error: pass ? "" : "expected " + (expected[0]?.value) + ", got " + actual,
+    });
+  }
+  return results;
+}
+
 function packValue(mem, offset, v) {
   mem[offset] = v.type;
   const data = v.data;
@@ -241,6 +466,11 @@ self.onmessage = async function(e) {
   const assertionResults = [];
 
   try {
+    if (testSpec.mode === "browser-native") {
+      const results = await runBrowserNative(testSpec);
+      self.postMessage({type: "done", file: testSpec.file, results});
+      return;
+    }
     if (testSpec.error) throw new Error(testSpec.error);
     if (!Array.isArray(testSpec.groups) || testSpec.groups.length === 0)
       throw new Error("WAST preprocessing produced no module groups");
@@ -254,6 +484,15 @@ self.onmessage = async function(e) {
       while (mem[ptr + len] !== 0 && len < 512) len++;
       return new TextDecoder().decode(mem.subarray(ptr, ptr + len));
     };
+    const putStr = (value) => {
+      const bytes = new TextEncoder().encode(value || "");
+      const ptr = exp.waste_wast_alloc(bytes.length + 1);
+      const mem = new Uint8Array(exp.memory.buffer);
+      mem.set(bytes, ptr); mem[ptr + bytes.length] = 0;
+      return {ptr, length: bytes.length};
+    };
+
+    exp.waste_wast_reset();
 
     for (const group of testSpec.groups) {
       /* Decode hex module */
@@ -267,7 +506,18 @@ self.onmessage = async function(e) {
       new Uint8Array(exp.memory.buffer).set(modBytes, modPtr);
 
       /* Load module */
-      const loadOk = exp.waste_wast_load_module(modPtr, modBytes.length);
+      const moduleId = putStr(group.id);
+      const loadOk = exp.waste_wast_load_linked_module(
+        modPtr, modBytes.length, moduleId.ptr, moduleId.length);
+      if (group.module_assertion) {
+        const kind = group.module_assertion.kind;
+        const expectedFailure = kind === 1 ? loadOk === 3 : loadOk !== 0;
+        const error = loadOk === 0 ? "module unexpectedly instantiated" :
+          (getStr(exp.waste_wast_error_ptr()) || "module instantiation failed");
+        assertionResults.push({func: "(module)", pass: expectedFailure,
+          error: expectedFailure ? "" : error});
+        continue;
+      }
       if (loadOk !== 0) {
         const error = getStr(exp.waste_wast_error_ptr()) || "module load failed";
         if (group.assertions.length === 0)
@@ -277,11 +527,27 @@ self.onmessage = async function(e) {
         continue;
       }
 
+      if (group.register) {
+        const registration = putStr(group.register);
+        const registerOk = exp.waste_wast_register_current(
+          registration.ptr, registration.length);
+        if (registerOk !== 0)
+          throw new Error(getStr(exp.waste_wast_error_ptr()) || "module registration failed");
+      }
+
       if (group.assertions.length === 0)
         assertionResults.push({func: "(module)", pass: true, error: ""});
 
       for (const assertion of group.assertions) {
-        const {func, args, alts} = assertion;
+        const {func, action, kind, args, alts} = assertion;
+        {
+          const selected = putStr(assertion.module || "");
+          if (exp.waste_wast_select_module(selected.ptr, selected.length) !== 0) {
+            assertionResults.push({func, pass: false,
+              error: getStr(exp.waste_wast_error_ptr()) || "unknown module id"});
+            continue;
+          }
+        }
         const argCount = args.length;
         const altCount = alts.length;
         const resultCount = altCount > 0 ? alts[0].length : 0;
@@ -313,12 +579,20 @@ self.onmessage = async function(e) {
         }
 
         /* Run assertion */
-        const pass = exp.waste_wast_assert_return(
-          namePtr, nameEnc.length,
-          argsPtr, argCount,
-          altsPtr, altCount,
-          resultCount
-        ) !== 0;
+        const pass = (kind === 1 || kind === 2) ?
+          exp.waste_wast_assert_trap(
+            namePtr, nameEnc.length, argsPtr, argCount
+          ) !== 0 : action === "get" ?
+          exp.waste_wast_assert_global(
+            namePtr, nameEnc.length,
+            altsPtr, altCount, resultCount
+          ) !== 0 :
+          exp.waste_wast_assert_return(
+            namePtr, nameEnc.length,
+            argsPtr, argCount,
+            altsPtr, altCount,
+            resultCount
+          ) !== 0;
 
         let error = "";
         if (!pass) {
@@ -427,6 +701,7 @@ self.onmessage = async function(e) {
     if (state === "pass" || state === "fail") {
       results.set(test.file, {
         file: test.file,
+        backend: test.spec.mode === "browser-native" ? "browser-wasm-compat" : "c-engine",
         state,
         durationMs,
         completedAt: new Date().toISOString(),
@@ -610,6 +885,11 @@ self.onmessage = async function(e) {
       batchRunning = false;
       document.querySelectorAll("button").forEach(b => b.disabled = false);
       updateSummary();
+      if (new URLSearchParams(location.search).has("autorun")) {
+        const failed = [...results.values()].filter(result => result.state !== "pass").length;
+        document.documentElement.dataset.autorun = failed ? `failed:${failed}` : "passed";
+        document.title = failed ? `FAILED (${failed}) — WASTE C engine tests` : "PASSED — WASTE C engine tests";
+      }
     }
   }
 
@@ -651,6 +931,11 @@ self.onmessage = async function(e) {
       batchRunning = false;
       document.querySelectorAll("button").forEach(b => b.disabled = false);
       updateSummary();
+      if (new URLSearchParams(location.search).has("autorun")) {
+        const failed = [...results.values()].filter(result => result.state !== "pass").length;
+        document.documentElement.dataset.autorun = failed ? `failed:${failed}` : "passed";
+        document.title = failed ? `FAILED (${failed}) — WASTE C engine tests` : "PASSED — WASTE C engine tests";
+      }
     }
   }
 
@@ -689,6 +974,7 @@ self.onmessage = async function(e) {
   }
 
   render();
+  if (new URLSearchParams(location.search).has("autorun")) runTestAll();
   </script>
 </body>
 </html>
@@ -696,7 +982,9 @@ self.onmessage = async function(e) {
 
 
 def total_assertions(spec: dict) -> int:
-    return sum(len(g.get("assertions", [])) for g in spec.get("groups", []))
+    return sum(len(g.get("assertions", [])) +
+               (1 if g.get("module_assertion") else 0)
+               for g in spec.get("groups", []))
 
 
 def main() -> int:
@@ -711,6 +999,8 @@ def main() -> int:
                         help="Directory containing .wast test files (repeatable)")
     parser.add_argument("--output", type=Path, required=True,
                         help="Output HTML file path")
+    parser.add_argument("--wasm-as", default="wasm-as",
+                        help="Binaryen wasm-as used for repository DIY fixtures")
     args = parser.parse_args()
 
     for label, p, kind in [
@@ -729,7 +1019,6 @@ def main() -> int:
         (test_dir, wast_file)
         for test_dir in args.tests
         for wast_file in sorted(test_dir.glob("*.wast"))
-        if wast_file.name not in {"spectest-isolation-a.wast", "spectest-isolation-b.wast"}
     ]
     if not wast_files:
         print("error: no .wast files found", file=sys.stderr)
@@ -738,9 +1027,16 @@ def main() -> int:
     print(f"Building browser specs from {len(wast_files)} test files…")
     tests = []
     for test_dir, wast_file in wast_files:
-        spec = run_browser_spec(args.runner, wast_file)
+        if test_dir.name == "diy-posix-test":
+            try:
+                spec = build_diy_spec(wast_file, args.wasm_as)
+            except (OSError, ValueError) as exc:
+                spec = {"file": wast_file.name, "mode": "browser-native", "error": str(exc)}
+        else:
+            spec = run_browser_spec(args.runner, wast_file)
         n_assert = total_assertions(spec)
-        print(f"  {wast_file.name}: {n_assert} assertions")
+        n_steps = len(spec.get("steps", []))
+        print(f"  {wast_file.name}: {n_assert or n_steps} checks")
         # Derive group name from test directory name relative to a common root
         tests.append({
             "file": wast_file.name,

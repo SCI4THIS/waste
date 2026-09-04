@@ -1,0 +1,15 @@
+;; Module-level references may precede declarations in the text format.
+(module
+  (export "forward-func" (func $read))
+  (export "forward-table" (table $table))
+  (export "forward-memory" (memory $memory))
+  (export "forward-global" (global $answer))
+  (start $start)
+  (elem (table $table (offset (i32.const 0))) func $read)
+  (func $read (result i32) (global.get $answer))
+  (func $start)
+  (global $answer i32 (i32.const 42))
+  (table $table 1 funcref)
+  (memory $memory 1)
+)
+(assert_return (invoke "forward-func") (i32.const 42))

@@ -1,0 +1,13 @@
+(module
+  (import "provider" "memory" (memory 1 3))
+  (import "provider" "table" (table 2 4 funcref))
+  (import "provider" "global" (global (mut i32)))
+  (export "memory" (memory 0))
+  (export "table" (table 0))
+  (export "global" (global 0))
+  (func (export "set-global") (param i32 i32) (result i32)
+    local.get 0 global.set 0 global.get 0)
+  (func (export "store") (param i32 i32) (result i32)
+    local.get 0 local.get 1 i32.store local.get 0 i32.load)
+  (func (export "grow") (param i32 i32) (result i32)
+    local.get 0 memory.grow))

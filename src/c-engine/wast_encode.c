@@ -1,280 +1,135 @@
 #include "wast_encode.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
-/* ---- LEB128 helpers ---- */
-
-/* Return number of bytes needed to encode val as unsigned LEB128 */
-static size_t leb128_u32_size(uint32_t val) {
-    size_t n = 1;
-    while (val >= 0x80u) { val >>= 7; n++; }
-    return n;
-}
-
-/* Emit unsigned LEB128 */
-static void leb128_u32(uint8_t *buf, size_t *pos, uint32_t val) {
-    do {
-        uint8_t byte = (uint8_t)(val & 0x7Fu);
-        val >>= 7;
-        if (val != 0) byte |= 0x80u;
-        buf[(*pos)++] = byte;
-    } while (val != 0);
-}
-
-/* ---- Type byte for valtype ---- */
-static uint8_t valtype_byte(wasm_valtype t) {
-    switch (t) {
-        case WASM_VALTYPE_I32:  return 0x7F;
-        case WASM_VALTYPE_I64:  return 0x7E;
-        case WASM_VALTYPE_F32:  return 0x7D;
-        case WASM_VALTYPE_F64:  return 0x7C;
-        case WASM_VALTYPE_V128: return 0x7B;
-        default:                return 0x7F;
-    }
-}
-
-/* ---- Function type signature ---- */
+typedef struct { uint8_t *data; size_t len, cap; int failed; } writer;
 typedef struct {
-    wasm_valtype params[WAST_MAX_PARAMS];
-    int          param_count;
-    wasm_valtype result;
-    int          has_result;
+    wasm_valtype params[WAST_MAX_PARAMS], results[WAST_MAX_RESULTS];
+    int param_count, result_count;
 } func_sig;
 
-static int sig_equal(const func_sig *a, const func_sig *b) {
-    if (a->param_count != b->param_count) return 0;
-    if (a->has_result != b->has_result) return 0;
-    if (a->has_result && a->result != b->result) return 0;
-    for (int i = 0; i < a->param_count; i++)
-        if (a->params[i] != b->params[i]) return 0;
-    return 1;
+static void reserve(writer *w, size_t n) {
+    if (w->failed || n > (size_t)-1 - w->len) { w->failed=1; return; }
+    size_t need=w->len+n, cap=w->cap?w->cap:256;
+    if (need<=w->cap) return;
+    while(cap<need) { if(cap>(size_t)-1/2){cap=need;break;} cap*=2; }
+    uint8_t *p=(uint8_t*)realloc(w->data,cap);
+    if(!p){w->failed=1;return;} w->data=p; w->cap=cap;
+}
+static void byte(writer *w,uint8_t v){reserve(w,1);if(!w->failed)w->data[w->len++]=v;}
+static void bytes(writer *w,const void *p,size_t n){reserve(w,n);if(!w->failed&&n){memcpy(w->data+w->len,p,n);w->len+=n;}}
+static void u32(writer *w,uint32_t v){do{uint8_t b=(uint8_t)(v&0x7f);v>>=7;if(v)b|=0x80;byte(w,b);}while(v);}
+static void s33(writer *w,int64_t v){int more=1;while(more){uint8_t b=(uint8_t)(v&0x7f);v>>=7;more=!((v==0&&!(b&0x40))||(v==-1&&(b&0x40)));if(more)b|=0x80;byte(w,b);}}
+static void name(writer *w,const char *s){size_t n=strlen(s);if(n>UINT32_MAX){w->failed=1;return;}u32(w,(uint32_t)n);bytes(w,s,n);}
+static void section(writer *out,uint8_t id,writer *s){
+    if(s->failed||s->len>UINT32_MAX)out->failed=1;
+    else if(s->len){byte(out,id);u32(out,(uint32_t)s->len);bytes(out,s->data,s->len);}
+    free(s->data);memset(s,0,sizeof(*s));
+}
+static uint8_t vt(wasm_valtype t){
+    switch(t){case WASM_VALTYPE_I32:return 0x7f;case WASM_VALTYPE_I64:return 0x7e;
+    case WASM_VALTYPE_F32:return 0x7d;case WASM_VALTYPE_F64:return 0x7c;
+    case WASM_VALTYPE_V128:return 0x7b;case WASM_VALTYPE_FUNCREF:return 0x70;
+    case WASM_VALTYPE_EXTERNREF:return 0x6f;
+    case WASM_VALTYPE_FUNCREF_NONNULL:case WASM_VALTYPE_EXTERNREF_NONNULL:return 0;}return 0;
+}
+static void put_vt(writer *w,wasm_valtype t){
+    if(t==WASM_VALTYPE_FUNCREF_NONNULL){byte(w,0x64);s33(w,-16);}
+    else if(t==WASM_VALTYPE_EXTERNREF_NONNULL){byte(w,0x64);s33(w,-17);}
+    else if(WASM_VALTYPE_IS_TYPE_REF(t)){byte(w,(unsigned)t<WASM_VALTYPE_TYPE_REF_BASE?0x63:0x64);s33(w,(int64_t)WASM_VALTYPE_TYPE_REF_INDEX(t));}
+    else byte(w,vt(t));
+}
+static int sig_eq(const func_sig*a,const func_sig*b){
+    return a->param_count==b->param_count&&a->result_count==b->result_count&&
+      !memcmp(a->params,b->params,(size_t)a->param_count*sizeof(a->params[0]))&&
+      !memcmp(a->results,b->results,(size_t)a->result_count*sizeof(a->results[0]));
+}
+static func_sig type_sig(const wast_type*t){func_sig s={0};s.param_count=t->param_count;s.result_count=t->result_count;
+    memcpy(s.params,t->params,(size_t)s.param_count*sizeof(s.params[0]));memcpy(s.results,t->results,(size_t)s.result_count*sizeof(s.results[0]));return s;}
+static func_sig func_sig_of(const wast_func*f){func_sig s={0};s.param_count=f->param_count;s.result_count=f->result_count;
+    memcpy(s.params,f->params,(size_t)s.param_count*sizeof(s.params[0]));memcpy(s.results,f->results,(size_t)s.result_count*sizeof(s.results[0]));return s;}
+static void put_sig(writer*w,const func_sig*s){byte(w,0x60);u32(w,(uint32_t)s->param_count);
+    for(int i=0;i<s->param_count;i++)put_vt(w,s->params[i]);
+    u32(w,(uint32_t)s->result_count);
+    for(int i=0;i<s->result_count;i++)put_vt(w,s->results[i]);}
+static void limits(writer*w,const wast_limits*l){uint32_t f=(l->has_max?1u:0u)|(l->is_shared?2u:0u);u32(w,f);u32(w,l->min);if(l->has_max)u32(w,l->max);}
+static void table_type(writer*w,const wast_table*t){put_vt(w,t->reftype);limits(w,&t->limits);}
+static void global_type(writer*w,const wast_global*g){put_vt(w,g->valtype);byte(w,g->is_mutable?1:0);}
+static void export_(writer*w,const char*n,uint8_t k,uint32_t i){name(w,n);byte(w,k);u32(w,i);}
+static void elem_expr(writer*w,wasm_valtype t,uint32_t ref){
+    if(ref==UINT32_MAX){byte(w,0xd0);byte(w,t==WASM_VALTYPE_EXTERNREF?0x6f:0x70);}
+    else{byte(w,0xd2);u32(w,ref);}byte(w,0x0b);
 }
 
-/* ---- Instruction binary size (not counting the instruction, just immediates) ---- */
+uint8_t *wast_encode_module(const wast_module *m,size_t *size_out,char *error){
+    writer out={0},s={0};func_sig *sigs=NULL;uint32_t *ft=NULL;
+    if(!m||!size_out)return NULL;
+    *size_out=0;
+    int sig_cap=m->type_count+m->func_count,sig_count=m->type_count;
+    if(sig_cap){sigs=(func_sig*)calloc((size_t)sig_cap,sizeof(*sigs));ft=(uint32_t*)calloc((size_t)m->func_count,sizeof(*ft));
+        if(!sigs||(m->func_count&&!ft))goto oom;}
+    for(int i=0;i<m->type_count;i++)sigs[i]=type_sig(&m->types[i]);
+    for(int i=0;i<m->func_count;i++){const wast_func*f=&m->funcs[i];
+        if(f->type_index>=0){if(f->type_index>=m->type_count){if(error)snprintf(error,256,"function %d has invalid type index %d",i,f->type_index);goto fail;}ft[i]=(uint32_t)f->type_index;}
+        else{func_sig fs=func_sig_of(f);int found=-1;for(int j=0;j<sig_count;j++)if(sig_eq(&sigs[j],&fs)){found=j;break;}
+            if(found<0){found=sig_count;sigs[sig_count++]=fs;}ft[i]=(uint32_t)found;}}
+    bytes(&out,"\0asm\1\0\0\0",8);
 
-/* Return byte size of a single instruction in binary form */
-static size_t instr_binary_size(const wasm_instr *instr) {
-    if (instr->opcode == 0x20) {
-        /* local.get: 0x20 + LEB128(u32_imm) */
-        return 1 + leb128_u32_size(instr->u32_imm);
-    }
-    if (instr->opcode == 0xFD) {
-        /* 0xFD + LEB128(simd_op) + possible immediate */
-        size_t base = 1 + leb128_u32_size(instr->simd_op);
-        if (instr->simd_op == 12) {
-            /* v128.const: 16 bytes of immediate */
-            base += 16;
-        }
-        return base;
-    }
-    if (instr->opcode == 0x0B) {
-        return 1; /* end */
-    }
-    return 1; /* fallback */
-}
+    if(sig_count){u32(&s,(uint32_t)sig_count);for(int i=0;i<sig_count;i++)put_sig(&s,&sigs[i]);section(&out,1,&s);}
 
-/* Return the binary size of one function body (local decls byte + instructions) */
-static size_t func_body_size(const wast_func *func) {
-    /* 0x00 = local decl count 0 */
-    size_t sz = 1;
-    for (int i = 0; i < func->instr_count; i++)
-        sz += instr_binary_size(&func->instrs[i]);
-    return sz;
-}
+    uint32_t imports=0;for(int i=0;i<m->func_count;i++)imports+=m->funcs[i].is_import!=0;
+    for(int i=0;i<m->table_count;i++)imports+=m->tables[i].is_import!=0;
+    for(int i=0;i<m->memory_count;i++)imports+=m->memories[i].is_import!=0;
+    for(int i=0;i<m->global_count;i++)imports+=m->globals[i].is_import!=0;
+    if(imports){u32(&s,imports);
+        for(int i=0;i<m->func_count;i++)if(m->funcs[i].is_import){const wast_func*f=&m->funcs[i];name(&s,f->import_module);name(&s,f->import_name);byte(&s,0);u32(&s,ft[i]);}
+        for(int i=0;i<m->table_count;i++)if(m->tables[i].is_import){const wast_table*t=&m->tables[i];name(&s,t->import_module);name(&s,t->import_name);byte(&s,1);table_type(&s,t);}
+        for(int i=0;i<m->memory_count;i++)if(m->memories[i].is_import){const wast_memory*x=&m->memories[i];name(&s,x->import_module);name(&s,x->import_name);byte(&s,2);limits(&s,&x->limits);}
+        for(int i=0;i<m->global_count;i++)if(m->globals[i].is_import){const wast_global*g=&m->globals[i];name(&s,g->import_module);name(&s,g->import_name);byte(&s,3);global_type(&s,g);}
+        section(&out,2,&s);}
 
-/* ---- Type section size calculation ---- */
+    uint32_t defs=0;for(int i=0;i<m->func_count;i++)defs+=!m->funcs[i].is_import;
+    if(defs){u32(&s,defs);for(int i=0;i<m->func_count;i++)if(!m->funcs[i].is_import)u32(&s,ft[i]);section(&out,3,&s);}
+    uint32_t n=0;for(int i=0;i<m->table_count;i++)n+=!m->tables[i].is_import;
+    if(n){u32(&s,n);for(int i=0;i<m->table_count;i++)if(!m->tables[i].is_import)table_type(&s,&m->tables[i]);section(&out,4,&s);}
+    n=0;for(int i=0;i<m->memory_count;i++)n+=!m->memories[i].is_import;
+    if(n){u32(&s,n);for(int i=0;i<m->memory_count;i++)if(!m->memories[i].is_import)limits(&s,&m->memories[i].limits);section(&out,5,&s);}
+    n=0;for(int i=0;i<m->global_count;i++)n+=!m->globals[i].is_import;
+    if(n){u32(&s,n);for(int i=0;i<m->global_count;i++)if(!m->globals[i].is_import){const wast_global*g=&m->globals[i];global_type(&s,g);bytes(&s,g->init_expr,(size_t)g->init_len);}section(&out,6,&s);}
 
-static size_t type_entry_size(const func_sig *sig) {
-    /* 0x60 + param_count_leb + param_types + result_count_leb + result_types */
-    size_t sz = 1; /* 0x60 */
-    sz += leb128_u32_size((uint32_t)sig->param_count);
-    sz += (size_t)sig->param_count; /* one byte per param type */
-    sz += 1; /* result count (0 or 1) */
-    if (sig->has_result) sz += 1; /* result type byte */
-    return sz;
-}
+    uint32_t exports=(uint32_t)m->export_count;
+    for(int i=0;i<m->func_count;i++)exports+=m->funcs[i].export_name[0]!=0;
+    for(int i=0;i<m->table_count;i++)exports+=m->tables[i].export_name[0]!=0;
+    for(int i=0;i<m->memory_count;i++)exports+=m->memories[i].export_name[0]!=0;
+    for(int i=0;i<m->global_count;i++)exports+=m->globals[i].export_name[0]!=0;
+    if(exports){u32(&s,exports);
+        for(int i=0;i<m->func_count;i++)if(m->funcs[i].export_name[0])export_(&s,m->funcs[i].export_name,0,(uint32_t)i);
+        for(int i=0;i<m->table_count;i++)if(m->tables[i].export_name[0])export_(&s,m->tables[i].export_name,1,(uint32_t)i);
+        for(int i=0;i<m->memory_count;i++)if(m->memories[i].export_name[0])export_(&s,m->memories[i].export_name,2,(uint32_t)i);
+        for(int i=0;i<m->global_count;i++)if(m->globals[i].export_name[0])export_(&s,m->globals[i].export_name,3,(uint32_t)i);
+        for(int i=0;i<m->export_count;i++)export_(&s,m->exports[i].name,(uint8_t)m->exports[i].kind,m->exports[i].index);
+        section(&out,7,&s);}
+    if(m->start_func>=0){u32(&s,(uint32_t)m->start_func);section(&out,8,&s);}
 
-/* ---- Emit an instruction ---- */
-static void emit_instr(uint8_t *buf, size_t *pos, const wasm_instr *instr) {
-    if (instr->opcode == 0x20) {
-        buf[(*pos)++] = 0x20;
-        leb128_u32(buf, pos, instr->u32_imm);
-    } else if (instr->opcode == 0xFD) {
-        buf[(*pos)++] = 0xFD;
-        leb128_u32(buf, pos, instr->simd_op);
-        if (instr->simd_op == 12) {
-            memcpy(buf + *pos, instr->v128_imm.bytes, 16);
-            *pos += 16;
-        }
-    } else if (instr->opcode == 0x0B) {
-        buf[(*pos)++] = 0x0B;
-    } else {
-        buf[(*pos)++] = (uint8_t)instr->opcode;
-    }
-}
+    if(m->elem_count){u32(&s,(uint32_t)m->elem_count);for(int i=0;i<m->elem_count;i++){const wast_elem_seg*e=&m->elem[i];
+        uint32_t mode=e->is_declarative?7u:e->is_passive?5u:e->table_index?6u:4u;u32(&s,mode);
+        if(mode==6)u32(&s,(uint32_t)e->table_index);
+        if(mode==4||mode==6)bytes(&s,e->offset_expr,(size_t)e->offset_len);
+        if(mode!=4)put_vt(&s,e->reftype);
+        u32(&s,(uint32_t)e->ref_count);
+        for(int j=0;j<e->ref_count;j++)elem_expr(&s,e->reftype,e->refs[j]);}section(&out,9,&s);}
 
-/* ---- Main encoder ---- */
-
-uint8_t *wast_encode_module(const wast_module *module, size_t *size_out, char *error) {
-    int func_count = module->func_count;
-    if (func_count == 0) {
-        /* Empty module with all sections missing */
-        /* Just emit a minimal valid module with no functions */
-        uint8_t *buf = (uint8_t *)malloc(8);
-        if (!buf) {
-            if (error) snprintf(error, 256, "allocation failed");
-            return NULL;
-        }
-        buf[0] = 0x00; buf[1] = 0x61; buf[2] = 0x73; buf[3] = 0x6D;
-        buf[4] = 0x01; buf[5] = 0x00; buf[6] = 0x00; buf[7] = 0x00;
-        *size_out = 8;
-        return buf;
-    }
-
-    /* --- Pass 1: Collect unique type signatures --- */
-    func_sig sigs[WAST_MAX_FUNCS];
-    int      type_index[WAST_MAX_FUNCS]; /* type index for each function */
-    int      sig_count = 0;
-
-    for (int i = 0; i < func_count; i++) {
-        const wast_func *f = &module->funcs[i];
-        func_sig s;
-        memset(&s, 0, sizeof(s));
-        s.param_count = f->param_count;
-        s.has_result  = f->has_result;
-        s.result      = f->result;
-        for (int p = 0; p < f->param_count; p++) s.params[p] = f->params[p];
-
-        /* Find existing sig */
-        int found = -1;
-        for (int j = 0; j < sig_count; j++) {
-            if (sig_equal(&sigs[j], &s)) { found = j; break; }
-        }
-        if (found < 0) {
-            if (sig_count >= WAST_MAX_FUNCS) {
-                if (error) snprintf(error, 256, "too many distinct type signatures");
-                return NULL;
-            }
-            sigs[sig_count] = s;
-            found = sig_count++;
-        }
-        type_index[i] = found;
-    }
-
-    /* --- Pass 1: Compute section sizes --- */
-
-    /* Type section content size */
-    size_t type_content = leb128_u32_size((uint32_t)sig_count);
-    for (int i = 0; i < sig_count; i++)
-        type_content += type_entry_size(&sigs[i]);
-
-    /* Function section content size: count + type indices */
-    size_t func_content = leb128_u32_size((uint32_t)func_count);
-    for (int i = 0; i < func_count; i++)
-        func_content += leb128_u32_size((uint32_t)type_index[i]);
-
-    /* Export section content size */
-    size_t export_content = leb128_u32_size((uint32_t)func_count);
-    for (int i = 0; i < func_count; i++) {
-        size_t name_len = strlen(module->funcs[i].export_name);
-        export_content += leb128_u32_size((uint32_t)name_len);
-        export_content += name_len;
-        export_content += 1; /* export kind: 0x00 = function */
-        export_content += leb128_u32_size((uint32_t)i);
-    }
-
-    /* Code section content size */
-    size_t body_sizes[WAST_MAX_FUNCS];
-    size_t code_content = leb128_u32_size((uint32_t)func_count);
-    for (int i = 0; i < func_count; i++) {
-        body_sizes[i] = func_body_size(&module->funcs[i]);
-        /* Each entry is: LEB128(body_size) + body_size bytes */
-        code_content += leb128_u32_size((uint32_t)body_sizes[i]);
-        code_content += body_sizes[i];
-    }
-
-    /* Total binary size:
-       magic(4) + version(4)
-       + section_id(1) + section_size_leb + section_content  (for each section)
-    */
-    size_t total = 8;
-    total += 1 + leb128_u32_size((uint32_t)type_content)   + type_content;
-    total += 1 + leb128_u32_size((uint32_t)func_content)   + func_content;
-    total += 1 + leb128_u32_size((uint32_t)export_content) + export_content;
-    total += 1 + leb128_u32_size((uint32_t)code_content)   + code_content;
-
-    /* --- Pass 2: Emit binary --- */
-    uint8_t *buf = (uint8_t *)calloc(1, total);
-    if (!buf) {
-        if (error) snprintf(error, 256, "allocation failed for binary module");
-        return NULL;
-    }
-
-    size_t pos = 0;
-
-    /* Magic + version */
-    buf[pos++] = 0x00; buf[pos++] = 0x61; buf[pos++] = 0x73; buf[pos++] = 0x6D;
-    buf[pos++] = 0x01; buf[pos++] = 0x00; buf[pos++] = 0x00; buf[pos++] = 0x00;
-
-    /* Section 1: Type */
-    buf[pos++] = 0x01; /* section id */
-    leb128_u32(buf, &pos, (uint32_t)type_content);
-    leb128_u32(buf, &pos, (uint32_t)sig_count);
-    for (int i = 0; i < sig_count; i++) {
-        const func_sig *s = &sigs[i];
-        buf[pos++] = 0x60; /* func type marker */
-        leb128_u32(buf, &pos, (uint32_t)s->param_count);
-        for (int p = 0; p < s->param_count; p++)
-            buf[pos++] = valtype_byte(s->params[p]);
-        if (s->has_result) {
-            buf[pos++] = 0x01; /* one result */
-            buf[pos++] = valtype_byte(s->result);
-        } else {
-            buf[pos++] = 0x00; /* no results */
-        }
-    }
-
-    /* Section 3: Function */
-    buf[pos++] = 0x03;
-    leb128_u32(buf, &pos, (uint32_t)func_content);
-    leb128_u32(buf, &pos, (uint32_t)func_count);
-    for (int i = 0; i < func_count; i++)
-        leb128_u32(buf, &pos, (uint32_t)type_index[i]);
-
-    /* Section 7: Export */
-    buf[pos++] = 0x07;
-    leb128_u32(buf, &pos, (uint32_t)export_content);
-    leb128_u32(buf, &pos, (uint32_t)func_count);
-    for (int i = 0; i < func_count; i++) {
-        const char *name = module->funcs[i].export_name;
-        uint32_t name_len = (uint32_t)strlen(name);
-        leb128_u32(buf, &pos, name_len);
-        memcpy(buf + pos, name, name_len);
-        pos += name_len;
-        buf[pos++] = 0x00; /* function export */
-        leb128_u32(buf, &pos, (uint32_t)i);
-    }
-
-    /* Section 10: Code */
-    buf[pos++] = 0x0A;
-    leb128_u32(buf, &pos, (uint32_t)code_content);
-    leb128_u32(buf, &pos, (uint32_t)func_count);
-    for (int i = 0; i < func_count; i++) {
-        const wast_func *f = &module->funcs[i];
-        leb128_u32(buf, &pos, (uint32_t)body_sizes[i]);
-        /* local decl count = 0 */
-        buf[pos++] = 0x00;
-        for (int j = 0; j < f->instr_count; j++)
-            emit_instr(buf, &pos, &f->instrs[j]);
-    }
-
-    if (pos != total) {
-        free(buf);
-        if (error) snprintf(error, 256, "encoder size mismatch: expected %zu got %zu", total, pos);
-        return NULL;
-    }
-
-    *size_out = total;
-    return buf;
+    if(defs){u32(&s,defs);for(int i=0;i<m->func_count;i++)if(!m->funcs[i].is_import){const wast_func*f=&m->funcs[i];writer body={0};
+        u32(&body,(uint32_t)f->local_count);for(int j=0;j<f->local_count;j++){u32(&body,1);put_vt(&body,f->locals[j]);}
+        bytes(&body,f->code,(size_t)f->code_len);if(body.failed||body.len>UINT32_MAX){s.failed=1;free(body.data);break;}
+        u32(&s,(uint32_t)body.len);bytes(&s,body.data,body.len);free(body.data);}section(&out,10,&s);}
+    if(m->data_count){u32(&s,(uint32_t)m->data_count);for(int i=0;i<m->data_count;i++){const wast_data_seg*d=&m->data[i];
+        uint32_t mode=d->is_passive?1u:d->memory_index?2u:0u;u32(&s,mode);if(mode==2)u32(&s,(uint32_t)d->memory_index);
+        if(mode!=1)bytes(&s,d->offset_expr,(size_t)d->offset_len);
+        u32(&s,(uint32_t)d->len);bytes(&s,d->bytes,(size_t)d->len);}section(&out,11,&s);}
+    free(sigs);free(ft);if(out.failed)goto oom_out;*size_out=out.len;return out.data;
+oom:if(error)snprintf(error,256,"allocation failed while preparing module");
+fail:free(sigs);free(ft);free(out.data);free(s.data);return NULL;
+oom_out:if(error)snprintf(error,256,"allocation failed while encoding module");free(out.data);return NULL;
 }

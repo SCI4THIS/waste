@@ -13,7 +13,7 @@ typedef void *yyscan_t;
 typedef struct yy_buffer_state *YY_BUFFER_STATE;
 
 extern int           yyparse(wast_script *script, void *scanner);
-extern int           yylex_init(yyscan_t *scanner);
+extern int           yylex_init_extra(wast_lex_state *state, yyscan_t *scanner);
 extern int           yylex_destroy(yyscan_t scanner);
 extern YY_BUFFER_STATE yy_scan_bytes(const char *bytes, int len, yyscan_t scanner);
 extern void          yy_switch_to_buffer(YY_BUFFER_STATE buf, yyscan_t scanner);
@@ -49,7 +49,8 @@ int wast_parse_file(const char *path, wast_script *script) {
     source[nread+1] = '\0';
 
     yyscan_t scanner;
-    yylex_init(&scanner);
+    wast_lex_state lex_state = {1, 1};
+    yylex_init_extra(&lex_state, &scanner);
     YY_BUFFER_STATE buf = yy_scan_bytes(source, (int)nread, scanner);
     yy_switch_to_buffer(buf, scanner);
     int rc = yyparse(script, scanner);
@@ -132,6 +133,11 @@ static int value_matches(const wasm_value *actual, const wasm_value *expected) {
             memcpy(&eb, &expected->f64, 8);
             return ab == eb;
         }
+        case WASM_VALTYPE_FUNCREF:
+        case WASM_VALTYPE_EXTERNREF:
+        case WASM_VALTYPE_FUNCREF_NONNULL:
+        case WASM_VALTYPE_EXTERNREF_NONNULL:
+            return actual->ref == expected->ref;
     }
     return 0;
 }
@@ -139,9 +145,15 @@ static int value_matches(const wasm_value *actual, const wasm_value *expected) {
 int wast_v128_matches_any(const wasm_value *actual,
                            const wasm_value alternatives[][WAST_MAX_RESULTS],
                            int alt_count, int result_count) {
-    (void)result_count;
     for (int i = 0; i < alt_count; i++) {
-        if (value_matches(actual, &alternatives[i][0])) return 1;
+        int matches = 1;
+        for (int result = 0; result < result_count; result++) {
+            if (!value_matches(&actual[result], &alternatives[i][result])) {
+                matches = 0;
+                break;
+            }
+        }
+        if (matches) return 1;
     }
     return 0;
 }
@@ -149,6 +161,22 @@ int wast_v128_matches_any(const wasm_value *actual,
 exec_status wast_run_assertion(waste_exec_engine *engine,
                                const wast_assertion *assertion,
                                exec_error *error) {
+    if (assertion->action_kind == WAST_ACTION_GET) {
+        exec_global *global = NULL;
+        exec_status status = exec_find_export_global(
+            engine, assertion->func_name, &global, error);
+        if (status != EXEC_OK) return status;
+        if (assertion->alt_count == 0 ||
+            wast_v128_matches_any(&global->value, assertion->alternatives,
+                                  assertion->alt_count, 1))
+            return EXEC_OK;
+        if (error) {
+            error->status = EXEC_ERROR_TRAP;
+            snprintf(error->message, sizeof(error->message),
+                     "global result mismatch for %s", assertion->func_name);
+        }
+        return EXEC_ERROR_TRAP;
+    }
     uint32_t func_idx;
     exec_status st = exec_find_export(engine, assertion->func_name, &func_idx, error);
     if (st != EXEC_OK) return st;
@@ -158,18 +186,31 @@ exec_status wast_run_assertion(waste_exec_engine *engine,
     st = exec_invoke(engine, func_idx,
                      assertion->args, assertion->arg_count,
                      results, &result_count, error);
+    if (assertion->kind == WAST_ASSERT_TRAP ||
+        assertion->kind == WAST_ASSERT_EXHAUSTION) {
+        if (st == EXEC_ERROR_TRAP) {
+            if (error) memset(error, 0, sizeof(*error));
+            return EXEC_OK;
+        }
+        if (st == EXEC_OK && error) {
+            error->status = EXEC_ERROR_TRAP;
+            snprintf(error->message, sizeof(error->message),
+                     "expected trap from %s", assertion->func_name);
+        }
+        return st == EXEC_OK ? EXEC_ERROR_TRAP : st;
+    }
     if (st != EXEC_OK) return st;
 
     if (assertion->alt_count == 0) {
         return EXEC_OK;
     }
 
-    if (result_count < 1) {
-        if (error) snprintf(error->message, sizeof(error->message), "no result returned");
+    if (result_count != assertion->result_count) {
+        if (error) snprintf(error->message, sizeof(error->message), "result count mismatch");
         return EXEC_ERROR_TRAP;
     }
 
-    if (wast_v128_matches_any(&results[0], assertion->alternatives,
+    if (wast_v128_matches_any(results, assertion->alternatives,
                                assertion->alt_count, assertion->result_count)) {
         return EXEC_OK;
     }
