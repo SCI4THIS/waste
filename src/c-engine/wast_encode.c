@@ -123,8 +123,8 @@ uint8_t *wast_encode_module(const wast_module *m,size_t *size_out,char *error){
         if(!sigs||(m->func_count&&!ft)||(m->tag_count&&!tt))goto oom;}
     for(int i=0;i<m->type_count;i++)sigs[i]=type_sig(&m->types[i]);
     for(int i=0;i<m->func_count;i++){const wast_func*f=&m->funcs[i];
-        if(f->type_index>=0){if(f->type_index>=m->type_count||m->types[f->type_index].kind!=WAST_TYPE_FUNC){if(error)snprintf(error,256,"function %d has invalid function type index %d",i,f->type_index);goto fail;}
-            const wast_type*t=&m->types[f->type_index];
+        if(f->type_index>=0){if(f->type_index>=sig_count||(f->type_index<m->type_count&&m->types[f->type_index].kind!=WAST_TYPE_FUNC)){if(error)snprintf(error,256,"function %d has invalid function type index %d",i,f->type_index);goto fail;}
+            const func_sig*t=&sigs[f->type_index];
             if((f->has_inline_params||f->has_inline_results)&&
                (f->param_count!=t->param_count||f->result_count!=t->result_count||
                 memcmp(f->params,t->params,(size_t)f->param_count*sizeof(f->params[0]))||

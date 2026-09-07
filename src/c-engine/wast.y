@@ -114,6 +114,21 @@ typedef struct {
 static meta_fixup g_meta_fixups[WAST_MAX_FUNC_FIXUPS];
 static int g_meta_fixup_count = 0;
 
+/* Rec-group forward-reference fixups: when parsing type bodies inside a rec
+ * group, a reference like (ref $t3) may appear before $t3's type_item has
+ * been reached.  We store a patch record and resolve it after all types in
+ * the rec group have been committed. */
+typedef struct {
+    uint32_t type_index;   /* index into mod->types[] that will hold this type */
+    int      slot;         /* param/result/field index within the type */
+    int      location;     /* 0=param, 1=result, 2=field */
+    int      nullable;
+    char     name[WAST_MAX_EXPORT_NAME];
+} rec_type_fixup;
+#define WAST_MAX_REC_FIXUPS 256
+static rec_type_fixup g_rec_fixups[WAST_MAX_REC_FIXUPS];
+static int g_rec_fixup_count = 0;
+
 /* Assertion state */
 static wast_assertion g_cur_assert;
 static int            g_in_assert = 0;
@@ -259,6 +274,12 @@ static int resolve_inline_functype(wast_script *script) {
     return 0;
 }
 
+/* Sentinel range for deferred rec-group forward references.
+ * We use type indices WAST_MAX_TYPES - WAST_MAX_REC_FIXUPS .. WAST_MAX_TYPES-1
+ * as temporary placeholders.  These are patched in the rec_item closing action
+ * before anything else sees them. */
+#define REC_FIXUP_SENTINEL_BASE (WAST_MAX_TYPES - WAST_MAX_REC_FIXUPS)
+
 static wasm_valtype indexed_ref_type(wast_script *script, const char *name,
                                      int nullable) {
     uint32_t index = resolve_type(name);
@@ -267,6 +288,18 @@ static wasm_valtype indexed_ref_type(wast_script *script, const char *name,
          * orders all types before tables/globals/functions in binary.  A
          * forward reference from within a non-recursive type declaration is
          * different and remains invalid. */
+        if (g_in_rec_group && name && name[0] == '$' &&
+            g_rec_fixup_count < WAST_MAX_REC_FIXUPS) {
+            /* Queue a deferred fixup; use a sentinel index so the closing
+             * action of rec_item can locate and patch every occurrence. */
+            uint32_t sentinel = REC_FIXUP_SENTINEL_BASE +
+                                (uint32_t)g_rec_fixup_count;
+            rec_type_fixup *f = &g_rec_fixups[g_rec_fixup_count++];
+            f->nullable = nullable;
+            snprintf(f->name, WAST_MAX_EXPORT_NAME, "%s", name);
+            return (wasm_valtype)((nullable ? WASM_VALTYPE_TYPE_REF_NULL_BASE :
+                                  WASM_VALTYPE_TYPE_REF_BASE) + sentinel);
+        }
         if (!g_in_rec_group &&
             (g_parsing_type_definition || !name || name[0] != '$'))
             report_validation_error(script, "unknown type");
@@ -346,6 +379,9 @@ static void ensure_group(wast_script *s) {
 static void set_register_name(wast_script *script, const char *name,
                               const char *module_id) {
     wast_group *target = cur_group(script);
+    if (module_id && module_id[0])
+        snprintf(cur_group(script)->module.register_target,
+                 WAST_MAX_EXPORT_NAME, "%s", module_id);
     if (module_id && module_id[0]) {
         for (int i = 0; i < script->group_count; i++) {
             if (strcmp(script->groups[i].module.id, module_id) == 0) {
@@ -848,6 +884,7 @@ static void apply_func_fixups(wast_script *script) {
             if (global->is_import) continue;
             constexpr_check check = check_global_constexpr(script, global);
             if (check != CONSTEXPR_VALID) {
+#ifndef WASTE_FREESTANDING
                 if (getenv("WAST_DEBUG_CONSTEXPR")) {
                     fprintf(stderr, "constexpr group=%d global=%d type=%d check=%d types=%d funcs=%d func0_type=%d bytes=",
                             g_cur_group, i, (int)global->valtype, (int)check,
@@ -857,6 +894,7 @@ static void apply_func_fixups(wast_script *script) {
                         fprintf(stderr, "%02x", global->init_expr[j]);
                     fputc('\n', stderr);
                 }
+#endif
                 report_validation_error(script,
                     check == CONSTEXPR_NOT_CONSTANT ?
                     "constant expression required" : "type mismatch");
@@ -3551,6 +3589,7 @@ rec_item:
     LPAREN KW_REC {
         g_in_rec_group = 1;
         g_rec_group_start = (uint32_t)cur_group(script)->module.type_count;
+        g_rec_fixup_count = 0;
     } rec_type_list RPAREN {
         wast_module *mod = &cur_group(script)->module;
         uint32_t size = (uint32_t)mod->type_count - g_rec_group_start;
@@ -3559,6 +3598,38 @@ rec_item:
             mod->types[i].rec_group_start = g_rec_group_start;
             mod->types[i].rec_group_size = size;
         }
+        /* Resolve deferred forward references within this rec group.
+         * Sentinels encode REC_FIXUP_SENTINEL_BASE + fixup_index as the
+         * type-ref index.  Scan all type slots in the group and replace
+         * any sentinel with the now-resolved real type index. */
+        for (int fx = 0; fx < g_rec_fixup_count; fx++) {
+            uint32_t sentinel = REC_FIXUP_SENTINEL_BASE + (uint32_t)fx;
+            uint32_t resolved = resolve_type(g_rec_fixups[fx].name);
+            if (resolved == UINT32_MAX || resolved >= WAST_MAX_TYPES) {
+                report_validation_error(script, "unknown type in rec group");
+                resolved = 0;
+            }
+            wasm_valtype old_null = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE + sentinel);
+            wasm_valtype old_nn   = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE + sentinel);
+            wasm_valtype new_null = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE + resolved);
+            wasm_valtype new_nn   = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE + resolved);
+            for (uint32_t ti = g_rec_group_start; ti < (uint32_t)mod->type_count; ti++) {
+                wast_type *t = &mod->types[ti];
+                for (int j = 0; j < t->param_count; j++) {
+                    if (t->params[j] == old_null) t->params[j] = new_null;
+                    else if (t->params[j] == old_nn) t->params[j] = new_nn;
+                }
+                for (int j = 0; j < t->result_count; j++) {
+                    if (t->results[j] == old_null) t->results[j] = new_null;
+                    else if (t->results[j] == old_nn) t->results[j] = new_nn;
+                }
+                for (int j = 0; j < t->field_count; j++) {
+                    if (t->fields[j] == old_null) t->fields[j] = new_null;
+                    else if (t->fields[j] == old_nn) t->fields[j] = new_nn;
+                }
+            }
+        }
+        g_rec_fixup_count = 0;
         g_in_rec_group = 0;
     }
     ;

@@ -305,6 +305,7 @@ typedef struct {
     /* Module identity */
     char id[WAST_MAX_EXPORT_NAME];
     char register_name[WAST_MAX_EXPORT_NAME]; /* for (register "name") */
+    char register_target[WAST_MAX_EXPORT_NAME]; /* optional $id in register */
     int  is_definition; /* (module definition ...): validate/store as a template */
     char instance_of[WAST_MAX_EXPORT_NAME]; /* definition named by module instance */
 } wast_module;

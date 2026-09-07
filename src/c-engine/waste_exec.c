@@ -11,13 +11,28 @@ void *realloc(void *ptr, size_t size);
 void  free(void *p);
 int   snprintf(char *buf, size_t n, const char *fmt, ...);
 void *memcpy(void *dst, const void *src, size_t n);
+void *memmove(void *dst, const void *src, size_t n);
 void *memset(void *dst, int c, size_t n);
 int   memcmp(const void *a, const void *b, size_t n);
 int   strcmp(const char *a, const char *b);
-/* isnan: use compiler builtin; fma/fmaf provided by browser_wast.c */
+/* isnan/isinf: use compiler builtins */
 #define isnan(x)   __builtin_isnan(x)
+#define isinf(x)   __builtin_isinf(x)
+/* math functions provided by browser_wast.c */
 float  fmaf(float a, float b, float c);
 double fma(double a, double b, double c);
+float  fabsf(float x);
+float  ceilf(float x);
+float  floorf(float x);
+float  truncf(float x);
+float  nearbyintf(float x);
+float  sqrtf(float x);
+double fabs(double x);
+double ceil(double x);
+double floor(double x);
+double trunc(double x);
+double nearbyint(double x);
+double sqrt(double x);
 #else
 #include <stdlib.h>
 #include <string.h>
@@ -174,6 +189,8 @@ struct waste_exec_engine {
     wasm_valtype    elem_types[WAST_MAX_ELEM_SEGS];
     uint8_t         elem_dropped[WAST_MAX_ELEM_SEGS];
     uint32_t        elem_count;
+    uint8_t         instantiation_trapped;
+    char            instantiation_error[256];
     wasm_value      *local_frames[EXEC_MAX_CALL_DEPTH];
     uint32_t         local_frame_capacities[EXEC_MAX_CALL_DEPTH];
 };
@@ -185,6 +202,8 @@ static int value_type_is_defined(const waste_exec_engine *eng,
 }
 
 typedef struct {
+    const waste_exec_engine *left_engine;
+    const waste_exec_engine *right_engine;
     uint32_t left_group;
     uint32_t right_group;
 } exec_type_pair;
@@ -220,11 +239,19 @@ static int same_type_index_ctx(const waste_exec_engine *left_engine,
         left_index - left_start != right_index - right_start)
         return 0;
 
-    for (uint32_t i = 0; i < compare->count; i++)
-        if (compare->pairs[i].left_group == left_start &&
-            compare->pairs[i].right_group == right_start)
+    for (uint32_t i = 0; i < compare->count; i++) {
+        const exec_type_pair *p = &compare->pairs[i];
+        if (p->left_engine == left_engine && p->right_engine == right_engine &&
+            p->left_group == left_start && p->right_group == right_start)
             return 1;
+        /* Structural equivalence is symmetric */
+        if (p->left_engine == right_engine && p->right_engine == left_engine &&
+            p->left_group == right_start && p->right_group == left_start)
+            return 1;
+    }
     if (compare->count >= WAST_MAX_TYPES) return 0;
+    compare->pairs[compare->count].left_engine = left_engine;
+    compare->pairs[compare->count].right_engine = right_engine;
     compare->pairs[compare->count].left_group = left_start;
     compare->pairs[compare->count].right_group = right_start;
     compare->count++;
@@ -269,9 +296,28 @@ static int same_value_type_ctx(const waste_exec_engine *left_engine,
     if (((unsigned)left < WASM_VALTYPE_TYPE_REF_BASE) !=
         ((unsigned)right < WASM_VALTYPE_TYPE_REF_BASE))
         return 0;
-    return same_type_index_ctx(left_engine, WASM_VALTYPE_TYPE_REF_INDEX(left),
-                               right_engine, WASM_VALTYPE_TYPE_REF_INDEX(right),
-                               compare);
+    uint32_t li = WASM_VALTYPE_TYPE_REF_INDEX(left);
+    uint32_t ri = WASM_VALTYPE_TYPE_REF_INDEX(right);
+    /* When comparing inside a rec group, check whether each type ref is
+     * intra-group (referencing a member of a group currently being compared)
+     * or extra-group.  Intra-group refs must match by relative position;
+     * mixed intra/extra is a mismatch. */
+    for (uint32_t p = 0; p < compare->count; p++) {
+        const exec_type_pair *pair = &compare->pairs[p];
+        int l_intra = (left_engine == pair->left_engine &&
+                       li >= pair->left_group &&
+                       li < pair->left_group +
+                            pair->left_engine->types[pair->left_group].rec_group_size);
+        int r_intra = (right_engine == pair->right_engine &&
+                       ri >= pair->right_group &&
+                       ri < pair->right_group +
+                            pair->right_engine->types[pair->right_group].rec_group_size);
+        if (l_intra || r_intra) {
+            if (l_intra != r_intra) return 0;
+            return (li - pair->left_group) == (ri - pair->right_group);
+        }
+    }
+    return same_type_index_ctx(left_engine, li, right_engine, ri, compare);
 }
 
 static int same_value_type(const waste_exec_engine *left_engine, wasm_valtype left,
@@ -1188,9 +1234,16 @@ static exec_status parse_data(waste_exec_engine *eng, exec_reader *sec, exec_err
         if (!er_u32(sec, &length) || !er_bytes(sec, length, &data))
             return exec_fail(err, EXEC_ERROR_FORMAT, "invalid active data segment");
         if ((uint64_t)offset + length >
-            (uint64_t)memory->pages * EXEC_PAGE_SIZE)
-            return exec_fail(err, EXEC_ERROR_TRAP, "out of bounds memory access");
-        memcpy(memory->data + offset, data, length);
+            (uint64_t)memory->pages * EXEC_PAGE_SIZE) {
+            if (!eng->instantiation_trapped) {
+                eng->instantiation_trapped = 1;
+                snprintf(eng->instantiation_error,
+                         sizeof(eng->instantiation_error),
+                         "out of bounds memory access");
+            }
+        } else if (!eng->instantiation_trapped) {
+            memcpy(memory->data + offset, data, length);
+        }
     }
     return EXEC_OK;
 }
@@ -1250,13 +1303,8 @@ static exec_status parse_elements(waste_exec_engine *eng, exec_reader *sec,
                 return exec_fail(err, EXEC_ERROR_FORMAT,
                                  "element segment allocation failed");
         }
-        if (active && (table_index >= eng->table_count ||
-            !global_type_is_compat(eng, ref_type,
-                                   eng->tables[table_index]->type_owner,
-                                   eng->tables[table_index]->element_type, 0)))
+        if (active && table_index >= eng->table_count)
             return exec_fail(err, EXEC_ERROR_FORMAT, "invalid active element segment");
-        if (active && (uint64_t)offset + item_count > eng->tables[table_index]->size)
-            return exec_fail(err, EXEC_ERROR_TRAP, "out of bounds table access");
         if (uses_expressions) {
             /* Modes 4-7: each item is an init expression */
             for (uint32_t item = 0; item < item_count; item++) {
@@ -1271,7 +1319,6 @@ static exec_status parse_elements(waste_exec_engine *eng, exec_reader *sec,
                     slot.func_idx = value.value.ref;
                 }
                 eng->elem_values[segment][item] = slot;
-                if (active) eng->tables[table_index]->elements[offset + item] = slot;
             }
         } else {
             /* Modes 0-3: each item is a bare funcidx */
@@ -1283,9 +1330,34 @@ static exec_status parse_elements(waste_exec_engine *eng, exec_reader *sec,
                 exec_table_element slot = {eng, func_idx};
                 eng->declared_funcs[func_idx] = 1;
                 eng->elem_values[segment][item] = slot;
-                if (active) eng->tables[table_index]->elements[offset + item] = slot;
             }
         }
+        /* For active segments, the segment's effective type must be a subtype
+         * of the table's element type.  Modes 0-3 (bare funcidx) items are
+         * non-null function references by construction, so their effective
+         * type is (ref func) even though the declared encoding is funcref. */
+        wasm_valtype segment_eff_type = ref_type;
+        if (!uses_expressions && ref_type == WASM_VALTYPE_FUNCREF)
+            segment_eff_type = WASM_VALTYPE_FUNCREF_NONNULL;
+        if (active && !global_type_is_compat(
+                eng, segment_eff_type,
+                eng->tables[table_index]->type_owner,
+                eng->tables[table_index]->element_type, 0))
+            return exec_fail(err, EXEC_ERROR_FORMAT,
+                             "invalid active element segment");
+        int apply_segment = active && !eng->instantiation_trapped;
+        if (apply_segment &&
+            (uint64_t)offset + item_count > eng->tables[table_index]->size) {
+            eng->instantiation_trapped = 1;
+            snprintf(eng->instantiation_error,
+                     sizeof(eng->instantiation_error),
+                     "out of bounds table access");
+            apply_segment = 0;
+        }
+        if (apply_segment)
+            for (uint32_t item = 0; item < item_count; item++)
+                eng->tables[table_index]->elements[offset + item] =
+                    eng->elem_values[segment][item];
     }
     return EXEC_OK;
 }
@@ -2854,7 +2926,7 @@ exec_status exec_load_with_imports(const uint8_t *bytes, size_t size,
         return exec_fail(err, EXEC_ERROR_FORMAT, message);
     }
 
-    if (eng->has_start) {
+    if (eng->has_start && !eng->instantiation_trapped) {
         wasm_value start_results[WAST_MAX_RESULTS];
         int start_result_count = 0;
         exec_error start_err;
@@ -2863,9 +2935,25 @@ exec_status exec_load_with_imports(const uint8_t *bytes, size_t size,
                                       start_results, &start_result_count, &start_err);
         if (st2 != EXEC_OK) {
             if (err) *err = start_err;
+            if (st2 == EXEC_ERROR_TRAP) {
+                /* Instantiation failure does not roll back writes performed
+                 * by element/data initialization or by the start function.
+                 * Return an unaddressable live instance so references that
+                 * escaped through imported tables remain callable. */
+                *eng_out = eng;
+                return st2;
+            }
             exec_free(eng);
             return st2;
         }
+    }
+
+    if (eng->instantiation_trapped) {
+        *eng_out = eng;
+        return exec_fail(err, EXEC_ERROR_TRAP,
+                         eng->instantiation_error[0] ?
+                         eng->instantiation_error :
+                         "module instantiation trapped");
     }
 
     *eng_out = eng;
@@ -4427,18 +4515,12 @@ tail_entry:
             uint32_t target=slot.func_idx;
             if(target>=teng->import_func_count+teng->func_count)
                 return exec_fail(err,EXEC_ERROR_TRAP,"call_indirect target out of range");
-            exec_func_type *expected=&eng->types[instr->u32_imm];
-            exec_func_type *actual=target<teng->import_func_count?
-                &teng->types[teng->import_func_types[target]]:
-                &teng->types[teng->funcs[target-teng->import_func_count].type_index];
-            if(expected->param_count!=actual->param_count||expected->result_count!=actual->result_count)
+            uint32_t actual_type_index=target<teng->import_func_count?
+                teng->import_func_types[target]:
+                teng->funcs[target-teng->import_func_count].type_index;
+            if(!same_func_type(eng,instr->u32_imm,teng,actual_type_index))
                 return exec_fail(err,EXEC_ERROR_TRAP,"indirect call type mismatch");
-            for(int i=0;i<expected->param_count;i++)
-                if(!same_value_type(eng,expected->params[i],teng,actual->params[i],0))
-                    return exec_fail(err,EXEC_ERROR_TRAP,"indirect call type mismatch");
-            for(int i=0;i<expected->result_count;i++)
-                if(!same_value_type(eng,expected->results[i],teng,actual->results[i],0))
-                    return exec_fail(err,EXEC_ERROR_TRAP,"indirect call type mismatch");
+            exec_func_type *expected=&eng->types[instr->u32_imm];
             if (instr->opcode == 0x13) {
                 /* return_call_indirect: tail call — restart without recursion */
                 for(int i=expected->param_count;i-->0;)

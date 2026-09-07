@@ -62,12 +62,46 @@ static wast_stream_command_kind classify(const char *p, size_t n) {
     return WAST_STREAM_UNKNOWN;
 }
 
+static int starts_inline_module(const char *p, size_t n) {
+    static const char *fields[] = {
+        "func", "memory", "global", "table", "data", "elem",
+        "type", "import", "export", "start", "tag", "rec", NULL
+    };
+    size_t i = 0;
+    if (i >= n || p[i++] != '(') return 0;
+    while (i < n && (p[i] == ' ' || p[i] == '\t' ||
+                     p[i] == '\r' || p[i] == '\n')) i++;
+    for (int field = 0; fields[field]; field++) {
+        size_t length = strlen(fields[field]);
+        if (i + length <= n && memcmp(p + i, fields[field], length) == 0 &&
+            (i + length == n || p[i + length] == ' ' ||
+             p[i + length] == '\t' || p[i + length] == '\r' ||
+             p[i + length] == '\n' || p[i + length] == '(' ||
+             p[i + length] == ')'))
+            return 1;
+    }
+    return 0;
+}
+
 int wast_stream_next(wast_stream *s, wast_stream_callback callback, void *opaque) {
     if (!s || !callback) return -1;
     skip_space(s);
     if (s->offset >= s->length) return 0;
     size_t start = s->offset;
     unsigned line = s->line;
+    /* Inline-module sugar is one WAT module whose fields happen to occupy the
+     * top level.  It must remain one execution unit instead of being split
+     * into a sequence of unrelated WAST commands. */
+    if (starts_inline_module(s->source + start, s->length - start)) {
+        wast_script parsed;
+        memset(&parsed, 0, sizeof(parsed));
+        (void)wast_parse_bytes(s->source + start, s->length - start, &parsed);
+        s->offset = s->length;
+        (void)callback(WAST_STREAM_MODULE, s->source + start,
+                       s->length - start, start, line, &parsed, opaque);
+        wast_script_free(&parsed);
+        return 1;
+    }
     int depth = 0;
     int in_string = 0;
     while (s->offset < s->length) {

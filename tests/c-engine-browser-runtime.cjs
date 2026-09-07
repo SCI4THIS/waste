@@ -6,6 +6,7 @@ const vm = require("node:vm");
 
 const root = path.resolve(__dirname, "..");
 const htmlPath = process.argv[2] || path.join(root, "build/c-engine/browser-tests-c-engine.html");
+const requestedFiles = new Set(process.argv.slice(3));
 const html = fs.readFileSync(htmlPath, "utf8");
 const pageScripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
 if (pageScripts.length !== 1) throw new Error("expected exactly one generated page script");
@@ -18,7 +19,12 @@ const engineBytes = Uint8Array.from(Buffer.from(payload.wasmB64, "base64"));
 
 (async () => {
   let failed = 0;
-  for (const test of payload.tests) {
+  const tests = requestedFiles.size ? payload.tests.filter(test =>
+    requestedFiles.has(test.file) || requestedFiles.has(`${test.group}/${test.file}`)
+  ) : payload.tests;
+  if (requestedFiles.size && tests.length === 0)
+    throw new Error("no requested C-engine browser tests found");
+  for (const test of tests) {
     let message;
     const self = {postMessage(value) { message = value; }};
     const context = vm.createContext({
@@ -27,12 +33,20 @@ const engineBytes = Uint8Array.from(Buffer.from(payload.wasmB64, "base64"));
     });
     vm.runInContext(workerMatch[1], context, {filename: "c-engine-worker.js"});
     await self.onmessage({data: {wasmBytes: engineBytes, testSpec: test.spec}});
-    const ok = message?.type === "done" && message.results.length > 0 &&
+    const ok = message?.type === "done" &&
       message.results.every(result => result.pass);
     console.log(`${ok ? "PASS" : "FAIL"} ${test.group}/${test.file}`);
     if (!ok) {
       failed++;
-      console.error(JSON.stringify(message, null, 2));
+      if (message?.type === "done") {
+        const failures = message.results.map((result, index) =>
+          ({index, ...result})).filter(result => !result.pass);
+        console.error(JSON.stringify({type: message.type, file: message.file,
+          resultCount: message.results.length, failureCount: failures.length,
+          failures: failures.slice(0, 12)}, null, 2));
+      } else {
+        console.error(JSON.stringify(message, null, 2));
+      }
     }
   }
   if (failed) throw new Error(`${failed} C-engine browser test(s) failed`);

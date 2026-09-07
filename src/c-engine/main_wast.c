@@ -53,6 +53,9 @@ typedef struct {
     int module_count;
     int module_capacity;
     native_call_block *call_blocks;
+    waste_exec_engine **orphan_engines;
+    int orphan_count;
+    int orphan_capacity;
     exec_memory spectest_memory;
     exec_table spectest_table;
     exec_global spectest_i32;
@@ -115,6 +118,8 @@ static void native_store_init(native_store *store) {
 static void native_store_free(native_store *store) {
     for (int i = store->module_count; i > 0; i--)
         exec_free(store->modules[i - 1].engine);
+    for (int i = store->orphan_count; i > 0; i--)
+        exec_free(store->orphan_engines[i - 1]);
     native_call_block *block = store->call_blocks;
     while (block) {
         native_call_block *next = block->next;
@@ -123,9 +128,25 @@ static void native_store_free(native_store *store) {
         block = next;
     }
     free(store->modules);
+    free(store->orphan_engines);
     free(store->spectest_memory.data);
     free(store->spectest_table.elements);
     memset(store, 0, sizeof(*store));
+}
+
+static int native_store_keep_orphan(native_store *store,
+                                    waste_exec_engine *engine) {
+    if (store->orphan_count == store->orphan_capacity) {
+        int capacity = store->orphan_capacity ?
+                       store->orphan_capacity * 2 : 16;
+        waste_exec_engine **engines = realloc(
+            store->orphan_engines, (size_t)capacity * sizeof(*engines));
+        if (!engines) return 0;
+        store->orphan_engines = engines;
+        store->orphan_capacity = capacity;
+    }
+    store->orphan_engines[store->orphan_count++] = engine;
+    return 1;
 }
 
 static native_linked_module *native_registered_module(native_store *store,
@@ -543,7 +564,10 @@ static int run_normal(const char *path) {
             printf("}");
             total_count++;
             if (ok) total_passed++;
-            if (engine) exec_free(engine);
+            if (engine && !native_store_keep_orphan(&store, engine)) {
+                /* Preserve any funcrefs installed into imported tables even
+                 * if the lifetime bookkeeping itself cannot grow. */
+            }
             continue;
         }
         if (st != EXEC_OK) {

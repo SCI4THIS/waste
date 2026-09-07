@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Generate an interactive browser test dashboard for C-engine WAST tests.
 
-Runs the native waste-wast runner (--browser-spec mode) to pre-encode WAT modules
-and extract assertion specs, then embeds everything in a single offline HTML page
-where tests run live in the browser using waste-wast.wasm and Web Workers.
+Embeds raw .wast spec test text into a single offline HTML page where the full
+WAST parser/runner (compiled to Wasm) executes them in Web Workers.  Repository
+DIY fixtures are assembled ahead of time and run browser-natively.
 """
 
 import argparse
@@ -14,31 +14,6 @@ import sys
 import tempfile
 from pathlib import Path
 import datetime
-
-
-def run_browser_spec(runner: Path, wast_file: Path) -> dict:
-    """Run waste-wast --browser-spec on a .wast file and return parsed JSON."""
-    try:
-        result = subprocess.run(
-            [str(runner), "--browser-spec", str(wast_file)],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode not in (0, 1):
-            return {
-                "file": wast_file.name,
-                "groups": [],
-                "error": f"runner exited with status {result.returncode}: {result.stderr.strip()}",
-            }
-        spec = json.loads(result.stdout)
-        if result.returncode != 0 and not spec.get("error"):
-            spec["error"] = result.stderr.strip() or "WAST preprocessing failed"
-        return spec
-    except subprocess.TimeoutExpired:
-        return {"file": wast_file.name, "groups": [], "error": "timeout"}
-    except json.JSONDecodeError as exc:
-        return {"file": wast_file.name, "groups": [], "error": f"invalid JSON: {exc}"}
 
 
 def script_json(value) -> str:
@@ -330,8 +305,6 @@ HTML = r'''<!doctype html>
   })();
   const TESTS = PAYLOAD.tests;
 
-  const FLAT_VALUE_SIZE = 33; /* type(1) + data(16) + nan_mode(16) */
-
   let batchRunning = false;
   let testAllStartedAt = null;
   let testAllFinishedAt = null;
@@ -342,12 +315,236 @@ HTML = r'''<!doctype html>
   const WORKER_SRC = String.raw`
 "use strict";
 
-const FLAT_SIZE = 33;
-
 function decodeB64(text) {
   const raw = atob(text), bytes = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
   return bytes;
+}
+
+function roundShiftEven(value, shift) {
+  if (shift <= 0) return value << BigInt(-shift);
+  const amount = BigInt(shift);
+  let rounded = value >> amount;
+  const remainder = value - (rounded << amount);
+  const halfway = 1n << (amount - 1n);
+  if (remainder > halfway ||
+      (remainder === halfway && (rounded & 1n) !== 0n))
+    rounded++;
+  return rounded;
+}
+
+function roundRatioEven(numerator, denominator) {
+  let rounded = numerator / denominator;
+  const remainder = numerator % denominator;
+  const comparison = remainder * 2n - denominator;
+  if (comparison > 0n ||
+      (comparison === 0n && (rounded & 1n) !== 0n))
+    rounded++;
+  return rounded;
+}
+
+function watDecimalF32(text) {
+  let source = text.toLowerCase();
+  let negative = false;
+  if (source[0] === "+" || source[0] === "-") {
+    negative = source[0] === "-";
+    source = source.slice(1);
+  }
+  const exponentAt = source.indexOf("e");
+  const significand = exponentAt < 0 ? source : source.slice(0, exponentAt);
+  const decimalExponent = exponentAt < 0 ? 0 :
+    Number(source.slice(exponentAt + 1));
+  const pointAt = significand.indexOf(".");
+  const fractionDigits = pointAt < 0 ? 0 :
+    significand.length - pointAt - 1;
+  const digits = significand.replace(".", "");
+  const magnitude = BigInt(digits || "0");
+  if (magnitude === 0n) {
+    const data = new DataView(new ArrayBuffer(4));
+    data.setUint32(0, negative ? 0x80000000 : 0);
+    return data.getFloat32(0);
+  }
+  const decimalScale = decimalExponent - fractionDigits;
+  let numerator = magnitude;
+  let denominator = 1n;
+  if (decimalScale >= 0)
+    numerator *= 10n ** BigInt(decimalScale);
+  else
+    denominator = 10n ** BigInt(-decimalScale);
+
+  let unbiased = numerator.toString(2).length -
+                 denominator.toString(2).length;
+  if (unbiased >= 0 ? numerator < (denominator << BigInt(unbiased)) :
+      (numerator << BigInt(-unbiased)) < denominator)
+    unbiased--;
+
+  let exponentField = 0;
+  let fraction = 0n;
+  if (unbiased >= -126) {
+    const shift = 23 - unbiased;
+    let rounded = shift >= 0 ?
+      roundRatioEven(numerator << BigInt(shift), denominator) :
+      roundRatioEven(numerator, denominator << BigInt(-shift));
+    if (rounded === (1n << 24n)) {
+      rounded >>= 1n;
+      unbiased++;
+    }
+    if (unbiased > 127) {
+      exponentField = 0xff;
+    } else {
+      exponentField = unbiased + 127;
+      fraction = rounded - (1n << 23n);
+    }
+  } else {
+    const units = roundRatioEven(numerator << 149n, denominator);
+    if (units >= (1n << 23n)) {
+      exponentField = 1;
+      fraction = units - (1n << 23n);
+    } else {
+      fraction = units;
+    }
+  }
+  const bits = (negative ? 0x80000000 : 0) |
+    (exponentField << 23) | Number(fraction & 0x7fffffn);
+  const data = new DataView(new ArrayBuffer(4));
+  data.setUint32(0, bits >>> 0);
+  return data.getFloat32(0);
+}
+
+function watHexFloat(text, asF32) {
+  let source = text.toLowerCase();
+  let negative = false;
+  if (source[0] === "+" || source[0] === "-") {
+    negative = source[0] === "-";
+    source = source.slice(1);
+  }
+  const exponentAt = source.indexOf("p");
+  const significand = exponentAt < 0 ? source : source.slice(0, exponentAt);
+  const exponent = exponentAt < 0 ? 0 : Number(source.slice(exponentAt + 1));
+  const pointAt = significand.indexOf(".");
+  const fractionDigits = pointAt < 0 ? 0 : significand.length - pointAt - 1;
+  const digits = significand.replace(/^0x/, "").replace(".", "");
+  const magnitude = BigInt("0x" + (digits || "0"));
+  const signShift = asF32 ? 31n : 63n;
+  if (magnitude === 0n) {
+    if (asF32) {
+      const data = new DataView(new ArrayBuffer(4));
+      data.setUint32(0, negative ? 0x80000000 : 0);
+      return data.getFloat32(0);
+    }
+    const data = new DataView(new ArrayBuffer(8));
+    data.setBigUint64(0, negative ? (1n << signShift) : 0n);
+    return data.getFloat64(0);
+  }
+
+  const precision = asF32 ? 24 : 53;
+  const bias = asF32 ? 127 : 1023;
+  const maximumExponent = asF32 ? 127 : 1023;
+  const minimumNormal = asF32 ? -126 : -1022;
+  const minimumSubnormal = asF32 ? -149 : -1074;
+  const fractionBits = BigInt(precision - 1);
+  const bitLength = magnitude.toString(2).length;
+  const scale = exponent - fractionDigits * 4;
+  let unbiased = bitLength - 1 + scale;
+  let exponentField = 0;
+  let fraction = 0n;
+
+  if (unbiased >= minimumNormal) {
+    let rounded = roundShiftEven(magnitude, bitLength - precision);
+    if (rounded === (1n << BigInt(precision))) {
+      rounded >>= 1n;
+      unbiased++;
+    }
+    if (unbiased > maximumExponent) {
+      exponentField = asF32 ? 0xff : 0x7ff;
+    } else {
+      exponentField = unbiased + bias;
+      fraction = rounded - (1n << fractionBits);
+    }
+  } else {
+    const unitShift = scale - minimumSubnormal;
+    const units = unitShift >= 0 ?
+      magnitude << BigInt(unitShift) :
+      roundShiftEven(magnitude, -unitShift);
+    const normalUnit = 1n << fractionBits;
+    if (units >= normalUnit) {
+      exponentField = 1;
+      fraction = units - normalUnit;
+    } else {
+      fraction = units;
+    }
+  }
+
+  if (asF32) {
+    const bits = (negative ? 0x80000000 : 0) |
+      (exponentField << 23) | Number(fraction & 0x7fffffn);
+    const data = new DataView(new ArrayBuffer(4));
+    data.setUint32(0, bits >>> 0);
+    return data.getFloat32(0);
+  }
+  const bits = (negative ? (1n << signShift) : 0n) |
+    (BigInt(exponentField) << 52n) | (fraction & 0xfffffffffffffn);
+  const data = new DataView(new ArrayBuffer(8));
+  data.setBigUint64(0, bits);
+  return data.getFloat64(0);
+}
+
+function watFloat(text, asF32) {
+  const unsigned = text[0] === "+" || text[0] === "-" ? text.slice(1) : text;
+  if (unsigned.toLowerCase().startsWith("0x"))
+    return watHexFloat(text, asF32);
+  if (asF32) return watDecimalF32(text);
+  const value = Number(text);
+  return value;
+}
+
+async function runWastScript(wasmBytes, testSpec) {
+  const wastBytes = decodeB64(testSpec.wastB64);
+  if (wastBytes.length !== testSpec.sourceBytes) {
+    throw new Error("embedded WAST length mismatch: " + wastBytes.length +
+                    " != " + testSpec.sourceBytes);
+  }
+  let engineMemory = null;
+  const decoder = new TextDecoder();
+  const hostFloat = (ptr, length, asF32) => {
+    const bytes = new Uint8Array(engineMemory.buffer, ptr, length);
+    return watFloat(decoder.decode(bytes), asF32);
+  };
+  const imports = {waste_host: {
+    strtod: (ptr, length) => hostFloat(ptr, length, false),
+    strtof: (ptr, length) => hostFloat(ptr, length, true),
+  }};
+  const {instance} = await WebAssembly.instantiate(wasmBytes, imports);
+  engineMemory = instance.exports.memory;
+  const exp = instance.exports;
+
+  const ptr = exp.waste_wast_alloc(wastBytes.length);
+  new Uint8Array(exp.memory.buffer).set(wastBytes, ptr);
+
+  try {
+    exp.waste_wast_run_script(ptr, wastBytes.length);
+  } catch (error) {
+    throw new Error(String(error) + " at WAST line " +
+                    exp.waste_wast_command_line());
+  }
+
+  const total = exp.waste_wast_results_total();
+  const resultsPtr = exp.waste_wast_results_ptr();
+  const mem = new Uint8Array(exp.memory.buffer);
+  const results = [];
+
+  for (let i = 0; i < total; i++) {
+    const base = resultsPtr + i * 256;
+    const pass = mem[base] !== 0;
+    let funcEnd = 1;
+    while (funcEnd < 64 && mem[base + funcEnd] !== 0) funcEnd++;
+    const func = decoder.decode(mem.subarray(base + 1, base + funcEnd));
+    let errEnd = 64;
+    while (errEnd < 256 && mem[base + errEnd] !== 0) errEnd++;
+    const error = pass ? "" : decoder.decode(mem.subarray(base + 64, base + errEnd));
+    results.push({func, pass, error});
+  }
+  return results;
 }
 
 async function runBrowserNative(testSpec) {
@@ -451,169 +648,22 @@ async function runBrowserNative(testSpec) {
   return results;
 }
 
-function packValue(mem, offset, v) {
-  mem[offset] = v.type;
-  const data = v.data;
-  const nm   = v.nan_mode;
-  for (let i = 0; i < 16; i++) {
-    mem[offset + 1 + i]  = data[i] || 0;
-    mem[offset + 17 + i] = nm[i]   || 0;
-  }
-}
-
 self.onmessage = async function(e) {
   const {wasmBytes, testSpec} = e.data;
-  const assertionResults = [];
-
   try {
-    if (testSpec.mode === "browser-native") {
-      const results = await runBrowserNative(testSpec);
-      self.postMessage({type: "done", file: testSpec.file, results});
-      return;
-    }
     if (testSpec.error) throw new Error(testSpec.error);
-    if (!Array.isArray(testSpec.groups) || testSpec.groups.length === 0)
-      throw new Error("WAST preprocessing produced no module groups");
-
-    const {instance} = await WebAssembly.instantiate(wasmBytes);
-    const exp = instance.exports;
-
-    const getStr = (ptr) => {
-      const mem = new Uint8Array(exp.memory.buffer);
-      let len = 0;
-      while (mem[ptr + len] !== 0 && len < 512) len++;
-      return new TextDecoder().decode(mem.subarray(ptr, ptr + len));
-    };
-    const putStr = (value) => {
-      const bytes = new TextEncoder().encode(value || "");
-      const ptr = exp.waste_wast_alloc(bytes.length + 1);
-      const mem = new Uint8Array(exp.memory.buffer);
-      mem.set(bytes, ptr); mem[ptr + bytes.length] = 0;
-      return {ptr, length: bytes.length};
-    };
-
-    exp.waste_wast_reset();
-
-    for (const group of testSpec.groups) {
-      if (group.module_assertion && group.module_assertion.validation_error) {
-        const invalid = group.module_assertion.kind === 3;
-        assertionResults.push({func: "(module)", pass: invalid,
-          error: invalid ? "" : group.module_assertion.validation_error});
-        continue;
-      }
-      /* Decode hex module */
-      const hex = group.module_hex;
-      const modBytes = new Uint8Array(hex.length >> 1);
-      for (let i = 0; i < modBytes.length; i++)
-        modBytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-
-      /* Allocate + write module */
-      const modPtr = exp.waste_wast_alloc(modBytes.length);
-      new Uint8Array(exp.memory.buffer).set(modBytes, modPtr);
-
-      /* Load module */
-      const moduleId = putStr(group.id);
-      const loadOk = exp.waste_wast_load_linked_module(
-        modPtr, modBytes.length, moduleId.ptr, moduleId.length);
-      if (group.module_assertion) {
-        const kind = group.module_assertion.kind;
-        const expectedFailure = kind === 1 ? loadOk === 3 : loadOk !== 0;
-        const error = loadOk === 0 ? "module unexpectedly instantiated" :
-          (getStr(exp.waste_wast_error_ptr()) || "module instantiation failed");
-        assertionResults.push({func: "(module)", pass: expectedFailure,
-          error: expectedFailure ? "" : error});
-        continue;
-      }
-      if (loadOk !== 0) {
-        const error = getStr(exp.waste_wast_error_ptr()) || "module load failed";
-        if (group.assertions.length === 0)
-          assertionResults.push({func: "(module)", pass: false, error});
-        else for (const a of group.assertions)
-          assertionResults.push({func: a.func, pass: false, error});
-        continue;
-      }
-
-      if (group.register) {
-        const registration = putStr(group.register);
-        const registerOk = exp.waste_wast_register_current(
-          registration.ptr, registration.length);
-        if (registerOk !== 0)
-          throw new Error(getStr(exp.waste_wast_error_ptr()) || "module registration failed");
-      }
-
-      if (group.assertions.length === 0)
-        assertionResults.push({func: "(module)", pass: true, error: ""});
-
-      for (const assertion of group.assertions) {
-        const {func, action, kind, args, alts} = assertion;
-        {
-          const selected = putStr(assertion.module || "");
-          if (exp.waste_wast_select_module(selected.ptr, selected.length) !== 0) {
-            assertionResults.push({func, pass: false,
-              error: getStr(exp.waste_wast_error_ptr()) || "unknown module id"});
-            continue;
-          }
-        }
-        const argCount = args.length;
-        const altCount = alts.length;
-        const resultCount = altCount > 0 ? alts[0].length : 0;
-
-        /* Allocate name */
-        const nameEnc = new TextEncoder().encode(func);
-        const namePtr = exp.waste_wast_alloc(nameEnc.length + 1);
-        const nameMem = new Uint8Array(exp.memory.buffer);
-        nameMem.set(nameEnc, namePtr);
-        nameMem[namePtr + nameEnc.length] = 0;
-
-        /* Allocate + write args */
-        const argsSize = Math.max(1, argCount * FLAT_SIZE);
-        const argsPtr = exp.waste_wast_alloc(argsSize);
-        {
-          const m = new Uint8Array(exp.memory.buffer);
-          for (let i = 0; i < argCount; i++)
-            packValue(m, argsPtr + i * FLAT_SIZE, args[i]);
-        }
-
-        /* Allocate + write alts */
-        const altsSize = Math.max(1, altCount * resultCount * FLAT_SIZE);
-        const altsPtr = exp.waste_wast_alloc(altsSize);
-        {
-          const m = new Uint8Array(exp.memory.buffer);
-          for (let a = 0; a < altCount; a++)
-            for (let r = 0; r < alts[a].length; r++)
-              packValue(m, altsPtr + (a * resultCount + r) * FLAT_SIZE, alts[a][r]);
-        }
-
-        /* Run assertion */
-        const pass = (kind === 1 || kind === 2) ?
-          exp.waste_wast_assert_trap(
-            namePtr, nameEnc.length, argsPtr, argCount
-          ) !== 0 : action === "get" ?
-          exp.waste_wast_assert_global(
-            namePtr, nameEnc.length,
-            altsPtr, altCount, resultCount
-          ) !== 0 :
-          exp.waste_wast_assert_return(
-            namePtr, nameEnc.length,
-            argsPtr, argCount,
-            altsPtr, altCount,
-            resultCount
-          ) !== 0;
-
-        let error = "";
-        if (!pass) {
-          const errPtr = exp.waste_wast_error_ptr();
-          error = getStr(errPtr);
-        }
-        assertionResults.push({func, pass, error});
-      }
+    let results;
+    if (testSpec.mode === "browser-native") {
+      results = await runBrowserNative(testSpec);
+    } else if (testSpec.mode === "wast-stream") {
+      results = await runWastScript(wasmBytes, testSpec);
+    } else {
+      throw new Error("unsupported test mode: " + testSpec.mode);
     }
+    self.postMessage({type: "done", file: testSpec.file, results});
   } catch (err) {
     self.postMessage({type: "error", error: String(err.stack || err)});
-    return;
   }
-
-  self.postMessage({type: "done", file: testSpec.file, results: assertionResults});
 };
   `;
 
@@ -670,9 +720,7 @@ self.onmessage = async function(e) {
     } else if (state === "running") {
       assertEl.textContent = "running…";
     } else {
-      /* Count total from spec */
-      let total = 0;
-      for (const g of (test.spec.groups || [])) total += g.assertions.length;
+      const total = test.spec.assertionCount || 0;
       assertEl.textContent = total > 0 ? `${total} assertions` : "";
     }
 
@@ -785,8 +833,7 @@ self.onmessage = async function(e) {
 
         const assertEl = document.createElement("span");
         assertEl.className = "test-assertions";
-        let total = 0;
-        for (const g of (test.spec.groups || [])) total += g.assertions.length;
+        const total = test.spec.assertionCount || 0;
         assertEl.textContent = total > 0 ? `${total} assertions` : "";
 
         const dur = document.createElement("span");
@@ -834,7 +881,10 @@ self.onmessage = async function(e) {
         if (error) {
           setResult(test, "fail", [{func: "(worker)", pass: false, error}], durationMs);
         } else {
-          const passed = assertionResults.length > 0 && assertionResults.every(a => a.pass);
+          /* A valid script with no assertions (for example inline-module.wast)
+           * is a successful file.  Engine and parse errors are emitted as
+           * explicit failing results, so an empty result list is not an error. */
+          const passed = assertionResults.every(a => a.pass);
           setResult(test, passed ? "pass" : "fail", assertionResults, durationMs);
         }
         resolve();
@@ -988,17 +1038,15 @@ self.onmessage = async function(e) {
 
 
 def total_assertions(spec: dict) -> int:
-    return sum(len(g.get("assertions", [])) +
-               (1 if g.get("module_assertion") else 0)
-               for g in spec.get("groups", []))
+    return spec.get("assertionCount", 0)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Generate an interactive C engine test dashboard"
     )
-    parser.add_argument("--runner", type=Path, required=True,
-                        help="Path to the waste-wast native binary")
+    parser.add_argument("--runner", type=Path, default=None,
+                        help="Path to the waste-wast native binary (needed for --count)")
     parser.add_argument("--wasm", type=Path, required=True,
                         help="Path to waste-wast.wasm (browser C engine)")
     parser.add_argument("--tests", type=Path, required=True, action="append",
@@ -1007,13 +1055,17 @@ def main() -> int:
                         help="Output HTML file path")
     parser.add_argument("--wasm-as", default="wasm-as",
                         help="Binaryen wasm-as used for repository DIY fixtures")
+    parser.add_argument("--count", action="store_true",
+                        help="Use native runner to count assertions per file")
     args = parser.parse_args()
 
-    for label, p, kind in [
-        ("runner", args.runner, "file"),
-        ("wasm",   args.wasm,   "file"),
-        *((f"tests[{index}]", path, "dir") for index, path in enumerate(args.tests)),
-    ]:
+    checks = [
+        ("wasm", args.wasm, "file"),
+        *((f"tests[{i}]", p, "dir") for i, p in enumerate(args.tests)),
+    ]
+    if args.runner:
+        checks.insert(0, ("runner", args.runner, "file"))
+    for label, p, kind in checks:
         if kind == "file" and not p.is_file():
             print(f"error: {label} not found: {p}", file=sys.stderr)
             return 1
@@ -1030,20 +1082,44 @@ def main() -> int:
         print("error: no .wast files found", file=sys.stderr)
         return 1
 
-    print(f"Building browser specs from {len(wast_files)} test files…")
+    # Optionally count assertions per spec file using the native runner
+    assertion_counts = {}
+    if args.count and args.runner:
+        for _, wast_file in wast_files:
+            try:
+                result = subprocess.run(
+                    [str(args.runner), "--count", str(wast_file)],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if result.returncode == 0:
+                    assertion_counts[wast_file.name] = int(result.stdout.strip())
+            except (subprocess.TimeoutExpired, ValueError):
+                pass
+
+    print(f"Embedding {len(wast_files)} test files…")
     tests = []
     for test_dir, wast_file in wast_files:
         if test_dir.name == "diy-posix-test":
             try:
                 spec = build_diy_spec(wast_file, args.wasm_as)
+                n_steps = len(spec.get("steps", []))
+                spec["assertionCount"] = n_steps
             except (OSError, ValueError) as exc:
-                spec = {"file": wast_file.name, "mode": "browser-native", "error": str(exc)}
+                spec = {"file": wast_file.name, "mode": "browser-native",
+                        "error": str(exc), "assertionCount": 0}
         else:
-            spec = run_browser_spec(args.runner, wast_file)
-        n_assert = total_assertions(spec)
-        n_steps = len(spec.get("steps", []))
-        print(f"  {wast_file.name}: {n_assert or n_steps} checks")
-        # Derive group name from test directory name relative to a common root
+            wast_text = wast_file.read_bytes()
+            wast_b64 = base64.b64encode(wast_text).decode("ascii")
+            n_assert = assertion_counts.get(wast_file.name, 0)
+            spec = {
+                "file": wast_file.name,
+                "mode": "wast-stream",
+                "wastB64": wast_b64,
+                "sourceBytes": len(wast_text),
+                "assertionCount": n_assert,
+            }
+        n_display = total_assertions(spec) or len(spec.get("steps", []))
+        print(f"  {wast_file.name}: {n_display or '?'} checks")
         tests.append({
             "file": wast_file.name,
             "group": test_dir.name,
