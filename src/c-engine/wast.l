@@ -17,12 +17,71 @@ static void safe_strncpy(char *dest, const char *src, size_t n) {
 
 /* Strip underscores from a numeric literal into a static buffer */
 static const char *strip_underscores(const char *s) {
-    static char buf[128];
+    /* The core literal tests include exact decimal f64 boundaries with more
+     * than 300 digits.  Keep this bounded, but do not truncate a conforming
+     * literal before strtod performs the required rounding. */
+    static char buf[4096];
     size_t j = 0;
     for (size_t i = 0; s[i] && j + 1 < sizeof(buf); i++)
         if (s[i] != '_') buf[j++] = s[i];
     buf[j] = '\0';
     return buf;
+}
+
+static int hex_value(unsigned char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    c = (unsigned char)(c | 0x20);
+    return c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+}
+
+static void append_utf8(char *dest, size_t cap, size_t *out, uint32_t cp) {
+    unsigned char bytes[4];
+    size_t count;
+    if (cp <= 0x7f) { bytes[0] = (unsigned char)cp; count = 1; }
+    else if (cp <= 0x7ff) {
+        bytes[0] = (unsigned char)(0xc0 | (cp >> 6));
+        bytes[1] = (unsigned char)(0x80 | (cp & 0x3f)); count = 2;
+    } else if (cp <= 0xffff) {
+        bytes[0] = (unsigned char)(0xe0 | (cp >> 12));
+        bytes[1] = (unsigned char)(0x80 | ((cp >> 6) & 0x3f));
+        bytes[2] = (unsigned char)(0x80 | (cp & 0x3f)); count = 3;
+    } else {
+        bytes[0] = (unsigned char)(0xf0 | (cp >> 18));
+        bytes[1] = (unsigned char)(0x80 | ((cp >> 12) & 0x3f));
+        bytes[2] = (unsigned char)(0x80 | ((cp >> 6) & 0x3f));
+        bytes[3] = (unsigned char)(0x80 | (cp & 0x3f)); count = 4;
+    }
+    for (size_t i = 0; i < count && *out + 1 < cap; i++)
+        dest[(*out)++] = (char)bytes[i];
+}
+
+static void decode_quoted_id(char *dest, size_t cap,
+                             const char *src, size_t length) {
+    size_t out = 0;
+    if (cap > 1) dest[out++] = '$';
+    for (size_t i = 0; i < length && out + 1 < cap; i++) {
+        unsigned char c = (unsigned char)src[i];
+        if (c != '\\' || i + 1 >= length) { dest[out++] = (char)c; continue; }
+        c = (unsigned char)src[++i];
+        if (c == 'u' && i + 1 < length && src[i + 1] == '{') {
+            uint32_t cp = 0; i += 2;
+            while (i < length && src[i] != '}') {
+                int digit = hex_value((unsigned char)src[i++]);
+                if (digit >= 0) cp = cp * 16u + (uint32_t)digit;
+            }
+            append_utf8(dest, cap, &out, cp);
+        } else if (i + 1 < length && hex_value(c) >= 0 &&
+                   hex_value((unsigned char)src[i + 1]) >= 0) {
+            dest[out++] = (char)((hex_value(c) << 4) |
+                                 hex_value((unsigned char)src[++i]));
+        } else {
+            if (c == 't') c = '\t';
+            else if (c == 'n') c = '\n';
+            else if (c == 'r') c = '\r';
+            dest[out++] = (char)c;
+        }
+    }
+    dest[out] = '\0';
 }
 
 #define YY_USER_ACTION do {                                                   \
@@ -40,18 +99,75 @@ static const char *strip_underscores(const char *s) {
 DIGIT       [0-9]
 HEXDIGIT    [0-9a-fA-F]
 WS          [ \t\r\n]+
-ATOM_CHAR   [a-zA-Z0-9_.+\-*/\\^~=<>!?@#$%&|:`]
+ATOM_CHAR   [a-zA-Z0-9_.+\-*/\\^~=<>!?@#$%&|:`']
 NUM         {DIGIT}(_*{DIGIT})*
 HEXNUM      {HEXDIGIT}(_*{HEXDIGIT})*
 
 %%
 
 "(;"([^;]|";"[^)])*";)"    { }
-";;"[^\n]*                  { }
+";;"[^\x0a\x0d]*           { }
 {WS}                        { }
 
+    /* WAST annotations are syntactic wrappers around the following token.
+     * They carry no execution semantics for this engine, so discard a
+     * complete wrapper before returning ordinary WAT tokens.  The rule is
+     * deliberately limited to a single, balanced annotation; malformed
+     * annotation spellings remain visible to the parser for diagnostics. */
+\([ \t\r\n]*@[^()\r\n]*\) { }
+
+    /* Folded control starts are classified as one boundary token.  This avoids
+     * the LR parser choosing a function-header attribute after seeing `(` before
+     * it can inspect the following keyword. */
+\([ \t\r\n]*block { yyextra->fold_depth++; return FOLD_BLOCK_START; }
+\([ \t\r\n]*loop  { yyextra->fold_depth++; return FOLD_LOOP_START; }
+\([ \t\r\n]*if    { yyextra->fold_depth++; return FOLD_IF_START; }
+\([ \t\r\n]*local\.get { yyextra->fold_depth++; return FOLD_LOCAL_GET_START; }
+\([ \t\r\n]*local\.set { yyextra->fold_depth++; return FOLD_LOCAL_SET_START; }
+\([ \t\r\n]*local\.tee { yyextra->fold_depth++; return FOLD_LOCAL_TEE_START; }
+\([ \t\r\n]*global\.get { yyextra->fold_depth++; return FOLD_GLOBAL_GET_START; }
+\([ \t\r\n]*global\.set { yyextra->fold_depth++; return FOLD_GLOBAL_SET_START; }
+\([ \t\r\n]*ref\.null { yyextra->fold_depth++; return FOLD_REF_NULL_START; }
+\([ \t\r\n]*global { yyextra->fold_depth++; return MODULE_GLOBAL_START; }
+\([ \t\r\n]*mut { return MODULE_GLOBAL_MUT_START; }
+\([ \t\r\n]*module[ \t\r\n]+binary { yyextra->fold_depth++; return MODULE_BINARY_START; }
+\([ \t\r\n]*module[ \t\r\n]+quote { yyextra->fold_depth++; return MODULE_QUOTE_START; }
+\([ \t\r\n]*module[ \t\r\n]+\$[a-zA-Z0-9_.+\-]+[ \t\r\n]+binary { yyextra->fold_depth++; return MODULE_ID_BINARY_START; }
+\([ \t\r\n]*module[ \t\r\n]+\$[a-zA-Z0-9_.+\-]+[ \t\r\n]+quote { yyextra->fold_depth++; return MODULE_ID_QUOTE_START; }
+\([ \t\r\n]*memory { yyextra->fold_depth++; return MODULE_MEMORY_START; }
+\([ \t\r\n]*then { yyextra->fold_depth++; return FOLD_THEN_START; }
+\([ \t\r\n]*else { yyextra->fold_depth++; return FOLD_ELSE_START; }
+\([ \t\r\n]*drop { yyextra->fold_depth++; return FOLD_DROP_START; }
+\([ \t\r\n]*nop { yyextra->fold_depth++; return FOLD_NOP_START; }
+\([ \t\r\n]*unreachable { yyextra->fold_depth++; return FOLD_UNREACHABLE_START; }
+\([ \t\r\n]*return { yyextra->fold_depth++; return FOLD_RETURN_START; }
+\([ \t\r\n]*br_table { yyextra->fold_depth++; return FOLD_BR_TABLE_START; }
+\([ \t\r\n]*br_on_non_null { yyextra->fold_depth++; return FOLD_BR_ON_NON_NULL_START; }
+\([ \t\r\n]*br_on_null { yyextra->fold_depth++; return FOLD_BR_ON_NULL_START; }
+\([ \t\r\n]*br_if { yyextra->fold_depth++; return FOLD_BR_IF_START; }
+\([ \t\r\n]*br { yyextra->fold_depth++; return FOLD_BR_START; }
+\([ \t\r\n]*return_call_indirect { yyextra->fold_depth++; return FOLD_RETURN_CALL_INDIRECT_START; }
+\([ \t\r\n]*return_call_ref { yyextra->fold_depth++; return FOLD_RETURN_CALL_REF_START; }
+\([ \t\r\n]*return_call { yyextra->fold_depth++; return FOLD_RETURN_CALL_START; }
+\([ \t\r\n]*call_ref { yyextra->fold_depth++; return FOLD_CALL_REF_START; }
+\([ \t\r\n]*call_indirect { yyextra->fold_depth++; return FOLD_CALL_INDIRECT_START; }
+\([ \t\r\n]*call { yyextra->fold_depth++; return FOLD_CALL_START; }
+\([ \t\r\n]*try_table { safe_strncpy(yylval->str_val,"try_table",sizeof(yylval->str_val)); yyextra->fold_depth++; return FOLD_ATOM_START; }
+\([ \t\r\n]*catch_all { safe_strncpy(yylval->str_val,"catch_all",sizeof(yylval->str_val)); yyextra->fold_depth++; return FOLD_ATOM_START; }
+\([ \t\r\n]*catch { safe_strncpy(yylval->str_val,"catch",sizeof(yylval->str_val)); yyextra->fold_depth++; return FOLD_ATOM_START; }
+\([ \t\r\n]*throw { safe_strncpy(yylval->str_val,"throw",sizeof(yylval->str_val)); yyextra->fold_depth++; return FOLD_ATOM_START; }
+\([ \t\r\n]*select { yyextra->fold_depth++; return FOLD_SELECT_START; }
+\([ \t\r\n]*[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_.]+ {
+    const char *p = yytext + 1;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    size_t n = strlen(p); if (n >= sizeof(yylval->str_val)) n = sizeof(yylval->str_val)-1;
+    memcpy(yylval->str_val, p, n); yylval->str_val[n] = '\0';
+    yyextra->fold_depth++;
+    return FOLD_ATOM_START;
+}
+
 "("   { return LPAREN; }
-")"   { return RPAREN; }
+")"   { if (yyextra->fold_depth > 0) yyextra->fold_depth--; return RPAREN; }
 
 \"([^\"\\]|\\.)*\"  {
     size_t len = (size_t)(yyleng - 2);
@@ -91,9 +207,37 @@ f32x4\.eq   { yylval->u32_val = 65;  return SIMD_OP; }
 f64x2\.eq   { yylval->u32_val = 71;  return SIMD_OP; }
 
     /* offset= and align= immediates — must be before ATOM catch-all */
-offset=0x{HEXDIGIT}+  { yylval->u32_val = (uint32_t)strtoull(yytext+7,NULL,16); return OFFSET_IMM; }
-offset={DIGIT}+        { yylval->u32_val = (uint32_t)strtoul(yytext+7,NULL,10);  return OFFSET_IMM; }
-align={DIGIT}+         { yylval->u32_val = (uint32_t)strtoul(yytext+6,NULL,10);  return ALIGN_IMM; }
+offset=0x{HEXNUM}  {
+        const char *s = strip_underscores(yytext+9);
+        uint64_t v = strtoull(s,NULL,16);
+        yylval->u32_val = (v <= 0xFFFFFFFFu) ? (uint32_t)v : 0xFFFFFFFFu;
+        if (v > 0xFFFFFFFFu) {
+            wast_lex_state *st = yyget_extra(yyscanner);
+            if (st) st->offset_overflow = 1;
+        }
+        return OFFSET_IMM;
+    }
+offset={NUM}        {
+        const char *s = strip_underscores(yytext+7);
+        uint64_t v = strtoull(s,NULL,10);
+        yylval->u32_val = (v <= 0xFFFFFFFFu) ? (uint32_t)v : 0xFFFFFFFFu;
+        if (v > 0xFFFFFFFFu) {
+            wast_lex_state *st = yyget_extra(yyscanner);
+            if (st) st->offset_overflow = 1;
+        }
+        return OFFSET_IMM;
+    }
+align=0x{HEXNUM}  {
+        const char *s = strip_underscores(yytext+8);
+        uint64_t v = strtoull(s,NULL,16);
+        yylval->u32_val = (v <= 0xFFFFFFFFu) ? (uint32_t)v : 0xFFFFFFFFu;
+        if (v > 0xFFFFFFFFu) {
+            wast_lex_state *st = yyget_extra(yyscanner);
+            if (st) st->offset_overflow = 1;
+        }
+        return ALIGN_IMM;
+    }
+align={NUM}         { yylval->u32_val = (uint32_t)strtoul(yytext+6,NULL,10);  return ALIGN_IMM; }
 
     /* Dotted instruction keywords — must be before type keywords and ATOM */
 v128\.const      { return KW_V128_CONST; }
@@ -106,7 +250,14 @@ i32\.const       { return KW_I32_CONST; }
 i64\.const       { return KW_I64_CONST; }
 f32\.const       { return KW_F32_CONST; }
 f64\.const       { return KW_F64_CONST; }
-call_indirect    { return KW_CALL_INDIRECT; }
+call_indirect        { return KW_CALL_INDIRECT; }
+call_ref             { return KW_CALL_REF; }
+return_call_indirect { return KW_RETURN_CALL_INDIRECT; }
+return_call_ref      { return KW_RETURN_CALL_REF; }
+return_call          { return KW_RETURN_CALL; }
+br_on_non_null       { return KW_BR_ON_NON_NULL; }
+br_on_null           { return KW_BR_ON_NULL; }
+ref\.as_non_null { return KW_REF_AS_NON_NULL; }
 ref\.func        { return KW_REF_FUNC; }
 ref\.null        { return KW_REF_NULL; }
 ref\.is_null     { return KW_REF_IS_NULL; }
@@ -143,6 +294,16 @@ f32         { return KW_F32; }
 f64         { return KW_F64; }
 funcref     { return KW_FUNCREF; }
 externref   { return KW_EXTERNREF; }
+anyref      { return KW_ANYREF; }
+eqref       { return KW_EQREF; }
+i31ref      { return KW_I31REF; }
+structref   { return KW_STRUCTREF; }
+arrayref    { return KW_ARRAYREF; }
+exnref      { return KW_EXNREF; }
+nullref     { return KW_NULLREF; }
+nullfuncref { return KW_NULLFUNCREF; }
+nullexnref  { return KW_NULLEXNREF; }
+nullexternref { return KW_NULLEXTERNREF; }
 
 i8x16   { return KW_I8X16; }
 i16x8   { return KW_I16X8; }
@@ -150,6 +311,10 @@ i32x4   { return KW_I32X4; }
 i64x2   { return KW_I64X2; }
 f32x4   { return KW_F32X4; }
 f64x2   { return KW_F64X2; }
+
+    /* Script-level keywords — before ATOM */
+definition   { return KW_DEFINITION; }
+instance     { return KW_INSTANCE; }
 
     /* Module / structural keywords — before ATOM */
 module       { return KW_MODULE; }
@@ -162,12 +327,27 @@ global       { return KW_GLOBAL; }
 data         { return KW_DATA; }
 elem         { return KW_ELEM; }
 type         { return KW_TYPE; }
+struct       { return KW_STRUCT; }
+array        { return KW_ARRAY; }
+field        { return KW_FIELD; }
+i8           { return KW_I8; }
+i16          { return KW_I16; }
+any          { return KW_ANY; }
+eq           { return KW_EQ; }
+exn          { return KW_EXN; }
+none         { return KW_NONE; }
+nofunc       { return KW_NOFUNC; }
+noexn        { return KW_NOEXN; }
+noextern     { return KW_NOEXTERN; }
+i31          { return KW_I31; }
 start        { return KW_START; }
+tag          { return KW_TAG; }
 local        { return KW_LOCAL; }
 mut          { return KW_MUT; }
 param        { return KW_PARAM; }
 result       { return KW_RESULT; }
 declare      { return KW_DECLARE; }
+rec          { return KW_REC; }
 item         { return KW_ITEM; }
 offset       { return KW_OFFSET_KW; }
 register     { return KW_REGISTER; }
@@ -193,6 +373,8 @@ nop          { return KW_NOP; }
 
     /* Invoke / assertion helpers */
 invoke   { return KW_INVOKE; }
+quote    { return KW_QUOTE; }
+binary   { return KW_BINARY; }
 either   { return KW_EITHER; }
 get      { return KW_GET; }
 
@@ -216,9 +398,26 @@ inf             { return KW_INF; }
     return HEXINT;
 }
 
+\+0x{HEXNUM}  {
+    /* +0xHEX positive hex integer literal */
+    const char *s = strip_underscores(yytext + 1); /* skip + */
+    yylval->i64_val = (int64_t)strtoull(s, NULL, 16);
+    return HEXINT;
+}
+
 -?{NUM}  {
     const char *s = strip_underscores(yytext);
-    yylval->i64_val = strtoll(s, NULL, 10);
+    if (s[0] == '-')
+        yylval->i64_val = -(int64_t)strtoull(s + 1, NULL, 10);
+    else
+        yylval->i64_val = (int64_t)strtoull(s, NULL, 10);
+    return INT;
+}
+
+\+{NUM}  {
+    /* +N positive decimal integer literal */
+    const char *s = strip_underscores(yytext + 1); /* skip + */
+    yylval->i64_val = (int64_t)strtoull(s, NULL, 10);
     return INT;
 }
 
@@ -254,6 +453,23 @@ inf             { return KW_INF; }
     return FLOAT;
 }
 
+    /* Generic dotted instruction operators not covered by a dedicated rule. */
+[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_.]+ {
+    size_t n = (size_t)yyleng;
+    if (n >= sizeof(yylval->str_val)) n = sizeof(yylval->str_val) - 1;
+    memcpy(yylval->str_val, yytext, n);
+    yylval->str_val[n] = '\0';
+    return OP;
+}
+
+    /* Quoted identifier $"..." — must be before plain $id
+     * Store as $content (strip quotes) so $"fh" matches $fh. */
+\$\"([^\"\\]|\\.)*\"  {
+    size_t inner_len = (size_t)(yyleng - 3); /* skip $" and trailing " */
+    decode_quoted_id(yylval->str_val, sizeof(yylval->str_val),
+                     yytext + 2, inner_len);
+    return ID;
+}
 
     /* Dollar-prefixed identifier — must be before ATOM catch-all */
 \${ATOM_CHAR}*  {

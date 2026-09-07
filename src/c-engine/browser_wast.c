@@ -327,7 +327,17 @@ static void unpack_flat_value(const uint8_t *flat, wasm_value *v) {
         case WASM_VALTYPE_FUNCREF:
         case WASM_VALTYPE_EXTERNREF:
         case WASM_VALTYPE_FUNCREF_NONNULL:
-        case WASM_VALTYPE_EXTERNREF_NONNULL: memcpy(&v->ref, flat + 1, 4); break;
+        case WASM_VALTYPE_EXTERNREF_NONNULL:
+        case WASM_VALTYPE_ANYREF:
+        case WASM_VALTYPE_EQREF:
+        case WASM_VALTYPE_I31REF:
+        case WASM_VALTYPE_STRUCTREF:
+        case WASM_VALTYPE_ARRAYREF:
+        case WASM_VALTYPE_ANYREF_NONNULL:
+        case WASM_VALTYPE_EQREF_NONNULL:
+        case WASM_VALTYPE_I31REF_NONNULL:
+        case WASM_VALTYPE_STRUCTREF_NONNULL:
+        case WASM_VALTYPE_ARRAYREF_NONNULL: memcpy(&v->ref, flat + 1, 4); break;
     }
 }
 
@@ -360,7 +370,17 @@ static int flat_value_matches(const wasm_value *actual, const uint8_t *flat_exp)
         case WASM_VALTYPE_FUNCREF:
         case WASM_VALTYPE_EXTERNREF:
         case WASM_VALTYPE_FUNCREF_NONNULL:
-        case WASM_VALTYPE_EXTERNREF_NONNULL: {
+        case WASM_VALTYPE_EXTERNREF_NONNULL:
+        case WASM_VALTYPE_ANYREF:
+        case WASM_VALTYPE_EQREF:
+        case WASM_VALTYPE_I31REF:
+        case WASM_VALTYPE_STRUCTREF:
+        case WASM_VALTYPE_ARRAYREF:
+        case WASM_VALTYPE_ANYREF_NONNULL:
+        case WASM_VALTYPE_EQREF_NONNULL:
+        case WASM_VALTYPE_I31REF_NONNULL:
+        case WASM_VALTYPE_STRUCTREF_NONNULL:
+        case WASM_VALTYPE_ARRAYREF_NONNULL: {
             uint32_t expected; memcpy(&expected, exp_data, 4);
             return actual->ref == expected;
         }

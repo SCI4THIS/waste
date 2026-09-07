@@ -83,10 +83,131 @@ the self-contained browser C engine, and their generated modules pass an
 independent Binaryen decode. `tests/c-engine-import-smoke.wat` independently
 checks imported-function type and index encoding.
 
-This is an encoder milestone, not core-suite completion. Of the 30 previously
-targeted core files, 10 currently preprocess and 20 still stop in the WAST
-grammar. Some preprocessing successes still use instructions unsupported by
-the executor.
+This is an encoder milestone, not core-suite completion. The earlier 30-file
+measurement (10 preprocessing, 20 stopped in the grammar) is retained as
+historical context; the broader current measurement is below. Some
+preprocessing successes still use instructions unsupported by the executor.
+
+The current top-level core corpus contains 97 `.wast` files. With the present
+uncommitted grammar work, the strict mmap preprocessing gate accepts 85 and
+reports 12 files with a grammar, translation, semantic-capture, or fixed-limit
+error. The browser dashboard can be generated for the whole directory as a
+diagnostic, but the normal `--c-engine-tests` command intentionally runs only
+relaxed-SIMD and DIY POSIX directories ([`start.sh`](../start.sh)). The latest
+full-core diagnostic passes 8 of 97 files and fails 89. Only `address.wast` and
+`forward.wast` among those eight expose a nonzero emitted check count; the
+other nominal passes reveal a command-accounting gap rather than meaningful
+conformance. The dashboard currently embeds 18,108 checks, while a lexical
+count finds roughly 20,030 assertion commands in the input corpus. Exact
+accounting must come from the deterministic command scanner, because comments
+and annotations can make a text-only count imprecise.
+
+The dominant browser failures are module-load/validation gaps rather than
+browser transport. Loading is currently eager and whole-module: one opcode
+unsupported by `waste_exec.c` prevents every otherwise-supported export in the
+same module from running. The freestanding `snprintf` stub also discards loader
+diagnostics, reducing many concrete failures to the unhelpful `module load
+failed`. A browser-host `WebAssembly.validate` audit of emitted groups found 91
+nominally valid modules rejected and 37 `assert_invalid` modules accepted;
+this is a useful encoder/validator triage signal, not a replacement for the
+OCaml oracle or the C validator.
+
+The current browser artifact is an execution artifact, not yet a browser WAST
+front end. Its link target contains `browser_wast.c`, `waste_exec.c`, and
+`wast_general.c`; the Flex/Bison parser, encoder, and command stream run in the
+native generator, which embeds module bytes and assertion JSON in the HTML.
+To exercise WAST mode itself in the browser, the freestanding build must link
+the deterministic parser/encoder/stream and expose an incremental command API
+to the worker.
+
+`token.wast` also exposed a parser-recovery ownership bug:
+partially built modules could share data storage and be freed twice. The WAST
+runner now frees duplicate segment/function allocations at most once, and this
+fixture is an AddressSanitizer regression gate. The preprocessing input pass
+also strips nested block comments and annotation forms while preserving
+newlines; this brings `comments.wast` and `token.wast` through preprocessing.
+
+The binary loader now performs stricter instantiation preflight: standard
+sections must be unique and ordered, unsupported standard section IDs are
+rejected, each supported section must be consumed exactly, and a start
+function must have the required `() -> ()` type. These checks prevent malformed
+modules from being accepted accidentally; they are validation hardening, not
+the claim of complete core-suite semantics.
+
+An intermediate deterministic WAST command boundary is available in
+`src/c-engine/wast_stream.[ch]`. It scans balanced top-level forms while
+ignoring strings and nested comments, classifies each command, and can feed one
+command at a time to the pure deterministic parser through `wast_parse_bytes`.
+It is not wired into `wast_parse_file` or browser-spec generation yet; those
+paths still parse the entire file in one call. Moreover, browser-spec currently
+returns success after a partial parse when at least one group was produced, so
+the generated dashboard can silently omit the failing command and everything
+after it. Connecting the command boundary, retaining script state across
+commands, and reporting an exact input-versus-emitted command ledger are the
+next WAST-mode requirements. The parser grammar itself uses the LALR skeleton;
+recovery policy belongs at this C command boundary.
+
+The C front end now also exposes `waste_wat_compile`, a transactional WAT
+boundary: it requires exactly one parsed module, emits canonical Wasm only
+after parsing succeeds, and returns no partial output on failure. WAST mode is
+intended to use `wast_stream_run` plus `wast_parse_bytes` once cross-command
+module/store state is factored out of parser globals, so assertion
+classification and fail-fast-versus-streaming policy remain in C rather than
+in lexer actions.
+
+Global definitions now follow the OCaml parser's structural split:
+`global_fields` recursively handles inline exports/imports, and the initializer
+uses the same general instruction-list grammar as function bodies. A separate
+C pass then enforces the approved constant opcodes and the declared global
+result type. This lets WAST assertions retain invalid instruction sequences
+without weakening fail-fast WAT compilation. The focused gate is
+`tests/c-engine-global-constexpr.wast`. Parsed global initializer buffers are
+terminator-free; only the binary module encoder appends the required `end`.
+The post-parse pass now follows the OCaml `check_const` whitelist, including
+scalar/vector constants, integer add/sub/mul, immutable `global.get`,
+`ref.null`, `ref.func`, `ref.i31`, `struct.new[_default]`,
+`array.new[_default|_fixed]`, and nullability-preserving extern conversions.
+Struct/array type declarations retain field types, packed storage, mutability,
+and defaultability so constructor operands are validated rather than merely
+whitelisted. The module-complete pass runs after deferred references are
+patched, which also rejects out-of-range `ref.func` targets. The encoder emits
+the corresponding GC type definitions without confusing them with function
+signatures. This is initializer preprocessing/encoding coverage; execution of
+GC instructions in `waste_exec.c` remains a separate runtime gap.
+
+Invalid initializer expressions are no longer discarded or promoted to a
+whole-script parse failure when they occur inside `assert_invalid`. The parser
+retains their raw instruction bytes, the module-complete validation pass stores
+the first semantic rejection on the assertion's group, and browser-spec JSON
+exports it as `module_assertion.validation_error`. The offline harness consumes
+that rejection directly and does not instantiate the invalid module. Plain WAT
+continues to fail fast with the same error. Unresolved initializer global/type/
+function references use the same channel, while genuine malformed text remains
+a syntax error handled at the deterministic WAST command boundary.
+
+Function definitions now use the same recursive phase split as the OCaml text
+parser: inline wrappers and type use lead into parameters, then results, then
+locals, then the instruction list. The phase productions are flattened where
+necessary so their nullable handoffs do not introduce LR conflicts. Inline
+exports remain legal at phase boundaries for compatibility with existing
+C-engine fixtures. `tests/c-engine-function-fields.wast` is the focused gate.
+
+Folded `block`, `loop`, and `if` instructions now apply the same approach to
+block type fields: type use, parameters, and results are parsed before the
+instruction body. Composite lexer starts keep the nullable field/body handoff
+deterministic, including `unreachable`, tail-call, `br_on_*`, and vector
+constant forms. `tests/c-engine-block-fields.wast` is the focused native and
+browser gate. The combined function/block work reduces the expected Bison
+shift/reduce conflict count from 38 to 23 and moves strict top-level core
+preprocessing from 63/97 to 85/97; all seven relaxed-SIMD files still pass.
+
+The official core corpus now has a dedicated diagnostic dashboard command:
+`./start.sh --c-engine-core-tests`. It writes
+`build/c-engine/browser-tests-c-engine-core.html` and runs the same browser
+harness over all top-level core WAST files. This deliberately does not change
+the passing `--c-engine-tests` gate; core results currently expose parser and
+engine coverage gaps (the latest run reports 89 failing files), while still
+allowing every emitted command to be inspected in the offline HTML page.
 
 Forward named function and function-type references now use bounded deferred
 fixups. `tests/c-engine-forward-function.wast` and

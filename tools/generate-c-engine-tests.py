@@ -495,6 +495,12 @@ self.onmessage = async function(e) {
     exp.waste_wast_reset();
 
     for (const group of testSpec.groups) {
+      if (group.module_assertion && group.module_assertion.validation_error) {
+        const invalid = group.module_assertion.kind === 3;
+        assertionResults.push({func: "(module)", pass: invalid,
+          error: invalid ? "" : group.module_assertion.validation_error});
+        continue;
+      }
       /* Decode hex module */
       const hex = group.module_hex;
       const modBytes = new Uint8Array(hex.length >> 1);

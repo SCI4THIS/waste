@@ -42,6 +42,8 @@ C_ENGINE_RUNNER="$C_ENGINE_BUILD/waste-wast"
 C_ENGINE_WASM="$C_ENGINE_BUILD/waste-wast.wasm"
 C_ENGINE_GENERATOR="$REPO_ROOT/tools/generate-c-engine-tests.py"
 C_ENGINE_HTML="$C_ENGINE_BUILD/browser-tests-c-engine.html"
+C_ENGINE_CORE_HTML="$C_ENGINE_BUILD/browser-tests-c-engine-core.html"
+C_ENGINE_CORE_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core"
 C_ENGINE_RELAXED_SIMD_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/relaxed-simd"
 C_ENGINE_DIY_POSIX_TESTS="$REPO_ROOT/tests/diy-posix-test"
 C_ENGINE_BROWSER_TEST="$REPO_ROOT/tests/c-engine-browser-runtime.cjs"
@@ -70,6 +72,8 @@ interpreter to WebAssembly.
                    generate the self-contained WASTE Bash page
   --c-tail-poc     build native/browser C tail-call proofs and run native benchmark
   --c-engine-tests build C engine and run relaxed-SIMD spec tests, generate HTML report
+  --c-engine-core-tests
+                   generate/run the C-engine browser dashboard for core WAST files
   --patch-status   show the Wasm32 compatibility patch status
   --apply-i31      apply the Wasm32 patch (legacy option name)
   --revert-i31     revert the Wasm32 patch (legacy option name)
@@ -919,6 +923,25 @@ generate_c_engine_tests() {
   node "$C_ENGINE_BROWSER_TEST" "$C_ENGINE_HTML" >>"$TEST_LOG" 2>&1
 }
 
+generate_c_engine_core_tests() {
+  if ! have_command cc || ! have_command make || ! have_command flex ||
+      ! have_command bison || ! have_command python3 || ! have_command node; then
+    printf 'error: cc, make, flex, bison, python3, and node are required for C engine tests\n' >>"$TEST_LOG"
+    return 1
+  fi
+  if [[ ! -d "$C_ENGINE_CORE_TESTS" ]]; then
+    printf 'error: core tests not found at %s (run: git submodule update --init)\n' \
+      "$C_ENGINE_CORE_TESTS" >>"$TEST_LOG"
+    return 1
+  fi
+  printf '\n== C engine browser tests (official core WAST) ==\n' >>"$TEST_LOG"
+  make -C "$REPO_ROOT/src/c-engine" BUILD_DIR="$C_ENGINE_BUILD" \
+    WAST_BUILD_DIR="$C_ENGINE_BUILD" wast-native wast-browser >>"$TEST_LOG" 2>&1 || return 1
+  python3 "$C_ENGINE_GENERATOR" --runner "$C_ENGINE_RUNNER" --wasm "$C_ENGINE_WASM" \
+    --tests "$C_ENGINE_CORE_TESTS" --output "$C_ENGINE_CORE_HTML" >>"$TEST_LOG" 2>&1 || return 1
+  node "$C_ENGINE_BROWSER_TEST" "$C_ENGINE_CORE_HTML" >>"$TEST_LOG" 2>&1
+}
+
 run_test_group() {
   local group="$1"
   if [[ "$group" != spec && "$group" != tail && "$group" != tail-smoke &&
@@ -966,6 +989,9 @@ run_test_group() {
       ;;
     c-engine)
       generate_c_engine_tests || status=1
+      ;;
+    c-engine-core)
+      generate_c_engine_core_tests || status=1
       ;;
     posix)
       run_logged_test "POSIX control (sequential)" node "$REPO_ROOT/tests/diy-posix-test/posix-control-runtime.cjs" || status=1
@@ -1017,6 +1043,7 @@ test_suite_menu() {
       all "Run official core, DIY POSIX, libc, and Bash suites" \
       c-tail "Build native/browser C tail-call proof and benchmark" \
       c-engine "Build C engine and run relaxed-SIMD spec tests" \
+      c-engine-core "Generate/run C engine official core WAST dashboard" \
       spec "Run the official WebAssembly core suite" \
       isolation "Run scheduled test-sandbox isolation regressions" \
       tail "Run the three official tail-call tests" \
@@ -1027,7 +1054,7 @@ test_suite_menu() {
       log "Show the last test log" \
       back "Return to the main menu" 3>&1 1>&2 2>&3)" || return 0
     case "$choice" in
-      all|c-tail|c-engine|spec|isolation|tail|tail-smoke|posix|libc|bash) run_test_group "$choice" || true ;;
+      all|c-tail|c-engine|c-engine-core|spec|isolation|tail|tail-smoke|posix|libc|bash) run_test_group "$choice" || true ;;
       log)
         if [[ -s "$TEST_LOG" ]]; then
           whiptail --title "Last test log" --textbox "$TEST_LOG" 28 100
@@ -1143,6 +1170,12 @@ main() {
       : >"$TEST_LOG"
       c_engine_status=0
       generate_c_engine_tests || c_engine_status=$?
+      printf '\nFinished: %s\n' "$(date --iso-8601=seconds)" >>"$TEST_LOG"
+      return "$c_engine_status" ;;
+    --c-engine-core-tests)
+      : >"$TEST_LOG"
+      c_engine_status=0
+      generate_c_engine_core_tests || c_engine_status=$?
       printf '\nFinished: %s\n' "$(date --iso-8601=seconds)" >>"$TEST_LOG"
       return "$c_engine_status" ;;
     --patch-status) i31_patch_status ;;

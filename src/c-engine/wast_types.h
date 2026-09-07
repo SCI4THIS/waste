@@ -2,6 +2,7 @@
 #define WAST_TYPES_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 /* 16-byte v128 value */
 typedef struct { uint8_t bytes[16]; } wasm_v128;
@@ -16,7 +17,23 @@ typedef enum {
     WASM_VALTYPE_FUNCREF,
     WASM_VALTYPE_EXTERNREF,
     WASM_VALTYPE_FUNCREF_NONNULL,
-    WASM_VALTYPE_EXTERNREF_NONNULL
+    WASM_VALTYPE_EXTERNREF_NONNULL,
+    WASM_VALTYPE_ANYREF,
+    WASM_VALTYPE_EQREF,
+    WASM_VALTYPE_I31REF,
+    WASM_VALTYPE_STRUCTREF,
+    WASM_VALTYPE_ARRAYREF,
+    WASM_VALTYPE_ANYREF_NONNULL,
+    WASM_VALTYPE_EQREF_NONNULL,
+    WASM_VALTYPE_I31REF_NONNULL,
+    WASM_VALTYPE_STRUCTREF_NONNULL,
+    WASM_VALTYPE_ARRAYREF_NONNULL,
+    WASM_VALTYPE_EXNREF,
+    WASM_VALTYPE_EXNREF_NONNULL,
+    WASM_VALTYPE_NULLREF,
+    WASM_VALTYPE_NULLFUNCREF,
+    WASM_VALTYPE_NULLEXNREF,
+    WASM_VALTYPE_NULLEXTERNREF
 } wasm_valtype;
 
 /* Indexed heap references retain both nullability and their type index. */
@@ -34,6 +51,7 @@ typedef enum {
 #define NAN_MATCH_F32_ARITH  2
 #define NAN_MATCH_F64_CANON  3
 #define NAN_MATCH_F64_ARITH  4
+#define REF_MATCH_NULL       255
 
 /* Test argument / expected result value */
 typedef struct {
@@ -65,36 +83,40 @@ typedef enum {
 } wast_action_kind;
 
 /* Size limits */
-#define WAST_MAX_PARAMS        16
-#define WAST_MAX_LOCALS        64
-#define WAST_MAX_CODE_BYTES    16384
-#define WAST_MAX_EXPORT_NAME   128
+#define WAST_MAX_PARAMS        128
+#define WAST_MAX_LOCALS        2048
+#define WAST_MAX_CODE_BYTES    65536
+#define WAST_MAX_EXPORT_NAME   256
 #define WAST_MAX_FUNCS         1024
-#define WAST_MAX_RESULTS       8
+#define WAST_MAX_RESULTS       32
 #define WAST_MAX_ALTERNATIVES  4
-#define WAST_MAX_ARGS          8
-#define WAST_MAX_ASSERTIONS    4096   /* flat pool across whole script */
-#define WAST_MAX_GROUPS        128
-#define WAST_MAX_TYPES         64
+#define WAST_MAX_ARGS          32
+#define WAST_MAX_TYPES         128
+#define WAST_MAX_TYPE_FIELDS   64
 #define WAST_MAX_IMPORTS       64
 #define WAST_MAX_GLOBALS       64
 #define WAST_MAX_MEMORIES      4
 #define WAST_MAX_TABLES        8
+#define WAST_MAX_TAGS          64
 #define WAST_MAX_DATA_SEGS     32
 #define WAST_MAX_ELEM_SEGS     32
 #define WAST_MAX_DATA_BYTES    65536
 #define WAST_MAX_ELEM_REFS     256
+#define WAST_MAX_ELEM_EXPR_BYTES 32
 
 /* A parsed WAT function (code stored as pre-encoded bytes) */
 typedef struct {
     char         export_name[WAST_MAX_EXPORT_NAME];
+    int          has_export_name;
     char         id[WAST_MAX_EXPORT_NAME];         /* optional $name */
     char         import_module[WAST_MAX_EXPORT_NAME]; /* non-empty if imported */
     char         import_name[WAST_MAX_EXPORT_NAME];
     wasm_valtype params[WAST_MAX_PARAMS];
     int          param_count;
+    int          has_inline_params;
     wasm_valtype results[WAST_MAX_RESULTS];
     int          result_count;
+    int          has_inline_results;
     int          type_index;  /* explicit type ref, -1 if none */
     wasm_valtype locals[WAST_MAX_LOCALS];  /* extra locals beyond params */
     int          local_count;
@@ -107,13 +129,31 @@ typedef struct {
     int          _simd_instr_count;
 } wast_func;
 
-/* Function type definition (from (type ...) declarations) */
+typedef enum {
+    WAST_TYPE_FUNC = 0,
+    WAST_TYPE_STRUCT,
+    WAST_TYPE_ARRAY
+} wast_type_kind;
+
+/* Type definition.  GC field metadata is retained so constexpr validation can
+ * apply the same stack checks as the ordinary validator after parsing. */
 typedef struct {
     char         id[WAST_MAX_EXPORT_NAME];
+    wast_type_kind kind;
+    /* Every core type belongs to a recursive group.  An ordinary `(type ...)`
+     * is the one member of an implicit singleton group; members of an
+     * explicit `(rec ...)` share these bounds.  Keeping the source grouping is
+     * required for the spec's structural type equivalence rules. */
+    uint32_t     rec_group_start;
+    uint32_t     rec_group_size;
     wasm_valtype params[WAST_MAX_PARAMS];
     int          param_count;
     wasm_valtype results[WAST_MAX_RESULTS];
     int          result_count;
+    wasm_valtype fields[WAST_MAX_TYPE_FIELDS];
+    uint8_t      field_mutable[WAST_MAX_TYPE_FIELDS];
+    uint8_t      field_packed[WAST_MAX_TYPE_FIELDS]; /* 0=valtype, 1=i8, 2=i16 */
+    int          field_count;
 } wast_type;
 
 /* Import kinds */
@@ -137,12 +177,13 @@ typedef struct {
     char         id[WAST_MAX_EXPORT_NAME];
     wasm_valtype valtype;
     int          is_mutable;
-    uint8_t      init_expr[32]; /* binary-encoded init expression */
+    uint8_t      init_expr[32]; /* raw binary instructions; encoder adds end */
     int          init_len;
     int          is_import;
     char         import_module[WAST_MAX_EXPORT_NAME];
     char         import_name[WAST_MAX_EXPORT_NAME];
     char         export_name[WAST_MAX_EXPORT_NAME];
+    int          has_export_name;
 } wast_global;
 
 /* Table definition */
@@ -150,10 +191,14 @@ typedef struct {
     char         id[WAST_MAX_EXPORT_NAME];
     wasm_valtype reftype;
     wast_limits  limits;
+    uint8_t      init_expr[32]; /* raw explicit initializer; encoder adds end */
+    int          init_len;
+    int          has_explicit_init;
     int          is_import;
     char         import_module[WAST_MAX_EXPORT_NAME];
     char         import_name[WAST_MAX_EXPORT_NAME];
     char         export_name[WAST_MAX_EXPORT_NAME];
+    int          has_export_name;
 } wast_table;
 
 /* Memory definition */
@@ -164,7 +209,21 @@ typedef struct {
     char        import_module[WAST_MAX_EXPORT_NAME];
     char        import_name[WAST_MAX_EXPORT_NAME];
     char        export_name[WAST_MAX_EXPORT_NAME];
+    int         has_export_name;
 } wast_memory;
+
+/* Exception tag metadata.  Tags are retained by the script linker even
+ * while the execution engine does not yet expose throw/catch operations. */
+typedef struct {
+    char         id[WAST_MAX_EXPORT_NAME];
+    wasm_valtype params[WAST_MAX_PARAMS];
+    int          param_count;
+    int          is_import;
+    char         import_module[WAST_MAX_EXPORT_NAME];
+    char         import_name[WAST_MAX_EXPORT_NAME];
+    char         export_name[WAST_MAX_EXPORT_NAME];
+    int          has_export_name;
+} wast_tag;
 
 /* Data segment (active or passive) */
 typedef struct {
@@ -185,8 +244,10 @@ typedef struct {
     int          offset_len;
     wasm_valtype reftype;
     uint32_t     refs[WAST_MAX_ELEM_REFS]; /* func indices */
+    uint8_t      ref_opcodes[WAST_MAX_ELEM_REFS]; /* ref.null/ref.func/global.get */
+    uint8_t      ref_exprs[WAST_MAX_ELEM_REFS][WAST_MAX_ELEM_EXPR_BYTES];
+    int          ref_expr_lens[WAST_MAX_ELEM_REFS];
     int          ref_count;
-    /* raw init exprs for non-func refs (not yet supported, just func refs) */
 } wast_elem_seg;
 
 /* Additional (export ...) outside function bodies */
@@ -220,6 +281,10 @@ typedef struct {
     /* Tables */
     wast_table  tables[WAST_MAX_TABLES];
     int         table_count;
+
+    /* Exception tags (link-time metadata; not emitted into the MVP binary). */
+    wast_tag    tags[WAST_MAX_TAGS];
+    int         tag_count;
 
     /* Data segments */
     wast_data_seg data[WAST_MAX_DATA_SEGS];
@@ -255,27 +320,51 @@ typedef struct {
     char             expected_trap[WAST_MAX_EXPORT_NAME]; /* for assert_trap */
 } wast_assertion;
 
+typedef enum {
+    WAST_RAW_NONE = 0,
+    WAST_RAW_BINARY,
+    WAST_RAW_QUOTE
+} wast_raw_module_kind;
+
+typedef struct {
+    wast_raw_module_kind kind;
+    uint8_t *bytes;
+    size_t length;
+} wast_raw_module;
+
 typedef struct {
     int line;
     int column;
+    int fold_depth;
+    int offset_overflow; /* set by lexer when offset=/align= exceeds u32 */
 } wast_lex_state;
 
 /* One module + index range into flat assertion pool */
 typedef struct {
     wast_module module;
+    wast_raw_module raw_module;
     int         assertion_start; /* index into wast_script.assertions[] */
     int         assertion_count;
     int         has_module_assertion;
     wast_assert_kind module_assert_kind;
     char        expected_module_error[WAST_MAX_EXPORT_NAME];
+    int         has_validation_error;
+    char        validation_error[WAST_MAX_EXPORT_NAME];
 } wast_group;
 
 /* Complete parsed WAST script */
 typedef struct {
-    wast_group    groups[WAST_MAX_GROUPS];
+    wast_group   *groups;
     int           group_count;
-    wast_assertion assertions[WAST_MAX_ASSERTIONS]; /* flat pool */
+    int           group_capacity;
+    wast_assertion *assertions; /* flat pool */
     int            assertion_count;
+    int            assertion_capacity;
+    int            command_count;
+    wast_raw_module *raw_modules;
+    int            raw_module_count;
+    int            raw_module_cursor;
+    int            strict_wat_mode;
     char           error[256];
 } wast_script;
 

@@ -18,8 +18,10 @@ WAST_GEN_DIR := $(WAST_BUILD_DIR)/gen
 WAST_TAB_C := $(WAST_GEN_DIR)/wast.tab.c
 WAST_TAB_H := $(WAST_GEN_DIR)/wast.tab.h
 WAST_LEX_C := $(WAST_GEN_DIR)/wast.lex.c
-WAST_SOURCES := main_wast.c waste_exec.c wast_encode.c wast_runner.c wast_general.c
-WAST_HEADERS := wast_types.h wast_encode.h waste_exec.h wast_runner.h wast_general.h
+WAST_SOURCES := main_wast.c waste_exec.c wast_encode.c wast_runner.c wast_stream.c wast_general.c
+WAST_HEADERS := wast_types.h wast_encode.h waste_exec.h wast_runner.h wast_stream.h wast_general.h
+WAST_GENERATED_CFLAGS ?= -O2 -std=c11 -Wall -Wextra -Wno-unused-but-set-variable
+WAST_LEX_CFLAGS ?= -O2 -std=c11 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -Wno-unused-function -Wno-unused-parameter -Wno-sign-compare
 
 # WAST browser Wasm target
 WAST_WASM_TARGET := $(WAST_BUILD_DIR)/waste-wast.wasm
@@ -29,7 +31,7 @@ EXTERN_PROVIDER_WASM := $(WAST_BUILD_DIR)/extern-provider.wasm
 EXTERN_CONSUMER_WASM := $(WAST_BUILD_DIR)/extern-consumer.wasm
 I32_SMOKE_TARGET := $(WAST_BUILD_DIR)/i32-smoke-sanitize
 
-.PHONY: all browser clean sanitize wast-native wast-browser i32-smoke
+.PHONY: all browser clean sanitize wast-native wast-browser wast-mmap-test i32-smoke
 
 all: $(TARGET)
 
@@ -56,6 +58,19 @@ $(WASM_TARGET): browser.c waste_tail.c $(HEADERS)
 
 wast-native: $(WAST_TARGET)
 
+# Fast native parser regression harness.  Inputs are memory-mapped before
+# being handed to the same parser entry point used by the runner.
+WAST_MMAP_TEST := $(WAST_BUILD_DIR)/wast-mmap-test
+
+wast-mmap-test: $(WAST_MMAP_TEST)
+
+$(WAST_MMAP_TEST): wast_mmap_test.c wast_runner.c wast_encode.c waste_exec.c wast_stream.c wast_general.c \
+		$(WAST_HEADERS) $(WAST_BUILD_DIR)/wast.tab.o $(WAST_BUILD_DIR)/wast.lex.o
+	mkdir -p $(WAST_BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I. -I$(WAST_GEN_DIR) \
+		wast_mmap_test.c wast_runner.c wast_encode.c waste_exec.c wast_stream.c wast_general.c \
+		$(WAST_BUILD_DIR)/wast.tab.o $(WAST_BUILD_DIR)/wast.lex.o -lm -o $@
+
 # Generate Bison parser (tab.c and tab.h)
 $(WAST_TAB_C) $(WAST_TAB_H): wast.y
 	mkdir -p $(WAST_GEN_DIR)
@@ -66,18 +81,16 @@ $(WAST_LEX_C): wast.l $(WAST_TAB_H)
 	mkdir -p $(WAST_GEN_DIR)
 	$(FLEX) -o $(WAST_LEX_C) wast.l
 
+
 # Compile bison-generated parser (with relaxed warnings for generated code)
-$(WAST_BUILD_DIR)/wast.tab.o: $(WAST_TAB_C) $(WAST_TAB_H)
-	$(CC) $(CPPFLAGS) -O2 -std=c11 -Wall -Wextra \
-		-Wno-unused-but-set-variable \
+$(WAST_BUILD_DIR)/wast.tab.o: $(WAST_TAB_C) $(WAST_TAB_H) $(WAST_HEADERS)
+	$(CC) $(CPPFLAGS) $(WAST_GENERATED_CFLAGS) \
 		-I. -I$(WAST_GEN_DIR) \
 		-c $(WAST_TAB_C) -o $@
 
 # Compile flex-generated scanner (with relaxed warnings for generated code)
-$(WAST_BUILD_DIR)/wast.lex.o: $(WAST_LEX_C) $(WAST_TAB_H)
-	$(CC) $(CPPFLAGS) -O2 -std=c11 -Wall -Wextra \
-		-D_POSIX_C_SOURCE=200809L \
-		-Wno-unused-function -Wno-unused-parameter -Wno-sign-compare \
+$(WAST_BUILD_DIR)/wast.lex.o: $(WAST_LEX_C) $(WAST_TAB_H) $(WAST_HEADERS)
+	$(CC) $(CPPFLAGS) $(WAST_LEX_CFLAGS) \
 		-I. -I$(WAST_GEN_DIR) \
 		-c $(WAST_LEX_C) -o $@
 
