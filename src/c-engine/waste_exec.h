@@ -64,6 +64,11 @@ typedef struct {
 } exec_table;
 
 typedef struct {
+    const waste_exec_engine *type_owner;
+    uint32_t type_index;
+} exec_tag;
+
+typedef struct {
     const char *module;
     const char *name;
     exec_global *global;
@@ -82,6 +87,12 @@ typedef struct {
 } exec_table_import;
 
 typedef struct {
+    const char *module;
+    const char *name;
+    exec_tag *tag;
+} exec_tag_import;
+
+typedef struct {
     const exec_host_import *functions;
     size_t function_count;
     const exec_global_import *globals;
@@ -90,6 +101,8 @@ typedef struct {
     size_t memory_count;
     const exec_table_import *tables;
     size_t table_count;
+    const exec_tag_import *tags;
+    size_t tag_count;
 } exec_imports;
 
 /*
@@ -131,6 +144,9 @@ exec_status exec_find_export_memory(const waste_exec_engine *engine,
 exec_status exec_find_export_table(const waste_exec_engine *engine,
                                    const char *name, exec_table **table,
                                    exec_error *error);
+exec_status exec_find_export_tag(const waste_exec_engine *engine,
+                                 const char *name, exec_tag **tag,
+                                 exec_error *error);
 
 /*
  * Invoke a function with given arguments and collect results.

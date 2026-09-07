@@ -860,13 +860,16 @@ static int wast_parse_bytes_mode(const char *bytes, size_t length,
     nread = normalized_length;
 
     yyscan_t scanner;
-    wast_lex_state lex_state = {1, 1, 0, 0};
+    wast_lex_state lex_state = {.line = 1, .column = 1};
     yylex_init_extra(&lex_state, &scanner);
     YY_BUFFER_STATE buf = yy_scan_bytes(source, (int)nread, scanner);
     yy_switch_to_buffer(buf, scanner);
     int rc = yyparse(script, scanner);
     yy_delete_buffer(buf, scanner);
     yylex_destroy(scanner);
+    for (size_t i = 0; i < lex_state.string_count; i++)
+        free(lex_state.strings[i]);
+    free(lex_state.strings);
     free(source);
     if (rc != 0 && script->error[0] == '\0') snprintf(script->error, sizeof(script->error), "parse failed");
     return (rc != 0 || script->error[0] != '\0') ? -1 : 0;
@@ -1176,6 +1179,19 @@ exec_status wast_run_assertion(waste_exec_engine *engine,
                      "result mismatch for %s (actual %d, expected %d)",
                      assertion->func_name, results[0].i32,
                      assertion->alternatives[0][0].i32);
+        else if (assertion->result_count == 1 &&
+                 results[0].type == WASM_VALTYPE_F64 &&
+                 assertion->alternatives[0][0].type == WASM_VALTYPE_F64) {
+            uint64_t actual_bits, expected_bits;
+            memcpy(&actual_bits, &results[0].f64, sizeof(actual_bits));
+            memcpy(&expected_bits, &assertion->alternatives[0][0].f64,
+                   sizeof(expected_bits));
+            snprintf(error->message, sizeof(error->message),
+                     "result mismatch for %s (actual 0x%016llx, expected 0x%016llx)",
+                     assertion->func_name,
+                     (unsigned long long)actual_bits,
+                     (unsigned long long)expected_bits);
+        }
         else
             snprintf(error->message, sizeof(error->message),
                      "result mismatch for %s", assertion->func_name);

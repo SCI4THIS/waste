@@ -46,13 +46,22 @@ enum {
 /* ---- Internal instruction representation ---- */
 
 typedef struct {
+    uint8_t kind;
+    uint32_t tag_index;
+    uint32_t depth;
+} exec_catch;
+
+typedef struct {
     uint32_t  opcode;   /* 0x20=local.get, 0xFD=SIMD, 0x0B=end */
     uint32_t  simd_op;  /* for SIMD ops */
     uint32_t  u32_imm;  /* for local.get */
+    uint32_t  memory_index; /* memory selected by a memarg */
     wasm_v128 v128_imm; /* for v128.const (simd_op==12) */
     int32_t   block_type_index; /* >=0 for a block type use, -1 otherwise */
     wasm_valtype block_result_type; /* direct single-result block type */
     uint8_t   has_block_result_type;
+    exec_catch *catches;
+    uint32_t catch_count;
 } exec_instr;
 
 /* ---- Function type ---- */
@@ -62,6 +71,13 @@ typedef struct {
     wasm_valtype results[WAST_MAX_RESULTS];
     int          param_count;
     int          result_count;
+    wast_type_kind kind;
+    uint32_t rec_group_start;
+    uint32_t rec_group_size;
+    wasm_valtype fields[WAST_MAX_TYPE_FIELDS];
+    uint8_t field_mutable[WAST_MAX_TYPE_FIELDS];
+    uint8_t field_packed[WAST_MAX_TYPE_FIELDS];
+    int field_count;
 } exec_func_type;
 
 /* ---- Decoded function ---- */
@@ -130,19 +146,34 @@ struct waste_exec_engine {
     exec_global     owned_globals[EXEC_MAX_GLOBALS];
     uint32_t        global_count;
     uint32_t        import_global_count;
+    exec_memory    *memories[WAST_MAX_MEMORIES];
+    exec_memory     owned_memories[WAST_MAX_MEMORIES];
+    uint8_t         owns_memories[WAST_MAX_MEMORIES];
+    uint32_t        memory_count;
+    uint32_t        import_memory_count;
+    /* Compatibility alias for the default memory used by instructions whose
+     * binary form has no explicit memory index. */
     exec_memory    *memory;
-    exec_memory     owned_memory;
-    int             owns_memory;
     exec_table     *tables[EXEC_MAX_TABLES];
     exec_table      owned_tables[EXEC_MAX_TABLES];
     uint32_t        table_count;
     uint32_t        import_table_count;
+    exec_tag       *tags[WAST_MAX_TAGS];
+    exec_tag        owned_tags[WAST_MAX_TAGS];
+    uint32_t        tag_types[WAST_MAX_TAGS];
+    uint32_t        tag_count;
+    uint32_t        import_tag_count;
     uint32_t        start_func;
     int             has_start;
     uint32_t        declared_data_count;
     uint8_t         has_data_count;
     uint8_t         uses_data_count_instruction;
     uint8_t         declared_funcs[EXEC_MAX_FUNCS];
+    exec_table_element *elem_values[WAST_MAX_ELEM_SEGS];
+    uint32_t        elem_lengths[WAST_MAX_ELEM_SEGS];
+    wasm_valtype    elem_types[WAST_MAX_ELEM_SEGS];
+    uint8_t         elem_dropped[WAST_MAX_ELEM_SEGS];
+    uint32_t        elem_count;
     wasm_value      *local_frames[EXEC_MAX_CALL_DEPTH];
     uint32_t         local_frame_capacities[EXEC_MAX_CALL_DEPTH];
 };
@@ -153,33 +184,115 @@ static int value_type_is_defined(const waste_exec_engine *eng,
            WASM_VALTYPE_TYPE_REF_INDEX(type) < eng->type_count;
 }
 
+typedef struct {
+    uint32_t left_group;
+    uint32_t right_group;
+} exec_type_pair;
+
+typedef struct {
+    exec_type_pair pairs[WAST_MAX_TYPES];
+    uint32_t count;
+} exec_type_compare;
+
+static int same_value_type_ctx(const waste_exec_engine *left_engine,
+                               wasm_valtype left,
+                               const waste_exec_engine *right_engine,
+                               wasm_valtype right,
+                               exec_type_compare *compare);
+
+static int same_type_index_ctx(const waste_exec_engine *left_engine,
+                               uint32_t left_index,
+                               const waste_exec_engine *right_engine,
+                               uint32_t right_index,
+                               exec_type_compare *compare) {
+    if (!left_engine || !right_engine ||
+        left_index >= left_engine->type_count ||
+        right_index >= right_engine->type_count)
+        return 0;
+    const exec_func_type *left = &left_engine->types[left_index];
+    const exec_func_type *right = &right_engine->types[right_index];
+    uint32_t left_start = left->rec_group_start;
+    uint32_t right_start = right->rec_group_start;
+    if (!left->rec_group_size || !right->rec_group_size ||
+        left_start + left->rec_group_size > left_engine->type_count ||
+        right_start + right->rec_group_size > right_engine->type_count ||
+        left->rec_group_size != right->rec_group_size ||
+        left_index - left_start != right_index - right_start)
+        return 0;
+
+    for (uint32_t i = 0; i < compare->count; i++)
+        if (compare->pairs[i].left_group == left_start &&
+            compare->pairs[i].right_group == right_start)
+            return 1;
+    if (compare->count >= WAST_MAX_TYPES) return 0;
+    compare->pairs[compare->count].left_group = left_start;
+    compare->pairs[compare->count].right_group = right_start;
+    compare->count++;
+
+    for (uint32_t member = 0; member < left->rec_group_size; member++) {
+        const exec_func_type *a = &left_engine->types[left_start + member];
+        const exec_func_type *b = &right_engine->types[right_start + member];
+        if (a->kind != b->kind) return 0;
+        if (a->kind == WAST_TYPE_FUNC) {
+            if (a->param_count != b->param_count ||
+                a->result_count != b->result_count)
+                return 0;
+            for (int i = 0; i < a->param_count; i++)
+                if (!same_value_type_ctx(left_engine, a->params[i],
+                                         right_engine, b->params[i], compare))
+                    return 0;
+            for (int i = 0; i < a->result_count; i++)
+                if (!same_value_type_ctx(left_engine, a->results[i],
+                                         right_engine, b->results[i], compare))
+                    return 0;
+        } else {
+            if (a->field_count != b->field_count) return 0;
+            for (int i = 0; i < a->field_count; i++)
+                if (a->field_mutable[i] != b->field_mutable[i] ||
+                    a->field_packed[i] != b->field_packed[i] ||
+                    !same_value_type_ctx(left_engine, a->fields[i],
+                                         right_engine, b->fields[i], compare))
+                    return 0;
+        }
+    }
+    return 1;
+}
+
+static int same_value_type_ctx(const waste_exec_engine *left_engine,
+                               wasm_valtype left,
+                               const waste_exec_engine *right_engine,
+                               wasm_valtype right,
+                               exec_type_compare *compare) {
+    int left_indexed = WASM_VALTYPE_IS_TYPE_REF(left);
+    int right_indexed = WASM_VALTYPE_IS_TYPE_REF(right);
+    if (!left_indexed || !right_indexed) return left == right;
+    if (((unsigned)left < WASM_VALTYPE_TYPE_REF_BASE) !=
+        ((unsigned)right < WASM_VALTYPE_TYPE_REF_BASE))
+        return 0;
+    return same_type_index_ctx(left_engine, WASM_VALTYPE_TYPE_REF_INDEX(left),
+                               right_engine, WASM_VALTYPE_TYPE_REF_INDEX(right),
+                               compare);
+}
+
 static int same_value_type(const waste_exec_engine *left_engine, wasm_valtype left,
                            const waste_exec_engine *right_engine, wasm_valtype right,
                            unsigned depth) {
-    int left_indexed=WASM_VALTYPE_IS_TYPE_REF(left);
-    int right_indexed=WASM_VALTYPE_IS_TYPE_REF(right);
-    if(!left_indexed||!right_indexed)return left==right;
-    if(((unsigned)left<WASM_VALTYPE_TYPE_REF_BASE)!=
-       ((unsigned)right<WASM_VALTYPE_TYPE_REF_BASE)||depth>WAST_MAX_TYPES||
-       !left_engine||!right_engine)return 0;
-    uint32_t li=WASM_VALTYPE_TYPE_REF_INDEX(left),ri=WASM_VALTYPE_TYPE_REF_INDEX(right);
-    if(li>=left_engine->type_count||ri>=right_engine->type_count)return 0;
-    const exec_func_type *a=&left_engine->types[li],*b=&right_engine->types[ri];
-    if(a->param_count!=b->param_count||a->result_count!=b->result_count)return 0;
-    for(int i=0;i<a->param_count;i++)if(!same_value_type(left_engine,a->params[i],right_engine,b->params[i],depth+1))return 0;
-    for(int i=0;i<a->result_count;i++)if(!same_value_type(left_engine,a->results[i],right_engine,b->results[i],depth+1))return 0;
-    return 1;
+    exec_type_compare compare = {0};
+    (void)depth;
+    return same_value_type_ctx(left_engine, left, right_engine, right, &compare);
 }
 
 static int same_func_type(const waste_exec_engine *left_engine, uint32_t left_index,
                           const waste_exec_engine *right_engine, uint32_t right_index) {
-    if(!left_engine||!right_engine||left_index>=left_engine->type_count||
-       right_index>=right_engine->type_count)return 0;
-    const exec_func_type *a=&left_engine->types[left_index],*b=&right_engine->types[right_index];
-    if(a->param_count!=b->param_count||a->result_count!=b->result_count)return 0;
-    for(int i=0;i<a->param_count;i++)if(!same_value_type(left_engine,a->params[i],right_engine,b->params[i],0))return 0;
-    for(int i=0;i<a->result_count;i++)if(!same_value_type(left_engine,a->results[i],right_engine,b->results[i],0))return 0;
-    return 1;
+    exec_type_compare compare = {0};
+    if (!left_engine || !right_engine ||
+        left_index >= left_engine->type_count ||
+        right_index >= right_engine->type_count ||
+        left_engine->types[left_index].kind != WAST_TYPE_FUNC ||
+        right_engine->types[right_index].kind != WAST_TYPE_FUNC)
+        return 0;
+    return same_type_index_ctx(left_engine, left_index, right_engine, right_index,
+                               &compare);
 }
 
 /* Check if 'actual' value type is a subtype of 'required' value type.
@@ -262,6 +375,14 @@ static exec_table *find_table_import(const exec_imports *imports, const char *mo
     for (size_t i=0;i<imports->table_count;i++)
         if (strcmp(imports->tables[i].module,module)==0 && strcmp(imports->tables[i].name,name)==0)
             return imports->tables[i].table;
+    return NULL;
+}
+static exec_tag *find_tag_import(const exec_imports *imports, const char *module,
+                                 const char *name) {
+    if(!imports)return NULL;
+    for(size_t i=0;i<imports->tag_count;i++)
+        if(strcmp(imports->tags[i].module,module)==0&&
+           strcmp(imports->tags[i].name,name)==0)return imports->tags[i].tag;
     return NULL;
 }
 
@@ -450,37 +571,141 @@ static wasm_valtype nonnullable_reference_type(wasm_valtype type) {
 
 /* ---- Type section ---- */
 
-static exec_status parse_types(waste_exec_engine *eng, exec_reader *sec, exec_error *err) {
-    uint32_t count;
-    if (!er_u32(sec, &count))
-        return exec_fail(err, EXEC_ERROR_FORMAT, "invalid type count");
-    if (count > EXEC_MAX_TYPES)
-        return exec_fail(err, EXEC_ERROR_FORMAT, "too many types");
-    eng->types = (exec_func_type *)calloc(count, sizeof(*eng->types));
-    if (count && !eng->types)
-        return exec_fail(err, EXEC_ERROR_FORMAT, "type alloc failed");
-    eng->type_count = count;
-    for (uint32_t i = 0; i < count; i++) {
-        uint8_t form;
+static int parse_storage_type(exec_reader *sec, wasm_valtype *type,
+                              uint8_t *packed) {
+    uint8_t first;
+    if (!er_u8(sec, &first)) return 0;
+    if (first == 0x78 || first == 0x77) {
+        *type = WASM_VALTYPE_I32;
+        *packed = first == 0x78 ? 1 : 2;
+        return 1;
+    }
+    sec->cursor--;
+    *packed = 0;
+    return er_valtype(sec, type);
+}
+
+static exec_status parse_composite_type(waste_exec_engine *eng,
+                                        exec_reader *sec, uint8_t form,
+                                        uint32_t index,
+                                        uint32_t group_start,
+                                        uint32_t group_size,
+                                        exec_error *err) {
+    exec_func_type *type = &eng->types[index];
+    type->rec_group_start = group_start;
+    type->rec_group_size = group_size;
+    if (form == 0x60) {
         uint32_t params, results;
-        if (!er_u8(sec, &form) || form != 0x60)
-            return exec_fail(err, EXEC_ERROR_FORMAT, "expected func type 0x60");
+        type->kind = WAST_TYPE_FUNC;
         if (!er_u32(sec, &params) || params > EXEC_MAX_LOCALS)
             return exec_fail(err, EXEC_ERROR_FORMAT, "too many params");
-        eng->types[i].param_count = (int)params;
-        for (uint32_t p = 0; p < params; p++) {
-            if (!er_valtype(sec,&eng->types[i].params[p]) ||
-                !value_type_is_defined(eng, eng->types[i].params[p]))
-                return exec_fail(err, EXEC_ERROR_UNSUPPORTED, "unsupported param type");
-        }
+        type->param_count = (int)params;
+        for (uint32_t i = 0; i < params; i++)
+            if (!er_valtype(sec, &type->params[i]))
+                return exec_fail(err, EXEC_ERROR_UNSUPPORTED,
+                                 "unsupported param type");
         if (!er_u32(sec, &results) || results > WAST_MAX_RESULTS)
-            return exec_fail(err, EXEC_ERROR_FORMAT, "unsupported result count");
-        eng->types[i].result_count = (int)results;
-        for (uint32_t result = 0; result < results; result++) {
-            if (!er_valtype(sec,&eng->types[i].results[result]) ||
-                !value_type_is_defined(eng, eng->types[i].results[result]))
-                return exec_fail(err, EXEC_ERROR_UNSUPPORTED, "unsupported result type");
+            return exec_fail(err, EXEC_ERROR_FORMAT,
+                             "unsupported result count");
+        type->result_count = (int)results;
+        for (uint32_t i = 0; i < results; i++)
+            if (!er_valtype(sec, &type->results[i]))
+                return exec_fail(err, EXEC_ERROR_UNSUPPORTED,
+                                 "unsupported result type");
+        return EXEC_OK;
+    }
+    if (form == 0x5f) {
+        uint32_t fields;
+        type->kind = WAST_TYPE_STRUCT;
+        if (!er_u32(sec, &fields) || fields > WAST_MAX_TYPE_FIELDS)
+            return exec_fail(err, EXEC_ERROR_FORMAT,
+                             "invalid struct field count");
+        type->field_count = (int)fields;
+        for (uint32_t i = 0; i < fields; i++) {
+            uint8_t mutable_;
+            if (!parse_storage_type(sec, &type->fields[i],
+                                    &type->field_packed[i]) ||
+                !er_u8(sec, &mutable_) || mutable_ > 1)
+                return exec_fail(err, EXEC_ERROR_FORMAT,
+                                 "invalid struct field type");
+            type->field_mutable[i] = mutable_;
         }
+        return EXEC_OK;
+    }
+    if (form == 0x5e) {
+        uint8_t mutable_;
+        type->kind = WAST_TYPE_ARRAY;
+        type->field_count = 1;
+        if (!parse_storage_type(sec, &type->fields[0],
+                                &type->field_packed[0]) ||
+            !er_u8(sec, &mutable_) || mutable_ > 1)
+            return exec_fail(err, EXEC_ERROR_FORMAT,
+                             "invalid array field type");
+        type->field_mutable[0] = mutable_;
+        return EXEC_OK;
+    }
+    return exec_fail(err, EXEC_ERROR_FORMAT, "invalid composite type");
+}
+
+static int type_reference_in_scope(const exec_func_type *type,
+                                   wasm_valtype value_type,
+                                   uint32_t total_types) {
+    if (!WASM_VALTYPE_IS_TYPE_REF(value_type)) return 1;
+    uint32_t target = WASM_VALTYPE_TYPE_REF_INDEX(value_type);
+    uint32_t group_end = type->rec_group_start + type->rec_group_size;
+    return target < total_types && target < group_end;
+}
+
+static exec_status parse_types(waste_exec_engine *eng, exec_reader *sec, exec_error *err) {
+    uint32_t entries;
+    if (!er_u32(sec, &entries))
+        return exec_fail(err, EXEC_ERROR_FORMAT, "invalid type count");
+    if (entries > EXEC_MAX_TYPES)
+        return exec_fail(err, EXEC_ERROR_FORMAT, "too many types");
+    eng->types = (exec_func_type *)calloc(EXEC_MAX_TYPES, sizeof(*eng->types));
+    if (entries && !eng->types)
+        return exec_fail(err, EXEC_ERROR_FORMAT, "type alloc failed");
+    uint32_t index = 0;
+    for (uint32_t entry = 0; entry < entries; entry++) {
+        uint8_t form;
+        if (!er_u8(sec, &form))
+            return exec_fail(err, EXEC_ERROR_FORMAT, "truncated type entry");
+        uint32_t group_size = 1;
+        if (form == 0x4e) {
+            if (!er_u32(sec, &group_size) || !group_size)
+                return exec_fail(err, EXEC_ERROR_FORMAT,
+                                 "invalid recursive type group");
+        }
+        if (group_size > EXEC_MAX_TYPES - index)
+            return exec_fail(err, EXEC_ERROR_FORMAT, "too many types");
+        uint32_t group_start = index;
+        for (uint32_t member = 0; member < group_size; member++, index++) {
+            if (form == 0x4e && !er_u8(sec, &form))
+                return exec_fail(err, EXEC_ERROR_FORMAT,
+                                 "truncated recursive type group");
+            exec_status status = parse_composite_type(
+                eng, sec, form, index, group_start, group_size, err);
+            if (status != EXEC_OK) return status;
+            form = 0x4e;
+        }
+    }
+    eng->type_count = index;
+    for (uint32_t i = 0; i < eng->type_count; i++) {
+        exec_func_type *type = &eng->types[i];
+        for (int p = 0; p < type->param_count; p++)
+            if (!type_reference_in_scope(type, type->params[p], eng->type_count))
+                return exec_fail(err, EXEC_ERROR_FORMAT,
+                                 "type reference outside recursive group");
+        for (int result = 0; result < type->result_count; result++)
+            if (!type_reference_in_scope(type, type->results[result],
+                                         eng->type_count))
+                return exec_fail(err, EXEC_ERROR_FORMAT,
+                                 "type reference outside recursive group");
+        for (int field = 0; field < type->field_count; field++)
+            if (!type_reference_in_scope(type, type->fields[field],
+                                         eng->type_count))
+                return exec_fail(err, EXEC_ERROR_FORMAT,
+                                 "type reference outside recursive group");
     }
     return EXEC_OK;
 }
@@ -503,7 +728,9 @@ static exec_status parse_imports(waste_exec_engine *eng, exec_reader *sec,
         memcpy(name,name_bytes,name_len); name[name_len]='\0';
         if (kind == 0) {
             uint32_t type_index;
-            if (!er_u32(sec,&type_index) || type_index >= eng->type_count || eng->import_func_count >= EXEC_MAX_FUNCS)
+            if (!er_u32(sec,&type_index) || type_index >= eng->type_count ||
+                eng->types[type_index].kind != WAST_TYPE_FUNC ||
+                eng->import_func_count >= EXEC_MAX_FUNCS)
                 return exec_fail(err, EXEC_ERROR_FORMAT, "invalid function import type");
             const exec_host_import *binding = find_host_import(imports,module,name);
             if (!binding || !binding->function) return exec_fail(err, EXEC_ERROR_NOT_FOUND, "unresolved function import");
@@ -527,13 +754,16 @@ static exec_status parse_imports(waste_exec_engine *eng, exec_reader *sec,
         } else if (kind == 2) {
             uint8_t flags; uint32_t initial,maximum=0;
             if (!er_u8(sec,&flags) || flags>1 || !er_u32(sec,&initial) || ((flags&1u) && !er_u32(sec,&maximum)) ||
-                initial>65536u || ((flags&1u) && maximum<initial)) return exec_fail(err,EXEC_ERROR_FORMAT,"invalid memory import type");
+                initial>65536u || ((flags&1u) && maximum<initial) ||
+                eng->memory_count >= WAST_MAX_MEMORIES)
+                return exec_fail(err,EXEC_ERROR_FORMAT,"invalid memory import type");
             exec_memory *memory=find_memory_import(imports,module,name);
-            if (eng->memory) return exec_fail(err,EXEC_ERROR_UNSUPPORTED,"multiple memories unsupported");
             if (!memory) return exec_fail(err,EXEC_ERROR_NOT_FOUND,"unresolved memory import");
             if (memory->pages<initial || memory->pages>65536u || ((flags&1u) && (!memory->has_max || memory->max_pages>maximum)) ||
                 (memory->pages && !memory->data)) return exec_fail(err,EXEC_ERROR_FORMAT,"memory import type mismatch");
-            eng->memory=memory;
+            eng->memories[eng->memory_count++] = memory;
+            eng->import_memory_count++;
+            if (!eng->memory) eng->memory=memory;
         } else if (kind == 3) {
             uint8_t mutability; wasm_valtype value_type;
             if (!er_valtype(sec,&value_type) ||
@@ -547,10 +777,24 @@ static exec_status parse_imports(waste_exec_engine *eng, exec_reader *sec,
                 return exec_fail(err,EXEC_ERROR_FORMAT,"global import type mismatch");
             eng->globals[eng->global_count++]=global; eng->import_global_count++;
         } else if (kind == 4) {
-            /* Tag import: skip type index; throw/catch not implemented */
-            uint32_t type_index;
-            if (!er_u32(sec, &type_index))
+            uint32_t attribute, type_index;
+            if (!er_u32(sec, &attribute) || attribute != 0 ||
+                !er_u32(sec, &type_index) || type_index >= eng->type_count ||
+                eng->types[type_index].kind != WAST_TYPE_FUNC ||
+                eng->types[type_index].result_count != 0 ||
+                eng->tag_count >= WAST_MAX_TAGS)
                 return exec_fail(err, EXEC_ERROR_FORMAT, "invalid tag import");
+            exec_tag *tag = find_tag_import(imports, module, name);
+            if (!tag)
+                return exec_fail(err, EXEC_ERROR_NOT_FOUND,
+                                 "unresolved tag import");
+            if (!same_func_type(eng, type_index, tag->type_owner,
+                                tag->type_index))
+                return exec_fail(err, EXEC_ERROR_FORMAT,
+                                 "tag import type mismatch");
+            eng->tag_types[eng->tag_count] = type_index;
+            eng->tags[eng->tag_count++] = tag;
+            eng->import_tag_count++;
         } else return exec_fail(err,EXEC_ERROR_FORMAT,"invalid import kind");
     }
     return EXEC_OK;
@@ -570,7 +814,8 @@ static exec_status parse_funcs(waste_exec_engine *eng, exec_reader *sec, exec_er
     eng->func_count = count;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t ti;
-        if (!er_u32(sec, &ti) || ti >= eng->type_count)
+        if (!er_u32(sec, &ti) || ti >= eng->type_count ||
+            eng->types[ti].kind != WAST_TYPE_FUNC)
             return exec_fail(err, EXEC_ERROR_FORMAT, "invalid type index");
         eng->funcs[i].type_index = ti;
     }
@@ -600,11 +845,13 @@ static exec_status parse_exports(waste_exec_engine *eng, exec_reader *sec, exec_
             return exec_fail(err, EXEC_ERROR_FORMAT, "truncated export name");
         if (!valid_utf8(name, name_len))
             return exec_fail(err, EXEC_ERROR_FORMAT, "malformed UTF-8 encoding");
-        if (!er_u8(sec, &kind) || kind > 3 || !er_u32(sec, &idx))
+        if (!er_u8(sec, &kind) || kind > 4 || !er_u32(sec, &idx))
             return exec_fail(err, EXEC_ERROR_FORMAT, "invalid export");
         if ((kind==0 && idx>=eng->import_func_count+eng->func_count) ||
-            (kind==1 && idx>=eng->table_count) || (kind==2 && (!eng->memory || idx!=0)) ||
-            (kind==3 && idx>=eng->global_count)) return exec_fail(err,EXEC_ERROR_FORMAT,"invalid export index");
+            (kind==1 && idx>=eng->table_count) ||
+            (kind==2 && idx>=eng->memory_count) ||
+            (kind==3 && idx>=eng->global_count) ||
+            (kind==4 && idx>=eng->tag_count)) return exec_fail(err,EXEC_ERROR_FORMAT,"invalid export index");
         memcpy(eng->exports[i].name, name, name_len);
         eng->exports[i].name[name_len] = '\0';
         eng->exports[i].index = idx; eng->exports[i].kind=kind;
@@ -617,19 +864,29 @@ static exec_status parse_exports(waste_exec_engine *eng, exec_reader *sec, exec_
 }
 
 static exec_status parse_memory(waste_exec_engine *eng, exec_reader *sec, exec_error *err) {
-    uint32_t count, initial, maximum = 0; uint8_t flags;
-    if (!er_u32(sec, &count) || count > 1) return exec_fail(err, EXEC_ERROR_UNSUPPORTED, "multiple memories unsupported");
-    if (!count) return EXEC_OK;
-    if (eng->memory) return exec_fail(err,EXEC_ERROR_UNSUPPORTED,"multiple memories unsupported");
-    if (!er_u8(sec, &flags) || flags > 1 || !er_u32(sec, &initial) ||
-        ((flags & 1u) && !er_u32(sec, &maximum)) || initial > 65536u ||
-        ((flags & 1u) && (maximum > 65536u || maximum < initial)))
-        return exec_fail(err, EXEC_ERROR_FORMAT, "invalid memory limits");
-    size_t bytes = (size_t)initial * EXEC_PAGE_SIZE;
-    eng->owned_memory.data = (uint8_t *)calloc(bytes ? bytes : 1, 1);
-    if (!eng->owned_memory.data) return exec_fail(err, EXEC_ERROR_FORMAT, "memory allocation failed");
-    eng->owned_memory.pages=initial; eng->owned_memory.has_max=(uint8_t)(flags&1u); eng->owned_memory.max_pages=maximum;
-    eng->memory=&eng->owned_memory; eng->owns_memory=1;
+    uint32_t count;
+    if (!er_u32(sec, &count) || count > WAST_MAX_MEMORIES - eng->memory_count)
+        return exec_fail(err, EXEC_ERROR_FORMAT, "invalid memory count");
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t initial, maximum = 0;
+        uint8_t flags;
+        if (!er_u8(sec, &flags) || flags > 1 || !er_u32(sec, &initial) ||
+            ((flags & 1u) && !er_u32(sec, &maximum)) || initial > 65536u ||
+            ((flags & 1u) && (maximum > 65536u || maximum < initial)))
+            return exec_fail(err, EXEC_ERROR_FORMAT, "invalid memory limits");
+        uint32_t index = eng->memory_count;
+        exec_memory *memory = &eng->owned_memories[index];
+        size_t bytes = (size_t)initial * EXEC_PAGE_SIZE;
+        memory->data = (uint8_t *)calloc(bytes ? bytes : 1, 1);
+        if (!memory->data)
+            return exec_fail(err, EXEC_ERROR_FORMAT, "memory allocation failed");
+        memory->pages=initial; memory->has_max=(uint8_t)(flags&1u);
+        memory->max_pages=maximum;
+        eng->memories[index]=memory;
+        eng->owns_memories[index]=1;
+        eng->memory_count++;
+        if (!eng->memory) eng->memory=memory;
+    }
     return EXEC_OK;
 }
 
@@ -853,10 +1110,39 @@ static exec_status parse_globals(waste_exec_engine *eng, exec_reader *sec, exec_
                                             &initial, err);
         if (status != EXEC_OK) return status;
         global->value = initial.value;
-        global->type_owner = initial.type_owner;
+        /* A global's externally visible type is its declared type, not the
+         * possibly narrower type of its initializer.  In particular, a
+         * (ref.func ...) initializer must not turn a declared (ref func)
+         * global into a specific indexed reference type for later imports.
+         * The reference payload is unchanged; only its static type is
+         * canonicalized at the global boundary. */
+        global->value.type = type;
+        global->type_owner = eng;
         global->mutable_=mutability; eng->globals[index]=global;
     }
     eng->global_count += count;
+    return EXEC_OK;
+}
+
+static exec_status parse_tags(waste_exec_engine *eng, exec_reader *sec,
+                              exec_error *err) {
+    uint32_t count;
+    if (!er_u32(sec, &count) || count > WAST_MAX_TAGS - eng->tag_count)
+        return exec_fail(err, EXEC_ERROR_FORMAT, "invalid tag count");
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t attribute, type_index;
+        if (!er_u32(sec, &attribute) || attribute != 0 ||
+            !er_u32(sec, &type_index) || type_index >= eng->type_count ||
+            eng->types[type_index].result_count != 0)
+            return exec_fail(err, EXEC_ERROR_FORMAT, "invalid tag type");
+        uint32_t index = eng->tag_count;
+        exec_tag *tag = &eng->owned_tags[index];
+        tag->type_owner = eng;
+        tag->type_index = type_index;
+        eng->tag_types[index] = type_index;
+        eng->tags[index] = tag;
+        eng->tag_count++;
+    }
     return EXEC_OK;
 }
 
@@ -890,8 +1176,9 @@ static exec_status parse_data(waste_exec_engine *eng, exec_reader *sec, exec_err
             continue;
         }
         if (mode == 2 && !er_u32(sec, &memory_index)) return exec_fail(err, EXEC_ERROR_FORMAT, "invalid data memory");
-        if ((mode != 0 && mode != 2) || memory_index != 0 || !eng->memory)
+        if ((mode != 0 && mode != 2) || memory_index >= eng->memory_count)
             return exec_fail(err, EXEC_ERROR_FORMAT, "invalid active data segment");
+        exec_memory *memory = eng->memories[memory_index];
         exec_const_value initial;
         exec_status status = eval_constexpr(eng, sec, eng->global_count,
                                             WASM_VALTYPE_I32, &initial, err);
@@ -901,9 +1188,9 @@ static exec_status parse_data(waste_exec_engine *eng, exec_reader *sec, exec_err
         if (!er_u32(sec, &length) || !er_bytes(sec, length, &data))
             return exec_fail(err, EXEC_ERROR_FORMAT, "invalid active data segment");
         if ((uint64_t)offset + length >
-            (uint64_t)eng->memory->pages * EXEC_PAGE_SIZE)
+            (uint64_t)memory->pages * EXEC_PAGE_SIZE)
             return exec_fail(err, EXEC_ERROR_TRAP, "out of bounds memory access");
-        memcpy(eng->memory->data + offset, data, length);
+        memcpy(memory->data + offset, data, length);
     }
     return EXEC_OK;
 }
@@ -911,8 +1198,9 @@ static exec_status parse_data(waste_exec_engine *eng, exec_reader *sec, exec_err
 static exec_status parse_elements(waste_exec_engine *eng, exec_reader *sec,
                                   exec_error *err) {
     uint32_t count;
-    if (!er_u32(sec, &count))
+    if (!er_u32(sec, &count) || count > WAST_MAX_ELEM_SEGS)
         return exec_fail(err, EXEC_ERROR_FORMAT, "invalid element count");
+    eng->elem_count = count;
     for (uint32_t segment = 0; segment < count; segment++) {
         uint32_t mode, table_index = 0, item_count, offset = 0;
         wasm_valtype ref_type = WASM_VALTYPE_FUNCREF;
@@ -950,6 +1238,18 @@ static exec_status parse_elements(waste_exec_engine *eng, exec_reader *sec,
         /* else mode 0 or 4: ref_type stays FUNCREF */
         if (!er_u32(sec, &item_count))
             return exec_fail(err, EXEC_ERROR_FORMAT, "invalid element length");
+        eng->elem_types[segment] = ref_type;
+        eng->elem_lengths[segment] = item_count;
+        eng->elem_dropped[segment] =
+            (uint8_t)(active || mode == 3 || mode == 7);
+        if (item_count) {
+            eng->elem_values[segment] =
+                (exec_table_element *)calloc(item_count,
+                                              sizeof(exec_table_element));
+            if (!eng->elem_values[segment])
+                return exec_fail(err, EXEC_ERROR_FORMAT,
+                                 "element segment allocation failed");
+        }
         if (active && (table_index >= eng->table_count ||
             !global_type_is_compat(eng, ref_type,
                                    eng->tables[table_index]->type_owner,
@@ -970,6 +1270,7 @@ static exec_status parse_elements(waste_exec_engine *eng, exec_reader *sec,
                     slot.owner = (waste_exec_engine *)value.type_owner;
                     slot.func_idx = value.value.ref;
                 }
+                eng->elem_values[segment][item] = slot;
                 if (active) eng->tables[table_index]->elements[offset + item] = slot;
             }
         } else {
@@ -981,6 +1282,7 @@ static exec_status parse_elements(waste_exec_engine *eng, exec_reader *sec,
                     return exec_fail(err, EXEC_ERROR_FORMAT, "invalid element funcidx");
                 exec_table_element slot = {eng, func_idx};
                 eng->declared_funcs[func_idx] = 1;
+                eng->elem_values[segment][item] = slot;
                 if (active) eng->tables[table_index]->elements[offset + item] = slot;
             }
         }
@@ -1126,6 +1428,12 @@ static select_validation_result validate_select_function(
     for (uint32_t pc = 0; pc < code_size; pc++) {
         const exec_instr *instr = &code[pc];
         select_validation_control *control = &controls[control_top];
+#ifndef WASTE_FREESTANDING
+        if (getenv("WAST_DEBUG_VALIDATE_TRACE"))
+            fprintf(stderr, "validate pc=%u op=%02x top=%d control=%d height=%d unreachable=%d\n",
+                    pc, instr->opcode, top, control_top, control->height,
+                    control->unreachable);
+#endif
         switch (instr->opcode) {
             case 0x00:
                 top = control->height;
@@ -1135,7 +1443,8 @@ static select_validation_result validate_select_function(
                 break;
             case 0x02:
             case 0x03:
-            case 0x04: {
+            case 0x04:
+            case 0x1f: {
                 const wasm_valtype *params = NULL;
                 const wasm_valtype *results = NULL;
                 int param_count = 0;
@@ -1159,6 +1468,11 @@ static select_validation_result validate_select_function(
                     !select_validation_pop_type(stack, &top, control,
                                                 WASM_VALTYPE_I32))
                     return SELECT_VALIDATION_INVALID;
+                if (instr->opcode == 0x1f)
+                    for (uint32_t i = 0; i < instr->catch_count; i++)
+                        if (instr->catches[i].depth >
+                            (uint32_t)(control_top + 1))
+                            return SELECT_VALIDATION_INVALID;
                 for (int i = param_count; i > 0; i--)
                     if (!select_validation_pop_type(
                             stack, &top, control, params[i - 1]))
@@ -1185,6 +1499,21 @@ static select_validation_result validate_select_function(
                 for (int i = 0; i < param_count; i++)
                     if (!select_validation_push(stack, &top, params[i]))
                         return SELECT_VALIDATION_INCONCLUSIVE;
+                break;
+            }
+            case 0x08: {
+                if (instr->u32_imm >= eng->tag_count)
+                    return SELECT_VALIDATION_INVALID;
+                uint32_t type_index = eng->tag_types[instr->u32_imm];
+                if (type_index >= eng->type_count)
+                    return SELECT_VALIDATION_INVALID;
+                exec_func_type *tag_type = &eng->types[type_index];
+                for (int i = tag_type->param_count; i > 0; i--)
+                    if (!select_validation_pop_type(
+                            stack, &top, control, tag_type->params[i - 1]))
+                        return SELECT_VALIDATION_INVALID;
+                top = control->height;
+                control->unreachable = 1;
                 break;
             }
             case 0x05:
@@ -1703,7 +2032,8 @@ static select_validation_result validate_select_function(
                                       WASM_VALTYPE_F32 :
                                       instr->opcode == 0x2b ?
                                       WASM_VALTYPE_F64 : WASM_VALTYPE_I32;
-                if (!eng->memory || instr->simd_op > natural ||
+                if (instr->memory_index >= eng->memory_count ||
+                    instr->simd_op > natural ||
                     !select_validation_unary(stack, &top, control,
                                              WASM_VALTYPE_I32, result))
                     return SELECT_VALIDATION_INVALID;
@@ -1727,7 +2057,8 @@ static select_validation_result validate_select_function(
                                           WASM_VALTYPE_F32 :
                                           instr->opcode == 0x39 ?
                                           WASM_VALTYPE_F64 : WASM_VALTYPE_I32;
-                if (!eng->memory || instr->simd_op > natural ||
+                if (instr->memory_index >= eng->memory_count ||
+                    instr->simd_op > natural ||
                     !select_validation_pop_type(stack, &top, control,
                                                 value_type) ||
                     !select_validation_pop_type(stack, &top, control,
@@ -1736,13 +2067,13 @@ static select_validation_result validate_select_function(
                 break;
             }
             case 0x3f:
-                if (!eng->memory ||
+                if (instr->memory_index >= eng->memory_count ||
                     !select_validation_push(stack, &top,
                                             WASM_VALTYPE_I32))
                     return SELECT_VALIDATION_INVALID;
                 break;
             case 0x40:
-                if (!eng->memory ||
+                if (instr->memory_index >= eng->memory_count ||
                     !select_validation_unary(stack, &top, control,
                                              WASM_VALTYPE_I32,
                                              WASM_VALTYPE_I32))
@@ -1973,7 +2304,8 @@ static select_validation_result validate_select_function(
             }
             case 0xd2:
                 if (instr->u32_imm >=
-                    eng->import_func_count + eng->func_count)
+                    eng->import_func_count + eng->func_count ||
+                    !eng->declared_funcs[instr->u32_imm])
                     return SELECT_VALIDATION_INVALID;
                 {
                     uint32_t function_type =
@@ -2017,21 +2349,31 @@ static select_validation_result validate_select_function(
                 } else if (sub == 9) { /* data.drop: [] -> [] */
                     /* no stack effect */
                 } else if (sub == 12) { /* table.init: [i32 i32 i32] -> [] */
-                    if (!select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
+                    uint32_t table_index = instr->v128_imm.bytes[0];
+                    if (instr->u32_imm >= eng->elem_count ||
+                        table_index >= eng->table_count ||
+                        !global_type_is_compat(
+                            eng, eng->elem_types[instr->u32_imm],
+                            eng->tables[table_index]->type_owner,
+                            eng->tables[table_index]->element_type, 0) ||
+                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
                         !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
                         !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32))
                         return SELECT_VALIDATION_INVALID;
                 } else if (sub == 13) { /* elem.drop: [] -> [] */
-                    /* no stack effect */
+                    if (instr->u32_imm >= eng->elem_count)
+                        return SELECT_VALIDATION_INVALID;
                 } else if (sub == 14) { /* table.copy: [i32 i32 i32] -> [] */
                     if (!select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
                         !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
                         !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32))
                         return SELECT_VALIDATION_INVALID;
                 } else if (sub == 15) { /* table.grow: [ref i32] -> [i32] */
-                    wasm_valtype ref;
-                    if (!select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
-                        !select_validation_pop(stack, &top, control, &ref) ||
+                    if (instr->u32_imm >= eng->table_count ||
+                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
+                        !select_validation_pop_type(
+                            stack, &top, control,
+                            eng->tables[instr->u32_imm]->element_type) ||
                         !select_validation_push(stack, &top, WASM_VALTYPE_I32))
                         return SELECT_VALIDATION_INVALID;
                 } else if (sub == 16) { /* table.size: [] -> [i32] */
@@ -2080,6 +2422,7 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, exec_read
         if ((c)[_i].opcode == 0x0e) { \
             uint32_t *_d; memcpy(&_d, (c)[_i].v128_imm.bytes, sizeof(_d)); free(_d); \
         } \
+        free((c)[_i].catches); \
     } \
     free(c); \
 } while(0)
@@ -2098,7 +2441,8 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, exec_read
         instr.block_type_index = -1;
         if (byte == 0x00 || byte == 0x01) {
             instr.opcode = byte;
-        } else if (byte == 0x02 || byte == 0x03 || byte == 0x04) {
+        } else if (byte == 0x02 || byte == 0x03 || byte == 0x04 ||
+                   byte == 0x1f) {
             uint8_t block_type;
             if (!er_u8(body, &block_type)) { FREE_CODE(code, code_size); return exec_fail(err, EXEC_ERROR_FORMAT, "missing block type"); }
             if (control_size >= EXEC_MAX_CONTROL) {
@@ -2126,7 +2470,47 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, exec_read
                 instr.v128_imm.bytes[1] = (uint8_t)block_sig->result_count;
                 instr.block_type_index = type_index;
             }
+            if (byte == 0x1f) {
+                uint32_t catch_count;
+                if (!er_u32(body, &catch_count) ||
+                    catch_count > WAST_MAX_TAGS) {
+                    FREE_CODE(code, code_size);
+                    return exec_fail(err, EXEC_ERROR_FORMAT,
+                                     "invalid try_table catches");
+                }
+                instr.catches = (exec_catch *)calloc(
+                    catch_count ? catch_count : 1, sizeof(*instr.catches));
+                if (!instr.catches) {
+                    FREE_CODE(code, code_size);
+                    return exec_fail(err, EXEC_ERROR_FORMAT,
+                                     "catch allocation failed");
+                }
+                instr.catch_count = catch_count;
+                for (uint32_t i = 0; i < catch_count; i++) {
+                    exec_catch *catch_ = &instr.catches[i];
+                    if (!er_u8(body, &catch_->kind) || catch_->kind > 3 ||
+                        (catch_->kind < 2 &&
+                         (!er_u32(body, &catch_->tag_index) ||
+                          catch_->tag_index >= eng->tag_count)) ||
+                        !er_u32(body, &catch_->depth)) {
+                        free(instr.catches);
+                        instr.catches = NULL;
+                        FREE_CODE(code, code_size);
+                        return exec_fail(err, EXEC_ERROR_FORMAT,
+                                         "invalid try_table catch");
+                    }
+                }
+            }
             controls[control_size++] = code_size;
+        } else if (byte == 0x08) {
+            uint32_t tag_index;
+            if (!er_u32(body, &tag_index) || tag_index >= eng->tag_count) {
+                FREE_CODE(code, code_size);
+                return exec_fail(err, EXEC_ERROR_FORMAT,
+                                 "invalid throw tag index");
+            }
+            instr.opcode = byte;
+            instr.u32_imm = tag_index;
         } else if (byte == 0x05) {
             if (!control_size || code[controls[control_size - 1]].opcode != 0x04) {
                 FREE_CODE(code, code_size); return exec_fail(err, EXEC_ERROR_FORMAT, "else without if");
@@ -2165,17 +2549,20 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, exec_read
             }
             instr.opcode=byte;instr.u32_imm=type_index;instr.simd_op=table_index;
         } else if (byte >= 0x28 && byte <= 0x3e) {
-            uint32_t align, offset;
-            if (!er_u32(body, &align) || !er_u32(body, &offset)) {
+            uint32_t align, offset, memory_index = 0;
+            if (!er_u32(body, &align) || align >= 0x80u ||
+                ((align & 0x40u) && !er_u32(body, &memory_index)) ||
+                !er_u32(body, &offset)) {
                 FREE_CODE(code, code_size); return exec_fail(err, EXEC_ERROR_FORMAT, "invalid memory immediate");
             }
-            instr.opcode = byte; instr.simd_op = align; instr.u32_imm = offset;
+            instr.opcode = byte; instr.simd_op = align & 0x3fu;
+            instr.u32_imm = offset; instr.memory_index = memory_index;
         } else if (byte == 0x3f || byte == 0x40) {
-            uint8_t memory_index;
-            if (!er_u8(body, &memory_index) || memory_index != 0) {
-                FREE_CODE(code, code_size); return exec_fail(err, EXEC_ERROR_UNSUPPORTED, "unsupported memory index");
+            uint32_t memory_index;
+            if (!er_u32(body, &memory_index)) {
+                FREE_CODE(code, code_size); return exec_fail(err, EXEC_ERROR_FORMAT, "invalid memory index");
             }
-            instr.opcode = byte;
+            instr.opcode = byte; instr.memory_index = memory_index;
         } else if (byte == 0xd0) {
             int32_t heap_type;
             if (!er_i32(body, &heap_type)) {
@@ -2378,7 +2765,7 @@ exec_status exec_load_with_imports(const uint8_t *bytes, size_t size,
 
     exec_reader r = { bytes, bytes + 8, bytes + size };
     uint8_t last_section_rank = 0;
-    uint8_t seen_sections[13] = {0};
+    uint8_t seen_sections[14] = {0};
 
     while (r.cursor < r.end) {
         uint8_t section_id;
@@ -2394,16 +2781,16 @@ exec_status exec_load_with_imports(const uint8_t *bytes, size_t size,
                 exec_free(eng);
                 return exec_fail(err, EXEC_ERROR_UNSUPPORTED, "unsupported standard section");
             }
-            if (section_id <= 12 && seen_sections[section_id]) {
+            if (section_id <= 13 && seen_sections[section_id]) {
                 exec_free(eng);
                 return exec_fail(err, EXEC_ERROR_FORMAT, "duplicate standard section");
             }
-            if (section_id <= 12) seen_sections[section_id] = 1;
-            uint8_t section_rank = section_id <= 9 ? section_id :
-                                   section_id == 12 ? 10 :
-                                   section_id == 10 ? 11 :
-                                   section_id == 13 ? 10 : /* tag section between globals and exports */
-                                   12;
+            if (section_id <= 13) seen_sections[section_id] = 1;
+            uint8_t section_rank = section_id <= 5 ? section_id :
+                                   section_id == 13 ? 6 :
+                                   section_id <= 9 ? (uint8_t)(section_id + 1) :
+                                   section_id == 12 ? 11 :
+                                   section_id == 10 ? 12 : 13;
             if (section_rank < last_section_rank) {
                 exec_free(eng);
                 return exec_fail(err, EXEC_ERROR_FORMAT, "out-of-order section");
@@ -2443,6 +2830,7 @@ exec_status exec_load_with_imports(const uint8_t *bytes, size_t size,
                 else
                     eng->has_data_count = 1;
                 break;
+            case 13: st = parse_tags(eng, &sec, err); break;
             default: st = exec_fail(err, EXEC_ERROR_UNSUPPORTED, "unsupported standard section"); break;
         }
         if (st != EXEC_OK) {
@@ -2493,6 +2881,8 @@ void exec_free(waste_exec_engine *eng) {
     if (!eng) return;
     for (uint32_t i = 0; i < EXEC_MAX_CALL_DEPTH; i++)
         free(eng->local_frames[i]);
+    for (uint32_t i = 0; i < eng->elem_count; i++)
+        free(eng->elem_values[i]);
     for (uint32_t i = 0; i < eng->func_count; i++) {
         if (eng->funcs[i].code) {
             /* Free br_table depth arrays */
@@ -2501,6 +2891,7 @@ void exec_free(waste_exec_engine *eng) {
                     uint32_t *depths; memcpy(&depths, eng->funcs[i].code[j].v128_imm.bytes, sizeof(depths));
                     free(depths);
                 }
+                free(eng->funcs[i].code[j].catches);
             }
         }
         free(eng->funcs[i].code);
@@ -2508,7 +2899,8 @@ void exec_free(waste_exec_engine *eng) {
     free(eng->types);
     free(eng->funcs);
     free(eng->exports);
-    if (eng->owns_memory) free(eng->owned_memory.data);
+    for (uint32_t i = 0; i < eng->memory_count; i++)
+        if (eng->owns_memories[i]) free(eng->memories[i]->data);
     for(uint32_t i=eng->import_table_count;i<eng->table_count;i++) free(eng->owned_tables[i].elements);
     free(eng);
 }
@@ -2560,7 +2952,7 @@ exec_status exec_find_export_memory(const waste_exec_engine *eng, const char *na
                                     exec_memory **memory, exec_error *err) {
     uint32_t index; if(!memory) return exec_fail(err,EXEC_ERROR_FORMAT,"null argument");
     exec_status status=find_extern_export(eng,name,2,&index,err);
-    if(status==EXEC_OK) *memory=eng->memory;
+    if(status==EXEC_OK) *memory=eng->memories[index];
     return status;
 }
 exec_status exec_find_export_table(const waste_exec_engine *eng, const char *name,
@@ -2568,6 +2960,14 @@ exec_status exec_find_export_table(const waste_exec_engine *eng, const char *nam
     uint32_t index; if(!table) return exec_fail(err,EXEC_ERROR_FORMAT,"null argument");
     exec_status status=find_extern_export(eng,name,1,&index,err);
     if(status==EXEC_OK) *table=eng->tables[index];
+    return status;
+}
+exec_status exec_find_export_tag(const waste_exec_engine *eng, const char *name,
+                                 exec_tag **tag, exec_error *err) {
+    uint32_t index;
+    if(!tag) return exec_fail(err,EXEC_ERROR_FORMAT,"null argument");
+    exec_status status=find_extern_export(eng,name,4,&index,err);
+    if(status==EXEC_OK) *tag=eng->tags[index];
     return status;
 }
 
@@ -3002,11 +3402,11 @@ static void store_le(uint8_t *memory, uint32_t address, uint64_t value, uint32_t
     for (uint32_t i = 0; i < width; i++) memory[address + i] = (uint8_t)(value >> (8u * i));
 }
 
-static exec_status memory_address(waste_exec_engine *eng, uint32_t base, uint32_t offset,
+static exec_status memory_address(exec_memory *memory, uint32_t base, uint32_t offset,
                                   uint32_t width, uint32_t *address, exec_error *err) {
     uint64_t effective = (uint64_t)base + offset;
-    uint64_t size = eng->memory ? (uint64_t)eng->memory->pages * EXEC_PAGE_SIZE : 0;
-    if (!eng->memory || effective + width > size)
+    uint64_t size = memory ? (uint64_t)memory->pages * EXEC_PAGE_SIZE : 0;
+    if (!memory || effective + width > size)
         return exec_fail(err, EXEC_ERROR_TRAP, "out of bounds memory access");
     *address = (uint32_t)effective;
     return EXEC_OK;
@@ -3550,11 +3950,83 @@ tail_entry:
             continue;
         }
 
+        if (instr->opcode == 0x08) {
+            if (instr->u32_imm >= eng->tag_count)
+                return exec_fail(err, EXEC_ERROR_TRAP,
+                                 "throw tag index out of range");
+            uint32_t tag_type_index = eng->tag_types[instr->u32_imm];
+            if (tag_type_index >= eng->type_count)
+                return exec_fail(err, EXEC_ERROR_TRAP, "invalid tag type");
+            exec_func_type *tag_type = &eng->types[tag_type_index];
+            wasm_value payload[WAST_MAX_PARAMS];
+            if (tag_type->param_count > stack.top)
+                return exec_fail(err, EXEC_ERROR_TRAP,
+                                 "throw payload missing");
+            for (int i = tag_type->param_count; i-- > 0;)
+                stack_pop(&stack, &payload[i]);
+
+            int try_index = -1;
+            const exec_catch *selected_catch = NULL;
+            for (int i = control_top - 1; i >= 0 && !selected_catch; i--) {
+                if (controls[i].kind != 0x1f) continue;
+                exec_instr *try_instr =
+                    &func->code[controls[i].start_pc - 1];
+                for (uint32_t j = 0; j < try_instr->catch_count; j++) {
+                    exec_catch *catch_ = &try_instr->catches[j];
+                    if (catch_->kind == 2 ||
+                        (catch_->kind == 0 &&
+                         eng->tags[catch_->tag_index] ==
+                         eng->tags[instr->u32_imm])) {
+                        try_index = i;
+                        selected_catch = catch_;
+                        break;
+                    }
+                }
+            }
+            if (!selected_catch)
+                return exec_fail(err, EXEC_ERROR_TRAP,
+                                 "uncaught exception");
+            if (selected_catch->depth > (uint32_t)(try_index + 1))
+                return exec_fail(err, EXEC_ERROR_TRAP,
+                                 "catch branch depth out of range");
+
+            stack.top = controls[try_index].stack_height;
+            if (selected_catch->kind == 0)
+                for (int i = 0; i < tag_type->param_count; i++)
+                    if (!stack_push(&stack, payload[i]))
+                        return exec_fail(err, EXEC_ERROR_TRAP,
+                                         "stack overflow");
+            if (selected_catch->depth == (uint32_t)(try_index + 1))
+                goto func_return;
+            int target_index = try_index - (int)selected_catch->depth;
+            exec_control target = controls[target_index];
+            wasm_value carried[WAST_MAX_RESULTS];
+            if (target.branch_arity > stack.top - target.stack_height)
+                return exec_fail(err, EXEC_ERROR_TRAP,
+                                 "catch branch values missing");
+            for (int i = target.branch_arity; i-- > 0;)
+                stack_pop(&stack, &carried[i]);
+            stack.top = target.stack_height;
+            for (int i = 0; i < target.branch_arity; i++)
+                if (!stack_push(&stack, carried[i]))
+                    return exec_fail(err, EXEC_ERROR_TRAP,
+                                     "stack overflow");
+            if (target.kind == 0x03) {
+                control_top = target_index + 1;
+                pc = target.start_pc - 1;
+            } else {
+                control_top = target_index;
+                pc = target.end_pc;
+            }
+            continue;
+        }
+
         if (instr->opcode == 0x00)
             return exec_fail(err, EXEC_ERROR_TRAP, "unreachable");
         if (instr->opcode == 0x01) continue;
 
-        if (instr->opcode == 0x02 || instr->opcode == 0x03 || instr->opcode == 0x04) {
+        if (instr->opcode == 0x02 || instr->opcode == 0x03 ||
+            instr->opcode == 0x04 || instr->opcode == 0x1f) {
             int condition = 1;
             if (instr->opcode == 0x04) {
                 wasm_value value;
@@ -3686,9 +4158,14 @@ tail_entry:
             } else {
                 wasm_value value;
                 if (!eng->globals[instr->u32_imm]->mutable_) return exec_fail(err, EXEC_ERROR_TRAP, "immutable global");
-                if (!stack_pop(&stack, &value) || value.type != eng->globals[instr->u32_imm]->value.type)
+                exec_global *global = eng->globals[instr->u32_imm];
+                if (!stack_pop(&stack, &value) ||
+                    !global_type_is_compat(eng, value.type,
+                                           global->type_owner,
+                                           global->value.type, 0))
                     return exec_fail(err, EXEC_ERROR_TRAP, "global value mismatch");
-                eng->globals[instr->u32_imm]->value = value;
+                value.type = global->value.type;
+                global->value = value;
             }
             continue;
         }
@@ -3738,6 +4215,8 @@ tail_entry:
 
         if (instr->opcode >= 0x28 && instr->opcode <= 0x35) {
             wasm_value base, value; uint32_t width, address; int sign = 0;
+            exec_memory *memory = instr->memory_index < eng->memory_count ?
+                eng->memories[instr->memory_index] : NULL;
             if (!stack_pop(&stack, &base) || base.type != WASM_VALTYPE_I32)
                 return exec_fail(err, EXEC_ERROR_TRAP, "load address missing");
             switch (instr->opcode) {
@@ -3756,9 +4235,11 @@ tail_entry:
                 case 0x34: width=4; value.type=WASM_VALTYPE_I64; sign=1; break;
                 default: width=4; value.type=WASM_VALTYPE_I64; break;
             }
-            exec_status status = memory_address(eng, (uint32_t)base.i32, instr->u32_imm, width, &address, err);
+            exec_status status = memory_address(memory, (uint32_t)base.i32,
+                                                instr->u32_imm, width,
+                                                &address, err);
             if (status != EXEC_OK) return status;
-            uint64_t bits = load_le(eng->memory->data, address, width);
+            uint64_t bits = load_le(memory->data, address, width);
             if (sign && width < 8 && (bits & ((uint64_t)1 << (width * 8u - 1u)))) bits |= UINT64_MAX << (width * 8u);
             memset(value.nan_mode, 0, sizeof(value.nan_mode));
             if (value.type == WASM_VALTYPE_I32) value.i32=(int32_t)bits;
@@ -3771,6 +4252,8 @@ tail_entry:
 
         if (instr->opcode >= 0x36 && instr->opcode <= 0x3e) {
             wasm_value value, base; uint32_t width, address; uint64_t bits;
+            exec_memory *memory = instr->memory_index < eng->memory_count ?
+                eng->memories[instr->memory_index] : NULL;
             if (!stack_pop(&stack, &value) || !stack_pop(&stack, &base) || base.type != WASM_VALTYPE_I32)
                 return exec_fail(err, EXEC_ERROR_TRAP, "store operands missing");
             switch (instr->opcode) {
@@ -3784,31 +4267,38 @@ tail_entry:
                 case 0x3d: width=2; bits=(uint64_t)value.i64; break;
                 default: width=4; bits=(uint64_t)value.i64; break;
             }
-            exec_status status = memory_address(eng, (uint32_t)base.i32, instr->u32_imm, width, &address, err);
+            exec_status status = memory_address(memory, (uint32_t)base.i32,
+                                                instr->u32_imm, width,
+                                                &address, err);
             if (status != EXEC_OK) return status;
-            store_le(eng->memory->data, address, bits, width);
+            store_le(memory->data, address, bits, width);
             continue;
         }
 
         if (instr->opcode == 0x3f) {
-            if (!stack_push(&stack, i32_value(eng->memory ? eng->memory->pages : 0))) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
+            exec_memory *memory = instr->memory_index < eng->memory_count ?
+                eng->memories[instr->memory_index] : NULL;
+            if (!memory) return exec_fail(err, EXEC_ERROR_TRAP, "memory missing");
+            if (!stack_push(&stack, i32_value(memory->pages))) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
             continue;
         }
         if (instr->opcode == 0x40) {
             wasm_value delta;
             if (!stack_pop(&stack, &delta) || delta.type != WASM_VALTYPE_I32) return exec_fail(err, EXEC_ERROR_TRAP, "memory.grow operand missing");
-            if (!eng->memory) return exec_fail(err,EXEC_ERROR_TRAP,"memory missing");
-            uint32_t old = eng->memory->pages, add = (uint32_t)delta.i32;
+            exec_memory *memory = instr->memory_index < eng->memory_count ?
+                eng->memories[instr->memory_index] : NULL;
+            if (!memory) return exec_fail(err,EXEC_ERROR_TRAP,"memory missing");
+            uint32_t old = memory->pages, add = (uint32_t)delta.i32;
             uint64_t pages = (uint64_t)old + add;
-            if (pages > 65536u || (eng->memory->has_max && pages > eng->memory->max_pages)) {
+            if (pages > 65536u || (memory->has_max && pages > memory->max_pages)) {
                 if (!stack_push(&stack, i32_value(UINT32_MAX))) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
                 continue;
             }
             size_t new_size = (size_t)pages * EXEC_PAGE_SIZE;
             uint8_t *grown = (uint8_t *)calloc(new_size ? new_size : 1, 1);
             if (!grown) { if (!stack_push(&stack, i32_value(UINT32_MAX))) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow"); continue; }
-            memcpy(grown,eng->memory->data,(size_t)old*EXEC_PAGE_SIZE); free(eng->memory->data);
-            eng->memory->data=grown; eng->memory->pages=(uint32_t)pages;
+            memcpy(grown,memory->data,(size_t)old*EXEC_PAGE_SIZE); free(memory->data);
+            memory->data=grown; memory->pages=(uint32_t)pages;
             if (!stack_push(&stack, i32_value(old))) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
             continue;
         }
@@ -4106,6 +4596,36 @@ tail_entry:
                 uint64_t mem_size=(uint64_t)eng->memory->pages*EXEC_PAGE_SIZE;
                 if ((uint64_t)dst+n>mem_size) return exec_fail(err,EXEC_ERROR_TRAP,"out of bounds memory access");
                 memset(eng->memory->data+dst,(uint8_t)val_v.i32,n);
+            } else if (sub == 12) { /* table.init */
+                wasm_value n_v, src_v, dst_v;
+                if (!stack_pop(&stack, &n_v) || !stack_pop(&stack, &src_v) ||
+                    !stack_pop(&stack, &dst_v))
+                    return exec_fail(err, EXEC_ERROR_TRAP,
+                                     "table.init operands missing");
+                uint32_t elem = instr->u32_imm;
+                uint32_t table_index = instr->v128_imm.bytes[0];
+                if (elem >= eng->elem_count || table_index >= eng->table_count)
+                    return exec_fail(err, EXEC_ERROR_TRAP,
+                                     "table.init index out of range");
+                exec_table *table = eng->tables[table_index];
+                uint32_t n = (uint32_t)n_v.i32;
+                uint32_t src = (uint32_t)src_v.i32;
+                uint32_t dst = (uint32_t)dst_v.i32;
+                uint32_t length = eng->elem_dropped[elem] ? 0 :
+                                  eng->elem_lengths[elem];
+                if ((uint64_t)src + n > length ||
+                    (uint64_t)dst + n > table->size)
+                    return exec_fail(err, EXEC_ERROR_TRAP,
+                                     "out of bounds table access");
+                if (n)
+                    memcpy(table->elements + dst,
+                           eng->elem_values[elem] + src,
+                           (size_t)n * sizeof(exec_table_element));
+            } else if (sub == 13) { /* elem.drop */
+                if (instr->u32_imm >= eng->elem_count)
+                    return exec_fail(err, EXEC_ERROR_TRAP,
+                                     "element index out of range");
+                eng->elem_dropped[instr->u32_imm] = 1;
             } else if (sub == 15) { /* table.grow */
                 wasm_value delta_v, init_v;
                 if (!stack_pop(&stack,&delta_v)||!stack_pop(&stack,&init_v))
@@ -4124,7 +4644,10 @@ tail_entry:
                         new_size?new_size*sizeof(*nel):1);
                     if (!nel) { if (!stack_push(&stack,i32_value(UINT32_MAX))) return exec_fail(err,EXEC_ERROR_TRAP,"stack overflow"); }
                     else {
-                        for (uint32_t i=old_size;i<new_size;i++) { nel[i].owner=NULL; nel[i].func_idx=0; }
+                        for (uint32_t i=old_size;i<new_size;i++) {
+                            nel[i].owner = init_v.ref == UINT32_MAX ? NULL : eng;
+                            nel[i].func_idx = init_v.ref == UINT32_MAX ? 0 : init_v.ref;
+                        }
                         tbl->elements=nel; tbl->size=new_size;
                         if (!stack_push(&stack,i32_value(old_size))) return exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");
                     }

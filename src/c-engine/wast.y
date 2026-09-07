@@ -66,6 +66,7 @@ static char g_type_names[WAST_MAX_TYPES][WAST_MAX_EXPORT_NAME];
 static uint32_t g_type_name_indices[WAST_MAX_TYPES];
 static int  g_type_name_count = 0;
 static int  g_in_rec_group = 0;
+static int  g_parsing_type_definition = 0;
 static uint32_t g_rec_group_start = 0;
 static char g_table_names[WAST_MAX_TABLES][WAST_MAX_EXPORT_NAME];
 static int  g_table_name_count = 0;
@@ -125,6 +126,13 @@ static int            g_module_assert_action = 0;
 #define WAST_MAX_BR_TABLE_LABELS 65536
 static uint32_t g_brtable_labels[WAST_MAX_BR_TABLE_LABELS];
 static int      g_brtable_count = 0;
+typedef struct {
+    uint8_t kind;
+    uint32_t tag;
+    uint32_t depth;
+} parsed_catch;
+static parsed_catch g_try_catches[WAST_MAX_TAGS];
+static int          g_try_catch_count = 0;
 static wasm_valtype g_select_result_types[WAST_MAX_RESULTS];
 static int          g_select_result_count = 0;
 
@@ -143,6 +151,8 @@ static char g_import_module[WAST_MAX_EXPORT_NAME];
 static char g_import_name[WAST_MAX_EXPORT_NAME];
 static int  g_export_kind;
 static uint32_t g_export_index;
+static char g_instance_args[2][WAST_MAX_EXPORT_NAME];
+static int  g_instance_arg_count;
 
 /* Global being built */
 static wast_global g_cur_global;
@@ -171,6 +181,7 @@ static wasm_valtype g_blocktype_results[WAST_MAX_RESULTS];
 static int          g_blocktype_result_count = 0;
 static int          g_blocktype_explicit = -1;
 static int          g_typeuse_field_stage = 0;
+static int          g_signature_seen_result = 0;
 
 static uint32_t resolve_func(const char *s);
 static uint32_t resolve_type(const char *s);
@@ -181,6 +192,8 @@ static uint32_t resolve_elem(const char *s);
 static uint32_t resolve_tag(const char *s);
 
 static wasm_valtype heap_reftype_to_value_type(int heap_type) {
+    if (WASM_VALTYPE_IS_TYPE_REF((wasm_valtype)heap_type))
+        return (wasm_valtype)heap_type;
     switch (heap_type) {
         case 0x70: return WASM_VALTYPE_FUNCREF;
         case 0x6f: return WASM_VALTYPE_EXTERNREF;
@@ -250,13 +263,20 @@ static wasm_valtype indexed_ref_type(wast_script *script, const char *name,
                                      int nullable) {
     uint32_t index = resolve_type(name);
     if (index == UINT32_MAX || index >= WAST_MAX_TYPES) {
-        /* Inside a rec group forward refs are allowed; otherwise unknown. */
-        if (!g_in_rec_group)
+        /* Module fields may precede the type section in text; the encoder
+         * orders all types before tables/globals/functions in binary.  A
+         * forward reference from within a non-recursive type declaration is
+         * different and remains invalid. */
+        if (!g_in_rec_group &&
+            (g_parsing_type_definition || !name || name[0] != '$'))
             report_validation_error(script, "unknown type");
         index = 0;
     } else {
         wast_module *mod = &cur_group(script)->module;
-        if (!g_in_rec_group && index >= (uint32_t)mod->type_count)
+        if (!g_in_rec_group &&
+            index >= (uint32_t)mod->type_count &&
+            !(g_parsing_type_definition &&
+              index == (uint32_t)mod->type_count))
             report_validation_error(script, "unknown type");
     }
     return (wasm_valtype)((nullable ? WASM_VALTYPE_TYPE_REF_NULL_BASE :
@@ -273,7 +293,10 @@ static int32_t indexed_heap_type(wast_script *script, const char *name,
         return 0;
     } else {
         wast_module *mod = &cur_group(script)->module;
-        if (!g_in_rec_group && index >= (uint32_t)mod->type_count)
+        if (!g_in_rec_group &&
+            index >= (uint32_t)mod->type_count &&
+            !(g_parsing_type_definition &&
+              index == (uint32_t)mod->type_count))
             report_validation_error(script, "unknown type");
     }
     return (int32_t)index;
@@ -400,6 +423,36 @@ static void begin_module(wast_script *script) {
     g_memory_name_count = 0;
     g_elem_name_count   = 0;
     g_tag_name_count    = 0;
+    g_parsing_type_definition = 0;
+}
+
+static void append_instance_arg(wast_script *script, const char *arg) {
+    if (g_instance_arg_count >= 2) {
+        report_validation_error(script, "too many module instance identifiers");
+        return;
+    }
+    snprintf(g_instance_args[g_instance_arg_count++], WAST_MAX_EXPORT_NAME,
+             "%s", arg);
+}
+
+static void finish_module_instance(wast_script *script) {
+    wast_module *module = &cur_group(script)->module;
+#ifndef WASTE_FREESTANDING
+    if (getenv("WAST_DEBUG_INSTANCE"))
+        fprintf(stderr, "instance group=%d argc=%d arg0='%s' arg1='%s'\n",
+                g_cur_group, g_instance_arg_count, g_instance_args[0],
+                g_instance_args[1]);
+#endif
+    if (g_instance_arg_count == 1) {
+        snprintf(module->instance_of, sizeof(module->instance_of), "%s",
+                 g_instance_args[0]);
+    } else if (g_instance_arg_count == 2) {
+        snprintf(module->id, sizeof(module->id), "%s", g_instance_args[0]);
+        snprintf(module->instance_of, sizeof(module->instance_of), "%s",
+                 g_instance_args[1]);
+    } else {
+        report_validation_error(script, "module instance requires a definition");
+    }
 }
 
 static void commit_func(wast_script *s) {
@@ -645,6 +698,14 @@ static void append_elem_global_ref(wast_script *script, const char *name, int li
     uint32_t elem=(uint32_t)cur_group(script)->module.elem_count;
     g_cur_elem.ref_opcodes[g_cur_elem.ref_count]=0x23;
     g_cur_elem.refs[g_cur_elem.ref_count++]=meta_index_ref(script,META_ELEM_GLOBAL,IDX_GLOBAL,elem,slot,name,line,column);
+}
+
+static void append_elem_null_ref(wasm_valtype type) {
+    if (g_cur_elem.ref_count >= WAST_MAX_ELEM_REFS) return;
+    int slot = g_cur_elem.ref_count++;
+    g_cur_elem.ref_opcodes[slot] = 0xd0;
+    g_cur_elem.ref_types[slot] = type;
+    g_cur_elem.refs[slot] = UINT32_MAX;
 }
 
 static void emit_global_init_ref(wast_script *script, index_space space, const char *name,
@@ -2015,6 +2076,7 @@ static void emit_blocktype(wast_script *script, int bt) {
     uint32_t     u32_val;
     uint64_t     u64_val;
     char         str_val[WAST_MAX_EXPORT_NAME];
+    char        *string_val;
     wasm_valtype valtype_val;
     wasm_value   value_val;
     lane_list    lane_list_val;
@@ -2048,9 +2110,11 @@ static void emit_blocktype(wast_script *script, int bt) {
 %token FOLD_RETURN_CALL_START FOLD_RETURN_CALL_REF_START FOLD_RETURN_CALL_INDIRECT_START
 %token FOLD_SELECT_START
 %token FOLD_CALL_INDIRECT_START
+%token FOLD_TRY_TABLE_START FOLD_CATCH_START FOLD_CATCH_ALL_START FOLD_THROW_START
 %token <str_val> FOLD_ATOM_START
 %token <str_val> OP
-%token <str_val>  STRING ATOM ID
+%token <string_val> STRING
+%token <str_val>  ATOM ID
 %token <u32_val>  SIMD_OP OFFSET_IMM ALIGN_IMM
 %token <i64_val>  INT HEXINT
 %token <f64_val>  FLOAT
@@ -2167,12 +2231,14 @@ module_cmd:
   /* (module definition $id? ...) — defines a module without instantiating */
   | LPAREN KW_MODULE KW_DEFINITION {
         begin_module(script);
+        cur_group(script)->module.is_definition = 1;
     }
     opt_module_id module_fields RPAREN { apply_func_fixups(script); }
   /* (module instance ...) — instantiates a previously defined module */
-  | LPAREN KW_MODULE KW_INSTANCE instance_args RPAREN {
+  | LPAREN KW_MODULE KW_INSTANCE {
         start_new_group(script);
-    }
+        g_instance_arg_count = 0;
+    } instance_args RPAREN { finish_module_instance(script); }
   | LPAREN KW_MODULE {
         begin_module(script);
     }
@@ -2188,8 +2254,8 @@ opt_module_id:
 
 instance_args:
     /* empty */
-  | instance_args ID
-  | instance_args ATOM
+  | instance_args ID   { append_instance_arg(script, $2); }
+  | instance_args ATOM { append_instance_arg(script, $2); }
     ;
 
 module_fields:
@@ -2224,6 +2290,7 @@ func_item:
         g_cur_func_index = (uint32_t)cur_group(script)->module.func_count;
         g_label_depth = 0;
         g_local_name_count = 0;
+        g_signature_seen_result = 0;
     }
     func_attrs RPAREN
     ;
@@ -2338,10 +2405,16 @@ opt_id:
 
 param_list:
     /* empty */
-  | param_list LPAREN KW_PARAM param_items RPAREN
+  | param_list LPAREN KW_PARAM {
+        if (g_signature_seen_result)
+            report_validation_error(script,
+                                    "parameter field after result field");
+    } param_items RPAREN
   /* Permit the following signature attribute to be consumed while resolving
    * the shared LPAREN prefix; result_list remains a no-op afterwards. */
-  | param_list LPAREN KW_RESULT result_valtype_list RPAREN
+  | param_list LPAREN KW_RESULT {
+        g_signature_seen_result = 1;
+    } result_valtype_list RPAREN
     ;
 
 param_items:
@@ -2810,6 +2883,12 @@ fold_instr:
   | FOLD_UNREACHABLE_START RPAREN { emit_byte(script,0x00); }
   | FOLD_RETURN_START RPAREN { emit_byte(script,0x0F); }
   | FOLD_RETURN_START fold_arg_list RPAREN { emit_byte(script,0x0F); }
+  | FOLD_THROW_START any_idx fold_arg_list RPAREN {
+        emit_byte(script, 0x08);
+        emit_index_ref(script, IDX_TAG, $2,
+                       @2.first_line, @2.first_column);
+    }
+  | fold_try_table
 
   /* control — br / call */
   | FOLD_BR_START    any_idx fold_arg_list RPAREN { emit_byte(script,0x0C); emit_leb_u32(script,resolve_label(script,$2,@2.first_line,@2.first_column)); }
@@ -2905,7 +2984,19 @@ fold_instr:
         }
     }
   | FOLD_ATOM_START ID fold_arg_list_nonempty RPAREN {
-        if (strcmp($1, "table.get") == 0 ||
+        uint8_t memory_op = memop_by_name($1);
+        if (memory_op) {
+            emit_byte(script, memory_op);
+            emit_leb_u32(script, default_align(memory_op) | 0x40u);
+            emit_index_ref(script, IDX_MEMORY, $2,
+                           @2.first_line, @2.first_column);
+            emit_leb_u32(script, 0); /* offset */
+        } else if (strcmp($1, "table.init") == 0) {
+            emit_byte(script, 0xfc); emit_leb_u32(script, 12);
+            emit_index_ref(script, IDX_ELEM, $2,
+                           @2.first_line, @2.first_column);
+            emit_leb_u32(script, 0); /* abbreviated form uses table 0 */
+        } else if (strcmp($1, "table.get") == 0 ||
             strcmp($1, "table.set") == 0) {
             emit_byte(script, strcmp($1, "table.get") == 0 ? 0x25 : 0x26);
             emit_index_ref(script, IDX_TABLE, $2,
@@ -2999,6 +3090,50 @@ fold_instr:
             if (align_log2 == 0 && offset == 0) align_log2 = default_align(op);
             emit_byte(script, op); emit_leb_u32(script, align_log2); emit_leb_u32(script, offset);
         } else emit_atom_op(script, $1);
+    }
+    ;
+
+fold_try_table:
+    FOLD_TRY_TABLE_START {
+        begin_block_type();
+        g_try_catch_count = 0;
+    } blocktype {
+        push_label("");
+        emit_byte(script, 0x1f);
+        emit_blocktype(script, $3);
+    } try_catch_list {
+        emit_leb_u32(script, (uint32_t)g_try_catch_count);
+        for (int i = 0; i < g_try_catch_count; i++) {
+            emit_byte(script, g_try_catches[i].kind);
+            if (g_try_catches[i].kind < 2)
+                emit_leb_u32(script, g_try_catches[i].tag);
+            emit_leb_u32(script, g_try_catches[i].depth);
+        }
+    } fold_arg_list RPAREN {
+        emit_byte(script, 0x0b);
+        pop_label();
+    }
+    ;
+
+try_catch_list:
+    /* empty */
+  | try_catch_list FOLD_CATCH_START any_idx any_idx RPAREN {
+        if (g_try_catch_count < WAST_MAX_TAGS) {
+            parsed_catch *catch_ = &g_try_catches[g_try_catch_count++];
+            catch_->kind = 0;
+            catch_->tag = resolve_tag($3);
+            catch_->depth = resolve_label(script, $4,
+                                          @4.first_line, @4.first_column);
+        }
+    }
+  | try_catch_list FOLD_CATCH_ALL_START any_idx RPAREN {
+        if (g_try_catch_count < WAST_MAX_TAGS) {
+            parsed_catch *catch_ = &g_try_catches[g_try_catch_count++];
+            catch_->kind = 2;
+            catch_->tag = 0;
+            catch_->depth = resolve_label(script, $3,
+                                          @3.first_line, @3.first_column);
+        }
     }
     ;
 
@@ -3240,8 +3375,12 @@ reftype:
   | LPAREN KW_REF_TYPE KW_STRUCT RPAREN { $$ = 0x6B; }
   | LPAREN KW_REF_TYPE KW_ARRAY RPAREN { $$ = 0x6A; }
   | LPAREN KW_REF_TYPE KW_EXN RPAREN { $$ = 0x69; }
-  | LPAREN KW_REF_TYPE KW_NULL any_idx RPAREN { $$ = 0x63; /* nullable indexed ref */ }
-  | LPAREN KW_REF_TYPE any_idx RPAREN { $$ = 0x64; /* non-nullable indexed ref */ }
+  | LPAREN KW_REF_TYPE KW_NULL any_idx RPAREN {
+        $$ = indexed_ref_type(script, $4, 1);
+    }
+  | LPAREN KW_REF_TYPE any_idx RPAREN {
+        $$ = indexed_ref_type(script, $3, 0);
+    }
     ;
 
 reftype_as_valtype:
@@ -3385,6 +3524,9 @@ valtype:
 /* --- type --- */
 type_item:
     LPAREN KW_TYPE opt_id {
+        g_parsing_type_definition = 1;
+        g_local_name_count = 0;
+        g_signature_seen_result = 0;
         begin_gc_type($3, WAST_TYPE_FUNC);
         memset(&g_cur_func, 0, sizeof(g_cur_func));
         g_cur_func.type_index = -1;
@@ -3401,7 +3543,7 @@ type_item:
             g_type_name_indices[g_type_name_count++] =
                 (uint32_t)cur_group(script)->module.type_count;
         }
-    } type_definition RPAREN
+    } type_definition RPAREN { g_parsing_type_definition = 0; }
     ;
 
 /* (rec (type ...) (type ...) ...) — recursive type group */
@@ -4091,7 +4233,7 @@ elem_item:
   | LPAREN KW_ELEM opt_id KW_DECLARE reftype {
         memset(&g_cur_elem, 0, sizeof(g_cur_elem));
         g_cur_elem.is_declarative = 1;
-        g_cur_elem.reftype = ($5 == 0x6F) ? WASM_VALTYPE_EXTERNREF : WASM_VALTYPE_FUNCREF;
+        g_cur_elem.reftype = heap_reftype_to_value_type($5);
     } elem_item_list RPAREN {
         /* declarative element segment */
         wast_module *mod = &cur_group(script)->module;
@@ -4103,7 +4245,7 @@ elem_item:
   | LPAREN KW_ELEM opt_id reftype {
         memset(&g_cur_elem, 0, sizeof(g_cur_elem));
         g_cur_elem.is_passive = 1;
-        g_cur_elem.reftype = ($4 == 0x6F) ? WASM_VALTYPE_EXTERNREF : WASM_VALTYPE_FUNCREF;
+        g_cur_elem.reftype = heap_reftype_to_value_type($4);
     } elem_item_list RPAREN {
         /* passive element segment */
         wast_module *mod = &cur_group(script)->module;
@@ -4265,15 +4407,13 @@ elem_expr_items:
         append_elem_func_ref(script,$2,@2.first_line,@2.first_column);
     }
   | FOLD_REF_NULL_START reftype RPAREN {
-        if (g_cur_elem.ref_count < WAST_MAX_ELEM_REFS)
-            g_cur_elem.refs[g_cur_elem.ref_count++] = UINT32_MAX;
+        append_elem_null_ref(heap_reftype_to_value_type($2));
     }
   | elem_expr_items FOLD_ATOM_START any_idx RPAREN {
         append_elem_func_ref(script,$3,@3.first_line,@3.first_column);
     }
   | elem_expr_items FOLD_REF_NULL_START reftype RPAREN {
-        if (g_cur_elem.ref_count < WAST_MAX_ELEM_REFS)
-            g_cur_elem.refs[g_cur_elem.ref_count++] = UINT32_MAX;
+        append_elem_null_ref(heap_reftype_to_value_type($3));
     }
     ;
 
@@ -4309,19 +4449,16 @@ elem_item_list:
         append_elem_func_ref(script,$3,@3.first_line,@3.first_column);
     }
   | elem_item_list FOLD_ATOM_START reftype RPAREN {
-        if (g_cur_elem.ref_count < WAST_MAX_ELEM_REFS)
-            g_cur_elem.refs[g_cur_elem.ref_count++] = UINT32_MAX;
+        append_elem_null_ref(heap_reftype_to_value_type($3));
     }
   | elem_item_list FOLD_REF_NULL_START reftype RPAREN {
-        if (g_cur_elem.ref_count < WAST_MAX_ELEM_REFS)
-            g_cur_elem.refs[g_cur_elem.ref_count++] = UINT32_MAX;
+        append_elem_null_ref(heap_reftype_to_value_type($3));
     }
   | elem_item_list FOLD_GLOBAL_GET_START any_idx RPAREN {
         append_elem_global_ref(script,$3,@3.first_line,@3.first_column);
     }
   | elem_item_list LPAREN KW_REF_NULL reftype RPAREN {
-        if (g_cur_elem.ref_count < WAST_MAX_ELEM_REFS)
-            g_cur_elem.refs[g_cur_elem.ref_count++] = UINT32_MAX; /* null */
+        append_elem_null_ref(heap_reftype_to_value_type($4));
     }
     ;
 

@@ -148,7 +148,8 @@ static waste_exec_engine *native_selected_engine(native_store *store,
 }
 
 static int native_store_add(native_store *store, waste_exec_engine *engine,
-                            const wast_module *module) {
+                            const wast_module *identity,
+                            const wast_module *metadata) {
     if (store->module_count == store->module_capacity) {
         int next_capacity = store->module_capacity ?
                             store->module_capacity * 2 : 16;
@@ -161,11 +162,22 @@ static int native_store_add(native_store *store, waste_exec_engine *engine,
     native_linked_module *linked = &store->modules[store->module_count++];
     memset(linked, 0, sizeof(*linked));
     linked->engine = engine;
-    linked->module = module;
-    snprintf(linked->id, sizeof(linked->id), "%s", module->id);
+    linked->module = metadata;
+    snprintf(linked->id, sizeof(linked->id), "%s", identity->id);
     snprintf(linked->registered, sizeof(linked->registered), "%s",
-             module->register_name);
+             identity->register_name);
     return 1;
+}
+
+static const wast_module *native_find_definition(const wast_script *script,
+                                                 int before_group,
+                                                 const char *id) {
+    for (int i = before_group - 1; i >= 0; i--) {
+        const wast_module *module = &script->groups[i].module;
+        if (module->is_definition && strcmp(module->id, id) == 0)
+            return module;
+    }
+    return NULL;
 }
 
 static exec_global *native_spectest_global(native_store *store,
@@ -180,6 +192,16 @@ static exec_global *native_spectest_global(native_store *store,
 static const wast_tag *native_find_exported_tag(
         const native_linked_module *provider, const char *name) {
     if (!provider || !provider->module) return NULL;
+    /* A single tag may have multiple standalone exports.  The tag metadata's
+     * convenience export_name can retain only one of them, so use the module
+     * export table as the authoritative mapping. */
+    for (int i = 0; i < provider->module->export_count; i++) {
+        const wast_export *export_ = &provider->module->exports[i];
+        if (export_->kind == 4 &&
+            export_->index < (uint32_t)provider->module->tag_count &&
+            strcmp(export_->name, name) == 0)
+            return &provider->module->tags[export_->index];
+    }
     for (int i = 0; i < provider->module->tag_count; i++) {
         const wast_tag *tag = &provider->module->tags[i];
         if (tag->has_export_name && strcmp(tag->export_name, name) == 0)
@@ -200,13 +222,32 @@ static exec_status native_load_module(native_store *store,
                                       const uint8_t *bytes, size_t size,
                                       waste_exec_engine **engine_out,
                                       exec_error *error) {
-    /* Tag imports: skip silently; throw/catch not yet implemented.
-     * Tag identity is link-time metadata only.  Skipping here lets modules
-     * that import tags still load for their non-exception exports. */
-    (void)native_find_exported_tag;
-    (void)native_tag_signature_matches;
+    /* Tags are not executable yet, but their imports still participate in
+     * ordinary module linking and must match an exported tag signature. */
+    for (int i = 0; i < module->tag_count; i++) {
+        const wast_tag *tag = &module->tags[i];
+        if (!tag->is_import) continue;
+        native_linked_module *provider = native_registered_module(
+            store, tag->import_module);
+        const wast_tag *provided = native_find_exported_tag(
+            provider, tag->import_name);
+        if (!provided) {
+            error->status = EXEC_ERROR_NOT_FOUND;
+            snprintf(error->message, sizeof(error->message),
+                     "unresolved tag import %s.%s", tag->import_module,
+                     tag->import_name);
+            return error->status;
+        }
+        if (!native_tag_signature_matches(tag, provided)) {
+            error->status = EXEC_ERROR_FORMAT;
+            snprintf(error->message, sizeof(error->message),
+                     "incompatible tag import type for %s.%s",
+                     tag->import_module, tag->import_name);
+            return error->status;
+        }
+    }
     size_t function_count = 0, global_count = 0;
-    size_t memory_count = 0, table_count = 0;
+    size_t memory_count = 0, table_count = 0, tag_count = 0;
     for (int i = 0; i < module->func_count; i++)
         function_count += module->funcs[i].is_import != 0;
     for (int i = 0; i < module->global_count; i++)
@@ -215,24 +256,27 @@ static exec_status native_load_module(native_store *store,
         memory_count += module->memories[i].is_import != 0;
     for (int i = 0; i < module->table_count; i++)
         table_count += module->tables[i].is_import != 0;
+    for (int i = 0; i < module->tag_count; i++)
+        tag_count += module->tags[i].is_import != 0;
 
     exec_host_import *functions = calloc(function_count, sizeof(*functions));
     exec_global_import *globals = calloc(global_count, sizeof(*globals));
     exec_memory_import *memories = calloc(memory_count, sizeof(*memories));
     exec_table_import *tables = calloc(table_count, sizeof(*tables));
+    exec_tag_import *tags = calloc(tag_count, sizeof(*tags));
     native_call_block *call_block = calloc(1, sizeof(*call_block));
     if (function_count) call_block->calls = calloc(function_count, sizeof(*call_block->calls));
     if ((function_count && (!functions || !call_block->calls)) ||
         (global_count && !globals) || (memory_count && !memories) ||
-        (table_count && !tables) || !call_block) {
-        free(functions); free(globals); free(memories); free(tables);
+        (table_count && !tables) || (tag_count && !tags) || !call_block) {
+        free(functions); free(globals); free(memories); free(tables); free(tags);
         if (call_block) { free(call_block->calls); free(call_block); }
         error->status = EXEC_ERROR_FORMAT;
         snprintf(error->message, sizeof(error->message), "out of memory linking module");
         return EXEC_ERROR_FORMAT;
     }
 
-    size_t nf = 0, ng = 0, nm = 0, nt = 0;
+    size_t nf = 0, ng = 0, nm = 0, nt = 0, ntag = 0;
     for (int i = 0; i < module->func_count; i++) if (module->funcs[i].is_import) {
         const wast_func *function = &module->funcs[i];
         native_linked_module *provider = native_registered_module(
@@ -307,15 +351,28 @@ static exec_status native_load_module(native_store *store,
         tables[nt++] = (exec_table_import){table->import_module,
                                            table->import_name, value};
     }
+    for (int i = 0; i < module->tag_count; i++) if (module->tags[i].is_import) {
+        const wast_tag *tag = &module->tags[i];
+        native_linked_module *provider = native_registered_module(
+            store, tag->import_module);
+        exec_tag *value = NULL;
+        if (provider) {
+            exec_status status = exec_find_export_tag(
+                provider->engine, tag->import_name, &value, error);
+            if (status != EXEC_OK) goto fail;
+        }
+        tags[ntag++] = (exec_tag_import){tag->import_module,
+                                         tag->import_name, value};
+    }
 
     {
         exec_imports imports = {functions, nf, globals, ng,
-                                memories, nm, tables, nt};
+                                memories, nm, tables, nt, tags, ntag};
         exec_status status = exec_load_with_imports(bytes, size, &imports,
                                                     engine_out, error);
         if (status != EXEC_OK) goto fail;
     }
-    free(functions); free(globals); free(memories); free(tables);
+    free(functions); free(globals); free(memories); free(tables); free(tags);
     if (function_count) {
         call_block->next = store->call_blocks;
         store->call_blocks = call_block;
@@ -325,7 +382,7 @@ static exec_status native_load_module(native_store *store,
     return EXEC_OK;
 
 fail:
-    free(functions); free(globals); free(memories); free(tables);
+    free(functions); free(globals); free(memories); free(tables); free(tags);
     free(call_block->calls); free(call_block);
     return error->status;
 }
@@ -404,6 +461,22 @@ static int run_normal(const char *path) {
     for (int g = 0; g < script->group_count; g++) {
         wast_group *group = &script->groups[g];
 
+        /* Definitions are templates.  A module instance below encodes and
+         * instantiates the definition afresh, which gives its globals,
+         * tables, memories, and tags distinct identities. */
+        if (group->module.is_definition) continue;
+
+        const wast_module *load_module = &group->module;
+        if (group->module.instance_of[0]) {
+            load_module = native_find_definition(
+                script, g, group->module.instance_of);
+            if (!load_module) {
+                fprintf(stderr, "unknown module definition %s\n",
+                        group->module.instance_of);
+                continue;
+            }
+        }
+
         if (group->has_module_assertion && group->has_validation_error) {
             int ok = group->module_assert_kind == WAST_ASSERT_INVALID ||
                      group->module_assert_kind == WAST_ASSERT_MALFORMED;
@@ -420,7 +493,10 @@ static int run_normal(const char *path) {
 
         char encode_error[256] = {0};
         size_t bin_size = 0;
-        uint8_t *bin = encode_group_module(group, &bin_size, encode_error);
+        wast_group encode_group = *group;
+        encode_group.module = *load_module;
+        uint8_t *bin = encode_group_module(&encode_group, &bin_size,
+                                           encode_error);
         if (!bin) {
             fprintf(stderr, "encode error (group %d): %s\n", g, encode_error);
             if (group->has_module_assertion) {
@@ -451,7 +527,7 @@ static int run_normal(const char *path) {
         waste_exec_engine *engine = NULL;
         exec_error exec_err;
         memset(&exec_err, 0, sizeof(exec_err));
-        exec_status st = native_load_module(&store, &group->module,
+        exec_status st = native_load_module(&store, load_module,
                                             bin, bin_size, &engine, &exec_err);
         free(bin);
         if (group->has_module_assertion) {
@@ -485,7 +561,7 @@ static int run_normal(const char *path) {
             continue;
         }
 
-        if (!native_store_add(&store, engine, &group->module)) {
+        if (!native_store_add(&store, engine, &group->module, load_module)) {
             exec_free(engine);
             engine = NULL;
             snprintf(exec_err.message, sizeof(exec_err.message),

@@ -245,6 +245,7 @@ typedef struct {
     wasm_valtype reftype;
     uint32_t     refs[WAST_MAX_ELEM_REFS]; /* func indices */
     uint8_t      ref_opcodes[WAST_MAX_ELEM_REFS]; /* ref.null/ref.func/global.get */
+    wasm_valtype ref_types[WAST_MAX_ELEM_REFS]; /* heap type for ref.null */
     uint8_t      ref_exprs[WAST_MAX_ELEM_REFS][WAST_MAX_ELEM_EXPR_BYTES];
     int          ref_expr_lens[WAST_MAX_ELEM_REFS];
     int          ref_count;
@@ -304,6 +305,8 @@ typedef struct {
     /* Module identity */
     char id[WAST_MAX_EXPORT_NAME];
     char register_name[WAST_MAX_EXPORT_NAME]; /* for (register "name") */
+    int  is_definition; /* (module definition ...): validate/store as a template */
+    char instance_of[WAST_MAX_EXPORT_NAME]; /* definition named by module instance */
 } wast_module;
 
 /* A single test assertion */
@@ -337,6 +340,9 @@ typedef struct {
     int column;
     int fold_depth;
     int offset_overflow; /* set by lexer when offset=/align= exceeds u32 */
+    char **strings;      /* parse-lifetime storage for unbounded STRING tokens */
+    size_t string_count;
+    size_t string_capacity;
 } wast_lex_state;
 
 /* One module + index range into flat assertion pool */

@@ -15,6 +15,25 @@ static void safe_strncpy(char *dest, const char *src, size_t n) {
     dest[i] = '\0';
 }
 
+static char *retain_string(wast_lex_state *state, const char *source,
+                           size_t length) {
+    char *value = (char *)malloc(length + 1);
+    if (!value) return NULL;
+    memcpy(value, source, length);
+    value[length] = '\0';
+    if (state->string_count == state->string_capacity) {
+        size_t capacity = state->string_capacity ?
+                          state->string_capacity * 2 : 64;
+        char **strings = (char **)realloc(
+            state->strings, capacity * sizeof(*strings));
+        if (!strings) { free(value); return NULL; }
+        state->strings = strings;
+        state->string_capacity = capacity;
+    }
+    state->strings[state->string_count++] = value;
+    return value;
+}
+
 /* Strip underscores from a numeric literal into a static buffer */
 static const char *strip_underscores(const char *s) {
     /* The core literal tests include exact decimal f64 boundaries with more
@@ -152,10 +171,10 @@ HEXNUM      {HEXDIGIT}(_*{HEXDIGIT})*
 \([ \t\r\n]*call_ref { yyextra->fold_depth++; return FOLD_CALL_REF_START; }
 \([ \t\r\n]*call_indirect { yyextra->fold_depth++; return FOLD_CALL_INDIRECT_START; }
 \([ \t\r\n]*call { yyextra->fold_depth++; return FOLD_CALL_START; }
-\([ \t\r\n]*try_table { safe_strncpy(yylval->str_val,"try_table",sizeof(yylval->str_val)); yyextra->fold_depth++; return FOLD_ATOM_START; }
-\([ \t\r\n]*catch_all { safe_strncpy(yylval->str_val,"catch_all",sizeof(yylval->str_val)); yyextra->fold_depth++; return FOLD_ATOM_START; }
-\([ \t\r\n]*catch { safe_strncpy(yylval->str_val,"catch",sizeof(yylval->str_val)); yyextra->fold_depth++; return FOLD_ATOM_START; }
-\([ \t\r\n]*throw { safe_strncpy(yylval->str_val,"throw",sizeof(yylval->str_val)); yyextra->fold_depth++; return FOLD_ATOM_START; }
+\([ \t\r\n]*try_table { yyextra->fold_depth++; return FOLD_TRY_TABLE_START; }
+\([ \t\r\n]*catch_all { yyextra->fold_depth++; return FOLD_CATCH_ALL_START; }
+\([ \t\r\n]*catch { yyextra->fold_depth++; return FOLD_CATCH_START; }
+\([ \t\r\n]*throw { yyextra->fold_depth++; return FOLD_THROW_START; }
 \([ \t\r\n]*select { yyextra->fold_depth++; return FOLD_SELECT_START; }
 \([ \t\r\n]*[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_.]+ {
     const char *p = yytext + 1;
@@ -171,9 +190,8 @@ HEXNUM      {HEXDIGIT}(_*{HEXDIGIT})*
 
 \"([^\"\\]|\\.)*\"  {
     size_t len = (size_t)(yyleng - 2);
-    if (len >= sizeof(yylval->str_val)) len = sizeof(yylval->str_val) - 1;
-    memcpy(yylval->str_val, yytext + 1, len);
-    yylval->str_val[len] = '\0';
+    yylval->string_val = retain_string(yyextra, yytext + 1, len);
+    if (!yylval->string_val) yylval->string_val = "";
     return STRING;
 }
 
