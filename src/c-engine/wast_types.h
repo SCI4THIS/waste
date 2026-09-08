@@ -166,11 +166,17 @@ typedef enum {
 
 /* Memory limits */
 typedef struct {
-    uint32_t min;
-    uint32_t max;
+    uint64_t min;
+    uint64_t max;
     int      has_max;
     int      is_shared;
+    int      is_64;
 } wast_limits;
+
+typedef struct {
+    uint64_t offset;
+    uint32_t alignment;
+} wast_memarg;
 
 /* Global definition */
 typedef struct {
@@ -341,7 +347,7 @@ typedef struct {
     int line;
     int column;
     int fold_depth;
-    int offset_overflow; /* set by lexer when offset=/align= exceeds u32 */
+    int offset_overflow; /* set when offset=/align= exceeds its encoded range */
     char **strings;      /* parse-lifetime storage for unbounded STRING tokens */
     size_t string_count;
     size_t string_capacity;

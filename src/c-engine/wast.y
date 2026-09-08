@@ -640,6 +640,14 @@ static void emit_leb_u32(wast_script *script, uint32_t v) {
     } while (v);
 }
 
+static void emit_leb_u64(wast_script *script, uint64_t v) {
+    do {
+        uint8_t b = (uint8_t)(v & UINT64_C(0x7f)); v >>= 7;
+        if (v) b |= 0x80;
+        emit_byte(script, b);
+    } while (v);
+}
+
 static void emit_func_ref(wast_script *script, const char *name, int line, int column) {
     if (g_constexpr_target == g_cur_global.init_expr) {
         emit_global_init_ref(script, IDX_FUNC, name, line, column);
@@ -1777,6 +1785,20 @@ static int emit_atom_op(wast_script *script, const char *name) {
         emit_byte(script, 0xFC); emit_leb_u32(script, 17); emit_byte(script, 0x00);
         return 1;
     }
+    if (strcmp(name, "table.copy") == 0) {
+        emit_byte(script, 0xFC); emit_leb_u32(script, 14);
+        emit_byte(script, 0x00); emit_byte(script, 0x00);
+        return 1;
+    }
+    if (strcmp(name, "memory.copy") == 0) {
+        emit_byte(script, 0xFC); emit_leb_u32(script, 10);
+        emit_byte(script, 0x00); emit_byte(script, 0x00);
+        return 1;
+    }
+    if (strcmp(name, "memory.fill") == 0) {
+        emit_byte(script, 0xFC); emit_leb_u32(script, 11); emit_byte(script, 0x00);
+        return 1;
+    }
     static const struct { const char *n; uint8_t op; } tbl[] = {
         /* control */
         {"unreachable",0x00},{"nop",0x01},{"return",0x0F},
@@ -1832,7 +1854,7 @@ static int emit_atom_op(wast_script *script, const char *name) {
         {"i64.extend8_s",0xC2},{"i64.extend16_s",0xC3},
         {"i64.extend32_s",0xC4},
         /* ref */
-        {"ref.is_null",0xD1},
+        {"ref.is_null",0xD1},{"ref.eq",0xD3},
         {NULL,0}
     };
     for (int i = 0; tbl[i].n; i++) {
@@ -2132,6 +2154,7 @@ static void emit_blocktype(wast_script *script, int bt) {
     wasm_valtype valtype_val;
     wasm_value   value_val;
     lane_list    lane_list_val;
+    wast_memarg  memarg_val;
     int          int_val;
     wast_limits  limits_val;
 }
@@ -2163,14 +2186,15 @@ static void emit_blocktype(wast_script *script, int bt) {
 %token FOLD_SELECT_START
 %token FOLD_CALL_INDIRECT_START
 %token FOLD_TRY_TABLE_START FOLD_CATCH_START FOLD_CATCH_ALL_START FOLD_THROW_START
-%token <str_val> FOLD_ATOM_START FOLD_MEMOP_START
+%token <str_val> FOLD_ATOM_START FOLD_MEMOP_START FOLD_EMPTY_ATOM
 %token <str_val> FOLD_SIMD_MEM_START FOLD_SIMD_MEM_LANE_START
 %token <str_val> FOLD_SIMD_LANE_START FOLD_SIMD_SHUFFLE_START
 %token <str_val> SIMD_SHUFFLE_OP
 %token <str_val> OP
 %token <string_val> STRING
 %token <str_val>  ATOM ID
-%token <u32_val>  SIMD_OP OFFSET_IMM ALIGN_IMM
+%token <u32_val>  SIMD_OP ALIGN_IMM
+%token <u64_val>  OFFSET_IMM
 %token <i64_val>  INT HEXINT POSINT
 %token <f64_val>  FLOAT
 
@@ -2215,14 +2239,14 @@ static void emit_blocktype(wast_script *script, int bt) {
 %type <int_val>       reftype opt_table_idx
 %type <str_val>       opt_id opt_label opt_label_end any_idx index_ref fold_if_start
 %type <i64_val>       any_int any_nat lane_index
-%type <u64_val>       memarg
+%type <memarg_val>    memarg
 %type <u64_val>       storage_type
 %type <int_val>       typeuse typeuse_items typeuse_item
 %type <int_val>       module_assert_body
 %type <int_val>       global_fields
 %type <int_val>       constexpr_expr
 %type <limits_val>    limits
-%type <u64_val>       memarg_nonempty
+%type <memarg_val>    memarg_nonempty
 
 %%
 
@@ -2670,22 +2694,20 @@ plain_instr:
   | OP index_ref memarg_nonempty {
         uint8_t op = memop_by_name($1);
         if (op) {
-            uint32_t align_log2 = (uint32_t)($3 >> 32);
-            uint32_t offset = (uint32_t)($3 & 0xFFFFFFFF);
+            uint32_t align_log2 = $3.alignment;
             emit_byte(script, op); emit_leb_u32(script, align_log2 | 0x40u);
             emit_index_ref(script, IDX_MEMORY, $2, @2.first_line, @2.first_column);
-            emit_leb_u32(script, offset);
+            emit_leb_u64(script, $3.offset);
         } else {
             wast_simd_info simd;
             if (wast_simd_lookup($1, &simd) &&
                 simd.immediate == WAST_SIMD_IMM_MEMARG) {
-                uint32_t align_log2 = (uint32_t)($3 >> 32);
-                uint32_t offset = (uint32_t)$3;
+                uint32_t align_log2 = $3.alignment;
                 emit_byte(script, 0xFD); emit_leb_u32(script, simd.opcode);
                 emit_leb_u32(script, align_log2 | 0x40u);
                 emit_index_ref(script, IDX_MEMORY, $2,
                                @2.first_line, @2.first_column);
-                emit_leb_u32(script, offset);
+                emit_leb_u64(script, $3.offset);
             }
         }
     }
@@ -2745,10 +2767,10 @@ plain_instr:
   | ATOM memarg {
         uint8_t op = memop_by_name($1);
         if (op) {
-            uint32_t align_log2 = (uint32_t)($2 >> 32);
-            uint32_t offset = (uint32_t)($2 & 0xFFFFFFFF);
+            uint32_t align_log2 = $2.alignment;
+            uint64_t offset = $2.offset;
             if (align_log2 == 0 && offset == 0) align_log2 = default_align(op);
-            emit_byte(script, op); emit_leb_u32(script, align_log2); emit_leb_u32(script, offset);
+            emit_byte(script, op); emit_leb_u32(script, align_log2); emit_leb_u64(script, offset);
         } else {
             if (!emit_atom_op(script,$1) && script->strict_wat_mode)
                 report_validation_error(script,"unknown instruction operator");
@@ -2774,16 +2796,15 @@ plain_instr:
   | OP memarg_nonempty {
         uint8_t op = memop_by_name($1);
         if (op) {
-            uint32_t align_log2 = (uint32_t)($2 >> 32);
-            uint32_t offset = (uint32_t)($2 & 0xFFFFFFFF);
-            emit_byte(script, op); emit_leb_u32(script, align_log2); emit_leb_u32(script, offset);
+            uint32_t align_log2 = $2.alignment;
+            emit_byte(script, op); emit_leb_u32(script, align_log2); emit_leb_u64(script, $2.offset);
         } else {
             wast_simd_info simd;
             if (wast_simd_lookup($1, &simd) &&
                 simd.immediate == WAST_SIMD_IMM_MEMARG) {
                 emit_atom_op(script,$1);
-                emit_leb_u32(script, (uint32_t)($2 >> 32));
-                emit_leb_u32(script, (uint32_t)$2);
+                emit_leb_u32(script, $2.alignment);
+                emit_leb_u64(script, $2.offset);
             } else if (!emit_atom_op(script,$1) && script->strict_wat_mode)
                 report_validation_error(script,"unknown instruction operator");
         }
@@ -2950,7 +2971,11 @@ opt_table_idx:
     ;
 
 typeuse:
-    /* empty */                                   { $$ = 0; }
+    /* empty */ {
+        g_inline_param_count = 0;
+        g_inline_result_count = 0;
+        $$ = resolve_inline_functype(script);
+    }
   | {
         g_inline_param_count = 0;
         g_inline_result_count = 0;
@@ -3023,7 +3048,16 @@ inline_result_list:
  * --------------------------------------------------------------------- */
 
 fold_instr:
-    FOLD_SIMD_MEM_START index_ref fold_arg_list RPAREN {
+    FOLD_EMPTY_ATOM {
+        if (strcmp($1, "table.fill") == 0 ||
+            strcmp($1, "memory.fill") == 0 ||
+            strcmp($1, "table.copy") == 0 ||
+            strcmp($1, "memory.copy") == 0)
+            report_validation_error(script, "type mismatch");
+        if (!emit_atom_op(script, $1) && script->strict_wat_mode)
+            report_validation_error(script,"unknown instruction operator");
+    }
+  | FOLD_SIMD_MEM_START index_ref fold_arg_list RPAREN {
         wast_simd_info simd; wast_simd_lookup($1, &simd);
         emit_byte(script,0xFD); emit_leb_u32(script,simd.opcode);
         emit_leb_u32(script,simd.natural_alignment|0x40u);
@@ -3033,9 +3067,9 @@ fold_instr:
   | FOLD_SIMD_MEM_START index_ref memarg_nonempty fold_arg_list RPAREN {
         wast_simd_info simd; wast_simd_lookup($1, &simd);
         emit_byte(script,0xFD); emit_leb_u32(script,simd.opcode);
-        emit_leb_u32(script,(uint32_t)($3>>32)|0x40u);
+        emit_leb_u32(script,$3.alignment|0x40u);
         emit_index_ref(script,IDX_MEMORY,$2,@2.first_line,@2.first_column);
-        emit_leb_u32(script,(uint32_t)$3);
+        emit_leb_u64(script,$3.offset);
     }
   | FOLD_SIMD_MEM_START fold_arg_list RPAREN {
         wast_simd_info simd; wast_simd_lookup($1, &simd);
@@ -3045,7 +3079,7 @@ fold_instr:
   | FOLD_SIMD_MEM_START memarg_nonempty fold_arg_list RPAREN {
         wast_simd_info simd; wast_simd_lookup($1, &simd);
         emit_byte(script,0xFD); emit_leb_u32(script,simd.opcode);
-        emit_leb_u32(script,(uint32_t)($2>>32)); emit_leb_u32(script,(uint32_t)$2);
+        emit_leb_u32(script,$2.alignment); emit_leb_u64(script,$2.offset);
     }
   | FOLD_SIMD_LANE_START lane_index fold_arg_list RPAREN {
         wast_simd_info simd; wast_simd_lookup($1, &simd);
@@ -3077,7 +3111,7 @@ fold_instr:
         if ($3 < 0 || $3 >= simd.lane_count)
             report_validation_error(script,"lane index out of range");
         emit_byte(script,0xFD); emit_leb_u32(script,simd.opcode);
-        emit_leb_u32(script,(uint32_t)($2>>32)); emit_leb_u32(script,(uint32_t)$2); emit_byte(script,(uint8_t)$3);
+        emit_leb_u32(script,$2.alignment); emit_leb_u64(script,$2.offset); emit_byte(script,(uint8_t)$3);
     }
   | FOLD_SIMD_MEM_LANE_START index_ref lane_index fold_arg_list RPAREN {
         wast_simd_info simd; wast_simd_lookup($1, &simd);
@@ -3092,8 +3126,8 @@ fold_instr:
         if ($4 < 0 || $4 >= simd.lane_count)
             report_validation_error(script,"lane index out of range");
         emit_byte(script,0xFD); emit_leb_u32(script,simd.opcode);
-        emit_leb_u32(script,(uint32_t)($3>>32)|0x40u);
-        emit_index_ref(script,IDX_MEMORY,$2,@2.first_line,@2.first_column); emit_leb_u32(script,(uint32_t)$3); emit_byte(script,(uint8_t)$4);
+        emit_leb_u32(script,$3.alignment|0x40u);
+        emit_index_ref(script,IDX_MEMORY,$2,@2.first_line,@2.first_column); emit_leb_u64(script,$3.offset); emit_byte(script,(uint8_t)$4);
     }
   | FOLD_MEMOP_START index_ref fold_arg_list RPAREN {
         uint8_t op = memop_by_name($1);
@@ -3105,13 +3139,12 @@ fold_instr:
     }
   | FOLD_MEMOP_START index_ref memarg_nonempty fold_arg_list RPAREN {
         uint8_t op = memop_by_name($1);
-        uint32_t align_log2 = (uint32_t)($3 >> 32);
-        uint32_t offset = (uint32_t)($3 & 0xFFFFFFFF);
+        uint32_t align_log2 = $3.alignment;
         emit_byte(script, op);
         emit_leb_u32(script, align_log2 | 0x40u);
         emit_index_ref(script, IDX_MEMORY, $2,
                        @2.first_line, @2.first_column);
-        emit_leb_u32(script, offset);
+        emit_leb_u64(script, $3.offset);
     }
   | FOLD_MEMOP_START fold_arg_list RPAREN {
         uint8_t op = memop_by_name($1);
@@ -3121,11 +3154,10 @@ fold_instr:
     }
   | FOLD_MEMOP_START memarg_nonempty fold_arg_list RPAREN {
         uint8_t op = memop_by_name($1);
-        uint32_t align_log2 = (uint32_t)($2 >> 32);
-        uint32_t offset = (uint32_t)($2 & 0xFFFFFFFF);
+        uint32_t align_log2 = $2.alignment;
         emit_byte(script, op);
         emit_leb_u32(script, align_log2);
-        emit_leb_u32(script, offset);
+        emit_leb_u64(script, $2.offset);
     }
   | FOLD_SELECT_START RPAREN { emit_byte(script,0x1B); }
   | FOLD_SELECT_START fold_arg_list RPAREN { emit_byte(script,0x1B); }
@@ -3206,6 +3238,18 @@ fold_instr:
             emit_byte(script, 0x44); emit_f64(script, (double)$2);
         } else if (strcmp($1, "ref.func") == 0) {
             emit_byte(script, 0xD2); emit_leb_u32(script, (uint32_t)$2);
+        } else if (strcmp($1, "data.drop") == 0) {
+            emit_byte(script, 0xfc); emit_leb_u32(script, 9);
+            emit_leb_u32(script, (uint32_t)$2);
+        } else if (strcmp($1, "elem.drop") == 0) {
+            emit_byte(script, 0xfc); emit_leb_u32(script, 13);
+            emit_leb_u32(script, (uint32_t)$2);
+        } else if (strcmp($1, "memory.init") == 0) {
+            emit_byte(script, 0xfc); emit_leb_u32(script, 8);
+            emit_leb_u32(script, (uint32_t)$2); emit_byte(script, 0x00);
+        } else if (strcmp($1, "table.init") == 0) {
+            emit_byte(script, 0xfc); emit_leb_u32(script, 12);
+            emit_leb_u32(script, (uint32_t)$2); emit_byte(script, 0x00);
         } else {
             if (!emit_atom_op(script, $1) && script->strict_wat_mode)
                 report_validation_error(script,"unknown instruction operator");
@@ -3224,6 +3268,12 @@ fold_instr:
             emit_index_ref(script, IDX_TABLE, $2, @2.first_line, @2.first_column);
         } else if (strcmp($1, "table.set") == 0) {
             emit_byte(script, 0x26);
+            emit_index_ref(script, IDX_TABLE, $2, @2.first_line, @2.first_column);
+        } else if (strcmp($1, "table.fill") == 0) {
+            /* Preserve malformed folded instructions so binary validation can
+             * reject them for assert_invalid instead of silently omitting the
+             * operator. */
+            emit_byte(script, 0xFC); emit_leb_u32(script, 17);
             emit_index_ref(script, IDX_TABLE, $2, @2.first_line, @2.first_column);
         } else if (strcmp($1, "memory.size") == 0) {
             emit_byte(script, 0x3F);
@@ -3298,16 +3348,38 @@ fold_instr:
             emit_byte(script, 0xfc); emit_leb_u32(script, 8);
             emit_leb_u32(script, (uint32_t)$3); /* dataidx */
             emit_index_ref(script, IDX_MEMORY, $2, @2.first_line, @2.first_column);
+        } else if (strcmp($1, "table.init") == 0) {
+            emit_byte(script, 0xfc); emit_leb_u32(script, 12);
+            emit_leb_u32(script, (uint32_t)$3);
+            emit_index_ref(script, IDX_TABLE, $2, @2.first_line, @2.first_column);
+        } else if (strcmp($1, "table.copy") == 0) {
+            emit_byte(script, 0xfc); emit_leb_u32(script, 14);
+            emit_index_ref(script, IDX_TABLE, $2, @2.first_line, @2.first_column);
+            emit_leb_u32(script, (uint32_t)$3);
+        } else if (strcmp($1, "memory.copy") == 0) {
+            emit_byte(script, 0xfc); emit_leb_u32(script, 10);
+            emit_index_ref(script, IDX_MEMORY, $2, @2.first_line, @2.first_column);
+            emit_leb_u32(script, (uint32_t)$3);
         } else if (emit_gc_constructor(script, $1, $2,
                                        @2.first_line, @2.first_column)) {
             emit_leb_u32(script, (uint32_t)$3);
         }
     }
   | FOLD_ATOM_START any_int fold_arg_list_nonempty RPAREN {
-        char type_name[32];
-        snprintf(type_name, sizeof(type_name), "%lld", (long long)$2);
-        emit_gc_constructor(script, $1, type_name,
-                            @2.first_line, @2.first_column);
+        if (strcmp($1, "memory.init") == 0) {
+            emit_byte(script, 0xfc); emit_leb_u32(script, 8);
+            emit_leb_u32(script, (uint32_t)$2);
+            emit_byte(script, 0x00);
+        } else if (strcmp($1, "table.init") == 0) {
+            emit_byte(script, 0xfc); emit_leb_u32(script, 12);
+            emit_leb_u32(script, (uint32_t)$2);
+            emit_byte(script, 0x00);
+        } else {
+            char type_name[32];
+            snprintf(type_name, sizeof(type_name), "%lld", (long long)$2);
+            emit_gc_constructor(script, $1, type_name,
+                                @2.first_line, @2.first_column);
+        }
     }
   | FOLD_ATOM_START any_int any_nat fold_arg_list RPAREN {
         char type_name[32];
@@ -3354,7 +3426,16 @@ fold_instr:
         emit_leb_u32(script, 12);
         for (int i = 0; i < 16; i++) emit_byte(script, v.v128.bytes[i]);
     }
-  | FOLD_ATOM_START fold_arg_list RPAREN {
+  | FOLD_ATOM_START RPAREN {
+        if (strcmp($1, "table.fill") == 0 ||
+            strcmp($1, "memory.fill") == 0 ||
+            strcmp($1, "table.copy") == 0 ||
+            strcmp($1, "memory.copy") == 0)
+            report_validation_error(script, "type mismatch");
+        if (!emit_atom_op(script, $1) && script->strict_wat_mode)
+            report_validation_error(script,"unknown instruction operator");
+    }
+  | FOLD_ATOM_START fold_arg_list_nonempty RPAREN {
         if (!emit_atom_op(script, $1) && script->strict_wat_mode)
             report_validation_error(script,"unknown instruction operator");
     }
@@ -3729,13 +3810,13 @@ any_nat:
     ;
 
 memarg:
-    /* empty */              { $$ = 0ULL; }
+    /* empty */              { $$.offset = 0; $$.alignment = 0; }
   | memarg_nonempty          { $$ = $1; }
     ;
 
 memarg_nonempty:
     OFFSET_IMM               {
-        $$ = (uint64_t)$1;
+        $$.offset = $1; $$.alignment = 0;
         wast_lex_state *ls = (wast_lex_state *)yyget_extra(scanner);
         if (ls && ls->offset_overflow) {
             report_validation_error(script, "offset out of range");
@@ -3743,7 +3824,7 @@ memarg_nonempty:
         }
     }
   | ALIGN_IMM                {
-        $$ = ((uint64_t)explicit_align_exponent($1) << 32);
+        $$.offset = 0; $$.alignment = explicit_align_exponent($1);
         wast_lex_state *ls = (wast_lex_state *)yyget_extra(scanner);
         if (ls && ls->offset_overflow) {
             report_validation_error(script, "alignment must not be larger than natural");
@@ -3751,7 +3832,7 @@ memarg_nonempty:
         }
     }
   | OFFSET_IMM ALIGN_IMM     {
-        $$ = (uint64_t)$1 | ((uint64_t)explicit_align_exponent($2) << 32);
+        $$.offset = $1; $$.alignment = explicit_align_exponent($2);
         wast_lex_state *ls = (wast_lex_state *)yyget_extra(scanner);
         if (ls && ls->offset_overflow) {
             report_validation_error(script, "offset out of range");
@@ -3759,7 +3840,7 @@ memarg_nonempty:
         }
     }
   | ALIGN_IMM  OFFSET_IMM    {
-        $$ = (uint64_t)$2 | ((uint64_t)explicit_align_exponent($1) << 32);
+        $$.offset = $2; $$.alignment = explicit_align_exponent($1);
         wast_lex_state *ls = (wast_lex_state *)yyget_extra(scanner);
         if (ls && ls->offset_overflow) {
             report_validation_error(script, "offset out of range");
@@ -4105,13 +4186,45 @@ memory_item:
             g_cur_data.bytes = NULL;
         }
     }
+  | MODULE_MEMORY_START opt_id KW_I64 LPAREN KW_DATA {
+        memset(&g_cur_data, 0, sizeof(g_cur_data));
+    } data_string_list RPAREN RPAREN {
+        wast_module *mod = &cur_group(script)->module;
+        if (mod->memory_count < WAST_MAX_MEMORIES) {
+            wast_memory *m = &mod->memories[mod->memory_count++];
+            memset(m, 0, sizeof(*m));
+            m->limits.min = (uint64_t)((g_cur_data.len + 65535) / 65536);
+            m->limits.max = m->limits.min;
+            m->limits.has_max = 1;
+            m->limits.is_64 = 1;
+            snprintf(m->id, WAST_MAX_EXPORT_NAME, "%s", $2);
+            if (g_memory_name_count < WAST_MAX_MEMORIES)
+                snprintf(g_memory_names[g_memory_name_count++],
+                         WAST_MAX_EXPORT_NAME, "%s", $2);
+        }
+        if (mod->data_count < WAST_MAX_DATA_SEGS) {
+            g_cur_data.memory_index = mod->memory_count - 1;
+            g_cur_data.offset_expr[0] = 0x42;
+            g_cur_data.offset_expr[1] = 0x00;
+            g_cur_data.offset_expr[2] = 0x0b;
+            g_cur_data.offset_len = 3;
+            record_data_name($2);
+            mod->data[mod->data_count++] = g_cur_data;
+        } else {
+            free(g_cur_data.bytes);
+            g_cur_data.bytes = NULL;
+        }
+    }
     ;
 
 limits:
-    any_nat           { $$.min=(uint32_t)$1; $$.max=0;           $$.has_max=0; $$.is_shared=0;
+    any_nat           { $$.min=(uint64_t)$1; $$.max=0;           $$.has_max=0; $$.is_shared=0; $$.is_64=0;
                         if ((uint64_t)$1 > 0xFFFFFFFFu) report_validation_error(script, "memory size"); }
-  | any_nat any_nat   { $$.min=(uint32_t)$1; $$.max=(uint32_t)$2; $$.has_max=1; $$.is_shared=0;
+  | any_nat any_nat   { $$.min=(uint64_t)$1; $$.max=(uint64_t)$2; $$.has_max=1; $$.is_shared=0; $$.is_64=0;
                         if ((uint64_t)$1 > 0xFFFFFFFFu || (uint64_t)$2 > 0xFFFFFFFFu) report_validation_error(script, "memory size"); }
+  | KW_I64 any_nat    { $$.min=(uint64_t)$2; $$.max=0;           $$.has_max=0; $$.is_shared=0; $$.is_64=1; }
+  | KW_I64 any_nat any_nat
+                      { $$.min=(uint64_t)$2; $$.max=(uint64_t)$3; $$.has_max=1; $$.is_shared=0; $$.is_64=1; }
     ;
 
 /* --- global --- */
@@ -4345,6 +4458,33 @@ table_item:
             if (g_elem_name_count < WAST_MAX_ELEM_SEGS) g_elem_names[g_elem_name_count++][0]='\0';
         }
     }
+  | LPAREN KW_TABLE opt_id KW_I64 table_reftype LPAREN KW_ELEM {
+        memset(&g_cur_elem, 0, sizeof(g_cur_elem));
+        g_cur_elem.reftype = $5;
+    } elem_func_list RPAREN RPAREN {
+        wast_module *mod = &cur_group(script)->module;
+        if (mod->table_count < WAST_MAX_TABLES) {
+            wast_table *t = &mod->tables[mod->table_count++];
+            memset(t, 0, sizeof(*t));
+            t->limits.min = (uint64_t)g_cur_elem.ref_count;
+            t->limits.is_64 = 1;
+            t->reftype = g_cur_elem.reftype;
+            snprintf(t->id, WAST_MAX_EXPORT_NAME, "%s", $3);
+            if (g_table_name_count < WAST_MAX_TABLES)
+                snprintf(g_table_names[g_table_name_count++],
+                         WAST_MAX_EXPORT_NAME, "%s", $3);
+        }
+        if (mod->elem_count < WAST_MAX_ELEM_SEGS) {
+            g_cur_elem.table_index = mod->table_count - 1;
+            g_cur_elem.offset_expr[0] = 0x42;
+            g_cur_elem.offset_expr[1] = 0x00;
+            g_cur_elem.offset_expr[2] = 0x0b;
+            g_cur_elem.offset_len = 3;
+            mod->elem[mod->elem_count++] = g_cur_elem;
+            if (g_elem_name_count < WAST_MAX_ELEM_SEGS)
+                g_elem_names[g_elem_name_count++][0] = '\0';
+        }
+    }
     ;
 
 /* --- data --- */
@@ -4428,10 +4568,13 @@ data_offset:
         end_constexpr();
     }
   | FOLD_ATOM_START HEXINT RPAREN {
-        memset(&g_cur_data, 0, sizeof(g_cur_data)); g_cur_data.is_passive = 0; g_cur_data.memory_index = 0;
-        emit_init_byte(g_cur_data.offset_expr, &g_cur_data.offset_len, 32, 0x41);
-        emit_init_leb_s32(g_cur_data.offset_expr, &g_cur_data.offset_len, 32, (int32_t)$2);
-        emit_init_byte(g_cur_data.offset_expr, &g_cur_data.offset_len, 32, 0x0B);
+        memset(&g_cur_data, 0, sizeof(g_cur_data));
+        g_cur_data.is_passive = 0; g_cur_data.memory_index = 0;
+        begin_constexpr(g_cur_data.offset_expr, &g_cur_data.offset_len,
+                        (int)sizeof(g_cur_data.offset_expr));
+        emit_const_immediate_atom(script, $1, $2);
+        emit_byte(script, 0x0b);
+        end_constexpr();
     }
   | LPAREN KW_I32_CONST any_int RPAREN {
         /* shorthand offset form */
@@ -4623,9 +4766,11 @@ elem_offset:
         g_cur_elem.table_index = (int)meta_index_ref(script,META_ELEM_TABLE,IDX_TABLE,
             (uint32_t)cur_group(script)->module.elem_count,0,$3,@3.first_line,@3.first_column);
         g_cur_elem.reftype = WASM_VALTYPE_FUNCREF;
-        emit_init_byte(g_cur_elem.offset_expr, &g_cur_elem.offset_len, 32, 0x41);
-        emit_init_leb_s32(g_cur_elem.offset_expr, &g_cur_elem.offset_len, 32, (int32_t)$6);
-        emit_init_byte(g_cur_elem.offset_expr, &g_cur_elem.offset_len, 32, 0x0B);
+        begin_constexpr(g_cur_elem.offset_expr, &g_cur_elem.offset_len,
+                        (int)sizeof(g_cur_elem.offset_expr));
+        emit_const_immediate_atom(script, $5, $6);
+        emit_byte(script, 0x0b);
+        end_constexpr();
     }
   | LPAREN KW_I32_CONST any_int RPAREN {
         memset(&g_cur_elem, 0, sizeof(g_cur_elem));
@@ -5122,6 +5267,19 @@ const_val:
         /* (ref.null) — any null reference pattern */
         memset(&$$, 0, sizeof($$)); $$.type = WASM_VALTYPE_FUNCREF;
         $$.ref = UINT32_MAX; $$.nan_mode[0] = REF_MATCH_NULL;
+    }
+  | FOLD_EMPTY_ATOM {
+        memset(&$$, 0, sizeof($$));
+        if (strcmp($1, "ref.null") == 0) {
+            $$.type = WASM_VALTYPE_FUNCREF;
+            $$.ref = UINT32_MAX; $$.nan_mode[0] = REF_MATCH_NULL;
+        } else if (strcmp($1, "ref.func") == 0) {
+            $$.type = WASM_VALTYPE_FUNCREF_NONNULL;
+            $$.ref = UINT32_MAX;
+        } else if (strcmp($1, "ref.extern") == 0) {
+            $$.type = WASM_VALTYPE_EXTERNREF_NONNULL;
+            $$.ref = UINT32_MAX;
+        }
     }
   |
     FOLD_ATOM_START KW_NAN RPAREN            { $$ = folded_nan_value($1,0, strcmp($1,"f64.const")==0 ? NAN_MATCH_F64_ARITH : NAN_MATCH_F32_ARITH); }

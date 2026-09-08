@@ -747,13 +747,23 @@ static int read_leb(bin_reader *r, uint32_t *v) {
     do { if(shift>=35||!read_u8(r,&b))return 0; out|=(uint32_t)(b&0x7f)<<shift; shift+=7; } while(b&0x80);
     *v=out; return 1;
 }
+static int read_leb64(bin_reader *r, uint64_t *v) {
+    uint64_t out=0; int shift=0; uint8_t b;
+    do {
+        if(shift>=70||!read_u8(r,&b))return 0;
+        if(shift==63&&(b&0xfeu))return 0;
+        out|=(uint64_t)(b&0x7f)<<shift; shift+=7;
+    } while(b&0x80);
+    *v=out; return 1;
+}
 static int read_name(bin_reader *r, char *out) {
     uint32_t n; if(!read_leb(r,&n)||n>=WAST_MAX_EXPORT_NAME||(size_t)(r->end-r->p)<n)return 0;
     memcpy(out,r->p,n);out[n]='\0';r->p+=n;return 1;
 }
 static int skip_limits(bin_reader *r) {
-    uint32_t flags, value; if(!read_leb(r,&flags)||!read_leb(r,&value))return 0;
-    if(flags&1u) return read_leb(r,&value); return 1;
+    uint32_t flags; uint64_t value;
+    if(!read_leb(r,&flags)||!read_leb64(r,&value))return 0;
+    if(flags&1u) return read_leb64(r,&value); return 1;
 }
 static int skip_valtype(bin_reader *r) {
     uint8_t type, byte;

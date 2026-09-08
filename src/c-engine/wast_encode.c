@@ -21,6 +21,7 @@ static void reserve(writer *w, size_t n) {
 static void byte(writer *w,uint8_t v){reserve(w,1);if(!w->failed)w->data[w->len++]=v;}
 static void bytes(writer *w,const void *p,size_t n){reserve(w,n);if(!w->failed&&n){memcpy(w->data+w->len,p,n);w->len+=n;}}
 static void u32(writer *w,uint32_t v){do{uint8_t b=(uint8_t)(v&0x7f);v>>=7;if(v)b|=0x80;byte(w,b);}while(v);}
+static void u64(writer *w,uint64_t v){do{uint8_t b=(uint8_t)(v&0x7f);v>>=7;if(v)b|=0x80;byte(w,b);}while(v);}
 static void s33(writer *w,int64_t v){int more=1;while(more){uint8_t b=(uint8_t)(v&0x7f);v>>=7;more=!((v==0&&!(b&0x40))||(v==-1&&(b&0x40)));if(more)b|=0x80;byte(w,b);}}
 static void name(writer *w,const char *s){size_t n=strlen(s);if(n>UINT32_MAX){w->failed=1;return;}u32(w,(uint32_t)n);bytes(w,s,n);}
 static void section(writer *out,uint8_t id,writer *s){
@@ -83,7 +84,7 @@ static void put_type(writer*w,const wast_type*t){
     }
     byte(w,0x5e);put_field(w,t,0);
 }
-static void limits(writer*w,const wast_limits*l){uint32_t f=(l->has_max?1u:0u)|(l->is_shared?2u:0u);u32(w,f);u32(w,l->min);if(l->has_max)u32(w,l->max);}
+static void limits(writer*w,const wast_limits*l){uint32_t f=(l->has_max?1u:0u)|(l->is_shared?2u:0u)|(l->is_64?4u:0u);u32(w,f);u64(w,l->min);if(l->has_max)u64(w,l->max);}
 static void table_type(writer*w,const wast_table*t){put_vt(w,t->reftype);limits(w,&t->limits);}
 static void global_type(writer*w,const wast_global*g){put_vt(w,g->valtype);byte(w,g->is_mutable?1:0);}
 static void export_(writer*w,const char*n,uint8_t k,uint32_t i){name(w,n);byte(w,k);u32(w,i);}
@@ -186,7 +187,8 @@ uint8_t *wast_encode_module(const wast_module *m,size_t *size_out,char *error){
             else table_type(&s,t);
         }section(&out,4,&s);}
     for(int i=0;i<m->memory_count;i++){const wast_limits*ml=&m->memories[i].limits;
-        if(ml->min>65536u||(ml->has_max&&ml->max>65536u)){if(error)snprintf(error,256,"memory size must be at most 65536 pages");goto fail;}}
+        const uint64_t page_limit=ml->is_64?(UINT64_C(1)<<48):UINT64_C(65536);
+        if(ml->min>page_limit||(ml->has_max&&ml->max>page_limit)){if(error)snprintf(error,256,"memory size exceeds address type");goto fail;}}
     n=0;for(int i=0;i<m->memory_count;i++)n+=!m->memories[i].is_import;
     if(n){u32(&s,n);for(int i=0;i<m->memory_count;i++)if(!m->memories[i].is_import)limits(&s,&m->memories[i].limits);section(&out,5,&s);}
     n=0;for(int i=0;i<m->tag_count;i++)n+=!m->tags[i].is_import;

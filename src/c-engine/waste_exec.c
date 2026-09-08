@@ -71,6 +71,7 @@ typedef struct {
     uint32_t  opcode;   /* 0x20=local.get, 0xFD=SIMD, 0x0B=end */
     uint32_t  simd_op;  /* for SIMD ops */
     uint32_t  u32_imm;  /* for local.get */
+    uint64_t  u64_imm;  /* memory offset and other 64-bit immediates */
     uint32_t  memory_index; /* memory selected by a memarg */
     uint32_t  source_memory_index; /* source memory for memory.copy */
     uint32_t  alignment; /* memarg alignment exponent */
@@ -199,6 +200,7 @@ struct waste_exec_engine {
     uint8_t         data_dropped[WAST_MAX_DATA_SEGS];
     uint32_t        data_count;
     uint8_t         instantiation_trapped;
+    uint32_t        next_opaque_ref;
     char            instantiation_error[256];
     wasm_value      *local_frames[EXEC_MAX_CALL_DEPTH];
     uint32_t         local_frame_capacities[EXEC_MAX_CALL_DEPTH];
@@ -387,6 +389,20 @@ static int global_type_is_compat(const waste_exec_engine *aeng, wasm_valtype act
          required == WASM_VALTYPE_ARRAYREF)) return 1;
     int a_isref = WASM_VALTYPE_IS_TYPE_REF(actual);
     int r_isref = WASM_VALTYPE_IS_TYPE_REF(required);
+    if (a_isref && aeng && WASM_VALTYPE_TYPE_REF_INDEX(actual) < aeng->type_count) {
+        const exec_func_type *actual_heap =
+            &aeng->types[WASM_VALTYPE_TYPE_REF_INDEX(actual)];
+        int actual_nonnull =
+            (unsigned)actual >= WASM_VALTYPE_TYPE_REF_BASE;
+        if (actual_heap->kind == WAST_TYPE_ARRAY &&
+            (required == WASM_VALTYPE_ARRAYREF ||
+             (required == WASM_VALTYPE_ARRAYREF_NONNULL && actual_nonnull)))
+            return 1;
+        if (actual_heap->kind == WAST_TYPE_STRUCT &&
+            (required == WASM_VALTYPE_STRUCTREF ||
+             (required == WASM_VALTYPE_STRUCTREF_NONNULL && actual_nonnull)))
+            return 1;
+    }
     /* Any (ref null T) or (ref T) where T is a func type <: (ref null func) */
     if (a_isref && required == WASM_VALTYPE_FUNCREF) return 1;
     /* (ref T) <: (ref func) */
@@ -480,6 +496,20 @@ static int er_u32(exec_reader *r, uint32_t *out) {
         if (!er_u8(r, &b)) return 0;
         if (i == 4 && (b & 0xF0u)) return 0;
         result |= (uint32_t)(b & 0x7Fu) << shift;
+        if (!(b & 0x80u)) { *out = result; return 1; }
+        shift += 7;
+    }
+    return 0;
+}
+
+static int er_u64(exec_reader *r, uint64_t *out) {
+    uint64_t result = 0;
+    unsigned shift = 0;
+    for (unsigned i = 0; i < 10; i++) {
+        uint8_t b;
+        if (!er_u8(r, &b)) return 0;
+        if (i == 9 && (b & 0xfeu)) return 0;
+        result |= (uint64_t)(b & 0x7fu) << shift;
         if (!(b & 0x80u)) { *out = result; return 1; }
         shift += 7;
     }
@@ -795,26 +825,33 @@ static exec_status parse_imports(waste_exec_engine *eng, exec_reader *sec,
             eng->import_func_types[index]=type_index; eng->import_funcs[index]=binding->function;
             eng->import_host_data[index]=binding->host_data;
         } else if (kind == 1) {
-            wasm_valtype type; uint8_t flags; uint32_t initial,maximum=0;
+            wasm_valtype type; uint8_t flags; uint64_t initial,maximum=0;
             if (!er_valtype(sec,&type) || !value_type_is_defined(eng, type) ||
-                !is_reference_type(type) || !er_u8(sec,&flags) || flags>1 ||
-                !er_u32(sec,&initial) || ((flags&1u) && !er_u32(sec,&maximum)) || ((flags&1u) && maximum<initial) ||
+                !is_reference_type(type) || !er_u8(sec,&flags) || (flags & 0xfau) ||
+                !er_u64(sec,&initial) || ((flags&1u) && !er_u64(sec,&maximum)) ||
+                (!(flags&4u) && (initial > UINT32_MAX || ((flags&1u) && maximum > UINT32_MAX))) ||
+                ((flags&1u) && maximum<initial) ||
                 eng->table_count>=EXEC_MAX_TABLES) return exec_fail(err,EXEC_ERROR_FORMAT,"invalid table import type");
             exec_table *table=find_table_import(imports,module,name);
             if (!table) return exec_fail(err,EXEC_ERROR_NOT_FOUND,"unresolved table import");
-            if (!same_value_type(eng,type,table->type_owner,table->element_type,0) ||
+            if (table->is_64 != ((flags & 4u) != 0) ||
+                !same_value_type(eng,type,table->type_owner,table->element_type,0) ||
                 table->size<initial || ((flags&1u) && (!table->has_max || table->max_size>maximum)))
                 return exec_fail(err,EXEC_ERROR_FORMAT,"table import type mismatch");
             eng->tables[eng->table_count++]=table; eng->import_table_count++;
         } else if (kind == 2) {
-            uint8_t flags; uint32_t initial,maximum=0;
-            if (!er_u8(sec,&flags) || flags>1 || !er_u32(sec,&initial) || ((flags&1u) && !er_u32(sec,&maximum)) ||
-                initial>65536u || ((flags&1u) && maximum<initial) ||
+            uint8_t flags; uint64_t initial,maximum=0;
+            if (!er_u8(sec,&flags) || (flags & 0xfau) || !er_u64(sec,&initial) ||
+                ((flags&1u) && !er_u64(sec,&maximum)) ||
+                initial > ((flags&4u) ? UINT64_C(0x1000000000000) : UINT64_C(65536)) ||
+                ((flags&1u) && (maximum < initial ||
+                    maximum > ((flags&4u) ? UINT64_C(0x1000000000000) : UINT64_C(65536)))) ||
                 eng->memory_count >= WAST_MAX_MEMORIES)
                 return exec_fail(err,EXEC_ERROR_FORMAT,"invalid memory import type");
             exec_memory *memory=find_memory_import(imports,module,name);
             if (!memory) return exec_fail(err,EXEC_ERROR_NOT_FOUND,"unresolved memory import");
-            if (memory->pages<initial || memory->pages>65536u || ((flags&1u) && (!memory->has_max || memory->max_pages>maximum)) ||
+            if (memory->is_64 != ((flags & 4u) != 0) || memory->pages<initial ||
+                ((flags&1u) && (!memory->has_max || memory->max_pages>maximum)) ||
                 (memory->pages && !memory->data)) return exec_fail(err,EXEC_ERROR_FORMAT,"memory import type mismatch");
             eng->memories[eng->memory_count++] = memory;
             eng->import_memory_count++;
@@ -923,19 +960,25 @@ static exec_status parse_memory(waste_exec_engine *eng, exec_reader *sec, exec_e
     if (!er_u32(sec, &count) || count > WAST_MAX_MEMORIES - eng->memory_count)
         return exec_fail(err, EXEC_ERROR_FORMAT, "invalid memory count");
     for (uint32_t i = 0; i < count; i++) {
-        uint32_t initial, maximum = 0;
+        uint64_t initial, maximum = 0;
         uint8_t flags;
-        if (!er_u8(sec, &flags) || flags > 1 || !er_u32(sec, &initial) ||
-            ((flags & 1u) && !er_u32(sec, &maximum)) || initial > 65536u ||
-            ((flags & 1u) && (maximum > 65536u || maximum < initial)))
+        if (!er_u8(sec, &flags) || (flags & 0xfau) || !er_u64(sec, &initial) ||
+            ((flags & 1u) && !er_u64(sec, &maximum)) ||
+            initial > ((flags&4u) ? UINT64_C(0x1000000000000) : UINT64_C(65536)) ||
+            ((flags & 1u) &&
+             (maximum > ((flags&4u) ? UINT64_C(0x1000000000000) : UINT64_C(65536)) ||
+              maximum < initial)))
             return exec_fail(err, EXEC_ERROR_FORMAT, "invalid memory limits");
         uint32_t index = eng->memory_count;
         exec_memory *memory = &eng->owned_memories[index];
+        if (initial > SIZE_MAX / EXEC_PAGE_SIZE)
+            return exec_fail(err, EXEC_ERROR_FORMAT, "memory allocation failed");
         size_t bytes = (size_t)initial * EXEC_PAGE_SIZE;
         memory->data = (uint8_t *)calloc(bytes ? bytes : 1, 1);
         if (!memory->data)
             return exec_fail(err, EXEC_ERROR_FORMAT, "memory allocation failed");
         memory->pages=initial; memory->has_max=(uint8_t)(flags&1u);
+        memory->is_64=(uint8_t)((flags&4u)!=0);
         memory->max_pages=maximum;
         eng->memories[index]=memory;
         eng->owns_memories[index]=1;
@@ -962,7 +1005,7 @@ static exec_status parse_tables(waste_exec_engine *eng, exec_reader *sec, exec_e
     if (!er_u32(sec,&count) || count>EXEC_MAX_TABLES-eng->table_count) return exec_fail(err,EXEC_ERROR_FORMAT,"invalid table count");
     for(uint32_t i=0;i<count;i++) {
         uint8_t has_initializer = 0;
-        wasm_valtype type; uint8_t flags; uint32_t initial,maximum=0;
+        wasm_valtype type; uint8_t flags; uint64_t initial,maximum=0;
         /* The typed-function-references table form is encoded as
          * 0x40 0x00 tabletype constexpr.  The reserved zero distinguishes it
          * from the legacy tabletype whose first byte is a reftype. */
@@ -974,17 +1017,22 @@ static exec_status parse_tables(waste_exec_engine *eng, exec_reader *sec, exec_e
             has_initializer = 1;
         }
         if (!er_valtype(sec,&type) || !value_type_is_defined(eng, type) ||
-            !is_reference_type(type) || !er_u8(sec,&flags) || flags>1 ||
-            !er_u32(sec,&initial) || ((flags&1u) && !er_u32(sec,&maximum)) || ((flags&1u) && maximum<initial))
+            !is_reference_type(type) || !er_u8(sec,&flags) || (flags&0xfau) ||
+            !er_u64(sec,&initial) || ((flags&1u) && !er_u64(sec,&maximum)) ||
+            (!(flags&4u) && (initial>UINT32_MAX || ((flags&1u) && maximum>UINT32_MAX))) ||
+            ((flags&1u) && maximum<initial))
             return exec_fail(err,EXEC_ERROR_FORMAT,"invalid table type");
         if (!has_initializer && !is_nullable_reference_type(type))
             return exec_fail(err, EXEC_ERROR_FORMAT,
                              "non-nullable table requires initializer");
+        if (initial > SIZE_MAX / sizeof(exec_table_element))
+            return exec_fail(err,EXEC_ERROR_FORMAT,"table allocation failed");
         uint32_t index=eng->table_count; exec_table *table=&eng->owned_tables[index];
         table->elements=(exec_table_element *)malloc((initial ? initial : 1)*sizeof(exec_table_element));
         if (!table->elements) return exec_fail(err,EXEC_ERROR_FORMAT,"table allocation failed");
-        for(uint32_t j=0;j<initial;j++){table->elements[j].owner=NULL;table->elements[j].func_idx=0;}
+        for(uint64_t j=0;j<initial;j++){table->elements[j].owner=NULL;table->elements[j].func_idx=0;}
         table->size=initial; table->has_max=(uint8_t)(flags&1u); table->max_size=maximum;
+        table->is_64=(uint8_t)((flags&4u)!=0);
         table->element_type=type;
         table->type_owner=eng;
         eng->tables[eng->table_count++]=table;
@@ -993,7 +1041,7 @@ static exec_status parse_tables(waste_exec_engine *eng, exec_reader *sec, exec_e
             exec_status status = eval_constexpr(
                 eng, sec, eng->global_count, type, &value, err);
             if (status != EXEC_OK) return status;
-            for (uint32_t j = 0; j < initial; j++) {
+            for (uint64_t j = 0; j < initial; j++) {
                 if (value.value.ref != UINT32_MAX) {
                     table->elements[j].owner =
                         (waste_exec_engine *)value.type_owner;
@@ -1109,6 +1157,18 @@ static exec_status eval_constexpr(waste_exec_engine *eng,
                                  "invalid v128 global initializer");
             value.value.type = WASM_VALTYPE_V128;
             memcpy(value.value.v128.bytes, bytes, 16);
+        } else if (opcode == 0xfb) {
+            uint32_t subopcode, type_index;
+            if (!er_u32(sec, &subopcode) || subopcode != 0x07 ||
+                !er_u32(sec, &type_index) || type_index >= eng->type_count ||
+                eng->types[type_index].kind != WAST_TYPE_ARRAY || top < 1 ||
+                stack[top - 1].value.type != WASM_VALTYPE_I32)
+                return exec_fail(err, EXEC_ERROR_UNSUPPORTED,
+                                 "unsupported global initializer");
+            top--;
+            value.value.type = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE +
+                                              type_index);
+            value.value.ref = UINT32_C(0x80000000) | eng->next_opaque_ref++;
         } else if (opcode == 0x6a || opcode == 0x6b || opcode == 0x6c ||
                    opcode == 0x7c || opcode == 0x7d || opcode == 0x7e) {
             wasm_valtype operand_type = opcode < 0x7c ? WASM_VALTYPE_I32 :
@@ -1151,9 +1211,16 @@ static exec_status eval_constexpr(waste_exec_engine *eng,
     }
     if (top != 1 ||
         !global_type_is_compat(stack[0].type_owner, stack[0].value.type,
-                               eng, declared_type, 0))
-        return exec_fail(err, EXEC_ERROR_FORMAT,
-                         "global initializer type mismatch");
+                               eng, declared_type, 0)) {
+        if (err) {
+            err->status = EXEC_ERROR_FORMAT;
+            snprintf(err->message, sizeof(err->message),
+                     "initializer type mismatch: expected %d, got %d (stack %d)",
+                     (int)declared_type,
+                     top == 1 ? (int)stack[0].value.type : -1, top);
+        }
+        return EXEC_ERROR_FORMAT;
+    }
     *result = stack[0];
     return EXEC_OK;
 }
@@ -1235,7 +1302,8 @@ static exec_status parse_data(waste_exec_engine *eng, exec_reader *sec, exec_err
         return exec_fail(err, EXEC_ERROR_FORMAT, "too many data segments");
     eng->data_count = count;
     for (uint32_t i = 0; i < count; i++) {
-        uint32_t mode, memory_index = 0, length, offset;
+        uint32_t mode, memory_index = 0, length;
+        uint64_t offset;
         const uint8_t *data;
         if (!er_u32(sec, &mode)) return exec_fail(err, EXEC_ERROR_FORMAT, "invalid data segment");
         if (mode == 1) {
@@ -1256,14 +1324,16 @@ static exec_status parse_data(waste_exec_engine *eng, exec_reader *sec, exec_err
         exec_memory *memory = eng->memories[memory_index];
         exec_const_value initial;
         exec_status status = eval_constexpr(eng, sec, eng->global_count,
-                                            WASM_VALTYPE_I32, &initial, err);
+                                            memory->is_64 ? WASM_VALTYPE_I64 : WASM_VALTYPE_I32,
+                                            &initial, err);
         if (status != EXEC_OK)
             return status;
-        offset = (uint32_t)initial.value.i32;
+        offset = memory->is_64 ? (uint64_t)initial.value.i64 :
+                                (uint64_t)(uint32_t)initial.value.i32;
         if (!er_u32(sec, &length) || !er_bytes(sec, length, &data))
             return exec_fail(err, EXEC_ERROR_FORMAT, "invalid active data segment");
-        if ((uint64_t)offset + length >
-            (uint64_t)memory->pages * EXEC_PAGE_SIZE) {
+        uint64_t memory_size = (uint64_t)memory->pages * EXEC_PAGE_SIZE;
+        if (offset > memory_size || length > memory_size - offset) {
             if (!eng->instantiation_trapped) {
                 eng->instantiation_trapped = 1;
                 snprintf(eng->instantiation_error,
@@ -1271,7 +1341,7 @@ static exec_status parse_data(waste_exec_engine *eng, exec_reader *sec, exec_err
                          "out of bounds memory access");
             }
         } else if (!eng->instantiation_trapped) {
-            memcpy(memory->data + offset, data, length);
+            memcpy(memory->data + (size_t)offset, data, length);
         }
         /* active segments are considered dropped after instantiation */
         eng->data_dropped[i] = 1;
@@ -1286,7 +1356,8 @@ static exec_status parse_elements(waste_exec_engine *eng, exec_reader *sec,
         return exec_fail(err, EXEC_ERROR_FORMAT, "invalid element count");
     eng->elem_count = count;
     for (uint32_t segment = 0; segment < count; segment++) {
-        uint32_t mode, table_index = 0, item_count, offset = 0;
+        uint32_t mode, table_index = 0, item_count;
+        uint64_t offset = 0;
         wasm_valtype ref_type = WASM_VALTYPE_FUNCREF;
         int active, uses_expressions;
         if (!er_u32(sec, &mode) || mode > 7)
@@ -1300,11 +1371,18 @@ static exec_status parse_elements(waste_exec_engine *eng, exec_reader *sec,
         /* Read offset expression for active segments */
         if (active) {
             exec_const_value initial;
+            if (table_index >= eng->table_count)
+                return exec_fail(err, EXEC_ERROR_FORMAT,
+                                 "invalid active element segment");
             exec_status status = eval_constexpr(eng, sec, eng->global_count,
-                                                WASM_VALTYPE_I32, &initial,
+                                                eng->tables[table_index]->is_64 ?
+                                                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32,
+                                                &initial,
                                                 err);
             if (status != EXEC_OK) return status;
-            offset = (uint32_t)initial.value.i32;
+            offset = eng->tables[table_index]->is_64 ?
+                (uint64_t)initial.value.i64 :
+                (uint64_t)(uint32_t)initial.value.i32;
         }
         /* Read type/kind: modes 1,2,3 have elemkind; modes 5,6,7 have reftype;
            modes 0,4 imply funcref */
@@ -1378,7 +1456,8 @@ static exec_status parse_elements(waste_exec_engine *eng, exec_reader *sec,
                              "invalid active element segment");
         int apply_segment = active && !eng->instantiation_trapped;
         if (apply_segment &&
-            (uint64_t)offset + item_count > eng->tables[table_index]->size) {
+            (offset > eng->tables[table_index]->size ||
+             item_count > eng->tables[table_index]->size - offset)) {
             eng->instantiation_trapped = 1;
             snprintf(eng->instantiation_error,
                      sizeof(eng->instantiation_error),
@@ -1387,7 +1466,7 @@ static exec_status parse_elements(waste_exec_engine *eng, exec_reader *sec,
         }
         if (apply_segment)
             for (uint32_t item = 0; item < item_count; item++)
-                eng->tables[table_index]->elements[offset + item] =
+                eng->tables[table_index]->elements[(size_t)(offset + item)] =
                     eng->elem_values[segment][item];
     }
     return EXEC_OK;
@@ -1973,7 +2052,8 @@ static select_validation_result validate_select_function(
             case 0x25:
                 if (instr->u32_imm >= eng->table_count ||
                     !select_validation_pop_type(stack, &top, control,
-                                                WASM_VALTYPE_I32) ||
+                        eng->tables[instr->u32_imm]->is_64 ?
+                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32) ||
                     !select_validation_push(
                         stack, &top,
                         eng->tables[instr->u32_imm]->element_type))
@@ -1985,7 +2065,8 @@ static select_validation_result validate_select_function(
                         stack, &top, control,
                         eng->tables[instr->u32_imm]->element_type) ||
                     !select_validation_pop_type(stack, &top, control,
-                                                WASM_VALTYPE_I32))
+                        eng->tables[instr->u32_imm]->is_64 ?
+                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                     return SELECT_VALIDATION_INVALID;
                 break;
             case 0x10:
@@ -2030,7 +2111,8 @@ static select_validation_result validate_select_function(
                     !is_function_reference_type(
                         eng->tables[instr->simd_op]->element_type) ||
                     !select_validation_pop_type(stack, &top, control,
-                                                WASM_VALTYPE_I32))
+                        eng->tables[instr->simd_op]->is_64 ?
+                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                     return SELECT_VALIDATION_INVALID;
                 const exec_func_type *callee = &eng->types[instr->u32_imm];
                 for (int i = callee->param_count; i > 0; i--)
@@ -2136,9 +2218,12 @@ static select_validation_result validate_select_function(
                                       instr->opcode == 0x2b ?
                                       WASM_VALTYPE_F64 : WASM_VALTYPE_I32;
                 if (instr->memory_index >= eng->memory_count ||
+                    (!eng->memories[instr->memory_index]->is_64 &&
+                     instr->u64_imm > UINT32_MAX) ||
                     instr->simd_op > natural ||
                     !select_validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I32, result))
+                        eng->memories[instr->memory_index]->is_64 ?
+                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32, result))
                     return SELECT_VALIDATION_INVALID;
                 break;
             }
@@ -2161,25 +2246,31 @@ static select_validation_result validate_select_function(
                                           instr->opcode == 0x39 ?
                                           WASM_VALTYPE_F64 : WASM_VALTYPE_I32;
                 if (instr->memory_index >= eng->memory_count ||
+                    (!eng->memories[instr->memory_index]->is_64 &&
+                     instr->u64_imm > UINT32_MAX) ||
                     instr->simd_op > natural ||
                     !select_validation_pop_type(stack, &top, control,
                                                 value_type) ||
                     !select_validation_pop_type(stack, &top, control,
-                                                WASM_VALTYPE_I32))
+                        eng->memories[instr->memory_index]->is_64 ?
+                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                     return SELECT_VALIDATION_INVALID;
                 break;
             }
             case 0x3f:
                 if (instr->memory_index >= eng->memory_count ||
                     !select_validation_push(stack, &top,
-                                            WASM_VALTYPE_I32))
+                        eng->memories[instr->memory_index]->is_64 ?
+                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                     return SELECT_VALIDATION_INVALID;
                 break;
             case 0x40:
                 if (instr->memory_index >= eng->memory_count ||
                     !select_validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I32,
-                                             WASM_VALTYPE_I32))
+                        eng->memories[instr->memory_index]->is_64 ?
+                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32,
+                        eng->memories[instr->memory_index]->is_64 ?
+                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                     return SELECT_VALIDATION_INVALID;
                 break;
             case 0x45:
@@ -2424,6 +2515,16 @@ static select_validation_result validate_select_function(
                         return SELECT_VALIDATION_INCONCLUSIVE;
                 }
                 break;
+            case 0xd3: {
+                wasm_valtype right, left;
+                if (!select_validation_pop(stack, &top, control, &right) ||
+                    !select_validation_pop(stack, &top, control, &left) ||
+                    (right != SELECT_BOTTOM_TYPE && !is_reference_type(right)) ||
+                    (left != SELECT_BOTTOM_TYPE && !is_reference_type(left)) ||
+                    !select_validation_push(stack, &top, WASM_VALTYPE_I32))
+                    return SELECT_VALIDATION_INVALID;
+                break;
+            }
             case 0xFD: {
                 uint32_t op = instr->simd_op;
                 wast_simd_info info;
@@ -2432,6 +2533,8 @@ static select_validation_result validate_select_function(
                 if ((info.immediate == WAST_SIMD_IMM_MEMARG ||
                      info.immediate == WAST_SIMD_IMM_MEMARG_LANE) &&
                     (instr->memory_index >= eng->memory_count ||
+                     (!eng->memories[instr->memory_index]->is_64 &&
+                      instr->u64_imm > UINT32_MAX) ||
                      instr->alignment > info.natural_alignment))
                     return SELECT_VALIDATION_INVALID;
                 if (op == 0x0c) {
@@ -2439,20 +2542,28 @@ static select_validation_result validate_select_function(
                         return SELECT_VALIDATION_INCONCLUSIVE;
                 } else if (op <= 0x0a || op == 0x5c || op == 0x5d) {
                     if (!select_validation_unary(stack,&top,control,
-                            WASM_VALTYPE_I32,WASM_VALTYPE_V128))
+                            eng->memories[instr->memory_index]->is_64 ?
+                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32,
+                            WASM_VALTYPE_V128))
                         return SELECT_VALIDATION_INVALID;
                 } else if (op == 0x0b) {
                     if (!select_validation_pop_type(stack,&top,control,WASM_VALTYPE_V128) ||
-                        !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32))
+                        !select_validation_pop_type(stack,&top,control,
+                            eng->memories[instr->memory_index]->is_64 ?
+                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                         return SELECT_VALIDATION_INVALID;
                 } else if (op >= 0x54 && op <= 0x57) {
                     if (!select_validation_pop_type(stack,&top,control,WASM_VALTYPE_V128) ||
-                        !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
+                        !select_validation_pop_type(stack,&top,control,
+                            eng->memories[instr->memory_index]->is_64 ?
+                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32) ||
                         !select_validation_push(stack,&top,WASM_VALTYPE_V128))
                         return SELECT_VALIDATION_INVALID;
                 } else if (op >= 0x58 && op <= 0x5b) {
                     if (!select_validation_pop_type(stack,&top,control,WASM_VALTYPE_V128) ||
-                        !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32))
+                        !select_validation_pop_type(stack,&top,control,
+                            eng->memories[instr->memory_index]->is_64 ?
+                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                         return SELECT_VALIDATION_INVALID;
                 } else if (op >= 0x0f && op <= 0x14) {
                     wasm_valtype input = op <= 0x11 ? WASM_VALTYPE_I32 :
@@ -2522,16 +2633,27 @@ static select_validation_result validate_select_function(
                 } else if (sub == 10) { /* memory.copy: [i32 i32 i32] -> [] */
                     uint32_t src_mem = instr->source_memory_index;
                     if (instr->memory_index >= eng->memory_count ||
-                        src_mem >= eng->memory_count ||
-                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
-                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
-                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32))
+                        src_mem >= eng->memory_count)
+                        return SELECT_VALIDATION_INVALID;
+                    wasm_valtype dst_type = eng->memories[instr->memory_index]->is_64 ?
+                        WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
+                    wasm_valtype src_type = eng->memories[src_mem]->is_64 ?
+                        WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
+                    wasm_valtype len_type = dst_type == WASM_VALTYPE_I64 &&
+                        src_type == WASM_VALTYPE_I64 ? WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
+                    if (!select_validation_pop_type(stack, &top, control, len_type) ||
+                        !select_validation_pop_type(stack, &top, control, src_type) ||
+                        !select_validation_pop_type(stack, &top, control, dst_type))
                         return SELECT_VALIDATION_INVALID;
                 } else if (sub == 11) { /* memory.fill: [i32 i32 i32] -> [] */
                     if (instr->memory_index >= eng->memory_count ||
+                        !select_validation_pop_type(stack, &top, control,
+                            eng->memories[instr->memory_index]->is_64 ?
+                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32) ||
                         !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
-                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
-                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32))
+                        !select_validation_pop_type(stack, &top, control,
+                            eng->memories[instr->memory_index]->is_64 ?
+                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                         return SELECT_VALIDATION_INVALID;
                 } else if (sub == 8) { /* memory.init: [i32 i32 i32] -> [] */
                     if (instr->memory_index >= eng->memory_count ||
@@ -2539,7 +2661,9 @@ static select_validation_result validate_select_function(
                         instr->u32_imm >= eng->declared_data_count ||
                         !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
                         !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
-                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32))
+                        !select_validation_pop_type(stack, &top, control,
+                            eng->memories[instr->memory_index]->is_64 ?
+                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                         return SELECT_VALIDATION_INVALID;
                 } else if (sub == 9) { /* data.drop: [] -> [] */
                     if (!eng->has_data_count ||
@@ -2555,32 +2679,62 @@ static select_validation_result validate_select_function(
                             eng->tables[table_index]->element_type, 0) ||
                         !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
                         !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
-                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32))
+                        !select_validation_pop_type(stack, &top, control,
+                            eng->tables[table_index]->is_64 ?
+                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                         return SELECT_VALIDATION_INVALID;
                 } else if (sub == 13) { /* elem.drop: [] -> [] */
                     if (instr->u32_imm >= eng->elem_count)
                         return SELECT_VALIDATION_INVALID;
                 } else if (sub == 14) { /* table.copy: [i32 i32 i32] -> [] */
-                    if (!select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
-                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
-                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32))
+                    uint32_t dst_table = instr->u32_imm;
+                    uint32_t src_table = instr->v128_imm.bytes[0];
+                    if (dst_table >= eng->table_count || src_table >= eng->table_count)
+                        return SELECT_VALIDATION_INVALID;
+                    wasm_valtype dst_type = eng->tables[dst_table]->is_64 ?
+                        WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
+                    wasm_valtype src_type = eng->tables[src_table]->is_64 ?
+                        WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
+                    wasm_valtype len_type = dst_type == WASM_VALTYPE_I64 &&
+                        src_type == WASM_VALTYPE_I64 ? WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
+                    if (!select_validation_pop_type(stack, &top, control, len_type) ||
+                        !select_validation_pop_type(stack, &top, control, src_type) ||
+                        !select_validation_pop_type(stack, &top, control, dst_type))
                         return SELECT_VALIDATION_INVALID;
                 } else if (sub == 15) { /* table.grow: [ref i32] -> [i32] */
                     if (instr->u32_imm >= eng->table_count ||
-                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
+                        !select_validation_pop_type(stack, &top, control,
+                            eng->tables[instr->u32_imm]->is_64 ?
+                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32) ||
                         !select_validation_pop_type(
                             stack, &top, control,
                             eng->tables[instr->u32_imm]->element_type) ||
-                        !select_validation_push(stack, &top, WASM_VALTYPE_I32))
+                        !select_validation_push(stack, &top,
+                            eng->tables[instr->u32_imm]->is_64 ?
+                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                         return SELECT_VALIDATION_INVALID;
                 } else if (sub == 16) { /* table.size: [] -> [i32] */
-                    if (!select_validation_push(stack, &top, WASM_VALTYPE_I32))
+                    if (instr->u32_imm >= eng->table_count ||
+                        !select_validation_push(stack, &top,
+                            eng->tables[instr->u32_imm]->is_64 ?
+                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                         return SELECT_VALIDATION_INCONCLUSIVE;
                 } else if (sub == 17) { /* table.fill: [i32 ref i32] -> [] */
                     wasm_valtype ref;
-                    if (!select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
+                    if (instr->u32_imm >= eng->table_count ||
+                        !select_validation_pop_type(stack, &top, control,
+                            eng->tables[instr->u32_imm]->is_64 ?
+                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32) ||
                         !select_validation_pop(stack, &top, control, &ref) ||
-                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32))
+                        !select_validation_pop_type(stack, &top, control,
+                            eng->tables[instr->u32_imm]->is_64 ?
+                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+                        return SELECT_VALIDATION_INVALID;
+                    if (ref != SELECT_BOTTOM_TYPE &&
+                        !global_type_is_compat(
+                            eng, ref,
+                            eng->tables[instr->u32_imm]->type_owner,
+                            eng->tables[instr->u32_imm]->element_type, 0))
                         return SELECT_VALIDATION_INVALID;
                 } else {
                     return SELECT_VALIDATION_INCONCLUSIVE;
@@ -2746,14 +2900,15 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, exec_read
             }
             instr.opcode=byte;instr.u32_imm=type_index;instr.simd_op=table_index;
         } else if (byte >= 0x28 && byte <= 0x3e) {
-            uint32_t align, offset, memory_index = 0;
+            uint32_t align, memory_index = 0;
+            uint64_t offset;
             if (!er_u32(body, &align) || align >= 0x80u ||
                 ((align & 0x40u) && !er_u32(body, &memory_index)) ||
-                !er_u32(body, &offset)) {
+                !er_u64(body, &offset)) {
                 FREE_CODE(code, code_size); return exec_fail(err, EXEC_ERROR_FORMAT, "invalid memory immediate");
             }
             instr.opcode = byte; instr.simd_op = align & 0x3fu;
-            instr.u32_imm = offset; instr.memory_index = memory_index;
+            instr.u64_imm = offset; instr.memory_index = memory_index;
         } else if (byte == 0x3f || byte == 0x40) {
             uint32_t memory_index;
             if (!er_u32(body, &memory_index)) {
@@ -2766,7 +2921,7 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, exec_read
                 FREE_CODE(code, code_size); return exec_fail(err, EXEC_ERROR_FORMAT, "truncated ref.null");
             }
             instr.opcode=byte; instr.u32_imm=(uint32_t)heap_type;
-        } else if (byte == 0xd1 || byte == 0xd4) {
+        } else if (byte == 0xd1 || byte == 0xd3 || byte == 0xd4) {
             instr.opcode=byte;
         } else if (byte == 0xd5 || byte == 0xd6) {
             uint32_t depth;
@@ -2913,7 +3068,8 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, exec_read
                 instr.lane_index = *lane;
             } else if (simd_info.immediate == WAST_SIMD_IMM_MEMARG ||
                        simd_info.immediate == WAST_SIMD_IMM_MEMARG_LANE) {
-                uint32_t align, offset, memory_index = 0;
+                uint32_t align, memory_index = 0;
+                uint64_t offset;
                 if (!er_u32(body, &align)) {
                     FREE_CODE(code, code_size);
                     return exec_fail(err, EXEC_ERROR_FORMAT, "invalid SIMD memarg");
@@ -2925,13 +3081,13 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, exec_read
                         return exec_fail(err, EXEC_ERROR_FORMAT, "invalid SIMD memory index");
                     }
                 }
-                if (!er_u32(body, &offset)) {
+                if (!er_u64(body, &offset)) {
                     FREE_CODE(code, code_size);
                     return exec_fail(err, EXEC_ERROR_FORMAT, "invalid SIMD offset");
                 }
                 instr.alignment = align;
                 instr.memory_index = memory_index;
-                instr.u32_imm = offset;
+                instr.u64_imm = offset;
                 if (simd_info.immediate == WAST_SIMD_IMM_MEMARG_LANE) {
                     const uint8_t *lane;
                     if (!er_bytes(body, 1, &lane) || *lane >= simd_info.lane_count) {
@@ -3272,6 +3428,7 @@ static int stack_pop(exec_stack *s, wasm_value *out) {
 }
 
 static wasm_value i32_value(uint32_t bits);
+static wasm_value i64_value(uint64_t bits);
 static uint32_t trunc_sat_i32_s_f32(float v);
 static uint32_t trunc_sat_i32_u_f32(float v);
 static uint32_t trunc_sat_i32_s_f64(double v);
@@ -4194,6 +4351,21 @@ static wasm_value i32_value(uint32_t bits) {
     return value;
 }
 
+static wasm_value i64_value(uint64_t bits) {
+    wasm_value value;
+    memset(&value, 0, sizeof(value));
+    value.type = WASM_VALTYPE_I64;
+    value.i64 = (int64_t)bits;
+    return value;
+}
+
+static int address_value(const wasm_value *value, int is_64, uint64_t *out) {
+    if (value->type != (is_64 ? WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+        return 0;
+    *out = is_64 ? (uint64_t)value->i64 : (uint64_t)(uint32_t)value->i32;
+    return 1;
+}
+
 static uint32_t rotl32(uint32_t value, uint32_t count) {
     count &= 31u;
     return count ? (value << count) | (value >> (32u - count)) : value;
@@ -4204,23 +4376,25 @@ static uint32_t rotr32(uint32_t value, uint32_t count) {
     return count ? (value >> count) | (value << (32u - count)) : value;
 }
 
-static uint64_t load_le(const uint8_t *memory, uint32_t address, uint32_t width) {
+static uint64_t load_le(const uint8_t *memory, size_t address, uint32_t width) {
     uint64_t value = 0;
     for (uint32_t i = 0; i < width; i++) value |= (uint64_t)memory[address + i] << (8u * i);
     return value;
 }
 
-static void store_le(uint8_t *memory, uint32_t address, uint64_t value, uint32_t width) {
+static void store_le(uint8_t *memory, size_t address, uint64_t value, uint32_t width) {
     for (uint32_t i = 0; i < width; i++) memory[address + i] = (uint8_t)(value >> (8u * i));
 }
 
-static exec_status memory_address(exec_memory *memory, uint32_t base, uint32_t offset,
-                                  uint32_t width, uint32_t *address, exec_error *err) {
-    uint64_t effective = (uint64_t)base + offset;
+static exec_status memory_address(exec_memory *memory, uint64_t base, uint64_t offset,
+                                  uint32_t width, size_t *address, exec_error *err) {
     uint64_t size = memory ? (uint64_t)memory->pages * EXEC_PAGE_SIZE : 0;
-    if (!memory || effective + width > size)
+    if (!memory || base > UINT64_MAX - offset)
         return exec_fail(err, EXEC_ERROR_TRAP, "out of bounds memory access");
-    *address = (uint32_t)effective;
+    uint64_t effective = base + offset;
+    if (effective > size || width > size - effective || effective > SIZE_MAX)
+        return exec_fail(err, EXEC_ERROR_TRAP, "out of bounds memory access");
+    *address = (size_t)effective;
     return EXEC_OK;
 }
 
@@ -4995,15 +5169,16 @@ tail_entry:
                                      "table.set value missing");
             }
             if (!stack_pop(&stack, &index) ||
-                index.type != WASM_VALTYPE_I32)
+                index.type != (table->is_64 ? WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                 return exec_fail(err, EXEC_ERROR_TRAP,
                                  "table index operand missing");
-            uint32_t element_index = (uint32_t)index.i32;
+            uint64_t element_index = table->is_64 ? (uint64_t)index.i64 :
+                                                   (uint64_t)(uint32_t)index.i32;
             if (element_index >= table->size)
                 return exec_fail(err, EXEC_ERROR_TRAP,
                                  "out of bounds table access");
             if (instr->opcode == 0x25) {
-                exec_table_element element = table->elements[element_index];
+                exec_table_element element = table->elements[(size_t)element_index];
                 memset(&reference, 0, sizeof(reference));
                 reference.type = table->element_type;
                 reference.ref = element.owner ? element.func_idx : UINT32_MAX;
@@ -5020,16 +5195,17 @@ tail_entry:
                     element.owner = eng;
                     element.func_idx = reference.ref;
                 }
-                table->elements[element_index] = element;
+                table->elements[(size_t)element_index] = element;
             }
             continue;
         }
 
         if (instr->opcode >= 0x28 && instr->opcode <= 0x35) {
-            wasm_value base, value; uint32_t width, address; int sign = 0;
+            wasm_value base, value; uint32_t width; size_t address; int sign = 0;
             exec_memory *memory = instr->memory_index < eng->memory_count ?
                 eng->memories[instr->memory_index] : NULL;
-            if (!stack_pop(&stack, &base) || base.type != WASM_VALTYPE_I32)
+            if (!stack_pop(&stack, &base) ||
+                base.type != (memory && memory->is_64 ? WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                 return exec_fail(err, EXEC_ERROR_TRAP, "load address missing");
             switch (instr->opcode) {
                 case 0x28: width=4; value.type=WASM_VALTYPE_I32; break;
@@ -5047,8 +5223,10 @@ tail_entry:
                 case 0x34: width=4; value.type=WASM_VALTYPE_I64; sign=1; break;
                 default: width=4; value.type=WASM_VALTYPE_I64; break;
             }
-            exec_status status = memory_address(memory, (uint32_t)base.i32,
-                                                instr->u32_imm, width,
+            uint64_t base_address = memory->is_64 ? (uint64_t)base.i64 :
+                                                   (uint64_t)(uint32_t)base.i32;
+            exec_status status = memory_address(memory, base_address,
+                                                instr->u64_imm, width,
                                                 &address, err);
             if (status != EXEC_OK) return status;
             uint64_t bits = load_le(memory->data, address, width);
@@ -5063,10 +5241,11 @@ tail_entry:
         }
 
         if (instr->opcode >= 0x36 && instr->opcode <= 0x3e) {
-            wasm_value value, base; uint32_t width, address; uint64_t bits;
+            wasm_value value, base; uint32_t width; size_t address; uint64_t bits;
             exec_memory *memory = instr->memory_index < eng->memory_count ?
                 eng->memories[instr->memory_index] : NULL;
-            if (!stack_pop(&stack, &value) || !stack_pop(&stack, &base) || base.type != WASM_VALTYPE_I32)
+            if (!stack_pop(&stack, &value) || !stack_pop(&stack, &base) ||
+                base.type != (memory && memory->is_64 ? WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                 return exec_fail(err, EXEC_ERROR_TRAP, "store operands missing");
             switch (instr->opcode) {
                 case 0x36: width=4; bits=(uint32_t)value.i32; break;
@@ -5079,8 +5258,10 @@ tail_entry:
                 case 0x3d: width=2; bits=(uint64_t)value.i64; break;
                 default: width=4; bits=(uint64_t)value.i64; break;
             }
-            exec_status status = memory_address(memory, (uint32_t)base.i32,
-                                                instr->u32_imm, width,
+            uint64_t base_address = memory->is_64 ? (uint64_t)base.i64 :
+                                                   (uint64_t)(uint32_t)base.i32;
+            exec_status status = memory_address(memory, base_address,
+                                                instr->u64_imm, width,
                                                 &address, err);
             if (status != EXEC_OK) return status;
             store_le(memory->data, address, bits, width);
@@ -5091,27 +5272,43 @@ tail_entry:
             exec_memory *memory = instr->memory_index < eng->memory_count ?
                 eng->memories[instr->memory_index] : NULL;
             if (!memory) return exec_fail(err, EXEC_ERROR_TRAP, "memory missing");
-            if (!stack_push(&stack, i32_value(memory->pages))) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
+            wasm_value size_value = memory->is_64 ? i64_value(memory->pages) :
+                                                   i32_value((uint32_t)memory->pages);
+            if (!stack_push(&stack, size_value)) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
             continue;
         }
         if (instr->opcode == 0x40) {
             wasm_value delta;
-            if (!stack_pop(&stack, &delta) || delta.type != WASM_VALTYPE_I32) return exec_fail(err, EXEC_ERROR_TRAP, "memory.grow operand missing");
             exec_memory *memory = instr->memory_index < eng->memory_count ?
                 eng->memories[instr->memory_index] : NULL;
             if (!memory) return exec_fail(err,EXEC_ERROR_TRAP,"memory missing");
-            uint32_t old = memory->pages, add = (uint32_t)delta.i32;
-            uint64_t pages = (uint64_t)old + add;
-            if (pages > 65536u || (memory->has_max && pages > memory->max_pages)) {
-                if (!stack_push(&stack, i32_value(UINT32_MAX))) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
+            if (!stack_pop(&stack, &delta) ||
+                delta.type != (memory->is_64 ? WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+                return exec_fail(err, EXEC_ERROR_TRAP, "memory.grow operand missing");
+            uint64_t old = memory->pages;
+            uint64_t add = memory->is_64 ? (uint64_t)delta.i64 :
+                                           (uint64_t)(uint32_t)delta.i32;
+            uint64_t limit = memory->is_64 ? UINT64_C(0x1000000000000) : UINT64_C(65536);
+            int grow_failed = old > UINT64_MAX - add;
+            uint64_t pages = grow_failed ? 0 : old + add;
+            if (grow_failed || pages > limit ||
+                (memory->has_max && pages > memory->max_pages) ||
+                pages > SIZE_MAX / EXEC_PAGE_SIZE) {
+                wasm_value failed = memory->is_64 ? i64_value(UINT64_MAX) : i32_value(UINT32_MAX);
+                if (!stack_push(&stack, failed)) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
                 continue;
             }
             size_t new_size = (size_t)pages * EXEC_PAGE_SIZE;
             uint8_t *grown = (uint8_t *)calloc(new_size ? new_size : 1, 1);
-            if (!grown) { if (!stack_push(&stack, i32_value(UINT32_MAX))) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow"); continue; }
+            if (!grown) {
+                wasm_value failed = memory->is_64 ? i64_value(UINT64_MAX) : i32_value(UINT32_MAX);
+                if (!stack_push(&stack, failed)) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
+                continue;
+            }
             memcpy(grown,memory->data,(size_t)old*EXEC_PAGE_SIZE); free(memory->data);
-            memory->data=grown; memory->pages=(uint32_t)pages;
-            if (!stack_push(&stack, i32_value(old))) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
+            memory->data=grown; memory->pages=pages;
+            wasm_value old_value = memory->is_64 ? i64_value(old) : i32_value((uint32_t)old);
+            if (!stack_push(&stack, old_value)) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
             continue;
         }
         if (instr->opcode == 0xd0 || instr->opcode == 0xd2) {
@@ -5142,6 +5339,17 @@ tail_entry:
                 !is_reference_type(value.type))
                 return exec_fail(err, EXEC_ERROR_TRAP, "ref.is_null operand missing");
             if (!stack_push(&stack,i32_value(value.ref == UINT32_MAX))) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
+            continue;
+        }
+
+        if (instr->opcode == 0xd3) {
+            wasm_value right, left;
+            if (!stack_pop(&stack, &right) || !is_reference_type(right.type) ||
+                !stack_pop(&stack, &left) || !is_reference_type(left.type))
+                return exec_fail(err, EXEC_ERROR_TRAP,
+                                 "ref.eq operands missing");
+            if (!stack_push(&stack, i32_value(left.ref == right.ref)))
+                return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
             continue;
         }
 
@@ -5228,12 +5436,13 @@ tail_entry:
 
         if (instr->opcode == 0x11 || instr->opcode == 0x13) {
             wasm_value table_operand;
-            if (!stack_pop(&stack,&table_operand) || table_operand.type!=WASM_VALTYPE_I32)
-                return exec_fail(err,EXEC_ERROR_TRAP,"call_indirect table operand missing");
             exec_table *table=eng->tables[instr->simd_op];
-            uint32_t element=(uint32_t)table_operand.i32;
+            uint64_t element;
+            if (!stack_pop(&stack,&table_operand) ||
+                !address_value(&table_operand,table->is_64,&element))
+                return exec_fail(err,EXEC_ERROR_TRAP,"call_indirect table operand missing");
             if(element>=table->size)return exec_fail(err,EXEC_ERROR_TRAP,"undefined element");
-            exec_table_element slot=table->elements[element];
+            exec_table_element slot=table->elements[(size_t)element];
             if(!slot.owner)return exec_fail(err,EXEC_ERROR_TRAP,"uninitialized element");
             waste_exec_engine *teng=slot.owner;
             uint32_t target=slot.func_idx;
@@ -5392,15 +5601,23 @@ tail_entry:
                     return exec_fail(err,EXEC_ERROR_TRAP,"memory index out of range");
                 exec_memory *dst_memory = eng->memories[instr->memory_index];
                 exec_memory *src_memory = eng->memories[instr->source_memory_index];
-                uint32_t dst=(uint32_t)dst_v.i32,src=(uint32_t)src_v.i32,n=(uint32_t)n_v.i32;
+                uint64_t dst, src, n;
+                int length_is_64 = dst_memory->is_64 && src_memory->is_64;
+                if (!address_value(&dst_v, dst_memory->is_64, &dst) ||
+                    !address_value(&src_v, src_memory->is_64, &src) ||
+                    !address_value(&n_v, length_is_64, &n))
+                    return exec_fail(err,EXEC_ERROR_TRAP,"memory.copy operand type mismatch");
                 uint64_t dst_size=(uint64_t)dst_memory->pages*EXEC_PAGE_SIZE;
                 uint64_t src_size=(uint64_t)src_memory->pages*EXEC_PAGE_SIZE;
-                if ((uint64_t)dst+n>dst_size||(uint64_t)src+n>src_size)
+                if (dst > dst_size || n > dst_size - dst ||
+                    src > src_size || n > src_size - src || n > SIZE_MAX)
                     return exec_fail(err,EXEC_ERROR_TRAP,"out of bounds memory access");
                 if (dst_memory == src_memory)
-                    memmove(dst_memory->data+dst,src_memory->data+src,n);
+                    memmove(dst_memory->data+(size_t)dst,
+                            src_memory->data+(size_t)src,(size_t)n);
                 else if (n)
-                    memcpy(dst_memory->data+dst,src_memory->data+src,n);
+                    memcpy(dst_memory->data+(size_t)dst,
+                           src_memory->data+(size_t)src,(size_t)n);
             } else if (sub == 11) { /* memory.fill */
                 wasm_value n_v, val_v, dst_v;
                 if (!stack_pop(&stack,&n_v)||!stack_pop(&stack,&val_v)||!stack_pop(&stack,&dst_v))
@@ -5408,10 +5625,15 @@ tail_entry:
                 if (instr->memory_index >= eng->memory_count)
                     return exec_fail(err,EXEC_ERROR_TRAP,"memory index out of range");
                 exec_memory *memory = eng->memories[instr->memory_index];
-                uint32_t dst=(uint32_t)dst_v.i32,n=(uint32_t)n_v.i32;
+                uint64_t dst, n;
+                if (!address_value(&dst_v, memory->is_64, &dst) ||
+                    !address_value(&n_v, memory->is_64, &n) ||
+                    val_v.type != WASM_VALTYPE_I32)
+                    return exec_fail(err,EXEC_ERROR_TRAP,"memory.fill operand type mismatch");
                 uint64_t mem_size=(uint64_t)memory->pages*EXEC_PAGE_SIZE;
-                if ((uint64_t)dst+n>mem_size) return exec_fail(err,EXEC_ERROR_TRAP,"out of bounds memory access");
-                memset(memory->data+dst,(uint8_t)val_v.i32,n);
+                if (dst > mem_size || n > mem_size-dst || n > SIZE_MAX)
+                    return exec_fail(err,EXEC_ERROR_TRAP,"out of bounds memory access");
+                memset(memory->data+(size_t)dst,(uint8_t)val_v.i32,(size_t)n);
             } else if (sub == 8) { /* memory.init */
                 wasm_value n_v, src_v, dst_v;
                 if (!stack_pop(&stack,&n_v)||!stack_pop(&stack,&src_v)||!stack_pop(&stack,&dst_v))
@@ -5420,14 +5642,20 @@ tail_entry:
                     instr->u32_imm >= eng->data_count)
                     return exec_fail(err,EXEC_ERROR_TRAP,"memory.init index out of range");
                 exec_memory *memory = eng->memories[instr->memory_index];
-                uint32_t dst=(uint32_t)dst_v.i32,src=(uint32_t)src_v.i32,n=(uint32_t)n_v.i32;
+                uint64_t dst;
+                uint32_t src=(uint32_t)src_v.i32,n=(uint32_t)n_v.i32;
+                if (!address_value(&dst_v, memory->is_64, &dst) ||
+                    src_v.type != WASM_VALTYPE_I32 || n_v.type != WASM_VALTYPE_I32)
+                    return exec_fail(err,EXEC_ERROR_TRAP,"memory.init operand type mismatch");
                 uint32_t data_length = eng->data_dropped[instr->u32_imm] ? 0 :
                     eng->data_seg_lengths[instr->u32_imm];
                 uint64_t mem_size=(uint64_t)memory->pages*EXEC_PAGE_SIZE;
-                if ((uint64_t)dst+n>mem_size || (uint64_t)src+n>data_length)
+                if (dst > mem_size || n > mem_size-dst ||
+                    src > data_length || n > data_length-src)
                     return exec_fail(err,EXEC_ERROR_TRAP,"out of bounds memory access");
                 if (n)
-                    memcpy(memory->data+dst,eng->data_segs[instr->u32_imm]+src,n);
+                    memcpy(memory->data+(size_t)dst,
+                           eng->data_segs[instr->u32_imm]+src,n);
             } else if (sub == 9) { /* data.drop */
                 if (instr->u32_imm >= eng->data_count)
                     return exec_fail(err,EXEC_ERROR_TRAP,"data segment index out of range");
@@ -5446,15 +5674,19 @@ tail_entry:
                 exec_table *table = eng->tables[table_index];
                 uint32_t n = (uint32_t)n_v.i32;
                 uint32_t src = (uint32_t)src_v.i32;
-                uint32_t dst = (uint32_t)dst_v.i32;
+                uint64_t dst;
+                if (!address_value(&dst_v, table->is_64, &dst) ||
+                    src_v.type != WASM_VALTYPE_I32 || n_v.type != WASM_VALTYPE_I32)
+                    return exec_fail(err, EXEC_ERROR_TRAP,
+                                     "table.init operand type mismatch");
                 uint32_t length = eng->elem_dropped[elem] ? 0 :
                                   eng->elem_lengths[elem];
-                if ((uint64_t)src + n > length ||
-                    (uint64_t)dst + n > table->size)
+                if (src > length || n > length-src ||
+                    dst > table->size || n > table->size-dst)
                     return exec_fail(err, EXEC_ERROR_TRAP,
                                      "out of bounds table access");
                 if (n)
-                    memcpy(table->elements + dst,
+                    memcpy(table->elements + (size_t)dst,
                            eng->elem_values[elem] + src,
                            (size_t)n * sizeof(exec_table_element));
             } else if (sub == 13) { /* elem.drop */
@@ -5470,29 +5702,40 @@ tail_entry:
                 if (tidx>=eng->table_count||!eng->tables[tidx])
                     return exec_fail(err,EXEC_ERROR_TRAP,"table index out of range");
                 exec_table *tbl=eng->tables[tidx];
-                uint32_t old_size=tbl->size,delta=(uint32_t)delta_v.i32;
-                if ((uint64_t)old_size+delta>0xFFFFFFFFu||
-                    (tbl->has_max&&old_size+delta>tbl->max_size)) {
-                    if (!stack_push(&stack,i32_value(UINT32_MAX))) return exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");
+                uint64_t old_size=tbl->size,delta;
+                if (!address_value(&delta_v,tbl->is_64,&delta))
+                    return exec_fail(err,EXEC_ERROR_TRAP,"table.grow operand type mismatch");
+                int failed = old_size > UINT64_MAX-delta;
+                uint64_t new_size = failed ? 0 : old_size+delta;
+                if (failed || (!tbl->is_64 && new_size>UINT32_MAX) ||
+                    (tbl->has_max&&new_size>tbl->max_size) ||
+                    new_size>SIZE_MAX/sizeof(exec_table_element)) {
+                    wasm_value failure=tbl->is_64?i64_value(UINT64_MAX):i32_value(UINT32_MAX);
+                    if (!stack_push(&stack,failure)) return exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");
                 } else {
-                    uint32_t new_size=old_size+delta;
                     exec_table_element *nel=(exec_table_element*)realloc(tbl->elements,
-                        new_size?new_size*sizeof(*nel):1);
-                    if (!nel) { if (!stack_push(&stack,i32_value(UINT32_MAX))) return exec_fail(err,EXEC_ERROR_TRAP,"stack overflow"); }
+                        new_size?(size_t)new_size*sizeof(*nel):1);
+                    if (!nel) {
+                        wasm_value failure=tbl->is_64?i64_value(UINT64_MAX):i32_value(UINT32_MAX);
+                        if (!stack_push(&stack,failure)) return exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");
+                    }
                     else {
-                        for (uint32_t i=old_size;i<new_size;i++) {
+                        for (uint64_t i=old_size;i<new_size;i++) {
                             nel[i].owner = init_v.ref == UINT32_MAX ? NULL : eng;
                             nel[i].func_idx = init_v.ref == UINT32_MAX ? 0 : init_v.ref;
                         }
                         tbl->elements=nel; tbl->size=new_size;
-                        if (!stack_push(&stack,i32_value(old_size))) return exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");
+                        wasm_value old_value=tbl->is_64?i64_value(old_size):i32_value((uint32_t)old_size);
+                        if (!stack_push(&stack,old_value)) return exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");
                     }
                 }
             } else if (sub == 16) { /* table.size */
                 uint32_t tidx=instr->u32_imm;
                 if (tidx>=eng->table_count||!eng->tables[tidx])
                     return exec_fail(err,EXEC_ERROR_TRAP,"table index out of range");
-                if (!stack_push(&stack,i32_value(eng->tables[tidx]->size)))
+                exec_table *tbl=eng->tables[tidx];
+                wasm_value size_value=tbl->is_64?i64_value(tbl->size):i32_value((uint32_t)tbl->size);
+                if (!stack_push(&stack,size_value))
                     return exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");
             } else if (sub == 14) { /* table.copy */
                 wasm_value n_v, src_v, dst_v;
@@ -5502,10 +5745,17 @@ tail_entry:
                 if (dtidx>=eng->table_count||stidx>=eng->table_count)
                     return exec_fail(err,EXEC_ERROR_TRAP,"table index out of range");
                 exec_table *dt=eng->tables[dtidx],*st=eng->tables[stidx];
-                uint32_t dst=(uint32_t)dst_v.i32,src=(uint32_t)src_v.i32,n=(uint32_t)n_v.i32;
-                if ((uint64_t)dst+n>dt->size||(uint64_t)src+n>st->size)
+                uint64_t dst,src,n;
+                int length_is_64=dt->is_64&&st->is_64;
+                if (!address_value(&dst_v,dt->is_64,&dst) ||
+                    !address_value(&src_v,st->is_64,&src) ||
+                    !address_value(&n_v,length_is_64,&n))
+                    return exec_fail(err,EXEC_ERROR_TRAP,"table.copy operand type mismatch");
+                if (dst>dt->size||n>dt->size-dst||src>st->size||n>st->size-src||
+                    n>SIZE_MAX/sizeof(exec_table_element))
                     return exec_fail(err,EXEC_ERROR_TRAP,"out of bounds table access");
-                memmove(dt->elements+dst,st->elements+src,n*sizeof(exec_table_element));
+                memmove(dt->elements+(size_t)dst,st->elements+(size_t)src,
+                        (size_t)n*sizeof(exec_table_element));
             } else if (sub == 17) { /* table.fill */
                 wasm_value n_v, val_v, dst_v;
                 if (!stack_pop(&stack,&n_v)||!stack_pop(&stack,&val_v)||!stack_pop(&stack,&dst_v))
@@ -5514,13 +5764,17 @@ tail_entry:
                 if (tidx>=eng->table_count||!eng->tables[tidx])
                     return exec_fail(err,EXEC_ERROR_TRAP,"table index out of range");
                 exec_table *tbl=eng->tables[tidx];
-                uint32_t dst=(uint32_t)dst_v.i32,n=(uint32_t)n_v.i32;
-                if ((uint64_t)dst+n>tbl->size) return exec_fail(err,EXEC_ERROR_TRAP,"out of bounds table access");
+                uint64_t dst,n;
+                if (!address_value(&dst_v,tbl->is_64,&dst)||
+                    !address_value(&n_v,tbl->is_64,&n))
+                    return exec_fail(err,EXEC_ERROR_TRAP,"table.fill operand type mismatch");
+                if (dst>tbl->size||n>tbl->size-dst)
+                    return exec_fail(err,EXEC_ERROR_TRAP,"out of bounds table access");
                 /* set val_v as table element — only funcref/externref supported */
                 exec_table_element fill_el;
                 if (val_v.ref==UINT32_MAX) { fill_el.owner=NULL; fill_el.func_idx=0; }
                 else { fill_el.owner=eng; fill_el.func_idx=val_v.ref; }
-                for (uint32_t i=0;i<n;i++) tbl->elements[dst+i]=fill_el;
+                for (uint64_t i=0;i<n;i++) tbl->elements[(size_t)(dst+i)]=fill_el;
             } else {
                 /* Unsupported 0xFC operation. */
             }
@@ -5542,7 +5796,7 @@ tail_entry:
 
             if (op <= 0x0b || (op >= 0x54 && op <= 0x5d)) {
                 wasm_value base, vector, out;
-                uint32_t address, width = 16;
+                size_t address; uint32_t width = 16;
                 int lane_memory = op >= 0x54 && op <= 0x5b;
                 int store = op == 0x0b || (op >= 0x58 && op <= 0x5b);
                 if (instr->memory_index >= eng->memory_count)
@@ -5550,9 +5804,10 @@ tail_entry:
                 exec_memory *memory = eng->memories[instr->memory_index];
                 if (lane_memory || store) {
                     if (!simd_pop(&stack,&vector) || !stack_pop(&stack,&base) ||
-                        base.type != WASM_VALTYPE_I32)
+                        base.type != (memory->is_64 ? WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
                         return exec_fail(err,EXEC_ERROR_TRAP,"SIMD memory operands missing");
-                } else if (!stack_pop(&stack,&base) || base.type != WASM_VALTYPE_I32) {
+                } else if (!stack_pop(&stack,&base) ||
+                           base.type != (memory->is_64 ? WASM_VALTYPE_I64 : WASM_VALTYPE_I32)) {
                     return exec_fail(err,EXEC_ERROR_TRAP,"SIMD memory address missing");
                 }
                 if (lane_memory) width = UINT32_C(1) << ((op - 0x54) & 3u);
@@ -5562,8 +5817,10 @@ tail_entry:
                 else if (op >= 0x07 && op <= 0x0a) width=UINT32_C(1)<<(op-0x07);
                 else if (op == 0x5c) width=4;
                 else if (op == 0x5d) width=8;
-                exec_status mem_status=memory_address(memory,(uint32_t)base.i32,
-                    instr->u32_imm,width,&address,err);
+                uint64_t base_address = memory->is_64 ? (uint64_t)base.i64 :
+                                                       (uint64_t)(uint32_t)base.i32;
+                exec_status mem_status=memory_address(memory,base_address,
+                    instr->u64_imm,width,&address,err);
                 if(mem_status!=EXEC_OK)return mem_status;
                 if(store) {
                     if(lane_memory) {

@@ -187,6 +187,18 @@ MEMOP       (i32\.load|i64\.load|f32\.load|f64\.load|i32\.load8_s|i32\.load8_u|i
     yyextra->fold_depth++;
     return FOLD_MEMOP_START;
 }
+\([ \t\r\n]*[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_.]+[ \t\r\n]*\) {
+    const char *p = yytext + 1;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    const char *end = yytext + yyleng - 1;
+    while (end > p && (end[-1] == ' ' || end[-1] == '\t' ||
+                       end[-1] == '\r' || end[-1] == '\n')) end--;
+    size_t n = (size_t)(end - p);
+    if (n >= sizeof(yylval->str_val)) n = sizeof(yylval->str_val) - 1;
+    memcpy(yylval->str_val, p, n);
+    yylval->str_val[n] = '\0';
+    return FOLD_EMPTY_ATOM;
+}
 \([ \t\r\n]*[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_.]+ {
     const char *p = yytext + 1;
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
@@ -250,21 +262,13 @@ f64x2\.eq   { yylval->u32_val = 71;  return SIMD_OP; }
 offset=0x{HEXNUM}  {
         const char *s = strip_underscores(yytext+9);
         uint64_t v = strtoull(s,NULL,16);
-        yylval->u32_val = (v <= 0xFFFFFFFFu) ? (uint32_t)v : 0xFFFFFFFFu;
-        if (v > 0xFFFFFFFFu) {
-            wast_lex_state *st = yyget_extra(yyscanner);
-            if (st) st->offset_overflow = 1;
-        }
+        yylval->u64_val = v;
         return OFFSET_IMM;
     }
 offset={NUM}        {
         const char *s = strip_underscores(yytext+7);
         uint64_t v = strtoull(s,NULL,10);
-        yylval->u32_val = (v <= 0xFFFFFFFFu) ? (uint32_t)v : 0xFFFFFFFFu;
-        if (v > 0xFFFFFFFFu) {
-            wast_lex_state *st = yyget_extra(yyscanner);
-            if (st) st->offset_overflow = 1;
-        }
+        yylval->u64_val = v;
         return OFFSET_IMM;
     }
 align=0x{HEXNUM}  {

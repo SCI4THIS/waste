@@ -42,9 +42,10 @@ typedef struct {
 
 typedef struct {
     uint8_t *data;
-    uint32_t pages;
-    uint32_t max_pages;
+    uint64_t pages;
+    uint64_t max_pages;
     uint8_t has_max;
+    uint8_t is_64;
 } exec_memory;
 
 /* A single slot in a table: tracks the owning engine and its local function index.
@@ -56,9 +57,10 @@ typedef struct {
 
 typedef struct {
     exec_table_element *elements;
-    uint32_t size;
-    uint32_t max_size;
+    uint64_t size;
+    uint64_t max_size;
     uint8_t has_max;
+    uint8_t is_64;
     wasm_valtype element_type;
     const waste_exec_engine *type_owner;
 } exec_table;

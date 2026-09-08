@@ -81,9 +81,12 @@ browser harness.  The separate multi-memory proposal suite also passes all 41
 `submodules/wasm-spec/test/core/multi-memory/*.wast` files natively and through
 the same browser worker.  The core SIMD suite passes all 59
 `submodules/wasm-spec/test/core/simd/*.wast` files (25,515 assertions) both
-natively and through the freestanding browser engine.  Later paragraphs in
-this section preserve the incremental implementation history; their smaller
-pass counts are no longer the current baseline.
+natively and through the freestanding browser engine.  The memory64 proposal
+suite passes all 25 `submodules/wasm-spec/test/core/memory64/*.wast` files in
+both paths (8,409 native command results; 7,946 explicit assertion commands in
+the generated browser dashboard).  Later paragraphs in this section preserve
+the incremental implementation history; their smaller pass counts are no
+longer the current baseline.
 
 The multi-memory work adds deterministic folded load/store boundaries, indexed
 load/store/size/grow and bulk-memory encoding, named data-segment resolution,
@@ -118,6 +121,33 @@ python3 tools/generate-c-engine-tests.py \
   --output build/c-engine/browser-tests-c-engine-simd.html
 node tests/c-engine-browser-runtime.cjs \
   build/c-engine/browser-tests-c-engine-simd.html
+```
+
+Memory64 uses 64-bit limits and memarg offsets end to end, selects i32 or i64
+address operands from each memory or table, and implements the mixed-address
+rules for bulk memory and table instructions.  The encoder retains the
+2^16-page limit for memory32 and uses the proposal's 2^48-page limit for
+memory64; the validator likewise rejects offsets wider than u32 only when the
+selected memory is memory32.  The final table-init identity fixture has narrow
+constexpr support for `array.new_default`: it creates an opaque typed reference
+whose identity can be copied through tables and compared by `ref.eq`.  This is
+not general runtime GC allocation support.
+
+Reproduce the memory64 offline-browser gate with:
+
+```sh
+make -C src/c-engine WAST_BUILD_DIR=../../build/c-engine \
+  wast-native wast-browser wast-mmap-test
+build/c-engine/wast-mmap-test \
+  submodules/wasm-spec/test/core/memory64/*.wast
+python3 tools/generate-c-engine-tests.py \
+  --runner build/c-engine/waste-wast \
+  --wasm build/c-engine/waste-wast.wasm \
+  --tests submodules/wasm-spec/test/core/memory64 \
+  --count \
+  --output build/c-engine/browser-tests-c-engine-memory64.html
+node tests/c-engine-browser-runtime.cjs \
+  build/c-engine/browser-tests-c-engine-memory64.html
 ```
 
 The developing WAST path now uses dynamically grown per-module function
