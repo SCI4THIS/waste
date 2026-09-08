@@ -276,6 +276,47 @@ static int raw_const_literals_are_valid(const uint8_t *source,
                 if (source[i] == '\\' && i + 1 < length) i++;
             continue;
         }
+        static const char vector_const[] = "v128.const";
+        if (i + sizeof(vector_const) - 1 <= length &&
+            memcmp(source + i, vector_const, sizeof(vector_const) - 1) == 0 &&
+            (i == 0 || raw_token_delimiter(source[i - 1])) &&
+            (i + sizeof(vector_const) - 1 == length ||
+             raw_token_delimiter(source[i + sizeof(vector_const) - 1]))) {
+            size_t at = i + sizeof(vector_const) - 1;
+            while (at < length && (source[at] == ' ' || source[at] == '\t' ||
+                   source[at] == '\r' || source[at] == '\n')) at++;
+            static const struct {
+                const char *name; int lane_count; int bits; int floating;
+            } shapes[] = {
+                {"i8x16",16,8,0},{"i16x8",8,16,0},{"i32x4",4,32,0},
+                {"i64x2",2,64,0},{"f32x4",4,32,1},{"f64x2",2,64,1}
+            };
+            const int shape_count = (int)(sizeof(shapes)/sizeof(shapes[0]));
+            int shape = -1;
+            for (int candidate=0;candidate<shape_count;candidate++) {
+                size_t shape_length=strlen(shapes[candidate].name);
+                if(at+shape_length<=length &&
+                   memcmp(source+at,shapes[candidate].name,shape_length)==0 &&
+                   (at+shape_length==length||raw_token_delimiter(source[at+shape_length]))) {
+                    shape=candidate;at+=shape_length;break;
+                }
+            }
+            if(shape<0)return 0;
+            for(int lane=0;lane<shapes[shape].lane_count;lane++) {
+                while(at<length&&(source[at]==' '||source[at]=='\t'||
+                      source[at]=='\r'||source[at]=='\n'))at++;
+                size_t end=at;
+                while(end<length&&!raw_token_delimiter(source[end]))end++;
+                if(end==at)return 0;
+                int valid=shapes[shape].floating?
+                    raw_float_literal_valid(source+at,end-at,shapes[shape].bits):
+                    raw_integer_literal_valid(source+at,end-at,shapes[shape].bits);
+                if(!valid)return 0;
+                at=end;
+            }
+            i = at ? at - 1 : at;
+            continue;
+        }
         for (size_t op = 0; op < sizeof(ops) / sizeof(ops[0]); op++) {
             size_t name_length = strlen(ops[op].name);
             if (i + name_length > length ||
@@ -669,6 +710,73 @@ static char *normalize_float_integer_literals(const char *source,
                     break;
             }
             continue;
+        }
+        if (read + 10 <= length &&
+            memcmp(source + read, "v128.const", 10) == 0 &&
+            (read == 0 || raw_token_delimiter((uint8_t)source[read - 1])) &&
+            (read + 10 == length ||
+             raw_token_delimiter((uint8_t)source[read + 10]))) {
+            size_t lane_begin = read + 10;
+            while (lane_begin < length &&
+                   (source[lane_begin] == ' ' || source[lane_begin] == '\t' ||
+                    source[lane_begin] == '\r' || source[lane_begin] == '\n'))
+                lane_begin++;
+            int vector_f32 = lane_begin + 5 <= length &&
+                memcmp(source + lane_begin, "f32x4", 5) == 0;
+            int vector_f64 = lane_begin + 5 <= length &&
+                memcmp(source + lane_begin, "f64x2", 5) == 0;
+            if (vector_f32 || vector_f64) {
+                size_t prefix_end = lane_begin + 5;
+                memcpy(output + written, source + read, prefix_end - read);
+                written += prefix_end - read;
+                read = prefix_end;
+                int lane_count = vector_f32 ? 4 : 2;
+                for (int lane = 0; lane < lane_count && read < length; lane++) {
+                    while (read < length &&
+                           (source[read] == ' ' || source[read] == '\t' ||
+                            source[read] == '\r' || source[read] == '\n'))
+                        output[written++] = source[read++];
+                    size_t end = read;
+                    while (end < length &&
+                           !raw_token_delimiter((uint8_t)source[end])) end++;
+                    int hexadecimal = 0;
+                    int numeric = read < end &&
+                        (raw_integer_syntax_valid((const uint8_t *)source + read,
+                                                  end - read, &hexadecimal) ||
+                         raw_float_syntax_valid((const uint8_t *)source + read,
+                                                end - read));
+                    if (!numeric) {
+                        memcpy(output + written, source + read, end - read);
+                        written += end - read; read = end; continue;
+                    }
+                    size_t token_length = end - read;
+                    char *clean = malloc(token_length + 1);
+                    if (!clean) { free(output); return NULL; }
+                    size_t clean_length = 0;
+                    for (size_t i = read; i < end; i++)
+                        if (source[i] != '_') clean[clean_length++] = source[i];
+                    clean[clean_length] = '\0';
+                    char canonical[64];
+                    int canonical_length;
+                    if (vector_f32) {
+                        float value = strtof(clean, NULL);
+                        canonical_length = snprintf(canonical,sizeof(canonical),
+                                                    "%a",(double)value);
+                    } else {
+                        double value = strtod(clean, NULL);
+                        canonical_length = snprintf(canonical,sizeof(canonical),
+                                                    "%a",value);
+                    }
+                    free(clean);
+                    if (canonical_length <= 0 ||
+                        (size_t)canonical_length >= sizeof(canonical)) {
+                        free(output); return NULL;
+                    }
+                    memcpy(output + written, canonical,(size_t)canonical_length);
+                    written += (size_t)canonical_length; read = end;
+                }
+                continue;
+            }
         }
         const char *name = NULL;
         int is_f32 = 0;
@@ -1135,7 +1243,7 @@ exec_status wast_run_assertion(waste_exec_engine *engine,
         if (error) {
             error->status = EXEC_ERROR_TRAP;
             snprintf(error->message, sizeof(error->message),
-                     "global result mismatch for %s", assertion->func_name);
+                     "global result mismatch for %.220s", assertion->func_name);
         }
         return EXEC_ERROR_TRAP;
     }
@@ -1157,7 +1265,7 @@ exec_status wast_run_assertion(waste_exec_engine *engine,
         if (st == EXEC_OK && error) {
             error->status = EXEC_ERROR_TRAP;
             snprintf(error->message, sizeof(error->message),
-                     "expected trap from %s", assertion->func_name);
+                     "expected trap from %.220s", assertion->func_name);
         }
         return st == EXEC_OK ? EXEC_ERROR_TRAP : st;
     }
@@ -1182,7 +1290,7 @@ exec_status wast_run_assertion(waste_exec_engine *engine,
             results[0].type == WASM_VALTYPE_I32 &&
             assertion->alternatives[0][0].type == WASM_VALTYPE_I32)
             snprintf(error->message, sizeof(error->message),
-                     "result mismatch for %s (actual %d, expected %d)",
+                     "result mismatch for %.150s (actual %d, expected %d)",
                      assertion->func_name, results[0].i32,
                      assertion->alternatives[0][0].i32);
         else if (assertion->result_count == 1 &&
@@ -1193,14 +1301,14 @@ exec_status wast_run_assertion(waste_exec_engine *engine,
             memcpy(&expected_bits, &assertion->alternatives[0][0].f64,
                    sizeof(expected_bits));
             snprintf(error->message, sizeof(error->message),
-                     "result mismatch for %s (actual 0x%016llx, expected 0x%016llx)",
+                     "result mismatch for %.150s (actual 0x%016llx, expected 0x%016llx)",
                      assertion->func_name,
                      (unsigned long long)actual_bits,
                      (unsigned long long)expected_bits);
         }
         else
             snprintf(error->message, sizeof(error->message),
-                     "result mismatch for %s", assertion->func_name);
+                     "result mismatch for %.220s", assertion->func_name);
     }
     return EXEC_ERROR_TRAP;
 }

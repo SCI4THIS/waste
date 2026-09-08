@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <stdio.h>
+#include "wast_simd.h"
 
 #define MAX_LANE_COUNT 16
 
@@ -208,6 +209,21 @@ static uint32_t resolve_memory(const char *s);
 static uint32_t resolve_data(const char *s);
 static uint32_t resolve_elem(const char *s);
 static uint32_t resolve_tag(const char *s);
+
+static uint64_t parse_hex_payload(const char *s) {
+    uint64_t value = 0;
+    while (*s) {
+        if (*s != '_') {
+            int digit = *s >= '0' && *s <= '9' ? *s - '0' :
+                *s >= 'a' && *s <= 'f' ? *s - 'a' + 10 :
+                *s >= 'A' && *s <= 'F' ? *s - 'A' + 10 : -1;
+            if (digit < 0) break;
+            value = (value << 4) | (uint64_t)digit;
+        }
+        s++;
+    }
+    return value;
+}
 
 static wasm_valtype heap_reftype_to_value_type(int heap_type) {
     if (WASM_VALTYPE_IS_TYPE_REF((wasm_valtype)heap_type))
@@ -1826,34 +1842,13 @@ static int emit_atom_op(wast_script *script, const char *name) {
         }
     }
     /* Folded dotted operators arrive through the generic folded-start token.
-     * Keep opcode selection in C instead of making the lexer semantic. */
-    static const struct { const char *n; uint32_t sub; } simd_tbl[] = {
-        {"i8x16.relaxed_swizzle",256},
-        {"i32x4.relaxed_trunc_f32x4_s",257},
-        {"i32x4.relaxed_trunc_f32x4_u",258},
-        {"i32x4.relaxed_trunc_f64x2_s_zero",259},
-        {"i32x4.relaxed_trunc_f64x2_u_zero",260},
-        {"f32x4.relaxed_madd",261},{"f32x4.relaxed_nmadd",262},
-        {"f64x2.relaxed_madd",263},{"f64x2.relaxed_nmadd",264},
-        {"i8x16.relaxed_laneselect",265},
-        {"i16x8.relaxed_laneselect",266},
-        {"i32x4.relaxed_laneselect",267},
-        {"i64x2.relaxed_laneselect",268},
-        {"f32x4.relaxed_min",269},{"f32x4.relaxed_max",270},
-        {"f64x2.relaxed_min",271},{"f64x2.relaxed_max",272},
-        {"i16x8.relaxed_q15mulr_s",273},
-        {"i16x8.relaxed_dot_i8x16_i7x16_s",274},
-        {"i32x4.relaxed_dot_i8x16_i7x16_add_s",275},
-        {"i8x16.eq",35},{"i16x8.eq",37},{"i32x4.eq",39},
-        {"i64x2.eq",214},{"f32x4.eq",65},{"f64x2.eq",71},
-        {NULL,0}
-    };
-    for (int i = 0; simd_tbl[i].n; i++) {
-        if (strcmp(name, simd_tbl[i].n) == 0) {
-            emit_byte(script, 0xFD);
-            emit_leb_u32(script, simd_tbl[i].sub);
-            return 1;
-        }
+     * The shared table mirrors the official interpreter's mnemonic mapping;
+     * immediate shape and semantic checking remain in the C grammar/runtime. */
+    wast_simd_info simd;
+    if (wast_simd_lookup(name, &simd)) {
+        emit_byte(script, 0xFD);
+        emit_leb_u32(script, simd.opcode);
+        return 1;
     }
     /* 0xFC prefix ops (trunc_sat) */
     static const struct { const char *n; uint32_t sub; } fc_tbl[] = {
@@ -2169,11 +2164,14 @@ static void emit_blocktype(wast_script *script, int bt) {
 %token FOLD_CALL_INDIRECT_START
 %token FOLD_TRY_TABLE_START FOLD_CATCH_START FOLD_CATCH_ALL_START FOLD_THROW_START
 %token <str_val> FOLD_ATOM_START FOLD_MEMOP_START
+%token <str_val> FOLD_SIMD_MEM_START FOLD_SIMD_MEM_LANE_START
+%token <str_val> FOLD_SIMD_LANE_START FOLD_SIMD_SHUFFLE_START
+%token <str_val> SIMD_SHUFFLE_OP
 %token <str_val> OP
 %token <string_val> STRING
 %token <str_val>  ATOM ID
 %token <u32_val>  SIMD_OP OFFSET_IMM ALIGN_IMM
-%token <i64_val>  INT HEXINT
+%token <i64_val>  INT HEXINT POSINT
 %token <f64_val>  FLOAT
 
 %token KW_V128_CONST KW_LOCAL_GET KW_LOCAL_SET KW_LOCAL_TEE
@@ -2216,7 +2214,7 @@ static void emit_blocktype(wast_script *script, int bt) {
 %type <int_val>       lane_type blocktype block_param_type block_result_type
 %type <int_val>       reftype opt_table_idx
 %type <str_val>       opt_id opt_label opt_label_end any_idx index_ref fold_if_start
-%type <i64_val>       any_int any_nat
+%type <i64_val>       any_int any_nat lane_index
 %type <u64_val>       memarg
 %type <u64_val>       storage_type
 %type <int_val>       typeuse typeuse_items typeuse_item
@@ -2650,6 +2648,23 @@ plain_instr:
             emit_index_ref(script, IDX_MEMORY, $2,
                            @2.first_line, @2.first_column);
             emit_leb_u32(script, 0);
+        } else {
+            wast_simd_info simd;
+            if (wast_simd_lookup($1, &simd)) {
+                emit_byte(script, 0xFD); emit_leb_u32(script, simd.opcode);
+                if (simd.immediate == WAST_SIMD_IMM_LANE) {
+                    int64_t lane = (int64_t)strtol($2, NULL, 0);
+                    if (lane < 0 || lane >= simd.lane_count)
+                        report_validation_error(script,"lane index out of range");
+                    emit_byte(script, (uint8_t)lane);
+                }
+                else if (simd.immediate == WAST_SIMD_IMM_MEMARG) {
+                    emit_leb_u32(script, simd.natural_alignment | 0x40u);
+                    emit_index_ref(script, IDX_MEMORY, $2,
+                                   @2.first_line, @2.first_column);
+                    emit_leb_u32(script, 0);
+                }
+            }
         }
     }
   | OP index_ref memarg_nonempty {
@@ -2660,6 +2675,18 @@ plain_instr:
             emit_byte(script, op); emit_leb_u32(script, align_log2 | 0x40u);
             emit_index_ref(script, IDX_MEMORY, $2, @2.first_line, @2.first_column);
             emit_leb_u32(script, offset);
+        } else {
+            wast_simd_info simd;
+            if (wast_simd_lookup($1, &simd) &&
+                simd.immediate == WAST_SIMD_IMM_MEMARG) {
+                uint32_t align_log2 = (uint32_t)($3 >> 32);
+                uint32_t offset = (uint32_t)$3;
+                emit_byte(script, 0xFD); emit_leb_u32(script, simd.opcode);
+                emit_leb_u32(script, align_log2 | 0x40u);
+                emit_index_ref(script, IDX_MEMORY, $2,
+                               @2.first_line, @2.first_column);
+                emit_leb_u32(script, offset);
+            }
         }
     }
   | KW_TABLE_SIZE           { emit_byte(script,0xFC); emit_leb_u32(script,16); emit_byte(script,0x00); }
@@ -2698,6 +2725,18 @@ plain_instr:
         emit_byte(script, 0xFD);
         emit_leb_u32(script, $1);
     }
+  | SIMD_SHUFFLE_OP lane_index lane_index lane_index lane_index lane_index lane_index lane_index lane_index
+                    lane_index lane_index lane_index lane_index lane_index lane_index lane_index lane_index {
+        wast_simd_info simd;
+        wast_simd_lookup($1, &simd);
+        emit_byte(script, 0xFD); emit_leb_u32(script, simd.opcode);
+        const int64_t lanes[16] = {$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17};
+        for (int i = 0; i < 16; i++) {
+            if (lanes[i] < 0 || lanes[i] >= 32)
+                report_validation_error(script,"shuffle lane out of range");
+            emit_byte(script, (uint8_t)lanes[i]);
+        }
+    }
   | block_plain
   | loop_plain
   | if_plain
@@ -2722,7 +2761,13 @@ plain_instr:
             emit_leb_u32(script, default_align(op));
             emit_leb_u32(script, 0);
         } else {
-            if (!emit_atom_op(script,$1) && script->strict_wat_mode)
+            wast_simd_info simd;
+            if (wast_simd_lookup($1, &simd) &&
+                simd.immediate == WAST_SIMD_IMM_MEMARG) {
+                emit_atom_op(script,$1);
+                emit_leb_u32(script, simd.natural_alignment);
+                emit_leb_u32(script, 0);
+            } else if (!emit_atom_op(script,$1) && script->strict_wat_mode)
                 report_validation_error(script,"unknown instruction operator");
         }
     }
@@ -2733,7 +2778,13 @@ plain_instr:
             uint32_t offset = (uint32_t)($2 & 0xFFFFFFFF);
             emit_byte(script, op); emit_leb_u32(script, align_log2); emit_leb_u32(script, offset);
         } else {
-            if (!emit_atom_op(script,$1) && script->strict_wat_mode)
+            wast_simd_info simd;
+            if (wast_simd_lookup($1, &simd) &&
+                simd.immediate == WAST_SIMD_IMM_MEMARG) {
+                emit_atom_op(script,$1);
+                emit_leb_u32(script, (uint32_t)($2 >> 32));
+                emit_leb_u32(script, (uint32_t)$2);
+            } else if (!emit_atom_op(script,$1) && script->strict_wat_mode)
                 report_validation_error(script,"unknown instruction operator");
         }
     }
@@ -2972,7 +3023,79 @@ inline_result_list:
  * --------------------------------------------------------------------- */
 
 fold_instr:
-    FOLD_MEMOP_START index_ref fold_arg_list RPAREN {
+    FOLD_SIMD_MEM_START index_ref fold_arg_list RPAREN {
+        wast_simd_info simd; wast_simd_lookup($1, &simd);
+        emit_byte(script,0xFD); emit_leb_u32(script,simd.opcode);
+        emit_leb_u32(script,simd.natural_alignment|0x40u);
+        emit_index_ref(script,IDX_MEMORY,$2,@2.first_line,@2.first_column);
+        emit_leb_u32(script,0);
+    }
+  | FOLD_SIMD_MEM_START index_ref memarg_nonempty fold_arg_list RPAREN {
+        wast_simd_info simd; wast_simd_lookup($1, &simd);
+        emit_byte(script,0xFD); emit_leb_u32(script,simd.opcode);
+        emit_leb_u32(script,(uint32_t)($3>>32)|0x40u);
+        emit_index_ref(script,IDX_MEMORY,$2,@2.first_line,@2.first_column);
+        emit_leb_u32(script,(uint32_t)$3);
+    }
+  | FOLD_SIMD_MEM_START fold_arg_list RPAREN {
+        wast_simd_info simd; wast_simd_lookup($1, &simd);
+        emit_byte(script,0xFD); emit_leb_u32(script,simd.opcode);
+        emit_leb_u32(script,simd.natural_alignment); emit_leb_u32(script,0);
+    }
+  | FOLD_SIMD_MEM_START memarg_nonempty fold_arg_list RPAREN {
+        wast_simd_info simd; wast_simd_lookup($1, &simd);
+        emit_byte(script,0xFD); emit_leb_u32(script,simd.opcode);
+        emit_leb_u32(script,(uint32_t)($2>>32)); emit_leb_u32(script,(uint32_t)$2);
+    }
+  | FOLD_SIMD_LANE_START lane_index fold_arg_list RPAREN {
+        wast_simd_info simd; wast_simd_lookup($1, &simd);
+        if ($2 < 0 || $2 >= simd.lane_count)
+            report_validation_error(script,"lane index out of range");
+        emit_byte(script,0xFD); emit_leb_u32(script,simd.opcode); emit_byte(script,(uint8_t)$2);
+    }
+  | FOLD_SIMD_SHUFFLE_START lane_index lane_index lane_index lane_index lane_index lane_index lane_index lane_index
+                            lane_index lane_index lane_index lane_index lane_index lane_index lane_index lane_index
+                            fold_arg_list RPAREN {
+        wast_simd_info simd; wast_simd_lookup($1, &simd);
+        emit_byte(script,0xFD); emit_leb_u32(script,simd.opcode);
+        const int64_t lanes[16] = {$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17};
+        for (int i=0;i<16;i++) {
+            if (lanes[i] < 0 || lanes[i] >= 32)
+                report_validation_error(script,"shuffle lane out of range");
+            emit_byte(script,(uint8_t)lanes[i]);
+        }
+    }
+  | FOLD_SIMD_MEM_LANE_START lane_index fold_arg_list RPAREN {
+        wast_simd_info simd; wast_simd_lookup($1, &simd);
+        if ($2 < 0 || $2 >= simd.lane_count)
+            report_validation_error(script,"lane index out of range");
+        emit_byte(script,0xFD); emit_leb_u32(script,simd.opcode);
+        emit_leb_u32(script,simd.natural_alignment); emit_leb_u32(script,0); emit_byte(script,(uint8_t)$2);
+    }
+  | FOLD_SIMD_MEM_LANE_START memarg_nonempty lane_index fold_arg_list RPAREN {
+        wast_simd_info simd; wast_simd_lookup($1, &simd);
+        if ($3 < 0 || $3 >= simd.lane_count)
+            report_validation_error(script,"lane index out of range");
+        emit_byte(script,0xFD); emit_leb_u32(script,simd.opcode);
+        emit_leb_u32(script,(uint32_t)($2>>32)); emit_leb_u32(script,(uint32_t)$2); emit_byte(script,(uint8_t)$3);
+    }
+  | FOLD_SIMD_MEM_LANE_START index_ref lane_index fold_arg_list RPAREN {
+        wast_simd_info simd; wast_simd_lookup($1, &simd);
+        if ($3 < 0 || $3 >= simd.lane_count)
+            report_validation_error(script,"lane index out of range");
+        emit_byte(script,0xFD); emit_leb_u32(script,simd.opcode);
+        emit_leb_u32(script,simd.natural_alignment|0x40u);
+        emit_index_ref(script,IDX_MEMORY,$2,@2.first_line,@2.first_column); emit_leb_u32(script,0); emit_byte(script,(uint8_t)$3);
+    }
+  | FOLD_SIMD_MEM_LANE_START index_ref memarg_nonempty lane_index fold_arg_list RPAREN {
+        wast_simd_info simd; wast_simd_lookup($1, &simd);
+        if ($4 < 0 || $4 >= simd.lane_count)
+            report_validation_error(script,"lane index out of range");
+        emit_byte(script,0xFD); emit_leb_u32(script,simd.opcode);
+        emit_leb_u32(script,(uint32_t)($3>>32)|0x40u);
+        emit_index_ref(script,IDX_MEMORY,$2,@2.first_line,@2.first_column); emit_leb_u32(script,(uint32_t)$3); emit_byte(script,(uint8_t)$4);
+    }
+  | FOLD_MEMOP_START index_ref fold_arg_list RPAREN {
         uint8_t op = memop_by_name($1);
         emit_byte(script, op);
         emit_leb_u32(script, default_align(op) | 0x40u);
@@ -3591,11 +3714,18 @@ index_ref:
 any_int:
     INT    { $$ = $1; }
   | HEXINT { $$ = $1; }
+  | POSINT { $$ = $1; }
+    ;
+
+lane_index:
+    INT    { $$ = $1; }
+  | HEXINT { $$ = $1; }
     ;
 
 any_nat:
     INT    { $$ = ($1 < 0) ? 0 : $1; }
   | HEXINT { $$ = $1; }
+  | POSINT { $$ = $1; }
     ;
 
 memarg:
@@ -5011,17 +5141,17 @@ const_val:
             uint64_t bits = 0x7ff8000000000000ULL;
             if (strcmp(s, "-inf") == 0) bits = 0xfff0000000000000ULL;
             else if (strcmp(s, "inf") == 0 || strcmp(s, "+inf") == 0) bits = 0x7ff0000000000000ULL;
-            else if (strncmp(s, "-nan:0x", 7) == 0) bits = 0xfff0000000000000ULL | (strtoull(s + 7, NULL, 16) & 0x000fffffffffffffULL);
-            else if (strncmp(s, "+nan:0x", 7) == 0) bits = 0x7ff0000000000000ULL | (strtoull(s + 7, NULL, 16) & 0x000fffffffffffffULL);
-            else if (strncmp(s, "nan:0x", 6) == 0) bits = 0x7ff0000000000000ULL | (strtoull(s + 6, NULL, 16) & 0x000fffffffffffffULL);
+            else if (strncmp(s, "-nan:0x", 7) == 0) bits = 0xfff0000000000000ULL | (parse_hex_payload(s + 7) & 0x000fffffffffffffULL);
+            else if (strncmp(s, "+nan:0x", 7) == 0) bits = 0x7ff0000000000000ULL | (parse_hex_payload(s + 7) & 0x000fffffffffffffULL);
+            else if (strncmp(s, "nan:0x", 6) == 0) bits = 0x7ff0000000000000ULL | (parse_hex_payload(s + 6) & 0x000fffffffffffffULL);
             memcpy(&$$.f64, &bits, sizeof(bits)); $$.type = WASM_VALTYPE_F64;
         } else {
             uint32_t bits = 0x7fc00000U;
             if (strcmp(s, "-inf") == 0) bits = 0xff800000U;
             else if (strcmp(s, "inf") == 0 || strcmp(s, "+inf") == 0) bits = 0x7f800000U;
-            else if (strncmp(s, "-nan:0x", 7) == 0) bits = 0xff800000U | (uint32_t)(strtoul(s + 7, NULL, 16) & 0x7fffffU);
-            else if (strncmp(s, "+nan:0x", 7) == 0) bits = 0x7f800000U | (uint32_t)(strtoul(s + 7, NULL, 16) & 0x7fffffU);
-            else if (strncmp(s, "nan:0x", 6) == 0) bits = 0x7f800000U | (uint32_t)(strtoul(s + 6, NULL, 16) & 0x7fffffU);
+            else if (strncmp(s, "-nan:0x", 7) == 0) bits = 0xff800000U | (uint32_t)(parse_hex_payload(s + 7) & 0x7fffffU);
+            else if (strncmp(s, "+nan:0x", 7) == 0) bits = 0x7f800000U | (uint32_t)(parse_hex_payload(s + 7) & 0x7fffffU);
+            else if (strncmp(s, "nan:0x", 6) == 0) bits = 0x7f800000U | (uint32_t)(parse_hex_payload(s + 6) & 0x7fffffU);
             memcpy(&$$.f32, &bits, sizeof(bits)); $$.type = WASM_VALTYPE_F32;
         }
     }
@@ -5282,6 +5412,12 @@ lane_val:
         $$.vals[0]  = (double)(uint64_t)$1;
         $$.count    = 1;
     }
+  | POSINT {
+        memset(&$$, 0, sizeof($$));
+        $$.ivals[0] = $1;
+        $$.vals[0]  = (double)(uint64_t)$1;
+        $$.count    = 1;
+    }
   | FLOAT {
         memset(&$$, 0, sizeof($$));
         $$.vals[0]  = $1;
@@ -5306,6 +5442,7 @@ lane_val:
   | KW_NEG_INF {
         memset(&$$, 0, sizeof($$));
         $$.vals[0]  = -1.0 / 0.0;
+        $$.flags[0] = 9;
         $$.count    = 1;
     }
   | KW_POS_NAN {
@@ -5316,6 +5453,7 @@ lane_val:
   | KW_POS_INF {
         memset(&$$, 0, sizeof($$));
         $$.vals[0]  = 1.0 / 0.0;
+        $$.flags[0] = 8;
         $$.count    = 1;
     }
   | KW_NAN {
@@ -5326,12 +5464,28 @@ lane_val:
   | KW_INF {
         memset(&$$, 0, sizeof($$));
         $$.vals[0]  = 1.0 / 0.0;
+        $$.flags[0] = 8;
         $$.count    = 1;
     }
   | ATOM {
-        /* nan:0xHEX or other atom forms — treat as arithmetic NaN */
         memset(&$$, 0, sizeof($$));
-        $$.flags[0] = 2; /* NAN_MATCH_F32_ARITH */
+        const char *p = $1; int negative = 0;
+        if (*p == '-' || *p == '+') { negative = *p == '-'; p++; }
+        if (strncmp(p, "nan:0x", 6) == 0) {
+            uint64_t payload = 0; p += 6;
+            while (*p) {
+                if (*p != '_') {
+                    int digit = *p >= '0' && *p <= '9' ? *p - '0' :
+                        *p >= 'a' && *p <= 'f' ? *p - 'a' + 10 :
+                        *p >= 'A' && *p <= 'F' ? *p - 'A' + 10 : -1;
+                    if (digit < 0) { payload = 0; break; }
+                    payload = (payload << 4) | (uint64_t)digit;
+                }
+                p++;
+            }
+            $$.ivals[0] = (int64_t)payload;
+            $$.flags[0] = negative ? 6 : 5;
+        } else $$.flags[0] = 7;
         $$.count    = 1;
     }
     ;
@@ -5373,10 +5527,37 @@ void yyerror(YYLTYPE *loc, wast_script *script, void *scanner, const char *msg) 
  * --------------------------------------------------------------------- */
 
 static wasm_value lanes_to_v128(int lane_type, const lane_list *lanes, wast_script *script) {
-    (void)script;
     wasm_value v;
     memset(&v, 0, sizeof(v));
     v.type = WASM_VALTYPE_V128;
+
+    static const int expected_counts[] = {16,8,4,2,4,2};
+    if (lane_type < 0 || lane_type > 5 ||
+        lanes->count != expected_counts[lane_type])
+        report_validation_error(script, "invalid vector lane count");
+    if (lane_type <= 3) {
+        static const uint32_t bits[] = {8,16,32,64};
+        uint32_t width = bits[lane_type];
+        for (int i=0;i<lanes->count;i++) {
+            if (lanes->flags[i]) {
+                report_validation_error(script,"constant out of range"); break;
+            }
+            if (width < 64) {
+                int64_t min = -(INT64_C(1) << (width-1));
+                uint64_t max = (UINT64_C(1) << width) - 1;
+                if (lanes->ivals[i] < min ||
+                    (lanes->ivals[i] >= 0 && (uint64_t)lanes->ivals[i] > max)) {
+                    report_validation_error(script,"constant out of range"); break;
+                }
+            }
+        }
+    } else {
+        for (int i=0;i<lanes->count;i++)
+            if ((!lanes->flags[i] && isinf(lanes->vals[i])) ||
+                lanes->flags[i] == 7) {
+                report_validation_error(script,"constant out of range"); break;
+            }
+    }
 
     switch (lane_type) {
         case 0: {
@@ -5418,6 +5599,13 @@ static wasm_value lanes_to_v128(int lane_type, const lane_list *lanes, wast_scri
                 else if (lanes->flags[i] == 2) { bits = 0x7FC00000u; nm = NAN_MATCH_F32_ARITH; }
                 else if (lanes->flags[i] == 3) { bits = 0xFFC00000u; nm = NAN_MATCH_F32_ARITH; }
                 else if (lanes->flags[i] == 4) { bits = 0x7FC00000u; nm = NAN_MATCH_F32_ARITH; }
+                else if (lanes->flags[i] == 5 || lanes->flags[i] == 6) {
+                    uint64_t payload=(uint64_t)lanes->ivals[i];
+                    if (!payload || payload > UINT32_C(0x7fffff))
+                        report_validation_error(script,"constant out of range");
+                    bits=(lanes->flags[i]==6?UINT32_C(0xff800000):UINT32_C(0x7f800000))|
+                         ((uint32_t)payload&UINT32_C(0x7fffff));
+                }
                 else { float f = (float)lanes->vals[i]; memcpy(&bits, &f, 4); }
                 v.v128.bytes[i*4]   = (uint8_t)(bits & 0xFF);
                 v.v128.bytes[i*4+1] = (uint8_t)((bits >> 8)  & 0xFF);
@@ -5435,6 +5623,13 @@ static wasm_value lanes_to_v128(int lane_type, const lane_list *lanes, wast_scri
                 else if (lanes->flags[i] == 2) { bits = 0x7FF8000000000000ULL; nm = NAN_MATCH_F64_ARITH; }
                 else if (lanes->flags[i] == 3) { bits = 0xFFF8000000000000ULL; nm = NAN_MATCH_F64_ARITH; }
                 else if (lanes->flags[i] == 4) { bits = 0x7FF8000000000000ULL; nm = NAN_MATCH_F64_ARITH; }
+                else if (lanes->flags[i] == 5 || lanes->flags[i] == 6) {
+                    uint64_t payload=(uint64_t)lanes->ivals[i];
+                    if (!payload || payload > UINT64_C(0x000fffffffffffff))
+                        report_validation_error(script,"constant out of range");
+                    bits=(lanes->flags[i]==6?UINT64_C(0xfff0000000000000):UINT64_C(0x7ff0000000000000))|
+                         (payload&UINT64_C(0x000fffffffffffff));
+                }
                 else { double d = lanes->vals[i]; memcpy(&bits, &d, 8); }
                 for (int b = 0; b < 8; b++)
                     v.v128.bytes[i*8+b] = (uint8_t)(bits >> (b*8));

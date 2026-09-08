@@ -813,14 +813,32 @@ static int run_browser_spec(const char *path) {
 
 /* ---- entry point ---- */
 
+static int run_count(const char *path) {
+    wast_script *script = (wast_script *)calloc(1, sizeof(*script));
+    if (!script) return 1;
+    int parse_rc = wast_parse_file(path, script);
+    if (parse_rc != 0 && script->group_count == 0) {
+        fprintf(stderr, "parse error in %s: %s\n", path, script->error);
+        wast_script_free(script); free(script); return 1;
+    }
+    int count = 0;
+    for (int group = 0; group < script->group_count; group++)
+        count += script->groups[group].assertion_count;
+    printf("%d\n", count);
+    wast_script_free(script); free(script);
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
     if (argc == 3 && strcmp(argv[1], "--browser-spec") == 0)
         return run_browser_spec(argv[2]);
     if (argc == 3 && strcmp(argv[1], "--general") == 0)
         return wast_general_run(argv[2]);
+    if (argc == 3 && strcmp(argv[1], "--count") == 0)
+        return run_count(argv[2]);
     if (argc == 2) {
         return run_normal(argv[1]);
     }
-    fprintf(stderr, "usage: %s [--browser-spec|--general] <file.wast>\n", argv[0]);
+    fprintf(stderr, "usage: %s [--browser-spec|--general|--count] <file.wast>\n", argv[0]);
     return 1;
 }

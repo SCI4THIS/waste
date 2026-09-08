@@ -1,4 +1,5 @@
 #include "waste_exec.h"
+#include "wast_simd.h"
 
 #ifdef WASTE_FREESTANDING
 /* Freestanding build: use only clang built-in headers; implementations
@@ -72,6 +73,8 @@ typedef struct {
     uint32_t  u32_imm;  /* for local.get */
     uint32_t  memory_index; /* memory selected by a memarg */
     uint32_t  source_memory_index; /* source memory for memory.copy */
+    uint32_t  alignment; /* memarg alignment exponent */
+    uint32_t  lane_index; /* SIMD lane immediate */
     wasm_v128 v128_imm; /* for v128.const (simd_op==12) */
     int32_t   block_type_index; /* >=0 for a block type use, -1 otherwise */
     wasm_valtype block_result_type; /* direct single-result block type */
@@ -1097,6 +1100,15 @@ static exec_status eval_constexpr(waste_exec_engine *eng,
                                               type_index);
             value.value.ref = function;
             eng->declared_funcs[function] = 1;
+        } else if (opcode == 0xfd) {
+            uint32_t simd_op;
+            const uint8_t *bytes;
+            if (!er_u32(sec, &simd_op) || simd_op != 0x0c ||
+                !er_bytes(sec, 16, &bytes))
+                return exec_fail(err, EXEC_ERROR_FORMAT,
+                                 "invalid v128 global initializer");
+            value.value.type = WASM_VALTYPE_V128;
+            memcpy(value.value.v128.bytes, bytes, 16);
         } else if (opcode == 0x6a || opcode == 0x6b || opcode == 0x6c ||
                    opcode == 0x7c || opcode == 0x7d || opcode == 0x7e) {
             wasm_valtype operand_type = opcode < 0x7c ? WASM_VALTYPE_I32 :
@@ -2412,6 +2424,91 @@ static select_validation_result validate_select_function(
                         return SELECT_VALIDATION_INCONCLUSIVE;
                 }
                 break;
+            case 0xFD: {
+                uint32_t op = instr->simd_op;
+                wast_simd_info info;
+                if (!wast_simd_get_info(op, &info))
+                    return SELECT_VALIDATION_INVALID;
+                if ((info.immediate == WAST_SIMD_IMM_MEMARG ||
+                     info.immediate == WAST_SIMD_IMM_MEMARG_LANE) &&
+                    (instr->memory_index >= eng->memory_count ||
+                     instr->alignment > info.natural_alignment))
+                    return SELECT_VALIDATION_INVALID;
+                if (op == 0x0c) {
+                    if (!select_validation_push(stack,&top,WASM_VALTYPE_V128))
+                        return SELECT_VALIDATION_INCONCLUSIVE;
+                } else if (op <= 0x0a || op == 0x5c || op == 0x5d) {
+                    if (!select_validation_unary(stack,&top,control,
+                            WASM_VALTYPE_I32,WASM_VALTYPE_V128))
+                        return SELECT_VALIDATION_INVALID;
+                } else if (op == 0x0b) {
+                    if (!select_validation_pop_type(stack,&top,control,WASM_VALTYPE_V128) ||
+                        !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32))
+                        return SELECT_VALIDATION_INVALID;
+                } else if (op >= 0x54 && op <= 0x57) {
+                    if (!select_validation_pop_type(stack,&top,control,WASM_VALTYPE_V128) ||
+                        !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
+                        !select_validation_push(stack,&top,WASM_VALTYPE_V128))
+                        return SELECT_VALIDATION_INVALID;
+                } else if (op >= 0x58 && op <= 0x5b) {
+                    if (!select_validation_pop_type(stack,&top,control,WASM_VALTYPE_V128) ||
+                        !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32))
+                        return SELECT_VALIDATION_INVALID;
+                } else if (op >= 0x0f && op <= 0x14) {
+                    wasm_valtype input = op <= 0x11 ? WASM_VALTYPE_I32 :
+                        op == 0x12 ? WASM_VALTYPE_I64 :
+                        op == 0x13 ? WASM_VALTYPE_F32 : WASM_VALTYPE_F64;
+                    if (!select_validation_unary(stack,&top,control,input,WASM_VALTYPE_V128))
+                        return SELECT_VALIDATION_INVALID;
+                } else if (op >= 0x15 && op <= 0x22) {
+                    int replace = op==0x17||op==0x1a||op==0x1c||op==0x1e||op==0x20||op==0x22;
+                    wasm_valtype scalar = op <= 0x1c ? WASM_VALTYPE_I32 :
+                        op <= 0x1e ? WASM_VALTYPE_I64 :
+                        op <= 0x20 ? WASM_VALTYPE_F32 : WASM_VALTYPE_F64;
+                    if (replace) {
+                        if (!select_validation_pop_type(stack,&top,control,scalar) ||
+                            !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_V128) ||
+                            !select_validation_push(stack,&top,WASM_VALTYPE_V128))
+                            return SELECT_VALIDATION_INVALID;
+                    } else if (!select_validation_unary(stack,&top,control,
+                                   WASM_VALTYPE_V128,scalar))
+                        return SELECT_VALIDATION_INVALID;
+                } else if (op==0x53||op==0x63||op==0x64||op==0x83||op==0x84||
+                           op==0xa3||op==0xa4||op==0xc3||op==0xc4) {
+                    if (!select_validation_unary(stack,&top,control,
+                            WASM_VALTYPE_V128,WASM_VALTYPE_I32))
+                        return SELECT_VALIDATION_INVALID;
+                } else if (op==0x6b||op==0x6c||op==0x6d||op==0x8b||op==0x8c||
+                           op==0x8d||op==0xab||op==0xac||op==0xad||op==0xcb||
+                           op==0xcc||op==0xcd) {
+                    if (!select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
+                        !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_V128) ||
+                        !select_validation_push(stack,&top,WASM_VALTYPE_V128))
+                        return SELECT_VALIDATION_INVALID;
+                } else if (op==0x52||(op>=0x105&&op<=0x10c)||op==0x113) {
+                    for (int operand=0;operand<3;operand++)
+                        if (!select_validation_pop_type(stack,&top,control,WASM_VALTYPE_V128))
+                            return SELECT_VALIDATION_INVALID;
+                    if (!select_validation_push(stack,&top,WASM_VALTYPE_V128))
+                        return SELECT_VALIDATION_INCONCLUSIVE;
+                } else {
+                    int unary = op==0x4d||op==0x5e||op==0x5f||
+                        (op>=0x60&&op<=0x62)||(op>=0x67&&op<=0x6a)||
+                        op==0x74||op==0x75||op==0x7a||(op>=0x7c&&op<=0x81)||
+                        (op>=0x87&&op<=0x8a)||op==0x94||op==0xa0||op==0xa1||
+                        (op>=0xa7&&op<=0xaa)||op==0xc0||op==0xc1||
+                        (op>=0xc7&&op<=0xca)||op==0xe0||op==0xe1||op==0xe3||
+                        op==0xec||op==0xed||op==0xef||(op>=0xf8&&op<=0xff)||
+                        (op>=0x101&&op<=0x104);
+                    int valid = unary ?
+                        select_validation_unary(stack,&top,control,
+                            WASM_VALTYPE_V128,WASM_VALTYPE_V128) :
+                        select_validation_binary(stack,&top,control,
+                            WASM_VALTYPE_V128,WASM_VALTYPE_V128);
+                    if (!valid) return SELECT_VALIDATION_INVALID;
+                }
+                break;
+            }
             case 0xFC: {
                 uint32_t sub = instr->simd_op;
                 if (sub <= 7) {
@@ -2778,19 +2875,72 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, exec_read
             /* sub_op 0x00-0x07 (sat trunc) have no immediates */
         } else if (byte == 0xFD) {
             uint32_t simd_op;
+            wast_simd_info simd_info;
             if (!er_u32(body, &simd_op)) {
                 FREE_CODE(code, code_size);
                 return exec_fail(err, EXEC_ERROR_FORMAT, "truncated SIMD op");
             }
             instr.opcode  = 0xFD;
             instr.simd_op = simd_op;
-            if (simd_op == 12) {
+            if (!wast_simd_get_info(simd_op, &simd_info)) {
+                FREE_CODE(code, code_size);
+                return exec_fail(err, EXEC_ERROR_FORMAT, "unknown SIMD opcode");
+            }
+            if (simd_info.immediate == WAST_SIMD_IMM_CONST ||
+                simd_info.immediate == WAST_SIMD_IMM_SHUFFLE) {
                 const uint8_t *imm;
                 if (!er_bytes(body, 16, &imm)) {
                     FREE_CODE(code, code_size);
-                    return exec_fail(err, EXEC_ERROR_FORMAT, "truncated v128.const");
+                    return exec_fail(err, EXEC_ERROR_FORMAT, "truncated SIMD immediate");
                 }
                 memcpy(instr.v128_imm.bytes, imm, 16);
+                if (simd_info.immediate == WAST_SIMD_IMM_SHUFFLE) {
+                    for (uint32_t lane = 0; lane < 16; lane++) {
+                        if (instr.v128_imm.bytes[lane] >= 32) {
+                            FREE_CODE(code, code_size);
+                            return exec_fail(err, EXEC_ERROR_FORMAT,
+                                             "SIMD shuffle lane out of range");
+                        }
+                    }
+                }
+            } else if (simd_info.immediate == WAST_SIMD_IMM_LANE) {
+                const uint8_t *lane;
+                if (!er_bytes(body, 1, &lane) || *lane >= simd_info.lane_count) {
+                    FREE_CODE(code, code_size);
+                    return exec_fail(err, EXEC_ERROR_FORMAT,
+                                     "SIMD lane out of range");
+                }
+                instr.lane_index = *lane;
+            } else if (simd_info.immediate == WAST_SIMD_IMM_MEMARG ||
+                       simd_info.immediate == WAST_SIMD_IMM_MEMARG_LANE) {
+                uint32_t align, offset, memory_index = 0;
+                if (!er_u32(body, &align)) {
+                    FREE_CODE(code, code_size);
+                    return exec_fail(err, EXEC_ERROR_FORMAT, "invalid SIMD memarg");
+                }
+                if (align & 0x40u) {
+                    align &= ~0x40u;
+                    if (!er_u32(body, &memory_index)) {
+                        FREE_CODE(code, code_size);
+                        return exec_fail(err, EXEC_ERROR_FORMAT, "invalid SIMD memory index");
+                    }
+                }
+                if (!er_u32(body, &offset)) {
+                    FREE_CODE(code, code_size);
+                    return exec_fail(err, EXEC_ERROR_FORMAT, "invalid SIMD offset");
+                }
+                instr.alignment = align;
+                instr.memory_index = memory_index;
+                instr.u32_imm = offset;
+                if (simd_info.immediate == WAST_SIMD_IMM_MEMARG_LANE) {
+                    const uint8_t *lane;
+                    if (!er_bytes(body, 1, &lane) || *lane >= simd_info.lane_count) {
+                        FREE_CODE(code, code_size);
+                        return exec_fail(err, EXEC_ERROR_FORMAT,
+                                         "SIMD lane out of range");
+                    }
+                    instr.lane_index = *lane;
+                }
             }
         } else if (byte == 0x0B) {
             instr.opcode = 0x0B;
@@ -3121,6 +3271,12 @@ static int stack_pop(exec_stack *s, wasm_value *out) {
     return 1;
 }
 
+static wasm_value i32_value(uint32_t bits);
+static uint32_t trunc_sat_i32_s_f32(float v);
+static uint32_t trunc_sat_i32_u_f32(float v);
+static uint32_t trunc_sat_i32_s_f64(double v);
+static uint32_t trunc_sat_i32_u_f64(double v);
+
 /* ---- v128 helpers as byte arrays ---- */
 
 static wasm_value v128_from_bytes(const uint8_t *b) {
@@ -3128,6 +3284,540 @@ static wasm_value v128_from_bytes(const uint8_t *b) {
     v.type = WASM_VALTYPE_V128;
     memcpy(v.v128.bytes, b, 16);
     return v;
+}
+
+static uint64_t simd_lane_u(const wasm_value *v, uint32_t lane,
+                            uint32_t width) {
+    uint64_t value = 0;
+    memcpy(&value, v->v128.bytes + lane * width, width);
+    return value;
+}
+
+static int64_t simd_lane_s(const wasm_value *v, uint32_t lane,
+                           uint32_t width) {
+    uint64_t value = simd_lane_u(v, lane, width);
+    if (width < 8 && (value & (UINT64_C(1) << (width * 8 - 1))))
+        value |= UINT64_MAX << (width * 8);
+    return (int64_t)value;
+}
+
+static void simd_set_lane(wasm_value *v, uint32_t lane, uint32_t width,
+                          uint64_t value) {
+    memcpy(v->v128.bytes + lane * width, &value, width);
+}
+
+static wasm_value simd_zero(void) {
+    uint8_t bytes[16] = {0};
+    return v128_from_bytes(bytes);
+}
+
+static int64_t simd_sat_s(int64_t value, uint32_t bits) {
+    int64_t min = -(INT64_C(1) << (bits - 1));
+    int64_t max = (INT64_C(1) << (bits - 1)) - 1;
+    return value < min ? min : value > max ? max : value;
+}
+
+static int simd_pop(exec_stack *stack, wasm_value *value) {
+    return stack_pop(stack, value) && value->type == WASM_VALTYPE_V128;
+}
+
+/* Execute the fixed-width integer, lane, comparison, and bitwise portion of
+ * the standard SIMD instruction set.  Returns 1 when the opcode is handled,
+ * 0 when a later SIMD family must handle it, and -1 on an execution error. */
+static int exec_standard_simd_integer(uint32_t op, uint32_t lane_index,
+                                      const wasm_v128 *immediate,
+                                      exec_stack *stack, exec_error *err) {
+    wasm_value a, b, c, out;
+    uint32_t width = 0, lanes, kind = 0;
+    uint64_t mask;
+
+    /* Splat and lane access. */
+    if (op >= 0x0f && op <= 0x14) {
+        wasm_value scalar;
+        if (!stack_pop(stack, &scalar)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "SIMD splat operand missing");
+            return -1;
+        }
+        out = simd_zero();
+        width = op <= 0x0f ? 1 : op == 0x10 ? 2 :
+                (op == 0x11 || op == 0x13) ? 4 : 8;
+        uint64_t bits = 0;
+        if (op <= 0x11) bits = (uint32_t)scalar.i32;
+        else if (op == 0x12) bits = (uint64_t)scalar.i64;
+        else if (op == 0x13) memcpy(&bits, &scalar.f32, 4);
+        else memcpy(&bits, &scalar.f64, 8);
+        for (uint32_t i = 0; i < 16 / width; i++)
+            simd_set_lane(&out, i, width, bits);
+        if (!stack_push(stack, out)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
+            return -1;
+        }
+        return 1;
+    }
+    if (op >= 0x15 && op <= 0x22) {
+        int replace = op == 0x17 || op == 0x1a || op == 0x1c ||
+                      op == 0x1e || op == 0x20 || op == 0x22;
+        width = op <= 0x17 ? 1 : op <= 0x1a ? 2 :
+                op <= 0x1c ? 4 : op <= 0x1e ? 8 :
+                op <= 0x20 ? 4 : 8;
+        if (replace) {
+            wasm_value scalar;
+            if (!stack_pop(stack, &scalar) || !simd_pop(stack, &a)) {
+                exec_fail(err, EXEC_ERROR_TRAP, "SIMD replace_lane operands missing");
+                return -1;
+            }
+            uint64_t bits = 0;
+            if (op <= 0x1c) bits = (uint32_t)scalar.i32;
+            else if (op == 0x1e) bits = (uint64_t)scalar.i64;
+            else if (op == 0x20) memcpy(&bits, &scalar.f32, 4);
+            else memcpy(&bits, &scalar.f64, 8);
+            simd_set_lane(&a, lane_index, width, bits);
+            if (!stack_push(stack, a)) {
+                exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
+                return -1;
+            }
+        } else {
+            if (!simd_pop(stack, &a)) {
+                exec_fail(err, EXEC_ERROR_TRAP, "SIMD extract_lane operand missing");
+                return -1;
+            }
+            uint64_t bits = simd_lane_u(&a, lane_index, width);
+            memset(&out, 0, sizeof(out));
+            if (op == 0x15 || op == 0x18) {
+                out.type = WASM_VALTYPE_I32;
+                out.i32 = (int32_t)simd_lane_s(&a, lane_index, width);
+            } else if (op == 0x16 || op == 0x19 || op == 0x1b) {
+                out.type = WASM_VALTYPE_I32; out.i32 = (int32_t)bits;
+            } else if (op == 0x1d) {
+                out.type = WASM_VALTYPE_I64; out.i64 = (int64_t)bits;
+            } else if (op == 0x1f) {
+                out.type = WASM_VALTYPE_F32; memcpy(&out.f32, &bits, 4);
+            } else {
+                out.type = WASM_VALTYPE_F64; memcpy(&out.f64, &bits, 8);
+            }
+            if (!stack_push(stack, out)) {
+                exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
+                return -1;
+            }
+        }
+        return 1;
+    }
+
+    if (op == 0x0d) { /* i8x16.shuffle */
+        if (!simd_pop(stack, &b) || !simd_pop(stack, &a)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "SIMD shuffle operands missing");
+            return -1;
+        }
+        out = simd_zero();
+        for (uint32_t i = 0; i < 16; i++) {
+            uint8_t index = immediate->bytes[i];
+            out.v128.bytes[i] = index < 16 ? a.v128.bytes[index] :
+                                  b.v128.bytes[index - 16];
+        }
+        if (!stack_push(stack, out)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "stack overflow"); return -1;
+        }
+        return 1;
+    }
+    if (op == 0x0e) { /* i8x16.swizzle */
+        if (!simd_pop(stack, &b) || !simd_pop(stack, &a)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "SIMD swizzle operands missing");
+            return -1;
+        }
+        out = simd_zero();
+        for (uint32_t i = 0; i < 16; i++)
+            out.v128.bytes[i] = b.v128.bytes[i] < 16 ?
+                                a.v128.bytes[b.v128.bytes[i]] : 0;
+        if (!stack_push(stack, out)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "stack overflow"); return -1;
+        }
+        return 1;
+    }
+
+    if (op >= 0x4d && op <= 0x53) {
+        if (!simd_pop(stack, &a)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "SIMD bitwise operand missing");
+            return -1;
+        }
+        if (op == 0x53) {
+            uint32_t any = 0;
+            for (uint32_t i = 0; i < 16; i++) any |= a.v128.bytes[i];
+            if (!stack_push(stack, i32_value(any != 0))) {
+                exec_fail(err, EXEC_ERROR_TRAP, "stack overflow"); return -1;
+            }
+            return 1;
+        }
+        if (op != 0x4d && (!simd_pop(stack, &b) ||
+            (op == 0x52 && !simd_pop(stack, &c)))) {
+            exec_fail(err, EXEC_ERROR_TRAP, "SIMD bitwise operands missing");
+            return -1;
+        }
+        out = simd_zero();
+        for (uint32_t i = 0; i < 16; i++) {
+            if (op == 0x4d) out.v128.bytes[i] = (uint8_t)~a.v128.bytes[i];
+            else if (op == 0x4e) out.v128.bytes[i] = b.v128.bytes[i] & a.v128.bytes[i];
+            else if (op == 0x4f) out.v128.bytes[i] = b.v128.bytes[i] & (uint8_t)~a.v128.bytes[i];
+            else if (op == 0x50) out.v128.bytes[i] = b.v128.bytes[i] | a.v128.bytes[i];
+            else if (op == 0x51) out.v128.bytes[i] = b.v128.bytes[i] ^ a.v128.bytes[i];
+            else out.v128.bytes[i] = (c.v128.bytes[i] & a.v128.bytes[i]) |
+                                     (b.v128.bytes[i] & (uint8_t)~a.v128.bytes[i]);
+        }
+        if (!stack_push(stack, out)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "stack overflow"); return -1;
+        }
+        return 1;
+    }
+
+    /* Integer comparisons. */
+    if (op >= 0x23 && op <= 0x40) {
+        if (op <= 0x2c) { width = 1; kind = op - 0x23; }
+        else if (op <= 0x36) { width = 2; kind = op - 0x2d; }
+        else { width = 4; kind = op - 0x37; }
+    } else if (op >= 0xd6 && op <= 0xdb) {
+        width = 8;
+        static const uint8_t kinds[] = {0,1,2,4,6,8};
+        kind = kinds[op - 0xd6];
+    }
+    if (width) {
+        if (!simd_pop(stack, &b) || !simd_pop(stack, &a)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "SIMD comparison operands missing");
+            return -1;
+        }
+        out = simd_zero(); lanes = 16 / width;
+        mask = width == 8 ? UINT64_MAX : (UINT64_C(1) << (width * 8)) - 1;
+        for (uint32_t i = 0; i < lanes; i++) {
+            uint64_t au = simd_lane_u(&a, i, width), bu = simd_lane_u(&b, i, width);
+            int64_t as = simd_lane_s(&a, i, width), bs = simd_lane_s(&b, i, width);
+            int yes = kind == 0 ? au == bu : kind == 1 ? au != bu :
+                      kind == 2 ? as < bs : kind == 3 ? au < bu :
+                      kind == 4 ? as > bs : kind == 5 ? au > bu :
+                      kind == 6 ? as <= bs : kind == 7 ? au <= bu :
+                      kind == 8 ? as >= bs : au >= bu;
+            simd_set_lane(&out, i, width, yes ? mask : 0);
+        }
+        if (!stack_push(stack, out)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "stack overflow"); return -1;
+        }
+        return 1;
+    }
+
+    /* Integer lane-width conversions and pairwise products. */
+    if (op == 0x65 || op == 0x66 || op == 0x85 || op == 0x86) {
+        uint32_t source_width = op <= 0x66 ? 2 : 4;
+        uint32_t dest_width = source_width / 2;
+        int signed_ = op == 0x65 || op == 0x85;
+        if (!simd_pop(stack,&b) || !simd_pop(stack,&a)) {
+            exec_fail(err,EXEC_ERROR_TRAP,"SIMD narrow operands missing");return -1;
+        }
+        out=simd_zero(); lanes=16/source_width;
+        for(uint32_t half=0;half<2;half++) for(uint32_t i=0;i<lanes;i++) {
+            wasm_value *source=half?&b:&a;
+            uint64_t r;
+            if(signed_) r=(uint64_t)simd_sat_s(simd_lane_s(source,i,source_width),dest_width*8);
+            else {
+                int64_t x=simd_lane_s(source,i,source_width);
+                uint64_t max=(UINT64_C(1)<<(dest_width*8))-1;
+                r=x<0?0:(uint64_t)x>max?max:(uint64_t)x;
+            }
+            simd_set_lane(&out,half*lanes+i,dest_width,r);
+        }
+        if(!stack_push(stack,out)){exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");return -1;}
+        return 1;
+    }
+    if ((op>=0x87&&op<=0x8a)||(op>=0xa7&&op<=0xaa)||(op>=0xc7&&op<=0xca)) {
+        uint32_t source_width=op<=0x8a?1:op<=0xaa?2:4;
+        uint32_t dest_width=source_width*2;
+        uint32_t variant=op-(op<=0x8a?0x87:op<=0xaa?0xa7:0xc7);
+        int high=(variant&1)!=0, signed_=(variant&2)==0;
+        if(!simd_pop(stack,&a)){exec_fail(err,EXEC_ERROR_TRAP,"SIMD extend operand missing");return -1;}
+        out=simd_zero();lanes=16/dest_width;
+        for(uint32_t i=0;i<lanes;i++) {
+            uint32_t source_lane=i+(high?lanes:0);
+            uint64_t r=signed_?(uint64_t)simd_lane_s(&a,source_lane,source_width):simd_lane_u(&a,source_lane,source_width);
+            simd_set_lane(&out,i,dest_width,r);
+        }
+        if(!stack_push(stack,out)){exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");return -1;}
+        return 1;
+    }
+    if ((op>=0x9c&&op<=0x9f)||(op>=0xbc&&op<=0xbf)||(op>=0xdc&&op<=0xdf)) {
+        uint32_t source_width=op<=0x9f?1:op<=0xbf?2:4;
+        uint32_t dest_width=source_width*2;
+        uint32_t variant=op-(op<=0x9f?0x9c:op<=0xbf?0xbc:0xdc);
+        int high=(variant&1)!=0, signed_=(variant&2)==0;
+        if(!simd_pop(stack,&b)||!simd_pop(stack,&a)){exec_fail(err,EXEC_ERROR_TRAP,"SIMD extmul operands missing");return -1;}
+        out=simd_zero();lanes=16/dest_width;
+        for(uint32_t i=0;i<lanes;i++) {
+            uint32_t source_lane=i+(high?lanes:0);uint64_t r;
+            if(signed_) r=(uint64_t)(simd_lane_s(&a,source_lane,source_width)*simd_lane_s(&b,source_lane,source_width));
+            else r=simd_lane_u(&a,source_lane,source_width)*simd_lane_u(&b,source_lane,source_width);
+            simd_set_lane(&out,i,dest_width,r);
+        }
+        if(!stack_push(stack,out)){exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");return -1;}
+        return 1;
+    }
+    if(op>=0x7c&&op<=0x7f) {
+        uint32_t source_width=op<=0x7d?1:2,dest_width=source_width*2;
+        int signed_=(op&1)==0;
+        if(!simd_pop(stack,&a)){exec_fail(err,EXEC_ERROR_TRAP,"SIMD pairwise operand missing");return -1;}
+        out=simd_zero();lanes=16/dest_width;
+        for(uint32_t i=0;i<lanes;i++) {
+            uint64_t r=signed_?(uint64_t)(simd_lane_s(&a,i*2,source_width)+simd_lane_s(&a,i*2+1,source_width)):
+                      simd_lane_u(&a,i*2,source_width)+simd_lane_u(&a,i*2+1,source_width);
+            simd_set_lane(&out,i,dest_width,r);
+        }
+        if(!stack_push(stack,out)){exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");return -1;}
+        return 1;
+    }
+    if(op==0x82) {
+        if(!simd_pop(stack,&b)||!simd_pop(stack,&a)){exec_fail(err,EXEC_ERROR_TRAP,"SIMD q15mulr operands missing");return -1;}
+        out=simd_zero();
+        for(uint32_t i=0;i<8;i++) {
+            int64_t r=(simd_lane_s(&a,i,2)*simd_lane_s(&b,i,2)+0x4000)>>15;
+            simd_set_lane(&out,i,2,(uint64_t)simd_sat_s(r,16));
+        }
+        if(!stack_push(stack,out)){exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");return -1;}return 1;
+    }
+    if(op==0xba) {
+        if(!simd_pop(stack,&b)||!simd_pop(stack,&a)){exec_fail(err,EXEC_ERROR_TRAP,"SIMD dot operands missing");return -1;}
+        out=simd_zero();
+        for(uint32_t i=0;i<4;i++) {
+            int64_t r=simd_lane_s(&a,i*2,2)*simd_lane_s(&b,i*2,2)+
+                      simd_lane_s(&a,i*2+1,2)*simd_lane_s(&b,i*2+1,2);
+            simd_set_lane(&out,i,4,(uint64_t)r);
+        }
+        if(!stack_push(stack,out)){exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");return -1;}return 1;
+    }
+
+    /* Regular integer lane operations. kind: abs, neg, popcnt, all_true,
+     * bitmask, shl, shr_s, shr_u, add, add_sat_s/u, sub, sub_sat_s/u,
+     * mul, min_s/u, max_s/u, avgr_u. */
+    switch (op) {
+        case 0x60: width=1;kind=1;break; case 0x61:width=1;kind=2;break;
+        case 0x62:width=1;kind=3;break; case 0x63:width=1;kind=4;break;
+        case 0x64:width=1;kind=5;break; case 0x6b:width=1;kind=6;break;
+        case 0x6c:width=1;kind=7;break; case 0x6d:width=1;kind=8;break;
+        case 0x6e:width=1;kind=9;break; case 0x6f:width=1;kind=10;break;
+        case 0x70:width=1;kind=11;break; case 0x71:width=1;kind=12;break;
+        case 0x72:width=1;kind=13;break; case 0x73:width=1;kind=14;break;
+        case 0x76:width=1;kind=16;break; case 0x77:width=1;kind=17;break;
+        case 0x78:width=1;kind=18;break; case 0x79:width=1;kind=19;break;
+        case 0x7b:width=1;kind=20;break;
+        case 0x80:width=2;kind=1;break; case 0x81:width=2;kind=2;break;
+        case 0x83:width=2;kind=4;break; case 0x84:width=2;kind=5;break;
+        case 0x8b:width=2;kind=6;break; case 0x8c:width=2;kind=7;break;
+        case 0x8d:width=2;kind=8;break; case 0x8e:width=2;kind=9;break;
+        case 0x8f:width=2;kind=10;break; case 0x90:width=2;kind=11;break;
+        case 0x91:width=2;kind=12;break; case 0x92:width=2;kind=13;break;
+        case 0x93:width=2;kind=14;break; case 0x95:width=2;kind=15;break;
+        case 0x96:width=2;kind=16;break; case 0x97:width=2;kind=17;break;
+        case 0x98:width=2;kind=18;break; case 0x99:width=2;kind=19;break;
+        case 0x9b:width=2;kind=20;break;
+        case 0xa0:width=4;kind=1;break; case 0xa1:width=4;kind=2;break;
+        case 0xa3:width=4;kind=4;break; case 0xa4:width=4;kind=5;break;
+        case 0xab:width=4;kind=6;break; case 0xac:width=4;kind=7;break;
+        case 0xad:width=4;kind=8;break; case 0xae:width=4;kind=9;break;
+        case 0xb1:width=4;kind=12;break; case 0xb5:width=4;kind=15;break;
+        case 0xb6:width=4;kind=16;break; case 0xb7:width=4;kind=17;break;
+        case 0xb8:width=4;kind=18;break; case 0xb9:width=4;kind=19;break;
+        case 0xc0:width=8;kind=1;break; case 0xc1:width=8;kind=2;break;
+        case 0xc3:width=8;kind=4;break; case 0xc4:width=8;kind=5;break;
+        case 0xcb:width=8;kind=6;break; case 0xcc:width=8;kind=7;break;
+        case 0xcd:width=8;kind=8;break; case 0xce:width=8;kind=9;break;
+        case 0xd1:width=8;kind=12;break; case 0xd5:width=8;kind=15;break;
+        default: break;
+    }
+    if (!width) return 0;
+    int unary = kind <= 5;
+    if ((kind >= 6 && kind <= 8)) {
+        if (!stack_pop(stack, &b) || b.type != WASM_VALTYPE_I32 || !simd_pop(stack, &a)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "SIMD shift operands missing"); return -1;
+        }
+    } else if (!simd_pop(stack, &b) || (!unary && !simd_pop(stack, &a))) {
+        exec_fail(err, EXEC_ERROR_TRAP, "SIMD integer operands missing"); return -1;
+    }
+    if (unary) a = b;
+    lanes = 16 / width;
+    if (kind == 4 || kind == 5) {
+        uint32_t result = kind == 4 ? 1u : 0u;
+        for (uint32_t i = 0; i < lanes; i++) {
+            uint64_t x = simd_lane_u(&a, i, width);
+            if (kind == 4) result &= x != 0;
+            else result |= (uint32_t)(x >> (width * 8 - 1)) << i;
+        }
+        if (!stack_push(stack, i32_value(result))) {
+            exec_fail(err, EXEC_ERROR_TRAP, "stack overflow"); return -1;
+        }
+        return 1;
+    }
+    out = simd_zero();
+    mask = width == 8 ? UINT64_MAX : (UINT64_C(1) << (width * 8)) - 1;
+    for (uint32_t i = 0; i < lanes; i++) {
+        uint64_t au=simd_lane_u(&a,i,width), bu=simd_lane_u(&b,i,width), r=0;
+        int64_t as=simd_lane_s(&a,i,width), bs=simd_lane_s(&b,i,width);
+        uint32_t shift = (uint32_t)b.i32 & (width * 8 - 1);
+        switch (kind) {
+            case 1: r = as < 0 ? (uint64_t)(0 - au) : au; break;
+            case 2: r = 0 - au; break;
+            case 3: r = (uint64_t)__builtin_popcount((unsigned)au); break;
+            case 6: r = au << shift; break;
+            case 7: r = (uint64_t)(as >> shift); break;
+            case 8: r = au >> shift; break;
+            case 9: r = au + bu; break;
+            case 10: r = (uint64_t)simd_sat_s(as + bs, width*8); break;
+            case 11: { uint64_t sum=au+bu; r=sum>mask?mask:sum; break; }
+            case 12: r = au - bu; break;
+            case 13: r = (uint64_t)simd_sat_s(as - bs, width*8); break;
+            case 14: r = au < bu ? 0 : au - bu; break;
+            case 15: r = au * bu; break;
+            case 16: r = (uint64_t)(as < bs ? as : bs); break;
+            case 17: r = au < bu ? au : bu; break;
+            case 18: r = (uint64_t)(as > bs ? as : bs); break;
+            case 19: r = au > bu ? au : bu; break;
+            case 20: r = (au + bu + 1) >> 1; break;
+            default: break;
+        }
+        simd_set_lane(&out, i, width, r & mask);
+    }
+    if (!stack_push(stack, out)) {
+        exec_fail(err, EXEC_ERROR_TRAP, "stack overflow"); return -1;
+    }
+    return 1;
+}
+
+static float simd_f32_minmax(float a, float b, int maximum) {
+    uint32_t ai, bi, ri;
+    memcpy(&ai, &a, 4); memcpy(&bi, &b, 4);
+    if (isnan(a) || isnan(b)) {
+        ri = UINT32_C(0x7fc00000); memcpy(&a, &ri, 4); return a;
+    }
+    if (a == 0.0f && b == 0.0f) {
+        ri = maximum ? ai & bi : ai | bi; memcpy(&a, &ri, 4); return a;
+    }
+    return maximum ? (a > b ? a : b) : (a < b ? a : b);
+}
+
+static double simd_f64_minmax(double a, double b, int maximum) {
+    uint64_t ai, bi, ri;
+    memcpy(&ai, &a, 8); memcpy(&bi, &b, 8);
+    if (isnan(a) || isnan(b)) {
+        ri = UINT64_C(0x7ff8000000000000); memcpy(&a, &ri, 8); return a;
+    }
+    if (a == 0.0 && b == 0.0) {
+        ri = maximum ? ai & bi : ai | bi; memcpy(&a, &ri, 8); return a;
+    }
+    return maximum ? (a > b ? a : b) : (a < b ? a : b);
+}
+
+static int exec_standard_simd_float(uint32_t op, exec_stack *stack,
+                                    exec_error *err) {
+    wasm_value a, b, out;
+    uint32_t width = 0, lanes = 0, kind = 0;
+
+    if (op >= 0x41 && op <= 0x46) { width=4;lanes=4;kind=op-0x41; }
+    else if (op >= 0x47 && op <= 0x4c) { width=8;lanes=2;kind=op-0x47; }
+    if (width) {
+        if (!simd_pop(stack,&b) || !simd_pop(stack,&a)) {
+            exec_fail(err,EXEC_ERROR_TRAP,"SIMD float comparison operands missing");
+            return -1;
+        }
+        out=simd_zero();
+        for (uint32_t i=0;i<lanes;i++) {
+            int yes;
+            if (width==4) {
+                float x,y; memcpy(&x,a.v128.bytes+i*4,4); memcpy(&y,b.v128.bytes+i*4,4);
+                yes=kind==0?x==y:kind==1?x!=y:kind==2?x<y:kind==3?x>y:kind==4?x<=y:x>=y;
+                simd_set_lane(&out,i,4,yes?UINT32_MAX:0);
+            } else {
+                double x,y; memcpy(&x,a.v128.bytes+i*8,8); memcpy(&y,b.v128.bytes+i*8,8);
+                yes=kind==0?x==y:kind==1?x!=y:kind==2?x<y:kind==3?x>y:kind==4?x<=y:x>=y;
+                simd_set_lane(&out,i,8,yes?UINT64_MAX:0);
+            }
+        }
+        if (!stack_push(stack,out)) { exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");return -1; }
+        return 1;
+    }
+
+    /* Unary rounding/arithmetic operations. */
+    switch(op) {
+        case 0x67:width=4;kind=1;break; case 0x68:width=4;kind=2;break;
+        case 0x69:width=4;kind=3;break; case 0x6a:width=4;kind=4;break;
+        case 0x74:width=8;kind=1;break; case 0x75:width=8;kind=2;break;
+        case 0x7a:width=8;kind=3;break; case 0x94:width=8;kind=4;break;
+        case 0xe0:width=4;kind=5;break; case 0xe1:width=4;kind=6;break;
+        case 0xe3:width=4;kind=7;break; case 0xec:width=8;kind=5;break;
+        case 0xed:width=8;kind=6;break; case 0xef:width=8;kind=7;break;
+        default:break;
+    }
+    if (width) {
+        if (!simd_pop(stack,&a)) { exec_fail(err,EXEC_ERROR_TRAP,"SIMD float operand missing");return -1; }
+        out=simd_zero(); lanes=16/width;
+        for(uint32_t i=0;i<lanes;i++) {
+            if(width==4) {
+                float x,r; uint32_t bits;
+                memcpy(&x,a.v128.bytes+i*4,4);
+                if(kind==5) { memcpy(&bits,&x,4);bits&=UINT32_C(0x7fffffff);memcpy(&r,&bits,4); }
+                else if(kind==6) { memcpy(&bits,&x,4);bits^=UINT32_C(0x80000000);memcpy(&r,&bits,4); }
+                else r=kind==1?ceilf(x):kind==2?floorf(x):kind==3?truncf(x):kind==4?nearbyintf(x):sqrtf(x);
+                memcpy(out.v128.bytes+i*4,&r,4);
+            } else {
+                double x,r; uint64_t bits;
+                memcpy(&x,a.v128.bytes+i*8,8);
+                if(kind==5) { memcpy(&bits,&x,8);bits&=UINT64_C(0x7fffffffffffffff);memcpy(&r,&bits,8); }
+                else if(kind==6) { memcpy(&bits,&x,8);bits^=UINT64_C(0x8000000000000000);memcpy(&r,&bits,8); }
+                else r=kind==1?ceil(x):kind==2?floor(x):kind==3?trunc(x):kind==4?nearbyint(x):sqrt(x);
+                memcpy(out.v128.bytes+i*8,&r,8);
+            }
+        }
+        if(!stack_push(stack,out)){exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");return -1;}
+        return 1;
+    }
+
+    /* Binary float arithmetic. */
+    if(op>=0xe4&&op<=0xeb){width=4;kind=op-0xe4;}
+    else if(op>=0xf0&&op<=0xf7){width=8;kind=op-0xf0;}
+    if(width) {
+        if(!simd_pop(stack,&b)||!simd_pop(stack,&a)){exec_fail(err,EXEC_ERROR_TRAP,"SIMD float operands missing");return -1;}
+        out=simd_zero();lanes=16/width;
+        for(uint32_t i=0;i<lanes;i++) {
+            if(width==4) {
+                float x,y,r;memcpy(&x,a.v128.bytes+i*4,4);memcpy(&y,b.v128.bytes+i*4,4);
+                if(kind==0)r=x+y;else if(kind==1)r=x-y;else if(kind==2)r=x*y;else if(kind==3)r=x/y;
+                else if(kind==4)r=simd_f32_minmax(x,y,0);else if(kind==5)r=simd_f32_minmax(x,y,1);
+                else if(kind==6)r=y<x?y:x;else r=x<y?y:x;
+                memcpy(out.v128.bytes+i*4,&r,4);
+            } else {
+                double x,y,r;memcpy(&x,a.v128.bytes+i*8,8);memcpy(&y,b.v128.bytes+i*8,8);
+                if(kind==0)r=x+y;else if(kind==1)r=x-y;else if(kind==2)r=x*y;else if(kind==3)r=x/y;
+                else if(kind==4)r=simd_f64_minmax(x,y,0);else if(kind==5)r=simd_f64_minmax(x,y,1);
+                else if(kind==6)r=y<x?y:x;else r=x<y?y:x;
+                memcpy(out.v128.bytes+i*8,&r,8);
+            }
+        }
+        if(!stack_push(stack,out)){exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");return -1;}
+        return 1;
+    }
+
+    /* Numeric vector conversions. */
+    if(op==0x5e||op==0x5f||(op>=0xf8&&op<=0xff)) {
+        if(!simd_pop(stack,&a)){exec_fail(err,EXEC_ERROR_TRAP,"SIMD conversion operand missing");return -1;}
+        out=simd_zero();
+        if(op==0x5e) {
+            for(uint32_t i=0;i<2;i++){double x;float r;memcpy(&x,a.v128.bytes+i*8,8);r=(float)x;memcpy(out.v128.bytes+i*4,&r,4);}
+        } else if(op==0x5f) {
+            for(uint32_t i=0;i<2;i++){float x;double r;memcpy(&x,a.v128.bytes+i*4,4);r=(double)x;memcpy(out.v128.bytes+i*8,&r,8);}
+        } else if(op==0xf8||op==0xf9) {
+            for(uint32_t i=0;i<4;i++){float x;uint32_t r;memcpy(&x,a.v128.bytes+i*4,4);r=op==0xf8?trunc_sat_i32_s_f32(x):trunc_sat_i32_u_f32(x);simd_set_lane(&out,i,4,r);}
+        } else if(op==0xfa||op==0xfb) {
+            for(uint32_t i=0;i<4;i++){uint32_t x=(uint32_t)simd_lane_u(&a,i,4);float r=op==0xfa?(float)(int32_t)x:(float)x;memcpy(out.v128.bytes+i*4,&r,4);}
+        } else if(op==0xfc||op==0xfd) {
+            for(uint32_t i=0;i<2;i++){double x;uint32_t r;memcpy(&x,a.v128.bytes+i*8,8);r=op==0xfc?trunc_sat_i32_s_f64(x):trunc_sat_i32_u_f64(x);simd_set_lane(&out,i,4,r);}
+        } else {
+            for(uint32_t i=0;i<2;i++){uint32_t x=(uint32_t)simd_lane_u(&a,i,4);double r=op==0xfe?(double)(int32_t)x:(double)x;memcpy(out.v128.bytes+i*8,&r,8);}
+        }
+        if(!stack_push(stack,out)){exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");return -1;}
+        return 1;
+    }
+    return 0;
 }
 
 /* i8x16.relaxed_laneselect: bitselect */
@@ -4849,6 +5539,74 @@ tail_entry:
                     return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
                 continue;
             }
+
+            if (op <= 0x0b || (op >= 0x54 && op <= 0x5d)) {
+                wasm_value base, vector, out;
+                uint32_t address, width = 16;
+                int lane_memory = op >= 0x54 && op <= 0x5b;
+                int store = op == 0x0b || (op >= 0x58 && op <= 0x5b);
+                if (instr->memory_index >= eng->memory_count)
+                    return exec_fail(err,EXEC_ERROR_TRAP,"memory index out of range");
+                exec_memory *memory = eng->memories[instr->memory_index];
+                if (lane_memory || store) {
+                    if (!simd_pop(&stack,&vector) || !stack_pop(&stack,&base) ||
+                        base.type != WASM_VALTYPE_I32)
+                        return exec_fail(err,EXEC_ERROR_TRAP,"SIMD memory operands missing");
+                } else if (!stack_pop(&stack,&base) || base.type != WASM_VALTYPE_I32) {
+                    return exec_fail(err,EXEC_ERROR_TRAP,"SIMD memory address missing");
+                }
+                if (lane_memory) width = UINT32_C(1) << ((op - 0x54) & 3u);
+                else if (op == 0x01 || op == 0x02) width=8;
+                else if (op == 0x03 || op == 0x04) width=8;
+                else if (op == 0x05 || op == 0x06) width=8;
+                else if (op >= 0x07 && op <= 0x0a) width=UINT32_C(1)<<(op-0x07);
+                else if (op == 0x5c) width=4;
+                else if (op == 0x5d) width=8;
+                exec_status mem_status=memory_address(memory,(uint32_t)base.i32,
+                    instr->u32_imm,width,&address,err);
+                if(mem_status!=EXEC_OK)return mem_status;
+                if(store) {
+                    if(lane_memory) {
+                        uint32_t lane_width=UINT32_C(1)<<((op-0x58)&3u);
+                        memcpy(memory->data+address,
+                               vector.v128.bytes+instr->lane_index*lane_width,
+                               lane_width);
+                    } else memcpy(memory->data+address,vector.v128.bytes,16);
+                    continue;
+                }
+                if(lane_memory) {
+                    memcpy(vector.v128.bytes+instr->lane_index*width,
+                           memory->data+address,width);
+                    if(!stack_push(&stack,vector))return exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");
+                    continue;
+                }
+                out=simd_zero();
+                if(op==0x00) memcpy(out.v128.bytes,memory->data+address,16);
+                else if(op>=0x01&&op<=0x06) {
+                    uint32_t source_width=op<=0x02?1:op<=0x04?2:4;
+                    uint32_t dest_width=source_width*2;
+                    int signed_=(op&1)!=0;
+                    for(uint32_t i=0;i<16/dest_width;i++) {
+                        uint64_t raw=0;memcpy(&raw,memory->data+address+i*source_width,source_width);
+                        if(signed_&&source_width<8&&(raw&(UINT64_C(1)<<(source_width*8-1))))
+                            raw|=UINT64_MAX<<(source_width*8);
+                        simd_set_lane(&out,i,dest_width,raw);
+                    }
+                } else if(op>=0x07&&op<=0x0a) {
+                    uint64_t raw=0;memcpy(&raw,memory->data+address,width);
+                    for(uint32_t i=0;i<16/width;i++)simd_set_lane(&out,i,width,raw);
+                } else memcpy(out.v128.bytes,memory->data+address,width);
+                if(!stack_push(&stack,out))return exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");
+                continue;
+            }
+
+            int standard_simd = exec_standard_simd_integer(
+                op, instr->lane_index, &instr->v128_imm, &stack, err);
+            if (standard_simd < 0) return err->status;
+            if (standard_simd > 0) continue;
+            standard_simd = exec_standard_simd_float(op, &stack, err);
+            if (standard_simd < 0) return err->status;
+            if (standard_simd > 0) continue;
 
             /* SIMD ops that take operands from the stack */
             wasm_value a, b, c;

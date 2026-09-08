@@ -22,8 +22,8 @@ WAST_TAB_NATIVE_O := $(WAST_BUILD_DIR)/wast.tab.native.o
 WAST_LEX_NATIVE_O := $(WAST_BUILD_DIR)/wast.lex.native.o
 WAST_TAB_WASM_O := $(WAST_BUILD_DIR)/wast.tab.wasm.o
 WAST_LEX_WASM_O := $(WAST_BUILD_DIR)/wast.lex.wasm.o
-WAST_SOURCES := main_wast.c waste_exec.c wast_encode.c wast_runner.c wast_stream.c wast_general.c
-WAST_HEADERS := wast_types.h wast_encode.h waste_exec.h wast_runner.h wast_stream.h wast_general.h
+WAST_SOURCES := main_wast.c waste_exec.c wast_encode.c wast_runner.c wast_stream.c wast_general.c wast_simd.c
+WAST_HEADERS := wast_types.h wast_encode.h waste_exec.h wast_runner.h wast_stream.h wast_general.h wast_simd.h
 WAST_GENERATED_CFLAGS ?= -O2 -std=c11 -Wall -Wextra -Wno-unused-but-set-variable
 WAST_LEX_CFLAGS ?= -O2 -std=c11 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -Wno-unused-function -Wno-unused-parameter -Wno-sign-compare
 
@@ -68,11 +68,11 @@ WAST_MMAP_TEST := $(WAST_BUILD_DIR)/wast-mmap-test
 
 wast-mmap-test: $(WAST_MMAP_TEST)
 
-$(WAST_MMAP_TEST): wast_mmap_test.c wast_runner.c wast_encode.c waste_exec.c wast_stream.c wast_general.c \
+$(WAST_MMAP_TEST): wast_mmap_test.c wast_runner.c wast_encode.c waste_exec.c wast_stream.c wast_general.c wast_simd.c \
 		$(WAST_HEADERS) $(WAST_TAB_NATIVE_O) $(WAST_LEX_NATIVE_O)
 	mkdir -p $(WAST_BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I. -I$(WAST_GEN_DIR) \
-		wast_mmap_test.c wast_runner.c wast_encode.c waste_exec.c wast_stream.c wast_general.c \
+		wast_mmap_test.c wast_runner.c wast_encode.c waste_exec.c wast_stream.c wast_general.c wast_simd.c \
 		$(WAST_TAB_NATIVE_O) $(WAST_LEX_NATIVE_O) -lm -o $@
 
 # Generate Bison parser (tab.c and tab.h)
@@ -142,7 +142,7 @@ WASM_CC_FLAGS := --target=wasm32 -O2 -std=c11 -Wall -Wextra \
 	-fno-builtin -DWASTE_FREESTANDING -DYYDEBUG=0 -nostdlib \
 	-I. -Ifreestanding
 
-$(WAST_WASM_TARGET): browser_wast.c waste_exec.c wast_general.c wast_runner.c wast_encode.c wast_stream.c \
+$(WAST_WASM_TARGET): browser_wast.c waste_exec.c wast_general.c wast_runner.c wast_encode.c wast_stream.c wast_simd.c \
 		$(WAST_TAB_C) $(WAST_LEX_C) $(WAST_HEADERS) waste_exec.h
 	mkdir -p $(WAST_BUILD_DIR)
 	clang $(WASM_CC_FLAGS) \
@@ -157,6 +157,8 @@ $(WAST_WASM_TARGET): browser_wast.c waste_exec.c wast_general.c wast_runner.c wa
 		-c wast_encode.c -o $(WAST_BUILD_DIR)/wast_encode.o
 	clang $(WASM_CC_FLAGS) \
 		-c wast_stream.c -o $(WAST_BUILD_DIR)/wast_stream.o
+	clang $(WASM_CC_FLAGS) \
+		-c wast_simd.c -o $(WAST_BUILD_DIR)/wast_simd.o
 	clang $(WASM_CC_FLAGS) -I$(WAST_GEN_DIR) \
 		-Wno-unused-but-set-variable \
 		-c $(WAST_TAB_C) -o $(WAST_TAB_WASM_O)
@@ -168,6 +170,7 @@ $(WAST_WASM_TARGET): browser_wast.c waste_exec.c wast_general.c wast_runner.c wa
 		$(WAST_BUILD_DIR)/browser_wast.o $(WAST_BUILD_DIR)/waste_exec.o \
 		$(WAST_BUILD_DIR)/wast_general.o $(WAST_BUILD_DIR)/wast_runner.o \
 		$(WAST_BUILD_DIR)/wast_encode.o $(WAST_BUILD_DIR)/wast_stream.o \
+		$(WAST_BUILD_DIR)/wast_simd.o \
 		$(WAST_TAB_WASM_O) $(WAST_LEX_WASM_O) \
 		-o $(WAST_WASM_TARGET)
 

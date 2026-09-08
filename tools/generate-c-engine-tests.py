@@ -285,7 +285,7 @@ HTML = r'''<!doctype html>
   <main>
     <div class="notice">
       Tests run in Web Workers using the pre-compiled C engine (<code>waste-wast.wasm</code>).
-      Each test file gets its own Worker instance. Relaxed-SIMD assertions use the WASTE C executor.
+      Each test file gets its own Worker instance. Official WAST assertions use the WASTE C executor.
       Repository DIY modules are assembled ahead of time and execute in the browser Wasm tier with
       a sandbox-local compatibility kernel while the corresponding C executor support is developed.
       Unsupported WAST syntax and engine features are reported as failures, never passes.

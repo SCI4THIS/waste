@@ -73,15 +73,17 @@ boundaries needed for pause, signals, and blocking operations.
 
 ## WAST Core-Module Encoder Status
 
-### Current browser conformance baseline (2026-09-07)
+### Current browser conformance baseline (2026-09-08)
 
 The Wasm-compiled C WAST engine now passes all 97 top-level
 `submodules/wasm-spec/test/core/*.wast` files through the self-contained
 browser harness.  The separate multi-memory proposal suite also passes all 41
 `submodules/wasm-spec/test/core/multi-memory/*.wast` files natively and through
-the same browser worker.  Later paragraphs in this section preserve the
-incremental implementation history; their smaller pass counts are no longer
-the current baseline.
+the same browser worker.  The core SIMD suite passes all 59
+`submodules/wasm-spec/test/core/simd/*.wast` files (25,515 assertions) both
+natively and through the freestanding browser engine.  Later paragraphs in
+this section preserve the incremental implementation history; their smaller
+pass counts are no longer the current baseline.
 
 The multi-memory work adds deterministic folded load/store boundaries, indexed
 load/store/size/grow and bulk-memory encoding, named data-segment resolution,
@@ -97,6 +99,25 @@ python3 tools/generate-c-engine-tests.py \
   --output build/c-engine/browser-tests-c-engine-multi-memory.html
 node tests/c-engine-browser-runtime.cjs \
   build/c-engine/browser-tests-c-engine-multi-memory.html
+```
+
+The SIMD implementation shares one mnemonic/opcode/immediate table between
+the text encoder and binary decoder.  Its deterministic grammar boundaries
+separate lane, shuffle, and memory immediates while leaving operand and result
+checking in the C validator.  It covers standard vector integer and floating
+operations, conversions, lane-width operations, and SIMD memory accesses.
+Reproduce the dedicated offline browser gate with:
+
+```sh
+make -C src/c-engine WAST_BUILD_DIR=../../build/c-engine wast-native wast-browser
+python3 tools/generate-c-engine-tests.py \
+  --runner build/c-engine/waste-wast \
+  --wasm build/c-engine/waste-wast.wasm \
+  --tests submodules/wasm-spec/test/core/simd \
+  --count \
+  --output build/c-engine/browser-tests-c-engine-simd.html
+node tests/c-engine-browser-runtime.cjs \
+  build/c-engine/browser-tests-c-engine-simd.html
 ```
 
 The developing WAST path now uses dynamically grown per-module function

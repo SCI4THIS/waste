@@ -119,8 +119,8 @@ DIGIT       [0-9]
 HEXDIGIT    [0-9a-fA-F]
 WS          [ \t\r\n]+
 ATOM_CHAR   [a-zA-Z0-9_.+\-*/\\^~=<>!?@#$%&|:`']
-NUM         {DIGIT}(_*{DIGIT})*
-HEXNUM      {HEXDIGIT}(_*{HEXDIGIT})*
+NUM         {DIGIT}(_?{DIGIT})*
+HEXNUM      {HEXDIGIT}(_?{HEXDIGIT})*
 MEMOP       (i32\.load|i64\.load|f32\.load|f64\.load|i32\.load8_s|i32\.load8_u|i32\.load16_s|i32\.load16_u|i64\.load8_s|i64\.load8_u|i64\.load16_s|i64\.load16_u|i64\.load32_s|i64\.load32_u|i32\.store|i64\.store|f32\.store|f64\.store|i32\.store8|i32\.store16|i64\.store8|i64\.store16|i64\.store32)
 
 %%
@@ -193,6 +193,17 @@ MEMOP       (i32\.load|i64\.load|f32\.load|f64\.load|i32\.load8_s|i32\.load8_u|i
     size_t n = strlen(p); if (n >= sizeof(yylval->str_val)) n = sizeof(yylval->str_val)-1;
     memcpy(yylval->str_val, p, n); yylval->str_val[n] = '\0';
     yyextra->fold_depth++;
+    wast_simd_info simd;
+    if (wast_simd_lookup(yylval->str_val, &simd)) {
+        if (simd.immediate == WAST_SIMD_IMM_MEMARG)
+            return FOLD_SIMD_MEM_START;
+        if (simd.immediate == WAST_SIMD_IMM_MEMARG_LANE)
+            return FOLD_SIMD_MEM_LANE_START;
+        if (simd.immediate == WAST_SIMD_IMM_LANE)
+            return FOLD_SIMD_LANE_START;
+        if (simd.immediate == WAST_SIMD_IMM_SHUFFLE)
+            return FOLD_SIMD_SHUFFLE_START;
+    }
     return FOLD_ATOM_START;
 }
 
@@ -431,7 +442,7 @@ inf             { return KW_INF; }
     /* +0xHEX positive hex integer literal */
     const char *s = strip_underscores(yytext + 1); /* skip + */
     yylval->i64_val = (int64_t)strtoull(s, NULL, 16);
-    return HEXINT;
+    return POSINT;
 }
 
 -?{NUM}  {
@@ -447,7 +458,7 @@ inf             { return KW_INF; }
     /* +N positive decimal integer literal */
     const char *s = strip_underscores(yytext + 1); /* skip + */
     yylval->i64_val = (int64_t)strtoull(s, NULL, 10);
-    return INT;
+    return POSINT;
 }
 
     /* Hex float literals (with dot or exponent) — must beat ATOM rule */
@@ -458,12 +469,6 @@ inf             { return KW_INF; }
 }
 
 [+-]?0x{HEXNUM}+"."{HEXNUM}*  {
-    const char *s = strip_underscores(yytext);
-    yylval->f64_val = strtod(s, NULL);
-    return FLOAT;
-}
-
--?0x{HEXNUM}*("."{HEXNUM}*)?([pP][+-]?{NUM})?  {
     const char *s = strip_underscores(yytext);
     yylval->f64_val = strtod(s, NULL);
     return FLOAT;
@@ -488,6 +493,10 @@ inf             { return KW_INF; }
     if (n >= sizeof(yylval->str_val)) n = sizeof(yylval->str_val) - 1;
     memcpy(yylval->str_val, yytext, n);
     yylval->str_val[n] = '\0';
+    wast_simd_info simd;
+    if (wast_simd_lookup(yylval->str_val, &simd) &&
+        simd.immediate == WAST_SIMD_IMM_SHUFFLE)
+        return SIMD_SHUFFLE_OP;
     return OP;
 }
 
