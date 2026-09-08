@@ -71,6 +71,7 @@ typedef struct {
     uint32_t  simd_op;  /* for SIMD ops */
     uint32_t  u32_imm;  /* for local.get */
     uint32_t  memory_index; /* memory selected by a memarg */
+    uint32_t  source_memory_index; /* source memory for memory.copy */
     wasm_v128 v128_imm; /* for v128.const (simd_op==12) */
     int32_t   block_type_index; /* >=0 for a block type use, -1 otherwise */
     wasm_valtype block_result_type; /* direct single-result block type */
@@ -189,6 +190,11 @@ struct waste_exec_engine {
     wasm_valtype    elem_types[WAST_MAX_ELEM_SEGS];
     uint8_t         elem_dropped[WAST_MAX_ELEM_SEGS];
     uint32_t        elem_count;
+    /* Passive data segments (for memory.init / data.drop) */
+    uint8_t        *data_segs[WAST_MAX_DATA_SEGS];
+    uint32_t        data_seg_lengths[WAST_MAX_DATA_SEGS];
+    uint8_t         data_dropped[WAST_MAX_DATA_SEGS];
+    uint32_t        data_count;
     uint8_t         instantiation_trapped;
     char            instantiation_error[256];
     wasm_value      *local_frames[EXEC_MAX_CALL_DEPTH];
@@ -1213,12 +1219,23 @@ static exec_status parse_data(waste_exec_engine *eng, exec_reader *sec, exec_err
     if (!er_u32(sec, &count)) return exec_fail(err, EXEC_ERROR_FORMAT, "invalid data count");
     if (eng->has_data_count && count != eng->declared_data_count)
         return exec_fail(err, EXEC_ERROR_FORMAT, "data count mismatch");
+    if (count > WAST_MAX_DATA_SEGS)
+        return exec_fail(err, EXEC_ERROR_FORMAT, "too many data segments");
+    eng->data_count = count;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t mode, memory_index = 0, length, offset;
         const uint8_t *data;
         if (!er_u32(sec, &mode)) return exec_fail(err, EXEC_ERROR_FORMAT, "invalid data segment");
         if (mode == 1) {
-            if (!er_u32(sec, &length) || !er_bytes(sec, length, &data)) return exec_fail(err, EXEC_ERROR_FORMAT, "invalid passive data");
+            /* passive segment — save bytes for memory.init */
+            if (!er_u32(sec, &length) || !er_bytes(sec, length, &data))
+                return exec_fail(err, EXEC_ERROR_FORMAT, "invalid passive data");
+            if (length) {
+                eng->data_segs[i] = (uint8_t *)malloc(length);
+                if (!eng->data_segs[i]) return exec_fail(err, EXEC_ERROR_FORMAT, "out of memory");
+                memcpy(eng->data_segs[i], data, length);
+            }
+            eng->data_seg_lengths[i] = length;
             continue;
         }
         if (mode == 2 && !er_u32(sec, &memory_index)) return exec_fail(err, EXEC_ERROR_FORMAT, "invalid data memory");
@@ -1244,6 +1261,8 @@ static exec_status parse_data(waste_exec_engine *eng, exec_reader *sec, exec_err
         } else if (!eng->instantiation_trapped) {
             memcpy(memory->data + offset, data, length);
         }
+        /* active segments are considered dropped after instantiation */
+        eng->data_dropped[i] = 1;
     }
     return EXEC_OK;
 }
@@ -2404,22 +2423,31 @@ static select_validation_result validate_select_function(
                     if (!select_validation_unary(stack, &top, control, from, to))
                         return SELECT_VALIDATION_INVALID;
                 } else if (sub == 10) { /* memory.copy: [i32 i32 i32] -> [] */
-                    if (!select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
+                    uint32_t src_mem = instr->source_memory_index;
+                    if (instr->memory_index >= eng->memory_count ||
+                        src_mem >= eng->memory_count ||
+                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
                         !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
                         !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32))
                         return SELECT_VALIDATION_INVALID;
                 } else if (sub == 11) { /* memory.fill: [i32 i32 i32] -> [] */
-                    if (!select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
+                    if (instr->memory_index >= eng->memory_count ||
+                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
                         !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
                         !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32))
                         return SELECT_VALIDATION_INVALID;
                 } else if (sub == 8) { /* memory.init: [i32 i32 i32] -> [] */
-                    if (!select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
+                    if (instr->memory_index >= eng->memory_count ||
+                        !eng->has_data_count ||
+                        instr->u32_imm >= eng->declared_data_count ||
+                        !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
                         !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
                         !select_validation_pop_type(stack, &top, control, WASM_VALTYPE_I32))
                         return SELECT_VALIDATION_INVALID;
                 } else if (sub == 9) { /* data.drop: [] -> [] */
-                    /* no stack effect */
+                    if (!eng->has_data_count ||
+                        instr->u32_imm >= eng->declared_data_count)
+                        return SELECT_VALIDATION_INVALID;
                 } else if (sub == 12) { /* table.init: [i32 i32 i32] -> [] */
                     uint32_t table_index = instr->v128_imm.bytes[0];
                     if (instr->u32_imm >= eng->elem_count ||
@@ -2708,15 +2736,19 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, exec_read
             instr.simd_op = sub_op;
             if (sub_op >= 8 && sub_op <= 11) {
                 /* memory.init / data.drop / memory.copy / memory.fill */
-                uint32_t seg, mem;
-                if (sub_op == 10) { /* memory.copy: two mem indices */
+                uint32_t seg = 0, mem = 0;
+                if (sub_op == 10) { /* memory.copy: dst mem, src mem */
                     if (!er_u32(body,&mem)||!er_u32(body,&seg)) { FREE_CODE(code, code_size); return exec_fail(err,EXEC_ERROR_FORMAT,"invalid memory.copy"); }
+                    instr.memory_index = mem;
+                    instr.source_memory_index = seg;
                 } else if (sub_op == 11) { /* memory.fill: one mem index */
                     if (!er_u32(body,&mem)) { FREE_CODE(code, code_size); return exec_fail(err,EXEC_ERROR_FORMAT,"invalid memory.fill"); }
+                    instr.memory_index = mem;
                 } else if (sub_op == 8) { /* memory.init: seg, mem */
                     if (!er_u32(body,&seg)||!er_u32(body,&mem)) { FREE_CODE(code, code_size); return exec_fail(err,EXEC_ERROR_FORMAT,"invalid memory.init"); }
                     eng->uses_data_count_instruction = 1;
                     instr.u32_imm = seg;
+                    instr.memory_index = mem;
                 } else { /* data.drop: seg */
                     if (!er_u32(body,&seg)) { FREE_CODE(code, code_size); return exec_fail(err,EXEC_ERROR_FORMAT,"invalid data.drop"); }
                     eng->uses_data_count_instruction = 1;
@@ -2971,6 +3003,8 @@ void exec_free(waste_exec_engine *eng) {
         free(eng->local_frames[i]);
     for (uint32_t i = 0; i < eng->elem_count; i++)
         free(eng->elem_values[i]);
+    for (uint32_t i = 0; i < eng->data_count; i++)
+        free(eng->data_segs[i]);
     for (uint32_t i = 0; i < eng->func_count; i++) {
         if (eng->funcs[i].code) {
             /* Free br_table depth arrays */
@@ -4663,21 +4697,51 @@ tail_entry:
                 wasm_value n_v, src_v, dst_v;
                 if (!stack_pop(&stack,&n_v)||!stack_pop(&stack,&src_v)||!stack_pop(&stack,&dst_v))
                     return exec_fail(err,EXEC_ERROR_TRAP,"memory.copy operands missing");
-                if (!eng->memory) return exec_fail(err,EXEC_ERROR_TRAP,"no memory");
+                if (instr->memory_index >= eng->memory_count ||
+                    instr->source_memory_index >= eng->memory_count)
+                    return exec_fail(err,EXEC_ERROR_TRAP,"memory index out of range");
+                exec_memory *dst_memory = eng->memories[instr->memory_index];
+                exec_memory *src_memory = eng->memories[instr->source_memory_index];
                 uint32_t dst=(uint32_t)dst_v.i32,src=(uint32_t)src_v.i32,n=(uint32_t)n_v.i32;
-                uint64_t mem_size=(uint64_t)eng->memory->pages*EXEC_PAGE_SIZE;
-                if ((uint64_t)dst+n>mem_size||(uint64_t)src+n>mem_size)
+                uint64_t dst_size=(uint64_t)dst_memory->pages*EXEC_PAGE_SIZE;
+                uint64_t src_size=(uint64_t)src_memory->pages*EXEC_PAGE_SIZE;
+                if ((uint64_t)dst+n>dst_size||(uint64_t)src+n>src_size)
                     return exec_fail(err,EXEC_ERROR_TRAP,"out of bounds memory access");
-                memmove(eng->memory->data+dst,eng->memory->data+src,n);
+                if (dst_memory == src_memory)
+                    memmove(dst_memory->data+dst,src_memory->data+src,n);
+                else if (n)
+                    memcpy(dst_memory->data+dst,src_memory->data+src,n);
             } else if (sub == 11) { /* memory.fill */
                 wasm_value n_v, val_v, dst_v;
                 if (!stack_pop(&stack,&n_v)||!stack_pop(&stack,&val_v)||!stack_pop(&stack,&dst_v))
                     return exec_fail(err,EXEC_ERROR_TRAP,"memory.fill operands missing");
-                if (!eng->memory) return exec_fail(err,EXEC_ERROR_TRAP,"no memory");
+                if (instr->memory_index >= eng->memory_count)
+                    return exec_fail(err,EXEC_ERROR_TRAP,"memory index out of range");
+                exec_memory *memory = eng->memories[instr->memory_index];
                 uint32_t dst=(uint32_t)dst_v.i32,n=(uint32_t)n_v.i32;
-                uint64_t mem_size=(uint64_t)eng->memory->pages*EXEC_PAGE_SIZE;
+                uint64_t mem_size=(uint64_t)memory->pages*EXEC_PAGE_SIZE;
                 if ((uint64_t)dst+n>mem_size) return exec_fail(err,EXEC_ERROR_TRAP,"out of bounds memory access");
-                memset(eng->memory->data+dst,(uint8_t)val_v.i32,n);
+                memset(memory->data+dst,(uint8_t)val_v.i32,n);
+            } else if (sub == 8) { /* memory.init */
+                wasm_value n_v, src_v, dst_v;
+                if (!stack_pop(&stack,&n_v)||!stack_pop(&stack,&src_v)||!stack_pop(&stack,&dst_v))
+                    return exec_fail(err,EXEC_ERROR_TRAP,"memory.init operands missing");
+                if (instr->memory_index >= eng->memory_count ||
+                    instr->u32_imm >= eng->data_count)
+                    return exec_fail(err,EXEC_ERROR_TRAP,"memory.init index out of range");
+                exec_memory *memory = eng->memories[instr->memory_index];
+                uint32_t dst=(uint32_t)dst_v.i32,src=(uint32_t)src_v.i32,n=(uint32_t)n_v.i32;
+                uint32_t data_length = eng->data_dropped[instr->u32_imm] ? 0 :
+                    eng->data_seg_lengths[instr->u32_imm];
+                uint64_t mem_size=(uint64_t)memory->pages*EXEC_PAGE_SIZE;
+                if ((uint64_t)dst+n>mem_size || (uint64_t)src+n>data_length)
+                    return exec_fail(err,EXEC_ERROR_TRAP,"out of bounds memory access");
+                if (n)
+                    memcpy(memory->data+dst,eng->data_segs[instr->u32_imm]+src,n);
+            } else if (sub == 9) { /* data.drop */
+                if (instr->u32_imm >= eng->data_count)
+                    return exec_fail(err,EXEC_ERROR_TRAP,"data segment index out of range");
+                eng->data_dropped[instr->u32_imm] = 1;
             } else if (sub == 12) { /* table.init */
                 wasm_value n_v, src_v, dst_v;
                 if (!stack_pop(&stack, &n_v) || !stack_pop(&stack, &src_v) ||
@@ -4768,7 +4832,7 @@ tail_entry:
                 else { fill_el.owner=eng; fill_el.func_idx=val_v.ref; }
                 for (uint32_t i=0;i<n;i++) tbl->elements[dst+i]=fill_el;
             } else {
-                /* Other 0xFC ops (memory.init, data.drop, table.init, elem.drop) — ignore */
+                /* Unsupported 0xFC operation. */
             }
             continue;
         }

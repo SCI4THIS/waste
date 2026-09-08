@@ -73,6 +73,32 @@ boundaries needed for pause, signals, and blocking operations.
 
 ## WAST Core-Module Encoder Status
 
+### Current browser conformance baseline (2026-09-07)
+
+The Wasm-compiled C WAST engine now passes all 97 top-level
+`submodules/wasm-spec/test/core/*.wast` files through the self-contained
+browser harness.  The separate multi-memory proposal suite also passes all 41
+`submodules/wasm-spec/test/core/multi-memory/*.wast` files natively and through
+the same browser worker.  Later paragraphs in this section preserve the
+incremental implementation history; their smaller pass counts are no longer
+the current baseline.
+
+The multi-memory work adds deterministic folded load/store boundaries, indexed
+load/store/size/grow and bulk-memory encoding, named data-segment resolution,
+DataCount emission before code, and runtime semantics for `memory.init`,
+`data.drop`, `memory.copy`, and `memory.fill`.  Reproduce its browser gate with:
+
+```sh
+make -C src/c-engine WAST_BUILD_DIR=../../build/c-engine wast-native wast-browser
+python3 tools/generate-c-engine-tests.py \
+  --runner build/c-engine/waste-wast \
+  --wasm build/c-engine/waste-wast.wasm \
+  --tests submodules/wasm-spec/test/core/multi-memory \
+  --output build/c-engine/browser-tests-c-engine-multi-memory.html
+node tests/c-engine-browser-runtime.cjs \
+  build/c-engine/browser-tests-c-engine-multi-memory.html
+```
+
 The developing WAST path now uses dynamically grown per-module function
 storage (bounded at 1024 functions) and emits canonical core sections in Wasm
 order: type, import, function, table, memory, global, export, start, element,

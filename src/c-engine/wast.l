@@ -121,6 +121,7 @@ WS          [ \t\r\n]+
 ATOM_CHAR   [a-zA-Z0-9_.+\-*/\\^~=<>!?@#$%&|:`']
 NUM         {DIGIT}(_*{DIGIT})*
 HEXNUM      {HEXDIGIT}(_*{HEXDIGIT})*
+MEMOP       (i32\.load|i64\.load|f32\.load|f64\.load|i32\.load8_s|i32\.load8_u|i32\.load16_s|i32\.load16_u|i64\.load8_s|i64\.load8_u|i64\.load16_s|i64\.load16_u|i64\.load32_s|i64\.load32_u|i32\.store|i64\.store|f32\.store|f64\.store|i32\.store8|i32\.store16|i64\.store8|i64\.store16|i64\.store32)
 
 %%
 
@@ -176,6 +177,16 @@ HEXNUM      {HEXDIGIT}(_*{HEXDIGIT})*
 \([ \t\r\n]*catch { yyextra->fold_depth++; return FOLD_CATCH_START; }
 \([ \t\r\n]*throw { yyextra->fold_depth++; return FOLD_THROW_START; }
 \([ \t\r\n]*select { yyextra->fold_depth++; return FOLD_SELECT_START; }
+\([ \t\r\n]*{MEMOP} {
+    const char *p = yytext + 1;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    size_t n = strlen(p);
+    if (n >= sizeof(yylval->str_val)) n = sizeof(yylval->str_val) - 1;
+    memcpy(yylval->str_val, p, n);
+    yylval->str_val[n] = '\0';
+    yyextra->fold_depth++;
+    return FOLD_MEMOP_START;
+}
 \([ \t\r\n]*[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_.]+ {
     const char *p = yytext + 1;
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;

@@ -222,6 +222,13 @@ uint8_t *wast_encode_module(const wast_module *m,size_t *size_out,char *error){
                            e->ref_opcodes[j],e->refs[j]);
         }}section(&out,9,&s);}
 
+    /* The DataCount section precedes code and is mandatory when a function
+     * uses memory.init or data.drop.  The text representation deliberately
+     * keeps function bodies as raw bytes, so emit the (always valid) section
+     * for every encoded module instead of rescanning instruction streams. */
+    u32(&s,(uint32_t)m->data_count);
+    section(&out,12,&s);
+
     if(defs){u32(&s,defs);for(int i=0;i<m->func_count;i++)if(!m->funcs[i].is_import){const wast_func*f=&m->funcs[i];writer body={0};
         u32(&body,(uint32_t)f->local_count);for(int j=0;j<f->local_count;j++){u32(&body,1);put_vt(&body,f->locals[j]);}
         bytes(&body,f->code,(size_t)f->code_len);if(body.failed||body.len>UINT32_MAX){s.failed=1;free(body.data);break;}

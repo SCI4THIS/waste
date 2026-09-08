@@ -95,7 +95,7 @@ typedef enum {
 #define WAST_MAX_TYPE_FIELDS   64
 #define WAST_MAX_IMPORTS       64
 #define WAST_MAX_GLOBALS       64
-#define WAST_MAX_MEMORIES      4
+#define WAST_MAX_MEMORIES      32
 #define WAST_MAX_TABLES        8
 #define WAST_MAX_TAGS          64
 #define WAST_MAX_DATA_SEGS     32
@@ -229,6 +229,7 @@ typedef struct {
 typedef struct {
     int      is_passive;
     int      memory_index;
+    char     name[WAST_MAX_EXPORT_NAME]; /* optional $id from (data $name ...) */
     uint8_t  offset_expr[32]; /* binary init expr for active offset */
     int      offset_len;
     uint8_t *bytes;           /* heap-allocated; must be freed by encoder; init to NULL */
