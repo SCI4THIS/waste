@@ -1291,6 +1291,18 @@ exec_status wast_run_assertion(waste_exec_engine *engine,
     st = exec_invoke(engine, func_idx,
                      assertion->args, assertion->arg_count,
                      results, &result_count, error);
+    if (assertion->kind == WAST_ASSERT_EXCEPTION) {
+        if (st == EXEC_ERROR_EXCEPTION) {
+            if (error) memset(error, 0, sizeof(*error));
+            return EXEC_OK;
+        }
+        if (st == EXEC_OK && error) {
+            error->status = EXEC_ERROR_TRAP;
+            snprintf(error->message, sizeof(error->message),
+                     "expected exception from %.215s", assertion->func_name);
+        }
+        return st == EXEC_OK ? EXEC_ERROR_TRAP : st;
+    }
     if (assertion->kind == WAST_ASSERT_TRAP ||
         assertion->kind == WAST_ASSERT_EXHAUSTION) {
         if (st == EXEC_ERROR_TRAP) {

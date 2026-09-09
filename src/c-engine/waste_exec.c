@@ -92,6 +92,12 @@ typedef struct {
     wasm_value *values;
 } exec_gc_object;
 
+typedef struct {
+    const exec_tag *tag;
+    wasm_value payload[WAST_MAX_PARAMS];
+    int payload_count;
+} exec_exception_object;
+
 /* ---- Function type ---- */
 
 typedef struct {
@@ -214,6 +220,9 @@ struct waste_exec_engine {
     exec_gc_object *gc_objects;
     uint32_t        gc_object_count;
     uint32_t        gc_object_capacity;
+    exec_exception_object *exception_objects;
+    uint32_t        exception_object_count;
+    uint32_t        exception_object_capacity;
     char            instantiation_error[256];
     wasm_value      *local_frames[EXEC_MAX_CALL_DEPTH];
     uint32_t         local_frame_capacities[EXEC_MAX_CALL_DEPTH];
@@ -578,6 +587,24 @@ static exec_status exec_fail(exec_error *error, exec_status status, const char *
         snprintf(error->message, sizeof(error->message), "%s", msg);
     }
     return status;
+}
+
+static exec_status exec_raise(exec_error *error, const exec_tag *tag,
+                              const wasm_value *payload, int payload_count,
+                              waste_exec_engine *owner, uint32_t reference) {
+    if (error) {
+        error->status = EXEC_ERROR_EXCEPTION;
+        snprintf(error->message, sizeof(error->message), "%s",
+                 "uncaught exception");
+        error->exception_tag = tag;
+        error->exception_payload_count = payload_count;
+        if (payload_count > 0)
+            memcpy(error->exception_payload, payload,
+                   (size_t)payload_count * sizeof(payload[0]));
+        error->exception_owner = owner;
+        error->exception_ref = reference;
+    }
+    return EXEC_ERROR_EXCEPTION;
 }
 
 /* ---- Bounded binary reader ---- */
@@ -1567,6 +1594,7 @@ static exec_status parse_tags(waste_exec_engine *eng, exec_reader *sec,
         uint32_t attribute, type_index;
         if (!er_u32(sec, &attribute) || attribute != 0 ||
             !er_u32(sec, &type_index) || type_index >= eng->type_count ||
+            eng->types[type_index].kind != WAST_TYPE_FUNC ||
             eng->types[type_index].result_count != 0)
             return exec_fail(err, EXEC_ERROR_FORMAT, "invalid tag type");
         uint32_t index = eng->tag_count;
@@ -2392,11 +2420,81 @@ static select_validation_result validate_select_function(
                     !select_validation_pop_type(stack, &top, control,
                                                 WASM_VALTYPE_I32))
                     return SELECT_VALIDATION_INVALID;
-                if (instr->opcode == 0x1f)
-                    for (uint32_t i = 0; i < instr->catch_count; i++)
-                        if (instr->catches[i].depth >
-                            (uint32_t)(control_top + 1))
+                if (instr->opcode == 0x1f) {
+                    for (uint32_t i = 0; i < instr->catch_count; i++) {
+                        const exec_catch *catch_ = &instr->catches[i];
+                        if (catch_->depth > (uint32_t)control_top)
                             return SELECT_VALIDATION_INVALID;
+
+                        const wasm_valtype *label_types;
+                        int label_count;
+                        if (catch_->depth == (uint32_t)control_top) {
+                            label_types = signature->results;
+                            label_count = signature->result_count;
+                        } else {
+                            const select_validation_control *target =
+                                &controls[control_top -
+                                          (int)catch_->depth];
+                            label_types = target->kind == 0x03 ?
+                                target->params : target->results;
+                            label_count = target->kind == 0x03 ?
+                                target->param_count : target->result_count;
+                        }
+
+                        const exec_func_type *tag_type = NULL;
+                        int catch_value_count = (catch_->kind & 1u) ? 1 : 0;
+                        if (catch_->kind < 2) {
+                            if (catch_->tag_index >= eng->tag_count)
+                                return SELECT_VALIDATION_INVALID;
+                            uint32_t tag_type_index =
+                                eng->tag_types[catch_->tag_index];
+                            if (tag_type_index >= eng->type_count)
+                                return SELECT_VALIDATION_INVALID;
+                            tag_type = &eng->types[tag_type_index];
+                            catch_value_count += tag_type->param_count;
+                        }
+                        if (catch_value_count != label_count)
+                        {
+#ifndef WASTE_FREESTANDING
+                            if (getenv("WAST_DEBUG_VALIDATION"))
+                                fprintf(stderr, "try catch arity pc=%u kind=%u depth=%u values=%d labels=%d\n",
+                                        pc, catch_->kind, catch_->depth,
+                                        catch_value_count, label_count);
+#endif
+                            return SELECT_VALIDATION_INVALID;
+                        }
+                        for (int value = 0;
+                             tag_type && value < tag_type->param_count;
+                             value++)
+                            if (!global_type_is_compat(
+                                    eng, tag_type->params[value], eng,
+                                    label_types[value], 0))
+                            {
+#ifndef WASTE_FREESTANDING
+                                if (getenv("WAST_DEBUG_VALIDATION"))
+                                    fprintf(stderr, "try catch payload pc=%u kind=%u value=%d actual=%u expected=%u\n",
+                                            pc, catch_->kind, value,
+                                            (unsigned)tag_type->params[value],
+                                            (unsigned)label_types[value]);
+#endif
+                                return SELECT_VALIDATION_INVALID;
+                            }
+                        if ((catch_->kind & 1u) &&
+                            !global_type_is_compat(
+                                eng, WASM_VALTYPE_EXNREF_NONNULL, eng,
+                                label_types[label_count - 1], 0))
+                        {
+#ifndef WASTE_FREESTANDING
+                            if (getenv("WAST_DEBUG_VALIDATION"))
+                                fprintf(stderr, "try catch ref pc=%u kind=%u actual=%u expected=%u\n",
+                                        pc, catch_->kind,
+                                        (unsigned)WASM_VALTYPE_EXNREF_NONNULL,
+                                        (unsigned)label_types[label_count - 1]);
+#endif
+                            return SELECT_VALIDATION_INVALID;
+                        }
+                    }
+                }
                 for (int i = param_count; i > 0; i--)
                     if (!select_validation_pop_type(
                             stack, &top, control, params[i - 1]))
@@ -2440,6 +2538,13 @@ static select_validation_result validate_select_function(
                 control->unreachable = 1;
                 break;
             }
+            case 0x0a:
+                if (!select_validation_pop_type(stack, &top, control,
+                                                WASM_VALTYPE_EXNREF))
+                    return SELECT_VALIDATION_INVALID;
+                top = control->height;
+                control->unreachable = 1;
+                break;
             case 0x05:
                 if (control_top == 0 || control->kind != 0x04 ||
                     control->has_else)
@@ -3834,6 +3939,8 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, exec_read
             }
             instr.opcode = byte;
             instr.u32_imm = tag_index;
+        } else if (byte == 0x0a) {
+            instr.opcode = byte;
         } else if (byte == 0x05) {
             if (!control_size || code[controls[control_size - 1]].opcode != 0x04) {
                 FREE_CODE(code, code_size); return exec_fail(err, EXEC_ERROR_FORMAT, "else without if");
@@ -4348,6 +4455,7 @@ void exec_free(waste_exec_engine *eng) {
     for (uint32_t i = 0; i < eng->gc_object_count; i++)
         free(eng->gc_objects[i].values);
     free(eng->gc_objects);
+    free(eng->exception_objects);
     for (uint32_t i = 0; i < eng->func_count; i++) {
         if (eng->funcs[i].code) {
             /* Free br_table depth arrays */
@@ -5392,6 +5500,7 @@ static wasm_value i64_value(uint64_t bits) {
 }
 
 #define EXEC_GC_REF_BASE UINT32_C(0x80000000)
+#define EXEC_EXN_REF_BASE UINT32_C(0x40000000)
 
 /* References use nan_mode as engine-private metadata.  The field is otherwise
  * irrelevant for reference values and travels with values through locals,
@@ -5427,6 +5536,147 @@ static wasm_value default_value(wasm_valtype type) {
         set_reference_dynamic_type(&value, type);
     }
     return value;
+}
+
+static exec_exception_object *exception_object(waste_exec_engine *eng,
+                                                const wasm_value *value) {
+    if (!eng || value->ref == UINT32_MAX ||
+        (value->ref & UINT32_C(0xc0000000)) != EXEC_EXN_REF_BASE)
+        return NULL;
+    uint32_t index = value->ref & ~EXEC_EXN_REF_BASE;
+    return index < eng->exception_object_count ?
+        &eng->exception_objects[index] : NULL;
+}
+
+static int exception_reference(waste_exec_engine *eng, const exec_tag *tag,
+                               const wasm_value *payload, int payload_count,
+                               waste_exec_engine *source_owner,
+                               uint32_t source_reference, wasm_value *out,
+                               exec_error *err) {
+    if (source_owner == eng && source_reference != UINT32_MAX) {
+        wasm_value existing = default_value(WASM_VALTYPE_EXNREF_NONNULL);
+        existing.ref = source_reference;
+        if (exception_object(eng, &existing)) {
+            *out = existing;
+            return 1;
+        }
+    }
+    if (payload_count < 0 || payload_count > WAST_MAX_PARAMS) {
+        exec_fail(err, EXEC_ERROR_TRAP, "invalid exception payload");
+        return 0;
+    }
+    if (eng->exception_object_count >= UINT32_C(0x3ffffffe)) {
+        exec_fail(err, EXEC_ERROR_TRAP, "exception allocation failed");
+        return 0;
+    }
+    if (eng->exception_object_count == eng->exception_object_capacity) {
+        uint32_t capacity = eng->exception_object_capacity ?
+            eng->exception_object_capacity * 2u : 8u;
+        exec_exception_object *objects = (exec_exception_object *)realloc(
+            eng->exception_objects, (size_t)capacity * sizeof(*objects));
+        if (!objects) {
+            exec_fail(err, EXEC_ERROR_TRAP, "exception allocation failed");
+            return 0;
+        }
+        eng->exception_objects = objects;
+        eng->exception_object_capacity = capacity;
+    }
+    uint32_t index = eng->exception_object_count++;
+    exec_exception_object *object = &eng->exception_objects[index];
+    object->tag = tag;
+    object->payload_count = payload_count;
+    if (payload_count)
+        memcpy(object->payload, payload,
+               (size_t)payload_count * sizeof(payload[0]));
+    *out = default_value(WASM_VALTYPE_EXNREF_NONNULL);
+    out->ref = EXEC_EXN_REF_BASE | index;
+    return 1;
+}
+
+/* Route an exception to the innermost matching try_table in this frame.
+ * Returns 0 when it must propagate, 1 after branching to a local handler,
+ * 2 when the handler branches to the function label, and -1 on a runtime
+ * failure while materializing an exception reference. */
+static int handle_exception(waste_exec_engine *eng, exec_func *func,
+                            exec_stack *stack, exec_control *controls,
+                            int *control_top, uint32_t *pc,
+                            const exec_tag *tag, const wasm_value *payload,
+                            int payload_count, waste_exec_engine *source_owner,
+                            uint32_t source_reference, exec_error *err) {
+    int try_index = -1;
+    const exec_catch *selected = NULL;
+    for (int i = *control_top - 1; i >= 0 && !selected; i--) {
+        if (controls[i].kind != 0x1f) continue;
+        exec_instr *try_instr = &func->code[controls[i].start_pc - 1];
+        for (uint32_t j = 0; j < try_instr->catch_count; j++) {
+            const exec_catch *catch_ = &try_instr->catches[j];
+            if (catch_->kind >= 2 ||
+                (catch_->tag_index < eng->tag_count &&
+                 eng->tags[catch_->tag_index] == tag)) {
+                try_index = i;
+                selected = catch_;
+                break;
+            }
+        }
+    }
+    if (!selected) return 0;
+    if (selected->depth > (uint32_t)try_index) {
+        exec_fail(err, EXEC_ERROR_TRAP, "catch branch depth out of range");
+        return -1;
+    }
+
+    stack->top = controls[try_index].stack_height;
+    if (selected->kind < 2)
+        for (int i = 0; i < payload_count; i++)
+            if (!stack_push(stack, payload[i])) {
+                exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
+                return -1;
+            }
+    if (selected->kind & 1u) {
+        wasm_value reference;
+        if (!exception_reference(eng, tag, payload, payload_count,
+                                 source_owner, source_reference, &reference,
+                                 err))
+            return -1;
+        if (!stack_push(stack, reference)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
+            return -1;
+        }
+    }
+
+    if (err) {
+        err->status = EXEC_OK;
+        err->message[0] = '\0';
+        err->exception_tag = NULL;
+        err->exception_payload_count = 0;
+        err->exception_owner = NULL;
+        err->exception_ref = UINT32_MAX;
+    }
+    if (selected->depth == (uint32_t)try_index) return 2;
+
+    int target_index = try_index - 1 - (int)selected->depth;
+    exec_control target = controls[target_index];
+    wasm_value carried[WAST_MAX_RESULTS];
+    if (target.branch_arity > stack->top - target.stack_height) {
+        exec_fail(err, EXEC_ERROR_TRAP, "catch branch values missing");
+        return -1;
+    }
+    for (int i = target.branch_arity; i-- > 0;)
+        stack_pop(stack, &carried[i]);
+    stack->top = target.stack_height;
+    for (int i = 0; i < target.branch_arity; i++)
+        if (!stack_push(stack, carried[i])) {
+            exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
+            return -1;
+        }
+    if (target.kind == 0x03) {
+        *control_top = target_index + 1;
+        *pc = target.start_pc - 1;
+    } else {
+        *control_top = target_index;
+        *pc = target.end_pc;
+    }
+    return 1;
 }
 
 static int gc_allocate(waste_exec_engine *eng, wast_type_kind kind,
@@ -6085,60 +6335,41 @@ tail_entry:
                                  "throw payload missing");
             for (int i = tag_type->param_count; i-- > 0;)
                 stack_pop(&stack, &payload[i]);
+            exec_raise(err, eng->tags[instr->u32_imm], payload,
+                       tag_type->param_count, NULL, UINT32_MAX);
+            int handled = handle_exception(
+                eng, func, &stack, controls, &control_top, &pc,
+                eng->tags[instr->u32_imm], payload, tag_type->param_count,
+                NULL, UINT32_MAX, err);
+            if (handled < 0) return err ? err->status : EXEC_ERROR_TRAP;
+            if (handled == 0) return EXEC_ERROR_EXCEPTION;
+            if (handled == 2) goto func_return;
+            continue;
+        }
 
-            int try_index = -1;
-            const exec_catch *selected_catch = NULL;
-            for (int i = control_top - 1; i >= 0 && !selected_catch; i--) {
-                if (controls[i].kind != 0x1f) continue;
-                exec_instr *try_instr =
-                    &func->code[controls[i].start_pc - 1];
-                for (uint32_t j = 0; j < try_instr->catch_count; j++) {
-                    exec_catch *catch_ = &try_instr->catches[j];
-                    if (catch_->kind == 2 ||
-                        (catch_->kind == 0 &&
-                         eng->tags[catch_->tag_index] ==
-                         eng->tags[instr->u32_imm])) {
-                        try_index = i;
-                        selected_catch = catch_;
-                        break;
-                    }
-                }
-            }
-            if (!selected_catch)
+        if (instr->opcode == 0x0a) {
+            wasm_value reference;
+            if (!stack_pop(&stack, &reference) ||
+                !global_type_is_compat(eng, reference.type, eng,
+                                       WASM_VALTYPE_EXNREF, 0))
                 return exec_fail(err, EXEC_ERROR_TRAP,
-                                 "uncaught exception");
-            if (selected_catch->depth > (uint32_t)(try_index + 1))
+                                 "throw_ref operand missing");
+            if (reference.ref == UINT32_MAX)
                 return exec_fail(err, EXEC_ERROR_TRAP,
-                                 "catch branch depth out of range");
-
-            stack.top = controls[try_index].stack_height;
-            if (selected_catch->kind == 0)
-                for (int i = 0; i < tag_type->param_count; i++)
-                    if (!stack_push(&stack, payload[i]))
-                        return exec_fail(err, EXEC_ERROR_TRAP,
-                                         "stack overflow");
-            if (selected_catch->depth == (uint32_t)(try_index + 1))
-                goto func_return;
-            int target_index = try_index - (int)selected_catch->depth;
-            exec_control target = controls[target_index];
-            wasm_value carried[WAST_MAX_RESULTS];
-            if (target.branch_arity > stack.top - target.stack_height)
+                                 "null exception reference");
+            exec_exception_object *object = exception_object(eng, &reference);
+            if (!object)
                 return exec_fail(err, EXEC_ERROR_TRAP,
-                                 "catch branch values missing");
-            for (int i = target.branch_arity; i-- > 0;)
-                stack_pop(&stack, &carried[i]);
-            stack.top = target.stack_height;
-            for (int i = 0; i < target.branch_arity; i++)
-                if (!stack_push(&stack, carried[i]))
-                    return exec_fail(err, EXEC_ERROR_TRAP,
-                                     "stack overflow");
-            if (target.kind == 0x03) {
-                control_top = target_index + 1;
-                pc = target.start_pc - 1;
-            } else {
-                control_top = target_index;
-                pc = target.end_pc;
-            }
+                                 "invalid exception reference");
+            exec_raise(err, object->tag, object->payload,
+                       object->payload_count, eng, reference.ref);
+            int handled = handle_exception(
+                eng, func, &stack, controls, &control_top, &pc,
+                object->tag, object->payload, object->payload_count,
+                eng, reference.ref, err);
+            if (handled < 0) return err ? err->status : EXEC_ERROR_TRAP;
+            if (handled == 0) return EXEC_ERROR_EXCEPTION;
+            if (handled == 2) goto func_return;
             continue;
         }
 
@@ -6589,6 +6820,17 @@ tail_entry:
             }
             exec_status status = exec_invoke_depth(eng, instr->u32_imm, call_args,
                 callee_type->param_count, call_results, &call_result_count, err, depth + 1);
+            if (status == EXEC_ERROR_EXCEPTION) {
+                int handled = handle_exception(
+                    eng, func, &stack, controls, &control_top, &pc,
+                    err->exception_tag, err->exception_payload,
+                    err->exception_payload_count, err->exception_owner,
+                    err->exception_ref, err);
+                if (handled < 0) return err->status;
+                if (handled == 0) return status;
+                if (handled == 2) goto func_return;
+                continue;
+            }
             if (status != EXEC_OK) return status;
             for (int i = 0; i < call_result_count; i++)
                 if (!stack_push(&stack, call_results[i]))
@@ -6633,6 +6875,16 @@ tail_entry:
                     return exec_fail(err,EXEC_ERROR_TRAP,"call_indirect arguments missing");
             exec_status status=exec_invoke_depth(teng,target,call_args,expected->param_count,
                 call_results,&call_result_count,err,depth+1);
+            if(status==EXEC_ERROR_EXCEPTION){
+                int handled=handle_exception(eng,func,&stack,controls,
+                    &control_top,&pc,err->exception_tag,
+                    err->exception_payload,err->exception_payload_count,
+                    err->exception_owner,err->exception_ref,err);
+                if(handled<0)return err->status;
+                if(handled==0)return status;
+                if(handled==2)goto func_return;
+                continue;
+            }
             if(status!=EXEC_OK)return status;
             for(int i=0;i<call_result_count;i++)if(!stack_push(&stack,call_results[i]))
                 return exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");
@@ -6683,6 +6935,17 @@ tail_entry:
             exec_status status = exec_invoke_depth(
                 eng, target, call_args, callee_type->param_count,
                 call_results, &call_result_count, err, depth + 1);
+            if (status == EXEC_ERROR_EXCEPTION) {
+                int handled = handle_exception(
+                    eng, func, &stack, controls, &control_top, &pc,
+                    err->exception_tag, err->exception_payload,
+                    err->exception_payload_count, err->exception_owner,
+                    err->exception_ref, err);
+                if (handled < 0) return err->status;
+                if (handled == 0) return status;
+                if (handled == 2) goto func_return;
+                continue;
+            }
             if (status != EXEC_OK) return status;
             for (int i = 0; i < call_result_count; i++)
                 if (!stack_push(&stack, call_results[i]))
@@ -7217,6 +7480,12 @@ exec_status exec_invoke(waste_exec_engine *eng,
                         const wasm_value *args, int arg_count,
                         wasm_value *results, int *result_count,
                         exec_error *err) {
+    exec_error local_error;
+    if (!err) {
+        memset(&local_error, 0, sizeof(local_error));
+        local_error.exception_ref = UINT32_MAX;
+        err = &local_error;
+    }
     return exec_invoke_depth(eng, func_idx, args, arg_count, results,
                              result_count, err, 0);
 }

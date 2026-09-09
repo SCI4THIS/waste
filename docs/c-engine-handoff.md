@@ -86,9 +86,12 @@ suite passes all 25 `submodules/wasm-spec/test/core/memory64/*.wast` files in
 both paths (8,409 native command results; 7,946 explicit assertion commands in
 the generated browser dashboard).  The GC proposal suite passes all 17
 `submodules/wasm-spec/test/core/gc/*.wast` files in the mmap, native execution,
-and freestanding browser paths (591 explicit assertions).  Later paragraphs in
-this section preserve the incremental implementation history; their smaller
-pass counts are no longer the current baseline.
+and freestanding browser paths (591 explicit assertions).  The exception
+handling suite passes all 4 `submodules/wasm-spec/test/core/exceptions/*.wast`
+files in those same paths: 90 native command results and 70 explicit action
+assertions in the browser dashboard.  Later paragraphs in this section preserve
+the incremental implementation history; their smaller pass counts are no
+longer the current baseline.
 
 The multi-memory work adds deterministic folded load/store boundaries, indexed
 load/store/size/grow and bulk-memory encoding, named data-segment resolution,
@@ -172,6 +175,32 @@ python3 tools/generate-c-engine-tests.py \
   --output build/c-engine/browser-tests-c-engine-gc.html
 node tests/c-engine-browser-runtime.cjs \
   build/c-engine/browser-tests-c-engine-gc.html
+```
+
+Exception handling is represented as a distinct executor result rather than a
+trap.  The carrier preserves the thrown tag's runtime identity and typed
+payload across direct, indirect, reference, and imported calls.  `try_table`
+selects the innermost first matching `catch`, `catch_ref`, `catch_all`, or
+`catch_all_ref`; reference catches materialize engine-owned exception objects
+that `throw_ref` can rethrow.  Catch label immediates are resolved against the
+labels outside the `try_table`, while branches in its body also see the
+`try_table` label.  Validation checks tag function types, empty tag results,
+throw operands, non-null exception references delivered by reference catches,
+and every catch destination signature.  Reproduce the dedicated gate with:
+
+```sh
+make -C src/c-engine WAST_BUILD_DIR=../../build/c-engine \
+  wast-native wast-browser wast-mmap-test
+build/c-engine/wast-mmap-test \
+  submodules/wasm-spec/test/core/exceptions/*.wast
+python3 tools/generate-c-engine-tests.py \
+  --runner build/c-engine/waste-wast \
+  --wasm build/c-engine/waste-wast.wasm \
+  --tests submodules/wasm-spec/test/core/exceptions \
+  --count \
+  --output build/c-engine/browser-tests-c-engine-exceptions.html
+node tests/c-engine-browser-runtime.cjs \
+  build/c-engine/browser-tests-c-engine-exceptions.html
 ```
 
 The developing WAST path now uses dynamically grown per-module function

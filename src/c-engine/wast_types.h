@@ -71,6 +71,7 @@ typedef struct {
 typedef enum {
     WAST_ASSERT_RETURN = 0,
     WAST_ASSERT_TRAP,
+    WAST_ASSERT_EXCEPTION,
     WAST_ASSERT_EXHAUSTION,
     WAST_ASSERT_INVALID,    /* expect load to fail */
     WAST_ASSERT_MALFORMED,  /* expect parse to fail */
@@ -221,12 +222,13 @@ typedef struct {
     int         has_export_name;
 } wast_memory;
 
-/* Exception tag metadata.  Tags are retained by the script linker even
- * while the execution engine does not yet expose throw/catch operations. */
+/* Exception tag metadata retained through text encoding and script linking. */
 typedef struct {
     char         id[WAST_MAX_EXPORT_NAME];
     wasm_valtype params[WAST_MAX_PARAMS];
     int          param_count;
+    int          has_inline_params;
+    int          type_index; /* explicit type use, -1 if absent */
     int          is_import;
     char         import_module[WAST_MAX_EXPORT_NAME];
     char         import_name[WAST_MAX_EXPORT_NAME];
@@ -293,7 +295,7 @@ typedef struct {
     wast_table  tables[WAST_MAX_TABLES];
     int         table_count;
 
-    /* Exception tags (link-time metadata; not emitted into the MVP binary). */
+    /* Exception tags. */
     wast_tag    tags[WAST_MAX_TAGS];
     int         tag_count;
 

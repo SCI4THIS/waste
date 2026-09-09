@@ -5,18 +5,28 @@
 #include <stddef.h>
 
 typedef struct waste_exec_engine waste_exec_engine;
+typedef struct exec_tag exec_tag;
 
 typedef enum {
     EXEC_OK = 0,
     EXEC_ERROR_FORMAT,
     EXEC_ERROR_UNSUPPORTED,
     EXEC_ERROR_TRAP,
+    EXEC_ERROR_EXCEPTION,
     EXEC_ERROR_NOT_FOUND,
 } exec_status;
 
 typedef struct {
     exec_status status;
     char message[256];
+    /* An exception is a distinct execution result, not a trap.  Keep its
+     * tag identity and payload here so it can cross ordinary and imported
+     * calls until a surrounding try_table handles it. */
+    const exec_tag *exception_tag;
+    wasm_value exception_payload[WAST_MAX_PARAMS];
+    int exception_payload_count;
+    waste_exec_engine *exception_owner;
+    uint32_t exception_ref;
 } exec_error;
 
 typedef exec_status (*exec_host_func)(void *host_data,
@@ -67,10 +77,10 @@ typedef struct {
     const waste_exec_engine *type_owner;
 } exec_table;
 
-typedef struct {
+struct exec_tag {
     const waste_exec_engine *type_owner;
     uint32_t type_index;
-} exec_tag;
+};
 
 typedef struct {
     const char *module;

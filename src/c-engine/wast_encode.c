@@ -144,11 +144,25 @@ uint8_t *wast_encode_module(const wast_module *m,size_t *size_out,char *error){
         else{func_sig fs=func_sig_of(f);int found=-1;for(int j=0;j<sig_count;j++)if((j>=m->type_count||m->types[j].rec_group_size<=1)&&sig_eq(&sigs[j],&fs)){found=j;break;}
             if(found<0){found=sig_count;sigs[sig_count++]=fs;}ft[i]=(uint32_t)found;}}
     for(int i=0;i<m->tag_count;i++){
-        func_sig ts={0};int found=-1;ts.is_func=1;
-        ts.param_count=m->tags[i].param_count;
-        memcpy(ts.params,m->tags[i].params,(size_t)ts.param_count*sizeof(ts.params[0]));
-        for(int j=0;j<sig_count;j++)if((j>=m->type_count||m->types[j].rec_group_size<=1)&&sig_eq(&sigs[j],&ts)){found=j;break;}
-        if(found<0){found=sig_count;sigs[sig_count++]=ts;}tt[i]=(uint32_t)found;
+        const wast_tag*t=&m->tags[i];
+        if(t->type_index>=0){
+            if(t->type_index>=m->type_count||m->types[t->type_index].kind!=WAST_TYPE_FUNC||
+               m->types[t->type_index].result_count!=0){if(error)snprintf(error,256,"tag %d has invalid function type",i);goto fail;}
+            const func_sig*declared=&sigs[t->type_index];
+            if(t->has_inline_params&&
+               (t->param_count!=declared->param_count||
+                memcmp(t->params,declared->params,(size_t)t->param_count*sizeof(t->params[0])))){
+                if(error)snprintf(error,256,"tag %d type use does not match inline signature",i);
+                goto fail;
+            }
+            tt[i]=(uint32_t)t->type_index;
+        }else{
+            func_sig ts={0};int found=-1;ts.is_func=1;
+            ts.param_count=t->param_count;
+            memcpy(ts.params,t->params,(size_t)ts.param_count*sizeof(ts.params[0]));
+            for(int j=0;j<sig_count;j++)if((j>=m->type_count||m->types[j].rec_group_size<=1)&&sig_eq(&sigs[j],&ts)){found=j;break;}
+            if(found<0){found=sig_count;sigs[sig_count++]=ts;}tt[i]=(uint32_t)found;
+        }
     }
     bytes(&out,"\0asm\1\0\0\0",8);
 

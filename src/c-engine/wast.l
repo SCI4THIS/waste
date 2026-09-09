@@ -176,8 +176,11 @@ MEMOP       (i32\.load|i64\.load|f32\.load|f64\.load|i32\.load8_s|i32\.load8_u|i
 \([ \t\r\n]*call_indirect { yyextra->fold_depth++; return FOLD_CALL_INDIRECT_START; }
 \([ \t\r\n]*call { yyextra->fold_depth++; return FOLD_CALL_START; }
 \([ \t\r\n]*try_table { yyextra->fold_depth++; return FOLD_TRY_TABLE_START; }
+\([ \t\r\n]*catch_all_ref { yyextra->fold_depth++; return FOLD_CATCH_ALL_REF_START; }
 \([ \t\r\n]*catch_all { yyextra->fold_depth++; return FOLD_CATCH_ALL_START; }
+\([ \t\r\n]*catch_ref { yyextra->fold_depth++; return FOLD_CATCH_REF_START; }
 \([ \t\r\n]*catch { yyextra->fold_depth++; return FOLD_CATCH_START; }
+\([ \t\r\n]*throw_ref { yyextra->fold_depth++; return FOLD_THROW_REF_START; }
 \([ \t\r\n]*throw { yyextra->fold_depth++; return FOLD_THROW_START; }
 \([ \t\r\n]*select { yyextra->fold_depth++; return FOLD_SELECT_START; }
 \([ \t\r\n]*br_on_cast(_fail)? {
@@ -330,6 +333,7 @@ table\.size      { return KW_TABLE_SIZE; }
     /* Multi-word assertion keywords — before shorter single-word keywords */
 assert_return      { return KW_ASSERT_RETURN; }
 assert_trap        { return KW_ASSERT_TRAP; }
+assert_exception   { return KW_ASSERT_EXCEPTION; }
 assert_exhaustion  { return KW_ASSERT_EXHAUSTION; }
 assert_invalid     { return KW_ASSERT_INVALID; }
 assert_malformed   { return KW_ASSERT_MALFORMED; }

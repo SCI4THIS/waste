@@ -2051,6 +2051,7 @@ static uint8_t valtype_byte(wasm_valtype vt) {
         case WASM_VALTYPE_I31REF:   return 0x6C;
         case WASM_VALTYPE_STRUCTREF:return 0x6B;
         case WASM_VALTYPE_ARRAYREF: return 0x6A;
+        case WASM_VALTYPE_EXNREF: return 0x69;
         case WASM_VALTYPE_NULLREF: return 0x71;
         case WASM_VALTYPE_NULLFUNCREF: return 0x73;
         case WASM_VALTYPE_NULLEXNREF: return 0x74;
@@ -2360,7 +2361,9 @@ static void emit_blocktype(wast_script *script, int bt) {
 %token FOLD_RETURN_CALL_START FOLD_RETURN_CALL_REF_START FOLD_RETURN_CALL_INDIRECT_START
 %token FOLD_SELECT_START
 %token FOLD_CALL_INDIRECT_START
-%token FOLD_TRY_TABLE_START FOLD_CATCH_START FOLD_CATCH_ALL_START FOLD_THROW_START
+%token FOLD_TRY_TABLE_START FOLD_CATCH_START FOLD_CATCH_REF_START
+%token FOLD_CATCH_ALL_START FOLD_CATCH_ALL_REF_START
+%token FOLD_THROW_START FOLD_THROW_REF_START
 %token <str_val> FOLD_ATOM_START FOLD_MEMOP_START
 %token <str_val> FOLD_SIMD_MEM_START FOLD_SIMD_MEM_LANE_START
 %token <str_val> FOLD_SIMD_LANE_START FOLD_SIMD_SHUFFLE_START
@@ -2399,7 +2402,7 @@ static void emit_blocktype(wast_script *script, int bt) {
 %token KW_I8X16 KW_I16X8 KW_I32X4 KW_I64X2 KW_F32X4 KW_F64X2
 %token KW_NAN_CANONICAL KW_NAN_ARITHMETIC KW_NEG_NAN KW_NEG_INF
 %token KW_POS_NAN KW_POS_INF KW_NAN KW_INF
-%token KW_ASSERT_RETURN KW_ASSERT_TRAP KW_ASSERT_EXHAUSTION
+%token KW_ASSERT_RETURN KW_ASSERT_TRAP KW_ASSERT_EXCEPTION KW_ASSERT_EXHAUSTION
 %token KW_ASSERT_INVALID KW_ASSERT_MALFORMED KW_ASSERT_UNLINKABLE
 %token KW_INVOKE KW_EITHER KW_GET
 %token KW_QUOTE KW_BINARY
@@ -3389,6 +3392,7 @@ fold_instr:
         emit_index_ref(script, IDX_TAG, $2,
                        @2.first_line, @2.first_column);
     }
+  | FOLD_THROW_REF_START fold_arg_list RPAREN { emit_byte(script, 0x0a); }
   | fold_try_table
 
   /* control — br / call */
@@ -3721,7 +3725,6 @@ fold_try_table:
         begin_block_type();
         g_try_catch_count = 0;
     } blocktype {
-        push_label("");
         emit_byte(script, 0x1f);
         emit_blocktype(script, $3);
     } try_catch_list {
@@ -3732,6 +3735,10 @@ fold_try_table:
                 emit_leb_u32(script, g_try_catches[i].tag);
             emit_leb_u32(script, g_try_catches[i].depth);
         }
+        /* Catch destinations are resolved outside the try_table label.  The
+         * body itself can branch to the try_table, so install that label only
+         * after all catch immediates have been parsed. */
+        push_label("");
     } fold_arg_list RPAREN {
         emit_byte(script, 0x0b);
         pop_label();
@@ -3753,6 +3760,24 @@ try_catch_list:
         if (g_try_catch_count < WAST_MAX_TAGS) {
             parsed_catch *catch_ = &g_try_catches[g_try_catch_count++];
             catch_->kind = 2;
+            catch_->tag = 0;
+            catch_->depth = resolve_label(script, $3,
+                                          @3.first_line, @3.first_column);
+        }
+    }
+  | try_catch_list FOLD_CATCH_REF_START any_idx any_idx RPAREN {
+        if (g_try_catch_count < WAST_MAX_TAGS) {
+            parsed_catch *catch_ = &g_try_catches[g_try_catch_count++];
+            catch_->kind = 1;
+            catch_->tag = resolve_tag($3);
+            catch_->depth = resolve_label(script, $4,
+                                          @4.first_line, @4.first_column);
+        }
+    }
+  | try_catch_list FOLD_CATCH_ALL_REF_START any_idx RPAREN {
+        if (g_try_catch_count < WAST_MAX_TAGS) {
+            parsed_catch *catch_ = &g_try_catches[g_try_catch_count++];
+            catch_->kind = 3;
             catch_->tag = 0;
             catch_->depth = resolve_label(script, $3,
                                           @3.first_line, @3.first_column);
@@ -4435,6 +4460,7 @@ import_desc:
     }
   | LPAREN KW_TAG {
         memset(&g_cur_tag, 0, sizeof(g_cur_tag));
+        g_cur_tag.type_index = -1;
         g_cur_tag.is_import = 1;
         snprintf(g_cur_tag.import_module, WAST_MAX_EXPORT_NAME, "%s",
                  g_import_module);
@@ -5486,6 +5512,7 @@ start_item:
 tag_item:
     LPAREN KW_TAG {
         memset(&g_cur_tag, 0, sizeof(g_cur_tag));
+        g_cur_tag.type_index = -1;
     } opt_id tag_attr_list RPAREN {
         commit_tag(script, $4);
     }
@@ -5510,9 +5537,13 @@ tag_attr_list:
         snprintf(g_cur_tag.export_name, WAST_MAX_EXPORT_NAME, "%s", $4);
         g_cur_tag.has_export_name = 1;
     }
-  | tag_attr_list LPAREN KW_TYPE any_idx RPAREN
-  | tag_attr_list LPAREN KW_PARAM tag_valtype_list RPAREN
-  | tag_attr_list LPAREN KW_RESULT tag_valtype_list RPAREN
+  | tag_attr_list LPAREN KW_TYPE any_idx RPAREN {
+        g_cur_tag.type_index = (int)resolve_type($4);
+    }
+  | tag_attr_list LPAREN KW_PARAM {
+        g_cur_tag.has_inline_params = 1;
+    } tag_valtype_list RPAREN
+  | tag_attr_list LPAREN KW_RESULT tag_result_list RPAREN
   | tag_attr_list LPAREN KW_IMPORT STRING STRING RPAREN {
         snprintf(g_cur_tag.import_module, WAST_MAX_EXPORT_NAME, "%s", $4);
         snprintf(g_cur_tag.import_name, WAST_MAX_EXPORT_NAME, "%s", $5);
@@ -5525,6 +5556,13 @@ tag_valtype_list:
   | tag_valtype_list valtype {
         if (g_cur_tag.param_count < WAST_MAX_PARAMS)
             g_cur_tag.params[g_cur_tag.param_count++] = $2;
+    }
+    ;
+
+tag_result_list:
+    /* empty */
+  | tag_result_list valtype {
+        report_validation_error(script, "non-empty tag result type");
     }
     ;
 
@@ -5575,6 +5613,15 @@ assert_cmd:
             ensure_group(script);
             append_assert(script);
         }
+    }
+  | LPAREN KW_ASSERT_EXCEPTION {
+        memset(&g_cur_assert, 0, sizeof(g_cur_assert));
+        g_cur_assert.kind = WAST_ASSERT_EXCEPTION;
+        g_in_assert = 1;
+    }
+    action RPAREN {
+        ensure_group(script);
+        append_assert(script);
     }
   | LPAREN KW_ASSERT_EXHAUSTION {
         memset(&g_cur_assert, 0, sizeof(g_cur_assert));

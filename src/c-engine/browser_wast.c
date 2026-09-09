@@ -1018,8 +1018,8 @@ static exec_status native_load_module(native_store *store,
                                       const uint8_t *bytes, size_t size,
                                       waste_exec_engine **engine_out,
                                       exec_error *error) {
-    /* Tags are not executable yet, but their imports still participate in
-     * ordinary module linking and must match an exported tag signature. */
+    /* Resolve tag imports before loading so the executor can preserve tag
+     * identity across module boundaries. */
     for (int i = 0; i < module->tag_count; i++) {
         const wast_tag *tag = &module->tags[i];
         if (!tag->is_import) continue;
