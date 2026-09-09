@@ -43,6 +43,8 @@ C_ENGINE_WASM="$C_ENGINE_BUILD/waste-wast.wasm"
 C_ENGINE_GENERATOR="$REPO_ROOT/tools/generate-c-engine-tests.py"
 C_ENGINE_HTML="$C_ENGINE_BUILD/browser-tests-c-engine.html"
 C_ENGINE_CORE_HTML="$C_ENGINE_BUILD/browser-tests-c-engine-core.html"
+C_ENGINE_OCAML_LAYOUT_HTML="$C_ENGINE_BUILD/browser-tests-c-engine-ocaml-layout.html"
+C_ENGINE_HTML_LOG="$C_ENGINE_BUILD/html.log"
 C_ENGINE_CORE_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core"
 C_ENGINE_RELAXED_SIMD_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/relaxed-simd"
 C_ENGINE_MEMORY64_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/memory64"
@@ -74,6 +76,7 @@ interpreter to WebAssembly.
                    generate the self-contained WASTE Bash page
   --c-tail-poc     build native/browser C tail-call proofs and run native benchmark
   --c-engine-tests build C engine and run relaxed-SIMD spec tests, generate HTML report
+  --c-engine-html  generate the full C-engine dashboard in OCaml-Wasm layout
   --c-engine-core-tests
                    generate/run the C-engine browser dashboard for core WAST files
   --patch-status   show the Wasm32 compatibility patch status
@@ -927,6 +930,65 @@ generate_c_engine_tests() {
   node "$C_ENGINE_BROWSER_TEST" "$C_ENGINE_HTML" >>"$TEST_LOG" 2>&1
 }
 
+generate_c_engine_dashboard_html() {
+  if ! have_command cc || ! have_command clang || ! have_command make ||
+      ! have_command flex || ! have_command bison || ! have_command python3 ||
+      ! have_command wasm-as || ! wasm_ld_is_usable; then
+    show_message "C-engine browser dashboard" \
+      "cc, clang, make, flex, bison, wasm-ld, wasm-as, and Python 3 are required."
+    return 1
+  fi
+  if [[ ! -d "$C_ENGINE_CORE_TESTS" || ! -d "$C_ENGINE_DIY_POSIX_TESTS" ]]; then
+    show_message "C-engine browser dashboard" \
+      "Specification or DIY POSIX tests are missing. Initialize the wasm-spec submodule first."
+    return 1
+  fi
+  if ! build_waste_libc true; then
+    show_message "C-engine browser dashboard" \
+      "The guest libc and its generated tests must build first.\n\nLog: $LIBC_LOG"
+    return 1
+  fi
+
+  mkdir -p "$C_ENGINE_BUILD"
+  : >"$C_ENGINE_HTML_LOG"
+  {
+    printf 'WASTE C-engine OCaml-layout dashboard generation\n'
+    printf 'Started: %s\n' "$(date --iso-8601=seconds)"
+    printf 'Output: %s\n\n' "$C_ENGINE_OCAML_LAYOUT_HTML"
+  } >>"$C_ENGINE_HTML_LOG"
+
+  if have_command whiptail && [[ -t 0 && -t 1 ]]; then
+    whiptail --title "C-engine browser dashboard" --infobox \
+      "Building the C engine and embedding the specification, signaling/POSIX, and libc tests...\n\nLog: $C_ENGINE_HTML_LOG" 10 84
+  else
+    printf 'Generating C-engine browser dashboard in OCaml-Wasm layout...\n'
+  fi
+
+  if ! make -C "$REPO_ROOT/src/c-engine" BUILD_DIR="$C_ENGINE_BUILD" \
+      WAST_BUILD_DIR="$C_ENGINE_BUILD" wast-native wast-browser \
+      >>"$C_ENGINE_HTML_LOG" 2>&1; then
+    show_message "C-engine browser dashboard failed" \
+      "The C engine build failed.\n\nLog: $C_ENGINE_HTML_LOG"
+    return 1
+  fi
+  if ! python3 "$C_ENGINE_GENERATOR" \
+      --repo-root "$REPO_ROOT" \
+      --ocaml-layout \
+      --runner "$C_ENGINE_RUNNER" \
+      --wasm "$C_ENGINE_WASM" \
+      --count \
+      --output "$C_ENGINE_OCAML_LAYOUT_HTML" \
+      >>"$C_ENGINE_HTML_LOG" 2>&1; then
+    show_message "C-engine browser dashboard failed" \
+      "HTML generation failed.\n\nLog: $C_ENGINE_HTML_LOG"
+    return 1
+  fi
+
+  printf 'Completed: %s\n' "$(date --iso-8601=seconds)" >>"$C_ENGINE_HTML_LOG"
+  show_message "C-engine browser dashboard generated" \
+    "A self-contained C-engine dashboard was generated with the same groups as the OCaml-Wasm dashboard, including signaling/POSIX and libc tests.\n\nOutput: $C_ENGINE_OCAML_LAYOUT_HTML\nLog: $C_ENGINE_HTML_LOG"
+}
+
 generate_c_engine_core_tests() {
   if ! have_command cc || ! have_command make || ! have_command flex ||
       ! have_command bison || ! have_command python3 || ! have_command node; then
@@ -1107,10 +1169,11 @@ main_menu() {
     local choice
     patch_state="$(i31_patch_status)"
     choice="$(whiptail --title "OCaml to WebAssembly" --menu \
-      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 29 92 12 \
+      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 30 94 13 \
       compile "Compile the OCaml interpreter to Wasm" \
       c-tail "Build native/browser C tail-call proof and benchmark" \
       c-engine "Build C engine and run relaxed-SIMD spec tests" \
+      c-html "Generate full C-engine browser dashboard (OCaml layout)" \
       libc "Build waste-libc.wasm and tests" \
       html "Generate embedded browser test dashboard" \
       bash "Generate self-contained WASTE Bash page" \
@@ -1125,6 +1188,7 @@ main_menu() {
       compile) compile_interpreter || true ;;
       c-tail) run_test_group c-tail || true ;;
       c-engine) generate_c_engine_tests || true ;;
+      c-html) generate_c_engine_dashboard_html || true ;;
       libc) build_waste_libc || true ;;
       html) generate_browser_test_html || true ;;
       bash) generate_bash_html || true ;;
@@ -1176,6 +1240,7 @@ main() {
       generate_c_engine_tests || c_engine_status=$?
       printf '\nFinished: %s\n' "$(date --iso-8601=seconds)" >>"$TEST_LOG"
       return "$c_engine_status" ;;
+    --c-engine-html) generate_c_engine_dashboard_html ;;
     --c-engine-core-tests)
       : >"$TEST_LOG"
       c_engine_status=0

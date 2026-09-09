@@ -464,6 +464,17 @@ static void attach_raw_module(wast_script *script,
     raw->length = 0;
 }
 
+static void attach_custom_assertion_validation(wast_script *script) {
+    if (script->custom_assertion_cursor >= script->custom_assertion_count)
+        return;
+    if (script->custom_assertion_errors[script->custom_assertion_cursor++]) {
+        wast_group *group = cur_group(script);
+        group->has_validation_error = 1;
+        snprintf(group->validation_error, sizeof(group->validation_error),
+                 "%s", "custom annotation validation failed");
+    }
+}
+
 static void begin_module(wast_script *script) {
     start_new_group(script);
     g_constexpr_target  = NULL;
@@ -2404,6 +2415,7 @@ static void emit_blocktype(wast_script *script, int bt) {
 %token KW_POS_NAN KW_POS_INF KW_NAN KW_INF
 %token KW_ASSERT_RETURN KW_ASSERT_TRAP KW_ASSERT_EXCEPTION KW_ASSERT_EXHAUSTION
 %token KW_ASSERT_INVALID KW_ASSERT_MALFORMED KW_ASSERT_UNLINKABLE
+%token KW_ASSERT_INVALID_CUSTOM KW_ASSERT_MALFORMED_CUSTOM
 %token KW_INVOKE KW_EITHER KW_GET
 %token KW_QUOTE KW_BINARY
 
@@ -5696,6 +5708,58 @@ assert_cmd:
         attach_raw_module(script, WAST_RAW_BINARY);
         group->has_module_assertion = 1;
         group->module_assert_kind = WAST_ASSERT_MALFORMED;
+        snprintf(group->expected_module_error, WAST_MAX_EXPORT_NAME, "%s", $7);
+        g_in_assert = 0;
+    }
+  | LPAREN KW_ASSERT_MALFORMED_CUSTOM {
+        g_in_assert = 1;
+        begin_module(script);
+    }
+    LPAREN KW_MODULE module_assert_body RPAREN STRING RPAREN {
+        wast_group *group = cur_group(script);
+        if ($6) apply_func_fixups(script);
+        attach_custom_assertion_validation(script);
+        group->has_module_assertion = 1;
+        group->module_assert_kind = WAST_ASSERT_MALFORMED;
+        snprintf(group->expected_module_error, WAST_MAX_EXPORT_NAME, "%s", $8);
+        g_in_assert = 0;
+    }
+  | LPAREN KW_ASSERT_MALFORMED_CUSTOM {
+        g_in_assert = 1;
+        begin_module(script);
+    }
+    MODULE_QUOTE_START string_list RPAREN STRING RPAREN {
+        wast_group *group = cur_group(script);
+        attach_raw_module(script, WAST_RAW_QUOTE);
+        attach_custom_assertion_validation(script);
+        group->has_module_assertion = 1;
+        group->module_assert_kind = WAST_ASSERT_MALFORMED;
+        snprintf(group->expected_module_error, WAST_MAX_EXPORT_NAME, "%s", $7);
+        g_in_assert = 0;
+    }
+  | LPAREN KW_ASSERT_INVALID_CUSTOM {
+        g_in_assert = 1;
+        begin_module(script);
+    }
+    LPAREN KW_MODULE module_assert_body RPAREN STRING RPAREN {
+        wast_group *group = cur_group(script);
+        if ($6) apply_func_fixups(script);
+        attach_custom_assertion_validation(script);
+        group->has_module_assertion = 1;
+        group->module_assert_kind = WAST_ASSERT_INVALID;
+        snprintf(group->expected_module_error, WAST_MAX_EXPORT_NAME, "%s", $8);
+        g_in_assert = 0;
+    }
+  | LPAREN KW_ASSERT_INVALID_CUSTOM {
+        g_in_assert = 1;
+        begin_module(script);
+    }
+    MODULE_QUOTE_START string_list RPAREN STRING RPAREN {
+        wast_group *group = cur_group(script);
+        attach_raw_module(script, WAST_RAW_QUOTE);
+        attach_custom_assertion_validation(script);
+        group->has_module_assertion = 1;
+        group->module_assert_kind = WAST_ASSERT_INVALID;
         snprintf(group->expected_module_error, WAST_MAX_EXPORT_NAME, "%s", $7);
         g_in_assert = 0;
     }

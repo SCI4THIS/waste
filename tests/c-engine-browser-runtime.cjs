@@ -20,8 +20,9 @@ const engineBytes = Uint8Array.from(Buffer.from(payload.wasmB64, "base64"));
 (async () => {
   let failed = 0;
   const tests = requestedFiles.size ? payload.tests.filter(test =>
-    requestedFiles.has(test.file) || requestedFiles.has(`${test.group}/${test.file}`)
-  ) : payload.tests;
+    requestedFiles.has(test.file) ||
+    requestedFiles.has(test.path || `${test.group}/${test.file}`)
+  ) : payload.tests.filter(test => !test.unsupported);
   if (requestedFiles.size && tests.length === 0)
     throw new Error("no requested C-engine browser tests found");
   for (const test of tests) {
@@ -35,7 +36,7 @@ const engineBytes = Uint8Array.from(Buffer.from(payload.wasmB64, "base64"));
     await self.onmessage({data: {wasmBytes: engineBytes, testSpec: test.spec}});
     const ok = message?.type === "done" &&
       message.results.every(result => result.pass);
-    console.log(`${ok ? "PASS" : "FAIL"} ${test.group}/${test.file}`);
+    console.log(`${ok ? "PASS" : "FAIL"} ${test.path || `${test.group}/${test.file}`}`);
     if (!ok) {
       failed++;
       if (message?.type === "done") {

@@ -626,6 +626,391 @@ static int collect_raw_modules(const char *source, size_t length,
     return 1;
 }
 
+typedef struct {
+    char keyword[40];
+    uint8_t has_child;
+    uint8_t has_name;
+} annotation_context;
+
+static size_t annotation_skip_space(const char *source, size_t length,
+                                    size_t at) {
+    while (at < length && (source[at] == ' ' || source[at] == '\t' ||
+           source[at] == '\r' || source[at] == '\n')) at++;
+    return at;
+}
+
+static int annotation_token(const char *source, size_t length, size_t *at,
+                            char *token, size_t token_size) {
+    size_t start = annotation_skip_space(source, length, *at);
+    size_t end = start;
+    while (end < length && source[end] != ' ' && source[end] != '\t' &&
+           source[end] != '\r' && source[end] != '\n' &&
+           source[end] != '(' && source[end] != ')' && source[end] != '"')
+        end++;
+    if (end == start) return 0;
+    size_t count = end - start;
+    if (count >= token_size) count = token_size - 1;
+    memcpy(token, source + start, count);
+    token[count] = '\0';
+    *at = end;
+    return 1;
+}
+
+static int annotation_string(const char *source, size_t length, size_t *at,
+                             int require_utf8, uint8_t *first,
+                             size_t *decoded_size) {
+    size_t cursor = annotation_skip_space(source, length, *at);
+    if (cursor >= length || source[cursor] != '"') return 0;
+    size_t begin = ++cursor;
+    while (cursor < length && source[cursor] != '"') {
+        if (source[cursor] == '\\' && cursor + 1 < length) cursor += 2;
+        else cursor++;
+    }
+    if (cursor >= length) return -1;
+    uint8_t *decoded = NULL;
+    size_t size = 0, capacity = 0;
+    int ok = raw_decode_string(source, begin, cursor, &decoded, &size,
+                               &capacity);
+    if (ok && require_utf8) ok = raw_valid_utf8(decoded, size);
+    if (first) *first = size ? decoded[0] : 0;
+    if (decoded_size) *decoded_size = size;
+    free(decoded);
+    *at = cursor + 1;
+    return ok ? 1 : -1;
+}
+
+/* Return the offset immediately after the balanced annotation/command that
+ * starts at an opening parenthesis.  Strings and nested comments are opaque. */
+static size_t annotation_form_end(const char *source, size_t length,
+                                  size_t start) {
+    int depth = 0;
+    for (size_t at = start; at < length; at++) {
+        if (source[at] == '"') {
+            for (at++; at < length; at++) {
+                if (source[at] == '\\' && at + 1 < length) at++;
+                else if (source[at] == '"') break;
+            }
+            continue;
+        }
+        if (source[at] == ';' && at + 1 < length && source[at + 1] == ';') {
+            while (at < length && source[at] != '\n' && source[at] != '\r')
+                at++;
+            continue;
+        }
+        if (source[at] == '(' && at + 1 < length && source[at + 1] == ';') {
+            int comments = 1;
+            at += 2;
+            while (at + 1 < length && comments) {
+                if (source[at] == '(' && source[at + 1] == ';') {
+                    comments++; at += 2;
+                } else if (source[at] == ';' && source[at + 1] == ')') {
+                    comments--; at += 2;
+                } else at++;
+            }
+            if (at) at--;
+            continue;
+        }
+        if (source[at] == '(') depth++;
+        else if (source[at] == ')' && --depth == 0) return at + 1;
+    }
+    return length;
+}
+
+static size_t annotation_block_comment_end(const char *source, size_t length,
+                                           size_t start) {
+    int depth = 1;
+    size_t at = start + 2;
+    while (at + 1 < length && depth) {
+        if (source[at] == '(' && source[at + 1] == ';') {
+            depth++;
+            at += 2;
+        } else if (source[at] == ';' && source[at + 1] == ')') {
+            depth--;
+            at += 2;
+        } else {
+            at++;
+        }
+    }
+    return at;
+}
+
+static int annotation_section_kind(const char *kind) {
+    static const char *const kinds[] = {
+        "custom", "type", "import", "func", "table", "memory", "tag",
+        "global", "export", "start", "elem", "data_count", "code", "data"
+    };
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
+        if (strcmp(kind, kinds[i]) == 0) return 1;
+    return 0;
+}
+
+static int validate_custom_annotation(const char *source, size_t start,
+                                      size_t end, char *error,
+                                      size_t error_size) {
+    size_t at = start + 2;
+    char id[64];
+    if (!annotation_token(source, end, &at, id, sizeof(id))) return 1;
+    if (strcmp(id, "custom") != 0) return 1;
+
+    int string_status = annotation_string(source, end, &at, 1, NULL, NULL);
+    if (string_status <= 0) {
+        snprintf(error, error_size, "%s", string_status < 0 ?
+                 "@custom annotation: malformed UTF-8 encoding" :
+                 "@custom annotation: missing section name");
+        return 0;
+    }
+    at = annotation_skip_space(source, end, at);
+    if (at < end && source[at] == '(') {
+        size_t placement_end = annotation_form_end(source, end, at);
+        size_t field = at + 1;
+        char direction[24], kind[24];
+        if (!annotation_token(source, placement_end, &field, direction,
+                              sizeof(direction)) ||
+            (strcmp(direction, "before") != 0 &&
+             strcmp(direction, "after") != 0)) {
+            snprintf(error, error_size, "%s",
+                     "@custom annotation: malformed placement");
+            return 0;
+        }
+        if (!annotation_token(source, placement_end, &field, kind,
+                              sizeof(kind)) || !annotation_section_kind(kind)) {
+            snprintf(error, error_size, "%s",
+                     "@custom annotation: malformed section kind");
+            return 0;
+        }
+        field = annotation_skip_space(source, placement_end, field);
+        if (field >= placement_end || source[field] != ')') {
+            snprintf(error, error_size, "%s",
+                     "@custom annotation: malformed placement");
+            return 0;
+        }
+        at = placement_end;
+    }
+    for (;;) {
+        at = annotation_skip_space(source, end, at);
+        if (at >= end || source[at] == ')') return 1;
+        if (annotation_string(source, end, &at, 0, NULL, NULL) != 1) {
+            snprintf(error, error_size, "%s",
+                     "@custom annotation: unexpected token");
+            return 0;
+        }
+    }
+}
+
+static int annotation_next_is_branch_hint(const char *source, size_t length,
+                                          size_t at, int *duplicate) {
+    at = annotation_skip_space(source, length, at);
+    *duplicate = 0;
+    if (at < length && source[at] == '(') {
+        size_t word = annotation_skip_space(source, length, at + 1);
+        if (word < length && source[word] == '@') {
+            static const char hint[] = "@metadata.code.branch_hint";
+            if (word + sizeof(hint) - 1 <= length &&
+                memcmp(source + word, hint, sizeof(hint) - 1) == 0)
+                *duplicate = 1;
+            return 0;
+        }
+        char token[16];
+        return annotation_token(source, length, &word, token,
+                                sizeof(token)) && strcmp(token, "if") == 0;
+    }
+    char token[16];
+    return annotation_token(source, length, &at, token, sizeof(token)) &&
+           strcmp(token, "if") == 0;
+}
+
+static int validate_custom_annotations(const char *source, size_t length,
+                                       char *error, size_t error_size) {
+    annotation_context contexts[256];
+    int depth = 0;
+    for (size_t at = 0; at < length; at++) {
+        if (source[at] == '"') {
+            for (at++; at < length; at++) {
+                if (source[at] == '\\' && at + 1 < length) at++;
+                else if (source[at] == '"') break;
+            }
+            continue;
+        }
+        if (source[at] == ';' && at + 1 < length && source[at + 1] == ';') {
+            while (at < length && source[at] != '\n' && source[at] != '\r')
+                at++;
+            continue;
+        }
+        if (source[at] == '(' && at + 1 < length && source[at + 1] == ';') {
+            size_t comment_end = annotation_block_comment_end(source, length,
+                                                               at);
+            at = comment_end ? comment_end - 1 : at;
+            continue;
+        }
+        if (source[at] == '(' && at + 1 < length && source[at + 1] == '@') {
+            size_t end = annotation_form_end(source, length, at);
+            size_t id_at = at + 2;
+            char id[64];
+            if (!annotation_token(source, end, &id_at, id, sizeof(id))) {
+                /* Generic annotations may use quoted identifiers.  Their
+                 * lexical validity is checked by the raw WAT gate; only the
+                 * three registered handlers below have semantic rules here. */
+                at = end ? end - 1 : at;
+                continue;
+            }
+            annotation_context *parent = depth ? &contexts[depth - 1] : NULL;
+            if (strcmp(id, "custom") == 0) {
+                if (!parent || strcmp(parent->keyword, "module") != 0) {
+                    snprintf(error, error_size, "%s",
+                             "misplaced @custom annotation");
+                    return 0;
+                }
+                if (!validate_custom_annotation(source, at, end, error,
+                                                error_size)) return 0;
+                parent->has_child = 1;
+            } else if (strcmp(id, "name") == 0) {
+                if (!parent || (strcmp(parent->keyword, "module") != 0 &&
+                    strcmp(parent->keyword, "func") != 0 &&
+                    strcmp(parent->keyword, "tag") != 0) ||
+                    parent->has_child) {
+                    snprintf(error, error_size, "%s",
+                             "misplaced @name annotation");
+                    return 0;
+                }
+                if (parent->has_name) {
+                    snprintf(error, error_size, "%s",
+                             "@name annotation: multiple names");
+                    return 0;
+                }
+                size_t value = id_at;
+                size_t close;
+                if (annotation_string(source, end, &value, 1, NULL, NULL) != 1 ||
+                    (close = annotation_skip_space(source, end, value)) >= end ||
+                    source[close] != ')') {
+                    snprintf(error, error_size, "%s",
+                             "@name annotation: string expected");
+                    return 0;
+                }
+                parent->has_name = 1;
+            } else if (strcmp(id, "metadata.code.branch_hint") == 0) {
+                int in_function = 0;
+                for (int i = depth - 1; i >= 0; i--)
+                    if (strcmp(contexts[i].keyword, "func") == 0) {
+                        in_function = 1;
+                        break;
+                    }
+                if (!in_function) {
+                    snprintf(error, error_size, "%s",
+                             "@metadata.code.branch_hint annotation: not in a function");
+                    return 0;
+                }
+                size_t value = id_at, decoded_size = 0;
+                uint8_t hint = 0;
+                size_t close;
+                if (annotation_string(source, end, &value, 0, &hint,
+                                      &decoded_size) != 1 ||
+                    decoded_size != 1 || hint > 1 ||
+                    (close = annotation_skip_space(source, end, value)) >= end ||
+                    source[close] != ')') {
+                    snprintf(error, error_size, "%s",
+                             "@metadata.code.branch_hint annotation: invalid hint value");
+                    return 0;
+                }
+                int duplicate = 0;
+                if (!annotation_next_is_branch_hint(source, length, end,
+                                                    &duplicate)) {
+                    snprintf(error, error_size, "%s", duplicate ?
+                             "@metadata.code.branch_hint annotation: duplicate annotation" :
+                             "@metadata.code.branch_hint annotation: invalid target");
+                    return 0;
+                }
+            }
+            at = end ? end - 1 : at;
+            continue;
+        }
+        if (source[at] == '(') {
+            size_t keyword_at = annotation_skip_space(source, length, at + 1);
+            char keyword[40] = {0};
+            annotation_token(source, length, &keyword_at, keyword,
+                             sizeof(keyword));
+            if (strcmp(keyword, "assert_malformed_custom") == 0 ||
+                strcmp(keyword, "assert_invalid_custom") == 0) {
+                size_t end = annotation_form_end(source, length, at);
+                at = end ? end - 1 : at;
+                continue;
+            }
+            if (depth && contexts[depth - 1].keyword[0])
+                contexts[depth - 1].has_child = 1;
+            if (depth >= (int)(sizeof(contexts) / sizeof(contexts[0]))) {
+                snprintf(error, error_size, "%s",
+                         "annotation nesting limit exceeded");
+                return 0;
+            }
+            memset(&contexts[depth], 0, sizeof(contexts[depth]));
+            snprintf(contexts[depth].keyword,
+                     sizeof(contexts[depth].keyword), "%s", keyword);
+            depth++;
+        } else if (source[at] == ')' && depth) {
+            depth--;
+        }
+    }
+    return 1;
+}
+
+static int queue_custom_assertion_errors(const char *source, size_t length,
+                                         wast_script *script) {
+    for (size_t at = 0; at < length; at++) {
+        if (source[at] == '"') {
+            for (at++; at < length; at++) {
+                if (source[at] == '\\' && at + 1 < length) at++;
+                else if (source[at] == '"') break;
+            }
+            continue;
+        }
+        if (source[at] != '(') continue;
+        size_t keyword_at = annotation_skip_space(source, length, at + 1);
+        char keyword[40];
+        if (!annotation_token(source, length, &keyword_at, keyword,
+                              sizeof(keyword)) ||
+            (strcmp(keyword, "assert_malformed_custom") != 0 &&
+             strcmp(keyword, "assert_invalid_custom") != 0))
+            continue;
+        size_t command_end = annotation_form_end(source, length, at);
+        size_t module = keyword_at;
+        while (module < command_end) {
+            if (source[module] == '"') {
+                for (module++; module < command_end; module++) {
+                    if (source[module] == '\\' && module + 1 < command_end)
+                        module++;
+                    else if (source[module] == '"') break;
+                }
+            } else if (source[module] == '(') {
+                size_t word_at = annotation_skip_space(source, command_end,
+                                                       module + 1);
+                char word[16];
+                if (annotation_token(source, command_end, &word_at, word,
+                                     sizeof(word)) &&
+                    strcmp(word, "module") == 0)
+                    break;
+            }
+            module++;
+        }
+        uint8_t invalid = 0;
+        if (module < command_end) {
+            size_t module_end = annotation_form_end(source, command_end,
+                                                    module);
+            char ignored[256] = {0};
+            invalid = !validate_custom_annotations(
+                source + module, module_end - module, ignored,
+                sizeof(ignored));
+        }
+        uint8_t *next = realloc(
+            script->custom_assertion_errors,
+            (size_t)(script->custom_assertion_count + 1));
+        if (!next) return 0;
+        script->custom_assertion_errors = next;
+        script->custom_assertion_errors[script->custom_assertion_count++] =
+            invalid;
+        at = command_end ? command_end - 1 : at;
+    }
+    return 1;
+}
+
 /* Remove comments and annotation forms before handing text to the generated
  * parser.  The official suite uses nested block comments and nested
  * annotations; Flex's regular-expression rules cannot represent either
@@ -908,10 +1293,12 @@ static int is_inline_module(const char *src, size_t len) {
     i++;
     while (i < len && (src[i] == ' ' || src[i] == '\t' ||
                        src[i] == '\r' || src[i] == '\n')) i++;
+    if (i < len && src[i] == '@') return 1;
     /* Module field keywords that are NOT top-level commands */
     static const char *field_kws[] = {
         "func", "memory", "global", "table", "data", "elem",
-        "type", "import", "export", "start", "tag", "rec", NULL
+        "type", "import", "export", "start", "tag", "rec", "@custom",
+        NULL
     };
     for (int k = 0; field_kws[k]; k++) {
         size_t klen = strlen(field_kws[k]);
@@ -936,6 +1323,11 @@ static int wast_parse_bytes_mode(const char *bytes, size_t length,
                  "out of memory retaining quoted module payload");
         return -1;
     }
+    if (!queue_custom_assertion_errors(bytes, length, script)) {
+        snprintf(script->error, sizeof(script->error),
+                 "out of memory retaining custom assertion metadata");
+        return -1;
+    }
 
 #ifndef WASTE_FREESTANDING
     yydebug = getenv("WAST_YYDEBUG") != NULL;
@@ -956,6 +1348,14 @@ static int wast_parse_bytes_mode(const char *bytes, size_t length,
         length = length + 9;
     } else {
         memcpy(source, bytes, length);
+    }
+    char annotation_error[256] = {0};
+    if (!validate_custom_annotations(source, length, annotation_error,
+                                     sizeof(annotation_error))) {
+        snprintf(script->error, sizeof(script->error), "%s",
+                 annotation_error);
+        free(source);
+        return -1;
     }
     size_t nread = strip_nonsemantic_forms(source, length);
     source[nread] = '\0'; source[nread + 1] = '\0';
@@ -1017,7 +1417,6 @@ int wast_parse_file(const char *path, wast_script *script) {
     }
     size_t nread = fread(source, 1, (size_t)fsize, f);
     fclose(f);
-    nread = strip_nonsemantic_forms(source, nread);
     /* Flex's yy_scan_bytes needs 2 null bytes at the end of the buffer */
     source[nread]   = '\0';
     source[nread+1] = '\0';
@@ -1055,6 +1454,7 @@ void wast_script_free(wast_script *script) {
     for (int i = 0; i < script->raw_module_count; i++)
         free(script->raw_modules[i].bytes);
     free(script->raw_modules);
+    free(script->custom_assertion_errors);
     script->groups = NULL;
     script->assertions = NULL;
     script->group_count = 0;
@@ -1064,6 +1464,9 @@ void wast_script_free(wast_script *script) {
     script->raw_modules = NULL;
     script->raw_module_count = 0;
     script->raw_module_cursor = 0;
+    script->custom_assertion_errors = NULL;
+    script->custom_assertion_count = 0;
+    script->custom_assertion_cursor = 0;
 }
 
 /* Compare two v128 values with NaN mode awareness.

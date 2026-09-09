@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Generate an interactive browser test dashboard for C-engine WAST tests.
 
-Embeds raw .wast spec test text into a single offline HTML page where the full
-WAST parser/runner (compiled to Wasm) executes them in Web Workers.  Repository
-DIY fixtures are assembled ahead of time and run browser-natively.
+Embeds raw .wast test text into a single offline HTML page where the full WAST
+parser/runner (compiled to Wasm) executes tests in Web Workers.  The optional
+OCaml-layout preset mirrors the OCaml dashboard's recursive spec, DIY POSIX,
+libc, and legacy groups.  Repository DIY fixtures are assembled ahead of time
+and run browser-natively.
 """
 
 import argparse
@@ -14,6 +16,43 @@ import sys
 import tempfile
 from pathlib import Path
 import datetime
+
+
+def collect_layout_tests(test_root: Path, suite: str,
+                         path_prefix: str = "") -> list[dict]:
+    """Collect tests with the same paths and groups as the OCaml dashboard."""
+    tests = []
+    for path in sorted(test_root.rglob("*.wast")):
+        relative_path = path.relative_to(test_root)
+        if "_output" in relative_path.parts:
+            continue
+        local_relative = relative_path.as_posix()
+        relative = "/".join(
+            part for part in (path_prefix, local_relative) if part
+        )
+        parent = path.parent.relative_to(test_root).as_posix()
+        group = "/".join(
+            part for part in (
+                path_prefix, parent if parent != "." else ""
+            ) if part
+        ) or "root"
+        unsupported = (
+            suite == "wasm-spec" and local_relative.startswith("legacy/")
+        )
+        tests.append({
+            "path": path,
+            "relative": relative,
+            "group": group,
+            "suite": suite,
+            "expectFailure": ".fail." in path.name,
+            "unsupported": unsupported,
+            "unsupportedReason": (
+                "Legacy exception syntax is not supported by the current "
+                "WebAssembly 3.0 engine"
+                if unsupported else None
+            ),
+        })
+    return tests
 
 
 def script_json(value) -> str:
@@ -160,6 +199,7 @@ HTML = r'''<!doctype html>
       --pass: #54d68b;
       --fail: #ff707c;
       --run: #ffd166;
+      --unsupported: #f0a43a;
     }
     * { box-sizing: border-box; }
     body {
@@ -195,6 +235,11 @@ HTML = r'''<!doctype html>
     button:disabled { cursor: wait; opacity: .55; }
     #test-all { background: #14568a; border-color: #2580bd; font-weight: 650; }
     #download-results { background: #26374d; }
+    #runtime-controls { display: flex; gap: 6px; align-items: center; }
+    #runtime-controls select {
+      border: 1px solid #40506a; border-radius: 6px; padding: 6px;
+      background: #111824; color: var(--text); font: inherit;
+    }
     #execution-mode { display: flex; align-items: center; gap: 8px; color: var(--muted); }
     #execution-mode label { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
     #custom-thread-count {
@@ -203,7 +248,7 @@ HTML = r'''<!doctype html>
     }
     #summary { color: var(--muted); font-variant-numeric: tabular-nums; }
     #test-all-timing { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-    main { width: min(1100px, calc(100% - 32px)); margin: 24px auto 60px; }
+    main { width: min(1180px, calc(100% - 32px)); margin: 24px auto 60px; }
     .notice {
       margin-bottom: 18px;
       padding: 12px 15px;
@@ -220,6 +265,8 @@ HTML = r'''<!doctype html>
       background: var(--panel);
     }
     .group.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+    .group.unsupported { border-color: #875a22; }
+    .group.unsupported .group-header { background: #372817; }
     .group-header {
       display: flex;
       align-items: center;
@@ -230,14 +277,7 @@ HTML = r'''<!doctype html>
     }
     .group-header h2 { margin: 0 auto 0 0; font-size: 15px; font-family: ui-monospace, monospace; }
     .group-count { color: var(--muted); }
-    .test {
-      display: grid;
-      grid-template-columns: 22px minmax(200px, 1fr) minmax(110px, auto) minmax(80px, auto) auto;
-      gap: 10px;
-      align-items: center;
-      padding: 8px 14px;
-      border-top: 1px solid #222c3a;
-    }
+    .test { display: grid; grid-template-columns: 22px minmax(240px, 1fr) minmax(72px, auto) auto; gap: 10px; align-items: center; padding: 8px 14px; border-top: 1px solid #222c3a; }
     .test:first-child { border-top: 0; }
     .test:hover { background: #192230; }
     .indicator {
@@ -247,10 +287,13 @@ HTML = r'''<!doctype html>
     .test.running .indicator { background: var(--run); animation: pulse 1s infinite alternate; }
     .test.pass .indicator { background: var(--pass); }
     .test.fail .indicator { background: var(--fail); }
-    .test-name { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
-    .test-assertions { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; font-size: .88em; }
+    .test.unsupported { background: #211a12; }
+    .test.unsupported .indicator { background: var(--unsupported); box-shadow: 0 0 0 3px #3b2b18; }
+    .test-path { min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .expected { margin-left: 8px; color: var(--muted); font: 11px system-ui, sans-serif; }
+    .unsupported-label { margin-left: 8px; color: var(--unsupported); font: 11px system-ui, sans-serif; font-weight: 700; }
     .duration { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
-    details { grid-column: 2 / 6; }
+    details { grid-column: 2 / 5; }
     details summary { cursor: pointer; color: var(--muted); font-size: .88em; }
     details summary:hover { color: var(--text); }
     .assertion-table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: .85em; }
@@ -267,18 +310,32 @@ HTML = r'''<!doctype html>
     @keyframes pulse { to { opacity: .35; } }
     @media (max-width: 620px) {
       header { padding: 12px; }
-      .test { grid-template-columns: 18px 1fr auto auto; }
-      .test-assertions { display: none; }
-      details { grid-column: 2 / 5; }
+      main { width: calc(100% - 16px); margin-top: 12px; }
+      .test { grid-template-columns: 18px 1fr auto; }
+      .test-path { grid-column: 2 / 4; }
+      .duration { grid-column: 2; grid-row: 2; text-align: left; }
+      .test button { grid-column: 3; grid-row: 2; }
+      details { grid-column: 2 / 4; }
     }
   </style>
 </head>
 <body>
   <header>
-    <h1>WASTE C engine tests</h1>
+    <h1>WASTE · embedded WebAssembly and POSIX tests (C engine)</h1>
     <div id="execution-mode">Concurrent sandboxes:</div>
     <div id="summary">0 / __TEST_COUNT__ completed</div>
     <div id="test-all-timing">Started at: — · Finished at: —</div>
+    <div id="runtime-controls">
+      <button class="runtime-control" id="pause-runtime" type="button">Pause</button>
+      <button class="runtime-control" id="resume-runtime" type="button">Resume</button>
+      <select class="runtime-control" id="signal-number" title="POSIX signal number">
+        <option value="2">SIGINT</option><option value="15">SIGTERM</option>
+        <option value="1">SIGHUP</option><option value="14">SIGALRM</option>
+        <option value="28">SIGWINCH</option>
+      </select>
+      <button class="runtime-control" id="send-signal" type="button">Send signal</button>
+      <span id="control-status"></span>
+    </div>
     <button id="download-results" type="button" disabled>Download results</button>
     <button id="test-all" type="button">Test all</button>
   </header>
@@ -287,7 +344,8 @@ HTML = r'''<!doctype html>
       Tests run in Web Workers using the pre-compiled C engine (<code>waste-wast.wasm</code>).
       Each test file gets its own Worker instance. Official WAST assertions use the WASTE C executor.
       Repository DIY modules are assembled ahead of time and execute in the browser Wasm tier with
-      a sandbox-local compatibility kernel while the corresponding C executor support is developed.
+      a sandbox-local compatibility kernel, including its process and signal probes.
+      Orange legacy modules are unsupported and excluded from Test all.
       Unsupported WAST syntax and engine features are reported as failures, never passes.
     </div>
     <div id="groups"></div>
@@ -303,13 +361,17 @@ HTML = r'''<!doctype html>
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return bytes;
   })();
-  const TESTS = PAYLOAD.tests;
+  const ALL_TESTS = PAYLOAD.tests;
+  const TESTS = ALL_TESTS.filter(test => !test.unsupported);
 
   let batchRunning = false;
+  let batchPaused = false;
+  let resumeBatchDispatch = null;
   let testAllStartedAt = null;
   let testAllFinishedAt = null;
   let threadCount = 1;
   const results = new Map();
+  const activeWorkers = new Set();
 
   /* Worker source — runs inside a Blob URL */
   const WORKER_SRC = String.raw`
@@ -648,9 +710,27 @@ async function runBrowserNative(testSpec) {
   return results;
 }
 
+let runtimePaused = false;
+let pendingRuntimeSignal = 0;
+let workerRunning = false;
+
+async function workerControlPoint() {
+  while (runtimePaused)
+    await new Promise(resolve => setTimeout(resolve, 10));
+}
+
 self.onmessage = async function(e) {
+  if (e.data.type === "control") {
+    if (e.data.operation === 1) runtimePaused = true;
+    else if (e.data.operation === 0) runtimePaused = false;
+    else if (e.data.operation === 2) pendingRuntimeSignal = e.data.argument;
+    return;
+  }
+  if (workerRunning) return;
+  workerRunning = true;
   const {wasmBytes, testSpec} = e.data;
   try {
+    await workerControlPoint();
     if (testSpec.error) throw new Error(testSpec.error);
     let results;
     if (testSpec.mode === "browser-native") {
@@ -663,6 +743,8 @@ self.onmessage = async function(e) {
     self.postMessage({type: "done", file: testSpec.file, results});
   } catch (err) {
     self.postMessage({type: "error", error: String(err.stack || err)});
+  } finally {
+    workerRunning = false;
   }
 };
   `;
@@ -670,7 +752,7 @@ self.onmessage = async function(e) {
   /* ---- DOM helpers ---- */
 
   function rowFor(test) {
-    return document.querySelector(`.test[data-file="${CSS.escape(test.file)}"]`);
+    return document.querySelector(`.test[data-path="${CSS.escape(test.path)}"]`);
   }
 
   function formatDuration(ms) {
@@ -692,13 +774,14 @@ self.onmessage = async function(e) {
 
   function updateSummary() {
     let passed = 0, failed = 0;
-    for (const r of results.values()) {
+    const supportedResults = [...results.values()].filter(result => !result.unsupported);
+    for (const r of supportedResults) {
       if (r.state === "pass") passed++;
       else if (r.state === "fail") failed++;
     }
-    const done = results.size;
+    const done = supportedResults.length;
     document.querySelector("#summary").textContent =
-      `${done} / ${TESTS.length} completed · ${passed} passed · ${failed} failed`;
+      `${done} / ${TESTS.length} supported reported · ${passed} passed · ${failed} failed · ${ALL_TESTS.length - TESTS.length} unsupported excluded`;
     document.querySelector("#download-results").disabled = results.size === 0 || batchRunning;
   }
 
@@ -713,13 +796,13 @@ self.onmessage = async function(e) {
       durationMs === null ? "—" : formatDuration(durationMs);
 
     const assertEl = row.querySelector(".test-assertions");
-    if (state !== "idle" && state !== "running" && assertionResults) {
+    if (assertEl && state !== "idle" && state !== "running" && assertionResults) {
       const p = assertionResults.filter(a => a.pass).length;
       const t = assertionResults.length;
       assertEl.textContent = `${p} / ${t} assertions`;
-    } else if (state === "running") {
+    } else if (assertEl && state === "running") {
       assertEl.textContent = "running…";
-    } else {
+    } else if (assertEl) {
       const total = test.spec.assertionCount || 0;
       assertEl.textContent = total > 0 ? `${total} assertions` : "";
     }
@@ -753,7 +836,13 @@ self.onmessage = async function(e) {
     }
 
     if (state === "pass" || state === "fail") {
-      results.set(test.file, {
+      results.set(test.path, {
+        path: test.path,
+        name: test.name,
+        group: test.group,
+        suite: test.suite,
+        unsupported: test.unsupported,
+        unsupportedReason: test.unsupportedReason,
         file: test.file,
         backend: test.spec.mode === "browser-native" ? "browser-wasm-compat" : "c-engine",
         state,
@@ -762,7 +851,7 @@ self.onmessage = async function(e) {
         assertions: assertionResults || [],
       });
     }
-    if (state === "running") results.delete(test.file);
+    if (state === "running") results.delete(test.path);
     updateSummary();
   }
 
@@ -772,12 +861,39 @@ self.onmessage = async function(e) {
       .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
+  function sendControl(worker, operation, argument = 0) {
+    worker.postMessage({type: "control", operation, argument});
+  }
+
+  function pauseRuntimes() {
+    batchPaused = true;
+    for (const worker of activeWorkers) sendControl(worker, 1);
+    document.querySelector("#control-status").textContent =
+      `paused scheduling; ${activeWorkers.size} active runtime(s) finishing their current C call`;
+  }
+
+  function resumeRuntimes() {
+    batchPaused = false;
+    for (const worker of activeWorkers) sendControl(worker, 0);
+    document.querySelector("#control-status").textContent =
+      `running ${activeWorkers.size} active runtime(s)`;
+    resumeBatchDispatch?.();
+  }
+
+  function signalRuntimes() {
+    const signal = Number(document.querySelector("#signal-number").value);
+    for (const worker of activeWorkers) sendControl(worker, 2, signal);
+    const name = document.querySelector("#signal-number").selectedOptions[0].textContent;
+    document.querySelector("#control-status").textContent =
+      `${name} queued for ${activeWorkers.size} active runtime(s)`;
+  }
+
   /* ---- Rendering ---- */
 
   function render() {
     /* Concurrency controls */
     const em = document.querySelector("#execution-mode");
-    for (const opt of [{value:"1", label:"1", checked:true}, {value:"all", label:`${TESTS.length} (all)`}, {value:"custom", label:"custom"}]) {
+    for (const opt of [{value:"1", label:"1", checked:true}, {value:"all", label:`${TESTS.length} (#tests)`}, {value:"custom", label:"custom"}]) {
       const lbl = document.createElement("label");
       const radio = document.createElement("input");
       radio.type = "radio"; radio.name = "threads"; radio.value = opt.value;
@@ -795,7 +911,7 @@ self.onmessage = async function(e) {
 
     /* Group tests by group name */
     const groups = new Map();
-    for (const test of TESTS) {
+    for (const test of ALL_TESTS) {
       if (!groups.has(test.group)) groups.set(test.group, []);
       groups.get(test.group).push(test);
     }
@@ -805,6 +921,8 @@ self.onmessage = async function(e) {
       const section = document.createElement("section");
       section.className = "group";
       section.dataset.group = groupName;
+      const unsupportedGroup = tests.every(test => test.unsupported);
+      if (unsupportedGroup) section.classList.add("unsupported");
 
       const header = document.createElement("div");
       header.className = "group-header";
@@ -812,29 +930,39 @@ self.onmessage = async function(e) {
       title.textContent = groupName;
       const count = document.createElement("span");
       count.className = "group-count";
-      count.textContent = `${tests.length} files`;
+      count.textContent = unsupportedGroup ?
+        `${tests.length} tests · unsupported` : `${tests.length} tests`;
       const btn = document.createElement("button");
-      btn.type = "button"; btn.textContent = "Test module";
+      btn.type = "button";
+      btn.textContent = unsupportedGroup ? "Test module anyway" : "Test module";
       btn.addEventListener("click", () => runBatch(tests, section));
       header.append(title, count, btn);
       section.append(header);
 
       for (const test of tests) {
         const row = document.createElement("div");
-        row.className = "test idle";
-        row.dataset.file = test.file;
+        row.className = `test idle${test.unsupported ? " unsupported" : ""}`;
+        row.dataset.path = test.path;
 
         const ind = document.createElement("span");
         ind.className = "indicator";
 
         const name = document.createElement("span");
-        name.className = "test-name";
-        name.textContent = test.file;
-
-        const assertEl = document.createElement("span");
-        assertEl.className = "test-assertions";
-        const total = test.spec.assertionCount || 0;
-        assertEl.textContent = total > 0 ? `${total} assertions` : "";
+        name.className = "test-path";
+        name.textContent = test.name;
+        if (test.expectFailure) {
+          const expected = document.createElement("span");
+          expected.className = "expected";
+          expected.textContent = "expected rejection";
+          name.append(expected);
+        }
+        if (test.unsupported) {
+          const unsupported = document.createElement("span");
+          unsupported.className = "unsupported-label";
+          unsupported.textContent = "unsupported legacy module";
+          unsupported.title = test.unsupportedReason;
+          name.append(unsupported);
+        }
 
         const dur = document.createElement("span");
         dur.className = "duration";
@@ -844,7 +972,7 @@ self.onmessage = async function(e) {
         runBtn.type = "button"; runBtn.textContent = "Run";
         runBtn.addEventListener("click", () => { if (!batchRunning) runTest(test); });
 
-        row.append(ind, name, assertEl, dur, runBtn);
+        row.append(ind, name, dur, runBtn);
         section.append(row);
       }
 
@@ -853,6 +981,10 @@ self.onmessage = async function(e) {
 
     document.querySelector("#test-all").addEventListener("click", runTestAll);
     document.querySelector("#download-results").addEventListener("click", downloadResults);
+    document.querySelector("#pause-runtime").addEventListener("click", pauseRuntimes);
+    document.querySelector("#resume-runtime").addEventListener("click", resumeRuntimes);
+    document.querySelector("#send-signal").addEventListener("click", signalRuntimes);
+    document.querySelector("#control-status").textContent = "ready";
     updateSummary();
   }
 
@@ -873,10 +1005,15 @@ self.onmessage = async function(e) {
       const startedAt = performance.now();
       const url = URL.createObjectURL(new Blob([WORKER_SRC], {type: "text/javascript"}));
       const worker = new Worker(url);
+      activeWorkers.add(worker);
+      let finished = false;
 
       const finish = (assertionResults, error) => {
+        if (finished) return;
+        finished = true;
         const durationMs = performance.now() - startedAt;
         worker.terminate();
+        activeWorkers.delete(worker);
         URL.revokeObjectURL(url);
         if (error) {
           setResult(test, "fail", [{func: "(worker)", pass: false, error}], durationMs);
@@ -896,7 +1033,8 @@ self.onmessage = async function(e) {
       };
       worker.onerror = ev => finish(null, ev.message || "Worker error");
 
-      worker.postMessage({wasmBytes: WASM_BYTES, testSpec: test.spec});
+      worker.postMessage({type: "run", wasmBytes: WASM_BYTES,
+                          testSpec: test.spec});
     });
   }
 
@@ -909,19 +1047,13 @@ self.onmessage = async function(e) {
     if (btn) btn.disabled = batchRunning;
   }
 
-  async function runBatch(tests, section) {
-    if (batchRunning) return;
-    batchRunning = true;
-    const maxConcurrent = selectedThreadCount();
-    section && section.classList.add("active");
-    document.querySelectorAll("button").forEach(b => b.disabled = true);
-
+  async function runConcurrentBatch(tests, maxConcurrent) {
+    const queue = [...tests];
+    let active = 0;
     try {
-      const queue = [...tests];
-      let active = 0;
-
       await new Promise(resolve => {
         function dispatch() {
+          if (batchPaused) return;
           while (active < maxConcurrent && queue.length > 0) {
             const test = queue.shift();
             active++;
@@ -934,12 +1066,27 @@ self.onmessage = async function(e) {
           }
           if (active === 0 && queue.length === 0) resolve();
         }
+        resumeBatchDispatch = dispatch;
         dispatch();
       });
     } finally {
+      resumeBatchDispatch = null;
+    }
+  }
+
+  async function runBatch(tests, section) {
+    if (batchRunning) return;
+    batchRunning = true;
+    const maxConcurrent = selectedThreadCount();
+    section && section.classList.add("active");
+    document.querySelectorAll("button:not(.runtime-control)").forEach(b => b.disabled = true);
+
+    try {
+      await runConcurrentBatch(tests, maxConcurrent);
+    } finally {
       section && section.classList.remove("active");
       batchRunning = false;
-      document.querySelectorAll("button").forEach(b => b.disabled = false);
+      document.querySelectorAll("button:not(.runtime-control)").forEach(b => b.disabled = false);
       updateSummary();
       if (new URLSearchParams(location.search).has("autorun")) {
         const failed = [...results.values()].filter(result => result.state !== "pass").length;
@@ -957,35 +1104,17 @@ self.onmessage = async function(e) {
 
     batchRunning = true;
     const maxConcurrent = selectedThreadCount();
-    document.querySelectorAll("button").forEach(b => b.disabled = true);
-    document.querySelectorAll(".group").forEach(s => s.classList.add("active"));
+    document.querySelectorAll("button:not(.runtime-control)").forEach(b => b.disabled = true);
+    document.querySelectorAll(".group:not(.unsupported)").forEach(s => s.classList.add("active"));
 
     try {
-      const queue = [...TESTS];
-      let active = 0;
-
-      await new Promise(resolve => {
-        function dispatch() {
-          while (active < maxConcurrent && queue.length > 0) {
-            const test = queue.shift();
-            active++;
-            setResult(test, "running", null, null);
-            runOneTest(test).then(() => {
-              active--;
-              dispatch();
-              if (active === 0 && queue.length === 0) resolve();
-            });
-          }
-          if (active === 0 && queue.length === 0) resolve();
-        }
-        dispatch();
-      });
+      await runConcurrentBatch(TESTS, maxConcurrent);
     } finally {
       document.querySelectorAll(".group").forEach(s => s.classList.remove("active"));
       testAllFinishedAt = new Date();
       updateTestAllTiming();
       batchRunning = false;
-      document.querySelectorAll("button").forEach(b => b.disabled = false);
+      document.querySelectorAll("button:not(.runtime-control)").forEach(b => b.disabled = false);
       updateSummary();
       if (new URLSearchParams(location.search).has("autorun")) {
         const failed = [...results.values()].filter(result => result.state !== "pass").length;
@@ -997,9 +1126,10 @@ self.onmessage = async function(e) {
 
   function downloadResults() {
     if (results.size === 0 || batchRunning) return;
-    const ordered = TESTS.map(t => results.get(t.file)).filter(Boolean);
-    const passed = ordered.filter(r => r.state === "pass").length;
-    const failed = ordered.length - passed;
+    const ordered = ALL_TESTS.map(t => results.get(t.path)).filter(Boolean);
+    const supported = ordered.filter(result => !result.unsupported);
+    const passed = supported.filter(r => r.state === "pass").length;
+    const failed = supported.length - passed;
     const report = {
       format: "waste-c-engine-results-v1",
       downloadedAt: new Date().toISOString(),
@@ -1014,7 +1144,10 @@ self.onmessage = async function(e) {
         durationMs: testAllStartedAt && testAllFinishedAt ?
           testAllFinishedAt - testAllStartedAt : null,
       },
-      summary: {available: TESTS.length, completed: ordered.length, passed, failed},
+      summary: {available: ALL_TESTS.length, supported: TESTS.length,
+                unsupported: ALL_TESTS.length - TESTS.length,
+                completed: ordered.length,
+                completedSupported: supported.length, passed, failed},
       results: ordered,
     };
     const blob = new Blob([JSON.stringify(report, null, 2) + "\n"], {type: "application/json"});
@@ -1045,11 +1178,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Generate an interactive C engine test dashboard"
     )
+    parser.add_argument("--repo-root", type=Path,
+                        default=Path(__file__).resolve().parents[1],
+                        help="Repository root used by --ocaml-layout")
+    parser.add_argument("--ocaml-layout", action="store_true",
+                        help="Embed the same recursive spec, DIY POSIX, and "
+                             "libc corpus and groups as the OCaml dashboard")
     parser.add_argument("--runner", type=Path, default=None,
                         help="Path to the waste-wast native binary (needed for --count)")
     parser.add_argument("--wasm", type=Path, required=True,
                         help="Path to waste-wast.wasm (browser C engine)")
-    parser.add_argument("--tests", type=Path, required=True, action="append",
+    parser.add_argument("--tests", type=Path, action="append", default=[],
                         help="Directory containing .wast test files (repeatable)")
     parser.add_argument("--output", type=Path, required=True,
                         help="Output HTML file path")
@@ -1058,6 +1197,46 @@ def main() -> int:
     parser.add_argument("--count", action="store_true",
                         help="Use native runner to count assertions per file")
     args = parser.parse_args()
+
+    if not args.ocaml_layout and not args.tests:
+        parser.error("at least one --tests directory or --ocaml-layout is required")
+
+    root = args.repo_root.resolve()
+    if args.ocaml_layout:
+        layout_roots = [
+            (root / "submodules" / "wasm-spec" / "test",
+             "wasm-spec", ""),
+            (root / "tests" / "diy-posix-test",
+             "diy-posix-test", "diy-posix-test"),
+            (root / "build" / "waste-libc" / "tests",
+             "libc-test", "libc-test"),
+        ]
+        missing = [path for path, _, _ in layout_roots if not path.is_dir()]
+        if missing:
+            print("error: OCaml-layout test directory not found: " +
+                  str(missing[0]), file=sys.stderr)
+            return 1
+        test_entries = [
+            entry
+            for path, suite, prefix in layout_roots
+            for entry in collect_layout_tests(path, suite, prefix)
+        ]
+    else:
+        test_entries = [
+            {
+                "path": wast_file,
+                "relative": f"{test_dir.name}/{wast_file.name}",
+                "group": test_dir.name,
+                "suite": ("diy-posix-test"
+                          if test_dir.name == "diy-posix-test"
+                          else "wasm-spec"),
+                "expectFailure": ".fail." in wast_file.name,
+                "unsupported": False,
+                "unsupportedReason": None,
+            }
+            for test_dir in args.tests
+            for wast_file in sorted(test_dir.glob("*.wast"))
+        ]
 
     checks = [
         ("wasm", args.wasm, "file"),
@@ -1073,33 +1252,30 @@ def main() -> int:
             print(f"error: {label} directory not found: {p}", file=sys.stderr)
             return 1
 
-    wast_files = [
-        (test_dir, wast_file)
-        for test_dir in args.tests
-        for wast_file in sorted(test_dir.glob("*.wast"))
-    ]
-    if not wast_files:
+    if not test_entries:
         print("error: no .wast files found", file=sys.stderr)
         return 1
 
     # Optionally count assertions per spec file using the native runner
     assertion_counts = {}
     if args.count and args.runner:
-        for _, wast_file in wast_files:
+        for entry in test_entries:
+            wast_file = entry["path"]
             try:
                 result = subprocess.run(
                     [str(args.runner), "--count", str(wast_file)],
                     capture_output=True, text=True, timeout=60,
                 )
                 if result.returncode == 0:
-                    assertion_counts[wast_file.name] = int(result.stdout.strip())
+                    assertion_counts[wast_file] = int(result.stdout.strip())
             except (subprocess.TimeoutExpired, ValueError):
                 pass
 
-    print(f"Embedding {len(wast_files)} test files…")
+    print(f"Embedding {len(test_entries)} test files…")
     tests = []
-    for test_dir, wast_file in wast_files:
-        if test_dir.name == "diy-posix-test":
+    for entry in test_entries:
+        wast_file = entry["path"]
+        if entry["suite"] == "diy-posix-test":
             try:
                 spec = build_diy_spec(wast_file, args.wasm_as)
                 n_steps = len(spec.get("steps", []))
@@ -1110,7 +1286,7 @@ def main() -> int:
         else:
             wast_text = wast_file.read_bytes()
             wast_b64 = base64.b64encode(wast_text).decode("ascii")
-            n_assert = assertion_counts.get(wast_file.name, 0)
+            n_assert = assertion_counts.get(wast_file, 0)
             spec = {
                 "file": wast_file.name,
                 "mode": "wast-stream",
@@ -1121,8 +1297,14 @@ def main() -> int:
         n_display = total_assertions(spec) or len(spec.get("steps", []))
         print(f"  {wast_file.name}: {n_display or '?'} checks")
         tests.append({
+            "path": entry["relative"],
+            "name": wast_file.name,
             "file": wast_file.name,
-            "group": test_dir.name,
+            "group": entry["group"],
+            "suite": entry["suite"],
+            "expectFailure": entry["expectFailure"],
+            "unsupported": entry["unsupported"],
+            "unsupportedReason": entry["unsupportedReason"],
             "spec": spec,
         })
 
@@ -1133,9 +1315,10 @@ def main() -> int:
     payload = {"wasmB64": wasm_b64, "tests": tests}
 
     total_files = len(tests)
+    supported_files = sum(not test["unsupported"] for test in tests)
     document = (
         HTML
-        .replace("__TEST_COUNT__", str(total_files))
+        .replace("__TEST_COUNT__", str(supported_files))
         .replace("__PAYLOAD__", script_json(payload))
     )
 
@@ -1144,7 +1327,8 @@ def main() -> int:
 
     total_a = sum(total_assertions(t["spec"]) for t in tests)
     print(f"Generated {args.output} ({args.output.stat().st_size:,} bytes)")
-    print(f"{total_files} test files · {total_a} total assertions")
+    print(f"{total_files} test files ({supported_files} supported) · "
+          f"{total_a} total assertions")
     return 0
 
 

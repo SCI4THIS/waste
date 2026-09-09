@@ -93,6 +93,60 @@ assertions in the browser dashboard.  Later paragraphs in this section preserve
 the incremental implementation history; their smaller pass counts are no
 longer the current baseline.
 
+Against the source inventory embedded by the OCaml-Wasm dashboard, the C
+browser engine now passes all 261 non-legacy specification files selected by
+OCaml-Wasm's **Test all** (100%).  This is 97 top-level core, 8 bulk-memory,
+4 exceptions, 17 GC, 25 memory64, 41 multi-memory, 7 relaxed-SIMD, and 59 SIMD
+files, including `custom_annot.wast`, `branch_hint.wast`, and `name_annot.wast`.
+Both comparisons exclude the four legacy exception files that OCaml-Wasm
+displays but deliberately omits from **Test all**.  The OCaml-layout C dashboard
+also embeds the four DIY POSIX files and ten generated libc tests.  Its **Test
+all** selection therefore matches OCaml-Wasm at all 275 supported files; both
+pages display the same additional four orange legacy exception files without
+including them in that selection.
+
+Generate the matching self-contained C dashboard from the TUI with **Generate
+full C-engine browser dashboard (OCaml layout)**, or directly with:
+
+```sh
+./start.sh --c-engine-html
+```
+
+The result is `build/c-engine/browser-tests-c-engine-ocaml-layout.html`.  It
+uses the same recursive paths and directory groups as the OCaml-Wasm page and
+includes its runtime-control toolbar, specification suites, DIY POSIX process
+and signal probes, and generated libc groups.  Official and libc WAST files run
+through the C engine.  DIY POSIX files continue to use isolated browser-native
+modules with the dashboard compatibility kernel.  Pause prevents additional
+test sandboxes from starting and resumes queued work; a running synchronous C
+engine call reaches worker control messages only at its next command boundary.
+The text model's bounded export capacity is 256 so the 216-export guest libc
+module is retained and linked without silently losing later exports.
+
+Registered custom annotations are checked by a bounded deterministic C pre-pass
+before the common WAT grammar removes annotation forms.  It validates custom
+section placement and payloads, names on modules/functions/tags, and branch
+hints on plain and folded `if` instructions.  The WAST grammar recognizes
+`assert_malformed_custom` and `assert_invalid_custom`, while quoted assertion
+modules are compiled directly instead of being wrapped in a second module.
+The three-file native gate reports 20 of 20 passing custom assertions.  Reproduce
+the corresponding self-contained browser gate with:
+
+```sh
+make -C src/c-engine WAST_BUILD_DIR=../../build/c-engine \
+  wast-native wast-mmap-test wast-browser
+python3 tools/generate-c-engine-tests.py \
+  --runner build/c-engine/waste-wast \
+  --wasm build/c-engine/waste-wast.wasm \
+  --tests submodules/wasm-spec/test/custom/custom \
+  --tests submodules/wasm-spec/test/custom/metadata.code.branch_hint \
+  --tests submodules/wasm-spec/test/custom/name \
+  --count \
+  --output build/c-engine/browser-tests-c-engine-custom-annotations.html
+node tests/c-engine-browser-runtime.cjs \
+  build/c-engine/browser-tests-c-engine-custom-annotations.html
+```
+
 The multi-memory work adds deterministic folded load/store boundaries, indexed
 load/store/size/grow and bulk-memory encoding, named data-segment resolution,
 DataCount emission before code, and runtime semantics for `memory.init`,

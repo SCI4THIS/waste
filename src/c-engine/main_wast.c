@@ -424,28 +424,12 @@ static uint8_t *encode_group_module(const wast_group *group, size_t *size_out,
         return copy;
     }
     if (group->raw_module.kind == WAST_RAW_QUOTE) {
-        static const char prefix[] = "(module ";
         size_t length = group->raw_module.length;
-        if (length > SIZE_MAX - sizeof(prefix) - 1) {
-            snprintf(error, 256, "quoted module is too large");
-            return NULL;
-        }
-        size_t source_length = sizeof(prefix) - 1 + length + 1;
-        char *source = malloc(source_length);
-        if (!source) {
-            snprintf(error, 256, "out of memory copying quoted module");
-            return NULL;
-        }
-        memcpy(source, prefix, sizeof(prefix) - 1);
-        if (length)
-            memcpy(source + sizeof(prefix) - 1,
-                   group->raw_module.bytes, length);
-        source[source_length - 1] = ')';
         uint8_t *wasm = NULL;
-        if (waste_wat_compile(source, source_length, &wasm, size_out,
+        if (waste_wat_compile((const char *)group->raw_module.bytes, length,
+                              &wasm, size_out,
                               error, 256) != 0)
             wasm = NULL;
-        free(source);
         return wasm;
     }
     return wast_encode_module(&group->module, size_out, error);

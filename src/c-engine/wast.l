@@ -335,6 +335,8 @@ assert_return      { return KW_ASSERT_RETURN; }
 assert_trap        { return KW_ASSERT_TRAP; }
 assert_exception   { return KW_ASSERT_EXCEPTION; }
 assert_exhaustion  { return KW_ASSERT_EXHAUSTION; }
+assert_malformed_custom { return KW_ASSERT_MALFORMED_CUSTOM; }
+assert_invalid_custom { return KW_ASSERT_INVALID_CUSTOM; }
 assert_invalid     { return KW_ASSERT_INVALID; }
 assert_malformed   { return KW_ASSERT_MALFORMED; }
 assert_unlinkable  { return KW_ASSERT_UNLINKABLE; }

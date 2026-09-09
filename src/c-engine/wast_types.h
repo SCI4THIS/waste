@@ -270,7 +270,7 @@ typedef struct {
     int      kind; /* 0=func, 1=table, 2=memory, 3=global */
 } wast_export;
 
-#define WAST_MAX_EXPORTS 128
+#define WAST_MAX_EXPORTS 256
 
 /* Complete parsed WAT module */
 typedef struct {
@@ -383,6 +383,9 @@ typedef struct {
     wast_raw_module *raw_modules;
     int            raw_module_count;
     int            raw_module_cursor;
+    uint8_t       *custom_assertion_errors;
+    int            custom_assertion_count;
+    int            custom_assertion_cursor;
     int            strict_wat_mode;
     char           error[256];
 } wast_script;
