@@ -3281,6 +3281,9 @@ fold_instr:
         } else if (strcmp($1, "data.drop") == 0) {
             emit_byte(script, 0xFC); emit_leb_u32(script, 9);
             emit_index_ref(script, IDX_DATA, $2, @2.first_line, @2.first_column);
+        } else if (strcmp($1, "elem.drop") == 0) {
+            emit_byte(script, 0xFC); emit_leb_u32(script, 13);
+            emit_index_ref(script, IDX_ELEM, $2, @2.first_line, @2.first_column);
         } else emit_gc_constructor(script, $1, $2,
                                    @2.first_line, @2.first_column);
     }
@@ -3337,6 +3340,11 @@ fold_instr:
         } else if (strcmp($1, "memory.fill") == 0) {
             emit_byte(script, 0xFC); emit_leb_u32(script, 11);
             emit_index_ref(script, IDX_MEMORY, $2, @2.first_line, @2.first_column);
+        } else if (strcmp($1, "memory.init") == 0) {
+            /* (memory.init $data ...) — abbreviated, memory 0 */
+            emit_byte(script, 0xFC); emit_leb_u32(script, 8);
+            emit_index_ref(script, IDX_DATA, $2, @2.first_line, @2.first_column);
+            emit_byte(script, 0x00); /* memidx = 0 */
         } else {
             emit_gc_constructor(script, $1, $2,
                                 @2.first_line, @2.first_column);

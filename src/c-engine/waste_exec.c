@@ -2689,7 +2689,12 @@ static select_validation_result validate_select_function(
                 } else if (sub == 14) { /* table.copy: [i32 i32 i32] -> [] */
                     uint32_t dst_table = instr->u32_imm;
                     uint32_t src_table = instr->v128_imm.bytes[0];
-                    if (dst_table >= eng->table_count || src_table >= eng->table_count)
+                    if (dst_table >= eng->table_count || src_table >= eng->table_count ||
+                        !global_type_is_compat(
+                            eng->tables[src_table]->type_owner,
+                            eng->tables[src_table]->element_type,
+                            eng->tables[dst_table]->type_owner,
+                            eng->tables[dst_table]->element_type, 0))
                         return SELECT_VALIDATION_INVALID;
                     wasm_valtype dst_type = eng->tables[dst_table]->is_64 ?
                         WASM_VALTYPE_I64 : WASM_VALTYPE_I32;

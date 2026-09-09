@@ -46,6 +46,7 @@ C_ENGINE_CORE_HTML="$C_ENGINE_BUILD/browser-tests-c-engine-core.html"
 C_ENGINE_CORE_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core"
 C_ENGINE_RELAXED_SIMD_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/relaxed-simd"
 C_ENGINE_MEMORY64_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/memory64"
+C_ENGINE_BULK_MEMORY_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/bulk-memory"
 C_ENGINE_DIY_POSIX_TESTS="$REPO_ROOT/tests/diy-posix-test"
 C_ENGINE_BROWSER_TEST="$REPO_ROOT/tests/c-engine-browser-runtime.cjs"
 
@@ -920,6 +921,7 @@ generate_c_engine_tests() {
     --wasm "$C_ENGINE_WASM" \
     --tests "$C_ENGINE_RELAXED_SIMD_TESTS" \
     --tests "$C_ENGINE_MEMORY64_TESTS" \
+    --tests "$C_ENGINE_BULK_MEMORY_TESTS" \
     --tests "$C_ENGINE_DIY_POSIX_TESTS" \
     --output "$C_ENGINE_HTML" >>"$TEST_LOG" 2>&1 || return 1
   node "$C_ENGINE_BROWSER_TEST" "$C_ENGINE_HTML" >>"$TEST_LOG" 2>&1
