@@ -75,7 +75,7 @@ static void put_field(writer*w,const wast_type*t,int i){
     else put_vt(w,t->fields[i]);
     byte(w,t->field_mutable[i]?1:0);
 }
-static void put_type(writer*w,const wast_type*t){
+static void put_composite_type(writer*w,const wast_type*t){
     if(t->kind==WAST_TYPE_FUNC){func_sig s=type_sig(t);put_sig(w,&s);return;}
     if(t->kind==WAST_TYPE_STRUCT){
         byte(w,0x5f);u32(w,(uint32_t)t->field_count);
@@ -83,6 +83,13 @@ static void put_type(writer*w,const wast_type*t){
         return;
     }
     byte(w,0x5e);put_field(w,t,0);
+}
+static void put_type(writer*w,const wast_type*t){
+    if(t->is_final&&t->supertype<0){put_composite_type(w,t);return;}
+    byte(w,t->is_final?0x4f:0x50);
+    u32(w,t->supertype>=0?1u:0u);
+    if(t->supertype>=0)u32(w,(uint32_t)t->supertype);
+    put_composite_type(w,t);
 }
 static void limits(writer*w,const wast_limits*l){uint32_t f=(l->has_max?1u:0u)|(l->is_shared?2u:0u)|(l->is_64?4u:0u);u32(w,f);u64(w,l->min);if(l->has_max)u64(w,l->max);}
 static void table_type(writer*w,const wast_table*t){put_vt(w,t->reftype);limits(w,&t->limits);}

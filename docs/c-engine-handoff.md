@@ -73,20 +73,22 @@ boundaries needed for pause, signals, and blocking operations.
 
 ## WAST Core-Module Encoder Status
 
-### Current browser conformance baseline (2026-09-08)
+### Current browser conformance baseline (2026-09-09)
 
 The Wasm-compiled C WAST engine now passes all 97 top-level
 `submodules/wasm-spec/test/core/*.wast` files through the self-contained
 browser harness.  The separate multi-memory proposal suite also passes all 41
 `submodules/wasm-spec/test/core/multi-memory/*.wast` files natively and through
 the same browser worker.  The core SIMD suite passes all 59
-`submodules/wasm-spec/test/core/simd/*.wast` files (25,515 assertions) both
+`submodules/wasm-spec/test/core/simd/*.wast` files (24,335 assertions) both
 natively and through the freestanding browser engine.  The memory64 proposal
 suite passes all 25 `submodules/wasm-spec/test/core/memory64/*.wast` files in
 both paths (8,409 native command results; 7,946 explicit assertion commands in
-the generated browser dashboard).  Later paragraphs in this section preserve
-the incremental implementation history; their smaller pass counts are no
-longer the current baseline.
+the generated browser dashboard).  The GC proposal suite passes all 17
+`submodules/wasm-spec/test/core/gc/*.wast` files in the mmap, native execution,
+and freestanding browser paths (591 explicit assertions).  Later paragraphs in
+this section preserve the incremental implementation history; their smaller
+pass counts are no longer the current baseline.
 
 The multi-memory work adds deterministic folded load/store boundaries, indexed
 load/store/size/grow and bulk-memory encoding, named data-segment resolution,
@@ -128,10 +130,7 @@ address operands from each memory or table, and implements the mixed-address
 rules for bulk memory and table instructions.  The encoder retains the
 2^16-page limit for memory32 and uses the proposal's 2^48-page limit for
 memory64; the validator likewise rejects offsets wider than u32 only when the
-selected memory is memory32.  The final table-init identity fixture has narrow
-constexpr support for `array.new_default`: it creates an opaque typed reference
-whose identity can be copied through tables and compared by `ref.eq`.  This is
-not general runtime GC allocation support.
+selected memory is memory32.
 
 Reproduce the memory64 offline-browser gate with:
 
@@ -148,6 +147,31 @@ python3 tools/generate-c-engine-tests.py \
   --output build/c-engine/browser-tests-c-engine-memory64.html
 node tests/c-engine-browser-runtime.cjs \
   build/c-engine/browser-tests-c-engine-memory64.html
+```
+
+GC types retain recursive-group, finality, supertype, field storage, and
+mutability metadata through text and binary forms.  Validation covers declared
+subtypes, structural recursive equivalence, function variance, constant
+expressions, GC instruction operands, casts, and branch refinement.  Runtime
+objects are engine-owned structs or arrays with dynamic reference-type
+metadata; the executor implements struct/array construction and access, packed
+fields, data/element initialization, bulk array operations, i31 references,
+reference tests/casts/equality, and any/extern conversions.  Reproduce the GC
+offline-browser gate with:
+
+```sh
+make -C src/c-engine WAST_BUILD_DIR=../../build/c-engine \
+  wast-native wast-browser wast-mmap-test
+build/c-engine/wast-mmap-test \
+  submodules/wasm-spec/test/core/gc/*.wast
+python3 tools/generate-c-engine-tests.py \
+  --runner build/c-engine/waste-wast \
+  --wasm build/c-engine/waste-wast.wasm \
+  --tests submodules/wasm-spec/test/core/gc \
+  --count \
+  --output build/c-engine/browser-tests-c-engine-gc.html
+node tests/c-engine-browser-runtime.cjs \
+  build/c-engine/browser-tests-c-engine-gc.html
 ```
 
 The developing WAST path now uses dynamically grown per-module function
@@ -189,13 +213,12 @@ nominally valid modules rejected and 37 `assert_invalid` modules accepted;
 this is a useful encoder/validator triage signal, not a replacement for the
 OCaml oracle or the C validator.
 
-The current browser artifact is an execution artifact, not yet a browser WAST
-front end. Its link target contains `browser_wast.c`, `waste_exec.c`, and
-`wast_general.c`; the Flex/Bison parser, encoder, and command stream run in the
-native generator, which embeds module bytes and assertion JSON in the HTML.
-To exercise WAST mode itself in the browser, the freestanding build must link
-the deterministic parser/encoder/stream and expose an incremental command API
-to the worker.
+The current browser artifact is a WAST front end as well as an execution
+artifact. Its link target contains the deterministic Flex/Bison parser,
+encoder, command stream, runner, executor, and `browser_wast.c` adapter. The
+HTML embeds the original `.wast` source and the worker calls
+`waste_wast_run_script`; native preprocessing is used by `--count` only to
+display expected assertion totals.
 
 `token.wast` also exposed a parser-recovery ownership bug:
 partially built modules could share data storage and be freed twice. The WAST
@@ -211,18 +234,13 @@ function must have the required `() -> ()` type. These checks prevent malformed
 modules from being accepted accidentally; they are validation hardening, not
 the claim of complete core-suite semantics.
 
-An intermediate deterministic WAST command boundary is available in
-`src/c-engine/wast_stream.[ch]`. It scans balanced top-level forms while
-ignoring strings and nested comments, classifies each command, and can feed one
-command at a time to the pure deterministic parser through `wast_parse_bytes`.
-It is not wired into `wast_parse_file` or browser-spec generation yet; those
-paths still parse the entire file in one call. Moreover, browser-spec currently
-returns success after a partial parse when at least one group was produced, so
-the generated dashboard can silently omit the failing command and everything
-after it. Connecting the command boundary, retaining script state across
-commands, and reporting an exact input-versus-emitted command ledger are the
-next WAST-mode requirements. The parser grammar itself uses the LALR skeleton;
-recovery policy belongs at this C command boundary.
+The deterministic WAST command boundary in `src/c-engine/wast_stream.[ch]`
+scans balanced top-level forms while ignoring strings and nested comments,
+classifies each command, and feeds one command at a time to the pure LALR
+parser through `wast_parse_bytes`. Native and browser runners preserve the
+store and retained module definitions across commands while isolating parser
+failures, so one malformed command cannot truncate the rest of a WAST file.
+Recovery policy remains in this C command boundary rather than lexer actions.
 
 The C front end now also exposes `waste_wat_compile`, a transactional WAT
 boundary: it requires exactly one parsed module, emits canonical Wasm only
@@ -249,8 +267,8 @@ and defaultability so constructor operands are validated rather than merely
 whitelisted. The module-complete pass runs after deferred references are
 patched, which also rejects out-of-range `ref.func` targets. The encoder emits
 the corresponding GC type definitions without confusing them with function
-signatures. This is initializer preprocessing/encoding coverage; execution of
-GC instructions in `waste_exec.c` remains a separate runtime gap.
+signatures. This initializer preprocessing/encoding work is now consumed by
+the GC execution support described in the current baseline above.
 
 Invalid initializer expressions are no longer discarded or promoted to a
 whole-script parse failure when they occur inside `assert_invalid`. The parser

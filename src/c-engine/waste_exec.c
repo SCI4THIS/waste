@@ -57,6 +57,7 @@ enum {
     EXEC_MAX_GLOBALS  = 128,
     EXEC_MAX_TABLES   = 16,
     EXEC_PAGE_SIZE    = 65536,
+    EXEC_MAX_GC_OBJECT_BYTES = 64 * 1024 * 1024,
 };
 
 /* ---- Internal instruction representation ---- */
@@ -84,6 +85,13 @@ typedef struct {
     uint32_t catch_count;
 } exec_instr;
 
+typedef struct {
+    wast_type_kind kind;
+    uint32_t type_index;
+    uint32_t length;
+    wasm_value *values;
+} exec_gc_object;
+
 /* ---- Function type ---- */
 
 typedef struct {
@@ -98,6 +106,8 @@ typedef struct {
     uint8_t field_mutable[WAST_MAX_TYPE_FIELDS];
     uint8_t field_packed[WAST_MAX_TYPE_FIELDS];
     int field_count;
+    int32_t supertype;
+    uint8_t is_final;
 } exec_func_type;
 
 /* ---- Decoded function ---- */
@@ -201,6 +211,9 @@ struct waste_exec_engine {
     uint32_t        data_count;
     uint8_t         instantiation_trapped;
     uint32_t        next_opaque_ref;
+    exec_gc_object *gc_objects;
+    uint32_t        gc_object_count;
+    uint32_t        gc_object_capacity;
     char            instantiation_error[256];
     wasm_value      *local_frames[EXEC_MAX_CALL_DEPTH];
     uint32_t         local_frame_capacities[EXEC_MAX_CALL_DEPTH];
@@ -267,33 +280,56 @@ static int same_type_index_ctx(const waste_exec_engine *left_engine,
     compare->pairs[compare->count].right_group = right_start;
     compare->count++;
 
+    int equivalent = 1;
     for (uint32_t member = 0; member < left->rec_group_size; member++) {
         const exec_func_type *a = &left_engine->types[left_start + member];
         const exec_func_type *b = &right_engine->types[right_start + member];
-        if (a->kind != b->kind) return 0;
+        if (a->kind != b->kind || a->is_final != b->is_final ||
+            ((a->supertype >= 0) != (b->supertype >= 0))) {
+            equivalent = 0; break;
+        }
+        if (a->supertype >= 0 &&
+            !same_value_type_ctx(left_engine,
+                (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE+
+                               (uint32_t)a->supertype),
+                right_engine,
+                (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE+
+                               (uint32_t)b->supertype),
+                compare))
+            { equivalent = 0; break; }
         if (a->kind == WAST_TYPE_FUNC) {
             if (a->param_count != b->param_count ||
-                a->result_count != b->result_count)
-                return 0;
+                a->result_count != b->result_count) {
+                equivalent = 0; break;
+            }
             for (int i = 0; i < a->param_count; i++)
                 if (!same_value_type_ctx(left_engine, a->params[i],
-                                         right_engine, b->params[i], compare))
-                    return 0;
+                                         right_engine, b->params[i], compare)) {
+                    equivalent = 0; break;
+                }
+            if (!equivalent) break;
             for (int i = 0; i < a->result_count; i++)
                 if (!same_value_type_ctx(left_engine, a->results[i],
-                                         right_engine, b->results[i], compare))
-                    return 0;
+                                         right_engine, b->results[i], compare)) {
+                    equivalent = 0; break;
+                }
+            if (!equivalent) break;
         } else {
-            if (a->field_count != b->field_count) return 0;
+            if (a->field_count != b->field_count) {
+                equivalent = 0; break;
+            }
             for (int i = 0; i < a->field_count; i++)
                 if (a->field_mutable[i] != b->field_mutable[i] ||
                     a->field_packed[i] != b->field_packed[i] ||
                     !same_value_type_ctx(left_engine, a->fields[i],
-                                         right_engine, b->fields[i], compare))
-                    return 0;
+                                         right_engine, b->fields[i], compare)) {
+                    equivalent = 0; break;
+                }
+            if (!equivalent) break;
         }
     }
-    return 1;
+    compare->count--;
+    return equivalent;
 }
 
 static int same_value_type_ctx(const waste_exec_engine *left_engine,
@@ -328,6 +364,7 @@ static int same_value_type_ctx(const waste_exec_engine *left_engine,
             return (li - pair->left_group) == (ri - pair->right_group);
         }
     }
+    if (left_engine == right_engine && li == ri) return 1;
     return same_type_index_ctx(left_engine, li, right_engine, ri, compare);
 }
 
@@ -352,6 +389,42 @@ static int same_func_type(const waste_exec_engine *left_engine, uint32_t left_in
                                &compare);
 }
 
+static int type_index_is_subtype(const waste_exec_engine *actual_engine,
+                                 uint32_t actual_index,
+                                 const waste_exec_engine *required_engine,
+                                 uint32_t required_index) {
+    if (!actual_engine || !required_engine ||
+        actual_index >= actual_engine->type_count ||
+        required_index >= required_engine->type_count)
+        return 0;
+    uint32_t current = actual_index;
+    for (uint32_t steps = 0; steps <= actual_engine->type_count; steps++) {
+        exec_type_compare compare = {0};
+        if (same_type_index_ctx(actual_engine, current, required_engine,
+                                required_index, &compare)) {
+            return 1;
+        }
+        int32_t parent = actual_engine->types[current].supertype;
+        if (parent < 0 || (uint32_t)parent >= actual_engine->type_count ||
+            (uint32_t)parent == current)
+            break;
+        current = (uint32_t)parent;
+    }
+    return 0;
+}
+
+static int func_type_is_subtype(const waste_exec_engine *actual_engine,
+                                uint32_t actual_index,
+                                const waste_exec_engine *required_engine,
+                                uint32_t required_index) {
+    return actual_index < actual_engine->type_count &&
+           required_index < required_engine->type_count &&
+           actual_engine->types[actual_index].kind == WAST_TYPE_FUNC &&
+           required_engine->types[required_index].kind == WAST_TYPE_FUNC &&
+           type_index_is_subtype(actual_engine, actual_index,
+                                 required_engine, required_index);
+}
+
 /* Check if 'actual' value type is a subtype of 'required' value type.
  * For mutable globals, use same_value_type (exact structural equality).
  * For immutable globals, applies Wasm GC subtype rules:
@@ -371,6 +444,11 @@ static int global_type_is_compat(const waste_exec_engine *aeng, wasm_valtype act
     /* Non-null builtins <: nullable counterparts */
     if (actual == WASM_VALTYPE_FUNCREF_NONNULL && required == WASM_VALTYPE_FUNCREF) return 1;
     if (actual == WASM_VALTYPE_EXTERNREF_NONNULL && required == WASM_VALTYPE_EXTERNREF) return 1;
+    if (actual == WASM_VALTYPE_ANYREF_NONNULL && required == WASM_VALTYPE_ANYREF) return 1;
+    if (actual == WASM_VALTYPE_EQREF_NONNULL && required == WASM_VALTYPE_EQREF) return 1;
+    if (actual == WASM_VALTYPE_I31REF_NONNULL && required == WASM_VALTYPE_I31REF) return 1;
+    if (actual == WASM_VALTYPE_STRUCTREF_NONNULL && required == WASM_VALTYPE_STRUCTREF) return 1;
+    if (actual == WASM_VALTYPE_ARRAYREF_NONNULL && required == WASM_VALTYPE_ARRAYREF) return 1;
     /* Bottom heap types are subtypes of the corresponding nullable reference
      * type.  Runtime assertion arguments retain these precise types so typed
      * select must accept them just as the validator does. */
@@ -389,6 +467,15 @@ static int global_type_is_compat(const waste_exec_engine *aeng, wasm_valtype act
          required == WASM_VALTYPE_ARRAYREF)) return 1;
     int a_isref = WASM_VALTYPE_IS_TYPE_REF(actual);
     int r_isref = WASM_VALTYPE_IS_TYPE_REF(required);
+    if (a_isref && r_isref && aeng && reng) {
+        int actual_nonnull = (unsigned)actual >= WASM_VALTYPE_TYPE_REF_BASE;
+        int required_nonnull = (unsigned)required >= WASM_VALTYPE_TYPE_REF_BASE;
+        if (!required_nonnull || actual_nonnull) {
+            uint32_t current = WASM_VALTYPE_TYPE_REF_INDEX(actual);
+            uint32_t target = WASM_VALTYPE_TYPE_REF_INDEX(required);
+            if (type_index_is_subtype(aeng, current, reng, target)) return 1;
+        }
+    }
     if (a_isref && aeng && WASM_VALTYPE_TYPE_REF_INDEX(actual) < aeng->type_count) {
         const exec_func_type *actual_heap =
             &aeng->types[WASM_VALTYPE_TYPE_REF_INDEX(actual)];
@@ -402,7 +489,33 @@ static int global_type_is_compat(const waste_exec_engine *aeng, wasm_valtype act
             (required == WASM_VALTYPE_STRUCTREF ||
              (required == WASM_VALTYPE_STRUCTREF_NONNULL && actual_nonnull)))
             return 1;
+        if ((actual_heap->kind == WAST_TYPE_ARRAY ||
+             actual_heap->kind == WAST_TYPE_STRUCT) &&
+            (required == WASM_VALTYPE_EQREF ||
+             required == WASM_VALTYPE_ANYREF ||
+             (required == WASM_VALTYPE_EQREF_NONNULL && actual_nonnull) ||
+             (required == WASM_VALTYPE_ANYREF_NONNULL && actual_nonnull)))
+            return 1;
     }
+    if ((actual == WASM_VALTYPE_I31REF ||
+         actual == WASM_VALTYPE_I31REF_NONNULL) &&
+        (required == WASM_VALTYPE_EQREF || required == WASM_VALTYPE_ANYREF ||
+         (actual == WASM_VALTYPE_I31REF_NONNULL &&
+          (required == WASM_VALTYPE_I31REF_NONNULL ||
+           required == WASM_VALTYPE_EQREF_NONNULL ||
+           required == WASM_VALTYPE_ANYREF_NONNULL)))) return 1;
+    if ((actual == WASM_VALTYPE_STRUCTREF ||
+         actual == WASM_VALTYPE_STRUCTREF_NONNULL) &&
+        (required == WASM_VALTYPE_EQREF || required == WASM_VALTYPE_ANYREF ||
+         (actual == WASM_VALTYPE_STRUCTREF_NONNULL &&
+          (required == WASM_VALTYPE_EQREF_NONNULL ||
+           required == WASM_VALTYPE_ANYREF_NONNULL)))) return 1;
+    if ((actual == WASM_VALTYPE_ARRAYREF ||
+         actual == WASM_VALTYPE_ARRAYREF_NONNULL) &&
+        (required == WASM_VALTYPE_EQREF || required == WASM_VALTYPE_ANYREF ||
+         (actual == WASM_VALTYPE_ARRAYREF_NONNULL &&
+          (required == WASM_VALTYPE_EQREF_NONNULL ||
+           required == WASM_VALTYPE_ANYREF_NONNULL)))) return 1;
     /* Any (ref null T) or (ref T) where T is a func type <: (ref null func) */
     if (a_isref && required == WASM_VALTYPE_FUNCREF) return 1;
     /* (ref T) <: (ref func) */
@@ -639,6 +752,19 @@ static int is_function_reference_type(wasm_valtype type) {
            WASM_VALTYPE_IS_TYPE_REF(type);
 }
 
+static int is_eq_reference_type(const waste_exec_engine *eng,
+                                wasm_valtype type) {
+    if (type == WASM_VALTYPE_EQREF || type == WASM_VALTYPE_EQREF_NONNULL ||
+        type == WASM_VALTYPE_I31REF || type == WASM_VALTYPE_I31REF_NONNULL ||
+        type == WASM_VALTYPE_STRUCTREF || type == WASM_VALTYPE_STRUCTREF_NONNULL ||
+        type == WASM_VALTYPE_ARRAYREF || type == WASM_VALTYPE_ARRAYREF_NONNULL ||
+        type == WASM_VALTYPE_NULLREF)
+        return 1;
+    return WASM_VALTYPE_IS_TYPE_REF(type) && eng &&
+           WASM_VALTYPE_TYPE_REF_INDEX(type) < eng->type_count &&
+           eng->types[WASM_VALTYPE_TYPE_REF_INDEX(type)].kind != WAST_TYPE_FUNC;
+}
+
 static wasm_valtype nonnullable_reference_type(wasm_valtype type) {
     if (type == WASM_VALTYPE_FUNCREF) return WASM_VALTYPE_FUNCREF_NONNULL;
     if (type == WASM_VALTYPE_EXTERNREF) return WASM_VALTYPE_EXTERNREF_NONNULL;
@@ -679,6 +805,19 @@ static exec_status parse_composite_type(waste_exec_engine *eng,
     exec_func_type *type = &eng->types[index];
     type->rec_group_start = group_start;
     type->rec_group_size = group_size;
+    type->supertype = -1;
+    type->is_final = 1;
+    if (form == 0x4f || form == 0x50) {
+        uint8_t wrapper = form;
+        uint32_t super_count, supertype = 0;
+        if (!er_u32(sec, &super_count) || super_count > 1 ||
+            (super_count == 1 && !er_u32(sec, &supertype)) ||
+            !er_u8(sec, &form))
+            return exec_fail(err, EXEC_ERROR_FORMAT,
+                             "invalid subtype definition");
+        type->is_final = (uint8_t)(wrapper == 0x4f);
+        if (super_count == 1) type->supertype = (int32_t)supertype;
+    }
     if (form == 0x60) {
         uint32_t params, results;
         type->kind = WAST_TYPE_FUNC;
@@ -741,6 +880,49 @@ static int type_reference_in_scope(const exec_func_type *type,
     return target < total_types && target < group_end;
 }
 
+static int validate_declared_subtype(waste_exec_engine *eng,
+                                     uint32_t index) {
+    exec_func_type *sub = &eng->types[index];
+    if (sub->supertype < 0) return 1;
+    uint32_t super_index = (uint32_t)sub->supertype;
+    if (super_index >= eng->type_count || super_index == index) return 0;
+    exec_func_type *super = &eng->types[super_index];
+    if (super->is_final || sub->kind != super->kind) return 0;
+    if (sub->kind == WAST_TYPE_FUNC) {
+        if (sub->param_count != super->param_count ||
+            sub->result_count != super->result_count) return 0;
+        for (int i=0;i<sub->param_count;i++)
+            if (!global_type_is_compat(eng,super->params[i],eng,
+                                       sub->params[i],0)) return 0;
+        for (int i=0;i<sub->result_count;i++)
+            if (!global_type_is_compat(eng,sub->results[i],eng,
+                                       super->results[i],0)) return 0;
+        return 1;
+    }
+    if (sub->kind == WAST_TYPE_STRUCT) {
+        if (sub->field_count < super->field_count) return 0;
+        for (int i=0;i<super->field_count;i++) {
+            if (sub->field_mutable[i] != super->field_mutable[i] ||
+                sub->field_packed[i] != super->field_packed[i]) return 0;
+            if (sub->field_mutable[i]) {
+                if (!same_value_type(eng,sub->fields[i],eng,
+                                     super->fields[i],0)) return 0;
+            } else if (!global_type_is_compat(eng,sub->fields[i],eng,
+                                              super->fields[i],0)) return 0;
+        }
+        return 1;
+    }
+    if (sub->kind == WAST_TYPE_ARRAY) {
+        if (sub->field_mutable[0] != super->field_mutable[0] ||
+            sub->field_packed[0] != super->field_packed[0]) return 0;
+        return sub->field_mutable[0] ?
+            same_value_type(eng,sub->fields[0],eng,super->fields[0],0) :
+            global_type_is_compat(eng,sub->fields[0],eng,
+                                  super->fields[0],0);
+    }
+    return 0;
+}
+
 static exec_status parse_types(waste_exec_engine *eng, exec_reader *sec, exec_error *err) {
     uint32_t entries;
     if (!er_u32(sec, &entries))
@@ -791,6 +973,15 @@ static exec_status parse_types(waste_exec_engine *eng, exec_reader *sec, exec_er
                                          eng->type_count))
                 return exec_fail(err, EXEC_ERROR_FORMAT,
                                  "type reference outside recursive group");
+        if (!validate_declared_subtype(eng, i)) {
+            if (err) {
+                err->status = EXEC_ERROR_FORMAT;
+                snprintf(err->message, sizeof(err->message),
+                         "invalid declared subtype %u (super %d, final %u)",
+                         i, type->supertype, (unsigned)type->is_final);
+            }
+            return EXEC_ERROR_FORMAT;
+        }
     }
     return EXEC_OK;
 }
@@ -819,7 +1010,8 @@ static exec_status parse_imports(waste_exec_engine *eng, exec_reader *sec,
                 return exec_fail(err, EXEC_ERROR_FORMAT, "invalid function import type");
             const exec_host_import *binding = find_host_import(imports,module,name);
             if (!binding || !binding->function) return exec_fail(err, EXEC_ERROR_NOT_FOUND, "unresolved function import");
-            if(binding->has_wasm_type&&!same_func_type(eng,type_index,binding->type_owner,binding->type_index))
+            if(binding->has_wasm_type&&!func_type_is_subtype(
+                    binding->type_owner,binding->type_index,eng,type_index))
                 return exec_fail(err,EXEC_ERROR_FORMAT,"function import type mismatch");
             uint32_t index=eng->import_func_count++;
             eng->import_func_types[index]=type_index; eng->import_funcs[index]=binding->function;
@@ -993,6 +1185,14 @@ typedef struct {
     const waste_exec_engine *type_owner;
 } exec_const_value;
 
+static wasm_value default_value(wasm_valtype type);
+static int gc_allocate(waste_exec_engine *eng, wast_type_kind kind,
+                       uint32_t type_index, uint32_t length,
+                       wasm_value *out, exec_error *err);
+static wasm_valtype reference_dynamic_type(const wasm_value *value);
+static void set_reference_dynamic_type(wasm_value *value,
+                                       wasm_valtype dynamic_type);
+
 static exec_status eval_constexpr(waste_exec_engine *eng,
                                   exec_reader *sec,
                                   uint32_t global_limit,
@@ -1030,7 +1230,12 @@ static exec_status parse_tables(waste_exec_engine *eng, exec_reader *sec, exec_e
         uint32_t index=eng->table_count; exec_table *table=&eng->owned_tables[index];
         table->elements=(exec_table_element *)malloc((initial ? initial : 1)*sizeof(exec_table_element));
         if (!table->elements) return exec_fail(err,EXEC_ERROR_FORMAT,"table allocation failed");
-        for(uint64_t j=0;j<initial;j++){table->elements[j].owner=NULL;table->elements[j].func_idx=0;}
+        for(uint64_t j=0;j<initial;j++){
+            table->elements[j].owner=NULL;
+            table->elements[j].func_idx=0;
+            table->elements[j].type=type;
+            table->elements[j].dynamic_type=type;
+        }
         table->size=initial; table->has_max=(uint8_t)(flags&1u); table->max_size=maximum;
         table->is_64=(uint8_t)((flags&4u)!=0);
         table->element_type=type;
@@ -1046,6 +1251,9 @@ static exec_status parse_tables(waste_exec_engine *eng, exec_reader *sec, exec_e
                     table->elements[j].owner =
                         (waste_exec_engine *)value.type_owner;
                     table->elements[j].func_idx = value.value.ref;
+                    table->elements[j].type = value.value.type;
+                    table->elements[j].dynamic_type =
+                        reference_dynamic_type(&value.value);
                 }
             }
         }
@@ -1158,17 +1366,112 @@ static exec_status eval_constexpr(waste_exec_engine *eng,
             value.value.type = WASM_VALTYPE_V128;
             memcpy(value.value.v128.bytes, bytes, 16);
         } else if (opcode == 0xfb) {
-            uint32_t subopcode, type_index;
-            if (!er_u32(sec, &subopcode) || subopcode != 0x07 ||
-                !er_u32(sec, &type_index) || type_index >= eng->type_count ||
-                eng->types[type_index].kind != WAST_TYPE_ARRAY || top < 1 ||
-                stack[top - 1].value.type != WASM_VALTYPE_I32)
+            uint32_t subopcode, type_index = 0;
+            if (!er_u32(sec, &subopcode))
+                return exec_fail(err, EXEC_ERROR_FORMAT,
+                                 "invalid GC initializer");
+            if (subopcode == 0x1a || subopcode == 0x1b) {
+                if (top < 1 || !is_reference_type(stack[top - 1].value.type))
+                    return exec_fail(err, EXEC_ERROR_FORMAT,
+                                     "GC initializer type mismatch");
+                value = stack[--top];
+                wasm_valtype dynamic = reference_dynamic_type(&value.value);
+                value.value.type = subopcode == 0x1a ?
+                    (value.value.ref == UINT32_MAX ? WASM_VALTYPE_ANYREF :
+                     (WASM_VALTYPE_IS_TYPE_REF(dynamic) ||
+                      dynamic == WASM_VALTYPE_I31REF_NONNULL ||
+                      dynamic == WASM_VALTYPE_STRUCTREF_NONNULL ||
+                      dynamic == WASM_VALTYPE_ARRAYREF_NONNULL ?
+                        dynamic : WASM_VALTYPE_ANYREF_NONNULL)) :
+                    (value.value.ref == UINT32_MAX ? WASM_VALTYPE_EXTERNREF :
+                                                    WASM_VALTYPE_EXTERNREF_NONNULL);
+                set_reference_dynamic_type(&value.value, dynamic);
+            } else if (subopcode == 0x1c) {
+                if (top < 1 || stack[top - 1].value.type != WASM_VALTYPE_I32)
+                    return exec_fail(err, EXEC_ERROR_FORMAT,
+                                     "ref.i31 initializer type mismatch");
+                value.value.type = WASM_VALTYPE_I31REF_NONNULL;
+                value.value.ref = (uint32_t)stack[--top].value.i32 &
+                                  UINT32_C(0x7fffffff);
+                set_reference_dynamic_type(&value.value,
+                                           WASM_VALTYPE_I31REF_NONNULL);
+            } else if (subopcode == 0x00 || subopcode == 0x01) {
+                if (!er_u32(sec, &type_index) || type_index >= eng->type_count ||
+                    eng->types[type_index].kind != WAST_TYPE_STRUCT)
+                    return exec_fail(err, EXEC_ERROR_FORMAT,
+                                     "invalid struct initializer type");
+                exec_func_type *type = &eng->types[type_index];
+                int operands = subopcode == 0x00 ? type->field_count : 0;
+                if (top < operands ||
+                    !gc_allocate(eng, WAST_TYPE_STRUCT, type_index,
+                                 (uint32_t)type->field_count, &value.value, err))
+                    return err && err->status ? err->status : EXEC_ERROR_FORMAT;
+                exec_gc_object *object =
+                    &eng->gc_objects[value.value.ref & ~UINT32_C(0x80000000)];
+                for (int i = type->field_count; i-- > 0;) {
+                    wasm_valtype field_type = type->fields[i];
+                    if (subopcode == 0x00) {
+                        exec_const_value operand = stack[--top];
+                        if ((type->field_packed[i] &&
+                             operand.value.type != WASM_VALTYPE_I32) ||
+                            (!type->field_packed[i] &&
+                             !global_type_is_compat(operand.type_owner,
+                                 operand.value.type, eng, field_type, 0)))
+                            return exec_fail(err, EXEC_ERROR_FORMAT,
+                                             "struct initializer type mismatch");
+                        object->values[i] = operand.value;
+                    } else {
+                        object->values[i] = default_value(field_type);
+                    }
+                }
+                set_reference_dynamic_type(&value.value, value.value.type);
+            } else if (subopcode == 0x06 || subopcode == 0x07 ||
+                       subopcode == 0x08) {
+                uint32_t length;
+                if (!er_u32(sec, &type_index) || type_index >= eng->type_count ||
+                    eng->types[type_index].kind != WAST_TYPE_ARRAY)
+                    return exec_fail(err, EXEC_ERROR_FORMAT,
+                                     "invalid array initializer type");
+                exec_func_type *type = &eng->types[type_index];
+                if (subopcode == 0x08) {
+                    if (!er_u32(sec, &length) || top < (int)length)
+                        return exec_fail(err, EXEC_ERROR_FORMAT,
+                                         "invalid array.new_fixed initializer");
+                } else {
+                    if (top < (subopcode == 0x06 ? 2 : 1) ||
+                        stack[top - 1].value.type != WASM_VALTYPE_I32)
+                        return exec_fail(err, EXEC_ERROR_FORMAT,
+                                         "array initializer length mismatch");
+                    length = (uint32_t)stack[--top].value.i32;
+                }
+                if (!gc_allocate(eng, WAST_TYPE_ARRAY, type_index, length,
+                                 &value.value, err))
+                    return err && err->status ? err->status : EXEC_ERROR_FORMAT;
+                exec_gc_object *object =
+                    &eng->gc_objects[value.value.ref & ~UINT32_C(0x80000000)];
+                if (subopcode == 0x07) {
+                    wasm_value initial = default_value(type->fields[0]);
+                    for (uint32_t i = 0; i < length; i++) object->values[i] = initial;
+                } else if (subopcode == 0x06) {
+                    exec_const_value initial = stack[--top];
+                    if ((type->field_packed[0] &&
+                         initial.value.type != WASM_VALTYPE_I32) ||
+                        (!type->field_packed[0] &&
+                         !global_type_is_compat(initial.type_owner,
+                             initial.value.type, eng, type->fields[0], 0)))
+                        return exec_fail(err, EXEC_ERROR_FORMAT,
+                                         "array initializer type mismatch");
+                    for (uint32_t i = 0; i < length; i++)
+                        object->values[i] = initial.value;
+                } else {
+                    for (uint32_t i = length; i-- > 0;)
+                        object->values[i] = stack[--top].value;
+                }
+                set_reference_dynamic_type(&value.value, value.value.type);
+            } else {
                 return exec_fail(err, EXEC_ERROR_UNSUPPORTED,
-                                 "unsupported global initializer");
-            top--;
-            value.value.type = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE +
-                                              type_index);
-            value.value.ref = UINT32_C(0x80000000) | eng->next_opaque_ref++;
+                                 "unsupported GC initializer");
+            }
         } else if (opcode == 0x6a || opcode == 0x6b || opcode == 0x6c ||
                    opcode == 0x7c || opcode == 0x7d || opcode == 0x7e) {
             wasm_valtype operand_type = opcode < 0x7c ? WASM_VALTYPE_I32 :
@@ -1417,7 +1720,7 @@ static exec_status parse_elements(waste_exec_engine *eng, exec_reader *sec,
         if (uses_expressions) {
             /* Modes 4-7: each item is an init expression */
             for (uint32_t item = 0; item < item_count; item++) {
-                exec_table_element slot = {NULL, 0};
+                exec_table_element slot = {NULL, 0, ref_type, ref_type};
                 exec_const_value value;
                 exec_status status = eval_constexpr(eng, sec,
                                                     eng->global_count,
@@ -1426,6 +1729,8 @@ static exec_status parse_elements(waste_exec_engine *eng, exec_reader *sec,
                 if (value.value.ref != UINT32_MAX) {
                     slot.owner = (waste_exec_engine *)value.type_owner;
                     slot.func_idx = value.value.ref;
+                    slot.type = value.value.type;
+                    slot.dynamic_type = reference_dynamic_type(&value.value);
                 }
                 eng->elem_values[segment][item] = slot;
             }
@@ -1436,7 +1741,15 @@ static exec_status parse_elements(waste_exec_engine *eng, exec_reader *sec,
                 if (!er_u32(sec, &func_idx) ||
                     func_idx >= eng->import_func_count + eng->func_count)
                     return exec_fail(err, EXEC_ERROR_FORMAT, "invalid element funcidx");
-                exec_table_element slot = {eng, func_idx};
+                exec_table_element slot = {eng, func_idx,
+                    (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE +
+                        (func_idx < eng->import_func_count ?
+                         eng->import_func_types[func_idx] :
+                         eng->funcs[func_idx - eng->import_func_count].type_index)),
+                    (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE +
+                        (func_idx < eng->import_func_count ?
+                         eng->import_func_types[func_idx] :
+                         eng->funcs[func_idx - eng->import_func_count].type_index))};
                 eng->declared_funcs[func_idx] = 1;
                 eng->elem_values[segment][item] = slot;
             }
@@ -1547,6 +1860,435 @@ static int select_validation_push(wasm_valtype *stack, int *top,
     if (*top >= SELECT_VALIDATION_STACK) return 0;
     stack[(*top)++] = value;
     return 1;
+}
+
+typedef struct {
+    wasm_value vals[EXEC_MAX_STACK];
+    int top;
+} exec_stack;
+
+static int stack_push(exec_stack *s, wasm_value v);
+static int stack_pop(exec_stack *s, wasm_value *out);
+static exec_gc_object *gc_object(waste_exec_engine *eng,
+                                 const wasm_value *value);
+static wasm_value i32_value(uint32_t bits);
+static uint64_t load_le(const uint8_t *memory, size_t address,
+                        uint32_t width);
+
+static int reference_matches_heap(waste_exec_engine *eng,
+                                  const wasm_value *value,
+                                  int32_t heap_type, int nullable) {
+    if (!is_reference_type(value->type)) return 0;
+    if (value->ref == UINT32_MAX) return nullable;
+    wasm_valtype dynamic = reference_dynamic_type(value);
+    if (heap_type >= 0) {
+        if ((uint32_t)heap_type >= eng->type_count ||
+            !WASM_VALTYPE_IS_TYPE_REF(dynamic))
+            return 0;
+        wasm_valtype required = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE +
+                                              (uint32_t)heap_type);
+        return global_type_is_compat(eng, dynamic, eng, required, 0);
+    }
+    switch (heap_type) {
+        case -16: /* func */
+            return is_function_reference_type(dynamic) ||
+                   (WASM_VALTYPE_IS_TYPE_REF(dynamic) &&
+                    eng->types[WASM_VALTYPE_TYPE_REF_INDEX(dynamic)].kind ==
+                        WAST_TYPE_FUNC);
+        case -17: /* extern */
+            return value->type == WASM_VALTYPE_EXTERNREF ||
+                   value->type == WASM_VALTYPE_EXTERNREF_NONNULL;
+        case -18: /* any */
+            return value->type != WASM_VALTYPE_FUNCREF &&
+                   value->type != WASM_VALTYPE_FUNCREF_NONNULL &&
+                   value->type != WASM_VALTYPE_EXNREF &&
+                   value->type != WASM_VALTYPE_EXNREF_NONNULL;
+        case -19: /* eq */
+            if (dynamic == WASM_VALTYPE_I31REF ||
+                dynamic == WASM_VALTYPE_I31REF_NONNULL ||
+                dynamic == WASM_VALTYPE_STRUCTREF ||
+                dynamic == WASM_VALTYPE_STRUCTREF_NONNULL ||
+                dynamic == WASM_VALTYPE_ARRAYREF ||
+                dynamic == WASM_VALTYPE_ARRAYREF_NONNULL)
+                return 1;
+            return WASM_VALTYPE_IS_TYPE_REF(dynamic) &&
+                eng->types[WASM_VALTYPE_TYPE_REF_INDEX(dynamic)].kind !=
+                    WAST_TYPE_FUNC;
+        case -20: /* i31 */
+            return dynamic == WASM_VALTYPE_I31REF ||
+                   dynamic == WASM_VALTYPE_I31REF_NONNULL;
+        case -21: /* struct */
+            return dynamic == WASM_VALTYPE_STRUCTREF ||
+                   dynamic == WASM_VALTYPE_STRUCTREF_NONNULL ||
+                   (WASM_VALTYPE_IS_TYPE_REF(dynamic) &&
+                    eng->types[WASM_VALTYPE_TYPE_REF_INDEX(dynamic)].kind ==
+                        WAST_TYPE_STRUCT);
+        case -22: /* array */
+            return dynamic == WASM_VALTYPE_ARRAYREF ||
+                   dynamic == WASM_VALTYPE_ARRAYREF_NONNULL ||
+                   (WASM_VALTYPE_IS_TYPE_REF(dynamic) &&
+                    eng->types[WASM_VALTYPE_TYPE_REF_INDEX(dynamic)].kind ==
+                        WAST_TYPE_ARRAY);
+        default: /* none/nofunc/noextern/noexn have no non-null values */
+            return 0;
+    }
+}
+
+static wasm_value packed_field_value(wasm_value value, uint8_t packed) {
+    if (packed == 1) value.i32 = (int32_t)((uint32_t)value.i32 & 0xffu);
+    else if (packed == 2) value.i32 = (int32_t)((uint32_t)value.i32 & 0xffffu);
+    return value;
+}
+
+static int gc_push(exec_stack *stack, wasm_value value, exec_error *err) {
+    if (stack_push(stack, value)) return 1;
+    exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
+    return 0;
+}
+
+/* Execute non-branching 0xfb instructions.  Returns 1 when handled and -1 on
+ * a trap.  br_on_cast(_fail) is integrated with the control-flow loop. */
+static int exec_gc_instruction(waste_exec_engine *eng,
+                               const exec_instr *instr,
+                               exec_stack *stack, exec_error *err) {
+    uint32_t op = instr->simd_op;
+    wasm_value a, b, c, d, e, out;
+    exec_func_type *type;
+    exec_gc_object *object;
+    uint32_t type_index = instr->u32_imm;
+
+    if (op == 0x1a || op == 0x1b) {
+        if (!stack_pop(stack, &out) || !is_reference_type(out.type)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "reference conversion operand missing");
+            return -1;
+        }
+        wasm_valtype dynamic = reference_dynamic_type(&out);
+        out.type = op == 0x1a ?
+            (out.ref == UINT32_MAX ? WASM_VALTYPE_ANYREF :
+             (WASM_VALTYPE_IS_TYPE_REF(dynamic) ||
+              dynamic == WASM_VALTYPE_I31REF_NONNULL ||
+              dynamic == WASM_VALTYPE_STRUCTREF_NONNULL ||
+              dynamic == WASM_VALTYPE_ARRAYREF_NONNULL ?
+                dynamic : WASM_VALTYPE_ANYREF_NONNULL)) :
+            (out.ref == UINT32_MAX ? WASM_VALTYPE_EXTERNREF : WASM_VALTYPE_EXTERNREF_NONNULL);
+        set_reference_dynamic_type(&out, dynamic);
+        return gc_push(stack, out, err) ? 1 : -1;
+    }
+    if (op == 0x1c) {
+        if (!stack_pop(stack, &a) || a.type != WASM_VALTYPE_I32) {
+            exec_fail(err, EXEC_ERROR_TRAP, "ref.i31 operand missing");
+            return -1;
+        }
+        memset(&out, 0, sizeof(out));
+        out.type = WASM_VALTYPE_I31REF_NONNULL;
+        out.ref = (uint32_t)a.i32 & UINT32_C(0x7fffffff);
+        set_reference_dynamic_type(&out, out.type);
+        return gc_push(stack, out, err) ? 1 : -1;
+    }
+    if (op == 0x1d || op == 0x1e) {
+        if (!stack_pop(stack, &a) ||
+            !reference_matches_heap(eng, &a, -20, 0)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "i31 reference expected");
+            return -1;
+        }
+        uint32_t bits = a.ref & UINT32_C(0x7fffffff);
+        if (op == 0x1d && (bits & UINT32_C(0x40000000)))
+            bits |= UINT32_C(0x80000000);
+        return gc_push(stack, i32_value(bits), err) ? 1 : -1;
+    }
+    if (op >= 0x14 && op <= 0x17) {
+        if (!stack_pop(stack, &a) || !is_reference_type(a.type)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "ref.test/ref.cast operand missing");
+            return -1;
+        }
+        int nullable = op == 0x15 || op == 0x17;
+        int matches = reference_matches_heap(eng, &a,
+                                             instr->block_type_index,
+                                             nullable);
+        if (op <= 0x15)
+            return gc_push(stack, i32_value((uint32_t)matches), err) ? 1 : -1;
+        if (!matches) {
+            exec_fail(err, EXEC_ERROR_TRAP, "cast failure");
+            return -1;
+        }
+        if (a.ref != UINT32_MAX) {
+            if (instr->block_type_index >= 0)
+                a.type = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE +
+                                        (uint32_t)instr->block_type_index);
+            else
+                a.type = nonnullable_reference_type(a.type);
+        }
+        return gc_push(stack, a, err) ? 1 : -1;
+    }
+
+    if ((op <= 0x10 && op != 0x0f) || (op >= 0x11 && op <= 0x13)) {
+        if (type_index >= eng->type_count) {
+            exec_fail(err, EXEC_ERROR_TRAP, "GC type index out of range");
+            return -1;
+        }
+        type = &eng->types[type_index];
+    } else type = NULL;
+
+    if (op == 0x00 || op == 0x01) {
+        if (type->kind != WAST_TYPE_STRUCT ||
+            !gc_allocate(eng, WAST_TYPE_STRUCT, type_index,
+                         (uint32_t)type->field_count, &out, err)) return -1;
+        object = gc_object(eng, &out);
+        for (int i = type->field_count; i-- > 0;) {
+            if (op == 0x00) {
+                if (!stack_pop(stack, &a)) {
+                    exec_fail(err, EXEC_ERROR_TRAP, "struct.new operand missing");
+                    return -1;
+                }
+                object->values[i] = packed_field_value(a, type->field_packed[i]);
+            } else object->values[i] = default_value(type->fields[i]);
+        }
+        return gc_push(stack, out, err) ? 1 : -1;
+    }
+    if (op >= 0x02 && op <= 0x05) {
+        uint32_t field = instr->memory_index;
+        if (type->kind != WAST_TYPE_STRUCT || field >= (uint32_t)type->field_count) {
+            exec_fail(err, EXEC_ERROR_TRAP, "struct field index out of range");
+            return -1;
+        }
+        if (op == 0x05 && !stack_pop(stack, &b)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "struct.set value missing"); return -1;
+        }
+        if (!stack_pop(stack, &a) || !(object = gc_object(eng, &a)) ||
+            object->kind != WAST_TYPE_STRUCT ||
+            !reference_matches_heap(eng, &a, (int32_t)type_index, 0)) {
+            exec_fail(err, EXEC_ERROR_TRAP, a.ref == UINT32_MAX ?
+                      "null struct reference" : "struct reference type mismatch");
+            return -1;
+        }
+        if (field >= object->length) {
+            exec_fail(err, EXEC_ERROR_TRAP, "struct field index out of range"); return -1;
+        }
+        if (op == 0x05) object->values[field] =
+            packed_field_value(b, type->field_packed[field]);
+        else {
+            out = object->values[field];
+            uint8_t packed = type->field_packed[field];
+            uint32_t bits = (uint32_t)out.i32;
+            if (packed == 1) bits &= 0xffu;
+            else if (packed == 2) bits &= 0xffffu;
+            if (op == 0x03 && packed == 1 && (bits & 0x80u)) bits |= 0xffffff00u;
+            if (op == 0x03 && packed == 2 && (bits & 0x8000u)) bits |= 0xffff0000u;
+            if (packed) out = i32_value(bits);
+            if (!gc_push(stack, out, err)) return -1;
+        }
+        return 1;
+    }
+    if (op == 0x06 || op == 0x07 || op == 0x08) {
+        uint32_t length;
+        if (type->kind != WAST_TYPE_ARRAY) {
+            exec_fail(err, EXEC_ERROR_TRAP, "array type expected"); return -1;
+        }
+        if (op == 0x08) length = instr->lane_index;
+        else {
+            if (!stack_pop(stack, &a) || a.type != WASM_VALTYPE_I32) {
+                exec_fail(err, EXEC_ERROR_TRAP, "array length missing"); return -1;
+            }
+            length = (uint32_t)a.i32;
+        }
+        if (!gc_allocate(eng, WAST_TYPE_ARRAY, type_index, length, &out, err))
+            return -1;
+        object = gc_object(eng, &out);
+        if (op == 0x07) {
+            a = default_value(type->fields[0]);
+            for (uint32_t i = 0; i < length; i++) object->values[i] = a;
+        } else if (op == 0x06) {
+            if (!stack_pop(stack, &a)) {
+                exec_fail(err, EXEC_ERROR_TRAP, "array initializer missing"); return -1;
+            }
+            a = packed_field_value(a, type->field_packed[0]);
+            for (uint32_t i = 0; i < length; i++) object->values[i] = a;
+        } else {
+            for (uint32_t i = length; i-- > 0;) {
+                if (!stack_pop(stack, &a)) {
+                    exec_fail(err, EXEC_ERROR_TRAP, "array initializer missing"); return -1;
+                }
+                object->values[i] = packed_field_value(a, type->field_packed[0]);
+            }
+        }
+        return gc_push(stack, out, err) ? 1 : -1;
+    }
+    if (op == 0x09 || op == 0x0a) {
+        uint32_t segment = instr->memory_index;
+        if (type->kind != WAST_TYPE_ARRAY ||
+            !stack_pop(stack, &b) || b.type != WASM_VALTYPE_I32 ||
+            !stack_pop(stack, &a) || a.type != WASM_VALTYPE_I32) {
+            exec_fail(err, EXEC_ERROR_TRAP, "array segment constructor operands missing");
+            return -1;
+        }
+        uint32_t source = (uint32_t)a.i32, length = (uint32_t)b.i32;
+        if (!gc_allocate(eng, WAST_TYPE_ARRAY, type_index, length, &out, err))
+            return -1;
+        object = gc_object(eng, &out);
+        if (op == 0x09) {
+            uint32_t width = type->field_packed[0] == 1 ? 1u :
+                             type->field_packed[0] == 2 ? 2u :
+                             type->fields[0] == WASM_VALTYPE_I64 ||
+                             type->fields[0] == WASM_VALTYPE_F64 ? 8u : 4u;
+            uint32_t segment_bytes = segment < eng->data_count &&
+                !eng->data_dropped[segment] ? eng->data_seg_lengths[segment] : 0;
+            if (segment >= eng->data_count || source > segment_bytes ||
+                length > (segment_bytes - source) / width) {
+                exec_fail(err, EXEC_ERROR_TRAP, "out of bounds array data access"); return -1;
+            }
+            for (uint32_t i = 0; i < length; i++) {
+                uint64_t bits = load_le(eng->data_segs[segment],
+                                        source + (size_t)i * width, width);
+                object->values[i] = default_value(type->fields[0]);
+                if (type->fields[0] == WASM_VALTYPE_I64) object->values[i].i64 = (int64_t)bits;
+                else if (type->fields[0] == WASM_VALTYPE_F32) { uint32_t x=(uint32_t)bits; memcpy(&object->values[i].f32,&x,4); }
+                else if (type->fields[0] == WASM_VALTYPE_F64) memcpy(&object->values[i].f64,&bits,8);
+                else object->values[i].i32 = (int32_t)bits;
+            }
+        } else {
+            uint32_t segment_length = segment < eng->elem_count &&
+                !eng->elem_dropped[segment] ? eng->elem_lengths[segment] : 0;
+            if (segment >= eng->elem_count || source > segment_length ||
+                length > segment_length - source) {
+                exec_fail(err, EXEC_ERROR_TRAP, "out of bounds array element access"); return -1;
+            }
+            for (uint32_t i = 0; i < length; i++) {
+                exec_table_element e = eng->elem_values[segment][source + i];
+                object->values[i] = default_value(type->fields[0]);
+                if (e.owner) {
+                    object->values[i].type = e.type;
+                    object->values[i].ref = e.func_idx;
+                    set_reference_dynamic_type(&object->values[i], e.dynamic_type);
+                }
+            }
+        }
+        return gc_push(stack, out, err) ? 1 : -1;
+    }
+    if (op >= 0x0b && op <= 0x0e) {
+        if (op == 0x0e && !stack_pop(stack, &b)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "array.set value missing"); return -1;
+        }
+        if (!stack_pop(stack, &a) || a.type != WASM_VALTYPE_I32 ||
+            !stack_pop(stack, &c) || !(object = gc_object(eng, &c)) ||
+            object->kind != WAST_TYPE_ARRAY || (uint32_t)a.i32 >= object->length) {
+            exec_fail(err, EXEC_ERROR_TRAP, c.ref == UINT32_MAX ?
+                      "null array reference" : "out of bounds array access"); return -1;
+        }
+        if (op == 0x0e) object->values[(uint32_t)a.i32] =
+            packed_field_value(b, type->field_packed[0]);
+        else {
+            out = object->values[(uint32_t)a.i32];
+            uint8_t packed = type->field_packed[0];
+            uint32_t bits = (uint32_t)out.i32;
+            if (packed == 1) bits &= 0xffu; else if (packed == 2) bits &= 0xffffu;
+            if (op == 0x0c && packed == 1 && (bits & 0x80u)) bits |= 0xffffff00u;
+            if (op == 0x0c && packed == 2 && (bits & 0x8000u)) bits |= 0xffff0000u;
+            if (packed) out = i32_value(bits);
+            if (!gc_push(stack, out, err)) return -1;
+        }
+        return 1;
+    }
+    if (op == 0x0f) {
+        if (!stack_pop(stack, &a) || !(object = gc_object(eng, &a)) ||
+            object->kind != WAST_TYPE_ARRAY) {
+            exec_fail(err, EXEC_ERROR_TRAP, a.ref == UINT32_MAX ?
+                      "null array reference" : "array reference expected"); return -1;
+        }
+        return gc_push(stack, i32_value(object->length), err) ? 1 : -1;
+    }
+    if (op == 0x10) {
+        if (!stack_pop(stack, &d) || d.type != WASM_VALTYPE_I32 ||
+            !stack_pop(stack, &c) || !stack_pop(stack, &b) || b.type != WASM_VALTYPE_I32 ||
+            !stack_pop(stack, &a) || !(object = gc_object(eng, &a)) ||
+            object->kind != WAST_TYPE_ARRAY) {
+            exec_fail(err, EXEC_ERROR_TRAP, "array.fill operands missing"); return -1;
+        }
+        uint32_t offset=(uint32_t)b.i32, length=(uint32_t)d.i32;
+        if (offset > object->length || length > object->length-offset) {
+            exec_fail(err, EXEC_ERROR_TRAP, "out of bounds array access"); return -1;
+        }
+        c = packed_field_value(c, type->field_packed[0]);
+        for (uint32_t i=0;i<length;i++) object->values[offset+i]=c;
+        return 1;
+    }
+    if (op == 0x11 || op == 0x12) {
+        uint32_t segment = instr->memory_index;
+        if (type->kind != WAST_TYPE_ARRAY ||
+            !stack_pop(stack,&d) || d.type!=WASM_VALTYPE_I32 ||
+            !stack_pop(stack,&c) || c.type!=WASM_VALTYPE_I32 ||
+            !stack_pop(stack,&b) || b.type!=WASM_VALTYPE_I32 ||
+            !stack_pop(stack,&a) || !(object=gc_object(eng,&a)) ||
+            object->kind!=WAST_TYPE_ARRAY) {
+            exec_fail(err,EXEC_ERROR_TRAP,"array.init operands missing"); return -1;
+        }
+        uint32_t dst=(uint32_t)b.i32, src=(uint32_t)c.i32,
+                 len=(uint32_t)d.i32;
+        if (dst>object->length || len>object->length-dst) {
+            exec_fail(err,EXEC_ERROR_TRAP,"out of bounds array access"); return -1;
+        }
+        if (op==0x11) {
+            uint32_t width=type->field_packed[0]==1?1u:
+                           type->field_packed[0]==2?2u:
+                           type->fields[0]==WASM_VALTYPE_I64 ||
+                           type->fields[0]==WASM_VALTYPE_F64?8u:4u;
+            uint32_t segment_bytes=segment<eng->data_count &&
+                !eng->data_dropped[segment]?eng->data_seg_lengths[segment]:0;
+            if (segment>=eng->data_count || src>segment_bytes ||
+                len>(segment_bytes-src)/width) {
+                exec_fail(err,EXEC_ERROR_TRAP,"out of bounds array data access"); return -1;
+            }
+            for(uint32_t i=0;i<len;i++) {
+                uint64_t bits=load_le(eng->data_segs[segment],
+                    src+(size_t)i*width,width);
+                wasm_value v=default_value(type->fields[0]);
+                if(type->fields[0]==WASM_VALTYPE_I64)v.i64=(int64_t)bits;
+                else if(type->fields[0]==WASM_VALTYPE_F32){uint32_t x=(uint32_t)bits;memcpy(&v.f32,&x,4);}
+                else if(type->fields[0]==WASM_VALTYPE_F64)memcpy(&v.f64,&bits,8);
+                else v.i32=(int32_t)bits;
+                object->values[dst+i]=v;
+            }
+        } else {
+            uint32_t segment_length=segment<eng->elem_count &&
+                !eng->elem_dropped[segment]?eng->elem_lengths[segment]:0;
+            if(segment>=eng->elem_count || src>segment_length ||
+               len>segment_length-src){
+                exec_fail(err,EXEC_ERROR_TRAP,"out of bounds array element access");return -1;
+            }
+            for(uint32_t i=0;i<len;i++){
+                exec_table_element el=eng->elem_values[segment][src+i];
+                wasm_value v=default_value(type->fields[0]);
+                if(el.owner){v.type=el.type;v.ref=el.func_idx;set_reference_dynamic_type(&v,el.dynamic_type);}
+                object->values[dst+i]=v;
+            }
+        }
+        return 1;
+    }
+    if (op == 0x13) {
+        if (instr->memory_index >= eng->type_count ||
+            !stack_pop(stack,&d) || d.type!=WASM_VALTYPE_I32 ||
+            !stack_pop(stack,&c) || c.type!=WASM_VALTYPE_I32 ||
+            !stack_pop(stack,&b) || !(object=gc_object(eng,&b)) ||
+            !stack_pop(stack,&e) || e.type!=WASM_VALTYPE_I32 ||
+            !stack_pop(stack,&a)) {
+            exec_fail(err,EXEC_ERROR_TRAP,"array.copy operands missing"); return -1;
+        }
+        exec_gc_object *destination=gc_object(eng,&a);
+        uint32_t dst=(uint32_t)e.i32, src=(uint32_t)c.i32, len=(uint32_t)d.i32;
+        if (!destination || destination->kind!=WAST_TYPE_ARRAY ||
+            object->kind!=WAST_TYPE_ARRAY || dst>destination->length ||
+            len>destination->length-dst || src>object->length ||
+            len>object->length-src) {
+            exec_fail(err,EXEC_ERROR_TRAP,"out of bounds array access"); return -1;
+        }
+        if(destination==object)
+            memmove(destination->values+dst,object->values+src,
+                    (size_t)len*sizeof(*object->values));
+        else
+            memcpy(destination->values+dst,object->values+src,
+                   (size_t)len*sizeof(*object->values));
+        return 1;
+    }
+    return 0;
 }
 
 static int select_validation_unary(wasm_valtype *stack, int *top,
@@ -2147,7 +2889,7 @@ static select_validation_result validate_select_function(
                 if (!select_validation_pop(stack, &top, control, &reference) ||
                     (reference != SELECT_BOTTOM_TYPE &&
                      (!WASM_VALTYPE_IS_TYPE_REF(reference) ||
-                      !same_func_type(
+                      !func_type_is_subtype(
                           eng, WASM_VALTYPE_TYPE_REF_INDEX(reference),
                           eng, instr->u32_imm))))
                     return SELECT_VALIDATION_INVALID;
@@ -2519,8 +3261,8 @@ static select_validation_result validate_select_function(
                 wasm_valtype right, left;
                 if (!select_validation_pop(stack, &top, control, &right) ||
                     !select_validation_pop(stack, &top, control, &left) ||
-                    (right != SELECT_BOTTOM_TYPE && !is_reference_type(right)) ||
-                    (left != SELECT_BOTTOM_TYPE && !is_reference_type(left)) ||
+                    (right != SELECT_BOTTOM_TYPE && !is_eq_reference_type(eng,right)) ||
+                    (left != SELECT_BOTTOM_TYPE && !is_eq_reference_type(eng,left)) ||
                     !select_validation_push(stack, &top, WASM_VALTYPE_I32))
                     return SELECT_VALIDATION_INVALID;
                 break;
@@ -2617,6 +3359,231 @@ static select_validation_result validate_select_function(
                         select_validation_binary(stack,&top,control,
                             WASM_VALTYPE_V128,WASM_VALTYPE_V128);
                     if (!valid) return SELECT_VALIDATION_INVALID;
+                }
+                break;
+            }
+            case 0xFB: {
+                uint32_t op = instr->simd_op;
+                uint32_t ti = instr->u32_imm;
+                const exec_func_type *gc_type = NULL;
+                if ((op <= 0x0e || (op >= 0x10 && op <= 0x13)) &&
+                    (ti >= eng->type_count ||
+                     ((gc_type = &eng->types[ti])->kind != WAST_TYPE_STRUCT &&
+                      gc_type->kind != WAST_TYPE_ARRAY)))
+                    return SELECT_VALIDATION_INVALID;
+                if (op == 0x00 || op == 0x01) {
+                    if (gc_type->kind != WAST_TYPE_STRUCT)
+                        return SELECT_VALIDATION_INVALID;
+                    if (op == 0x00) {
+                        for (int i=gc_type->field_count;i-- > 0;)
+                            if (!select_validation_pop_type(stack,&top,control,
+                                    gc_type->field_packed[i] ? WASM_VALTYPE_I32 :
+                                                               gc_type->fields[i]))
+                                return SELECT_VALIDATION_INVALID;
+                    } else {
+                        for (int i=0;i<gc_type->field_count;i++)
+                            if (is_reference_type(gc_type->fields[i]) &&
+                                !is_nullable_reference_type(gc_type->fields[i]))
+                                return SELECT_VALIDATION_INVALID;
+                    }
+                    if (!select_validation_push(stack,&top,
+                            (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE+ti)))
+                        return SELECT_VALIDATION_INCONCLUSIVE;
+                } else if (op >= 0x02 && op <= 0x05) {
+                    uint32_t field=instr->memory_index;
+                    if (gc_type->kind!=WAST_TYPE_STRUCT ||
+                        field >= (uint32_t)gc_type->field_count)
+                        return SELECT_VALIDATION_INVALID;
+                    if ((op==0x03 || op==0x04) && !gc_type->field_packed[field])
+                        return SELECT_VALIDATION_INVALID;
+                    if (op==0x02 && gc_type->field_packed[field])
+                        return SELECT_VALIDATION_INVALID;
+                    if (op==0x05 &&
+                        (!gc_type->field_mutable[field] ||
+                         !select_validation_pop_type(stack,&top,control,
+                            gc_type->field_packed[field] ? WASM_VALTYPE_I32 :
+                                                          gc_type->fields[field])))
+                        return SELECT_VALIDATION_INVALID;
+                    if (!select_validation_pop_type(stack,&top,control,
+                            (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+ti)))
+                        return SELECT_VALIDATION_INVALID;
+                    if (op!=0x05 && !select_validation_push(stack,&top,
+                            gc_type->field_packed[field] ? WASM_VALTYPE_I32 :
+                                                          gc_type->fields[field]))
+                        return SELECT_VALIDATION_INCONCLUSIVE;
+                } else if (op == 0x06 || op == 0x07 || op == 0x08) {
+                    if (gc_type->kind!=WAST_TYPE_ARRAY)
+                        return SELECT_VALIDATION_INVALID;
+                    if (op==0x08) {
+                        for(uint32_t i=0;i<instr->lane_index;i++)
+                            if(!select_validation_pop_type(stack,&top,control,
+                                gc_type->field_packed[0]?WASM_VALTYPE_I32:
+                                                         gc_type->fields[0]))
+                                return SELECT_VALIDATION_INVALID;
+                    } else {
+                        if(!select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32))
+                            return SELECT_VALIDATION_INVALID;
+                        if(op==0x06 && !select_validation_pop_type(stack,&top,control,
+                            gc_type->field_packed[0]?WASM_VALTYPE_I32:gc_type->fields[0]))
+                            return SELECT_VALIDATION_INVALID;
+                        if(op==0x07 && is_reference_type(gc_type->fields[0]) &&
+                           !is_nullable_reference_type(gc_type->fields[0]))
+                            return SELECT_VALIDATION_INVALID;
+                    }
+                    if(!select_validation_push(stack,&top,
+                        (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE+ti)))
+                        return SELECT_VALIDATION_INCONCLUSIVE;
+                } else if (op == 0x09 || op == 0x0a) {
+                    if(gc_type->kind!=WAST_TYPE_ARRAY ||
+                       !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
+                       !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32))
+                        return SELECT_VALIDATION_INVALID;
+                    if(op==0x09) {
+                        if(is_reference_type(gc_type->fields[0]) ||
+                           instr->memory_index>=eng->declared_data_count)
+                            return SELECT_VALIDATION_INVALID;
+                    } else if(instr->memory_index>=eng->elem_count ||
+                        !global_type_is_compat(eng,eng->elem_types[instr->memory_index],
+                                              eng,gc_type->fields[0],0))
+                        return SELECT_VALIDATION_INVALID;
+                    if(!select_validation_push(stack,&top,
+                        (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE+ti)))
+                        return SELECT_VALIDATION_INCONCLUSIVE;
+                } else if (op>=0x0b && op<=0x0e) {
+                    if(gc_type->kind!=WAST_TYPE_ARRAY ||
+                       (op==0x0b && gc_type->field_packed[0]) ||
+                       ((op==0x0c || op==0x0d) && !gc_type->field_packed[0]))
+                        return SELECT_VALIDATION_INVALID;
+                    if(op==0x0e && (!gc_type->field_mutable[0] ||
+                       !select_validation_pop_type(stack,&top,control,
+                          gc_type->field_packed[0]?WASM_VALTYPE_I32:gc_type->fields[0])))
+                        return SELECT_VALIDATION_INVALID;
+                    if(!select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
+                       !select_validation_pop_type(stack,&top,control,
+                          (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+ti)))
+                        return SELECT_VALIDATION_INVALID;
+                    if(op!=0x0e && !select_validation_push(stack,&top,
+                        gc_type->field_packed[0]?WASM_VALTYPE_I32:gc_type->fields[0]))
+                        return SELECT_VALIDATION_INCONCLUSIVE;
+                } else if(op==0x0f) {
+                    wasm_valtype ref;
+                    if(!select_validation_pop(stack,&top,control,&ref) ||
+                       (ref!=SELECT_BOTTOM_TYPE &&
+                        !global_type_is_compat(eng,ref,eng,WASM_VALTYPE_ARRAYREF,0)) ||
+                       !select_validation_push(stack,&top,WASM_VALTYPE_I32))
+                        return SELECT_VALIDATION_INVALID;
+                } else if(op==0x10) {
+                    if(gc_type->kind!=WAST_TYPE_ARRAY || !gc_type->field_mutable[0] ||
+                       !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
+                       !select_validation_pop_type(stack,&top,control,
+                          gc_type->field_packed[0]?WASM_VALTYPE_I32:gc_type->fields[0]) ||
+                       !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
+                       !select_validation_pop_type(stack,&top,control,
+                          (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+ti)))
+                        return SELECT_VALIDATION_INVALID;
+                } else if(op==0x11 || op==0x12) {
+                    if(gc_type->kind!=WAST_TYPE_ARRAY || !gc_type->field_mutable[0] ||
+                       !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
+                       !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
+                       !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
+                       !select_validation_pop_type(stack,&top,control,
+                          (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+ti)))
+                        return SELECT_VALIDATION_INVALID;
+                    if(op==0x11 && (is_reference_type(gc_type->fields[0]) ||
+                       instr->memory_index>=eng->declared_data_count))
+                        return SELECT_VALIDATION_INVALID;
+                    if(op==0x12 && (instr->memory_index>=eng->elem_count ||
+                       !global_type_is_compat(eng,eng->elem_types[instr->memory_index],
+                                             eng,gc_type->fields[0],0)))
+                        return SELECT_VALIDATION_INVALID;
+                } else if(op==0x13) {
+                    uint32_t sti=instr->memory_index;
+                    if(gc_type->kind!=WAST_TYPE_ARRAY || !gc_type->field_mutable[0] ||
+                       sti>=eng->type_count || eng->types[sti].kind!=WAST_TYPE_ARRAY ||
+                       gc_type->field_packed[0] != eng->types[sti].field_packed[0] ||
+                       !global_type_is_compat(eng,eng->types[sti].fields[0],eng,
+                                             gc_type->fields[0],0) ||
+                       !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
+                       !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
+                       !select_validation_pop_type(stack,&top,control,
+                           (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+sti)) ||
+                       !select_validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
+                       !select_validation_pop_type(stack,&top,control,
+                           (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+ti)))
+                        return SELECT_VALIDATION_INVALID;
+                } else if(op>=0x14 && op<=0x17) {
+                    wasm_valtype ref,target;
+                    if(!select_validation_pop(stack,&top,control,&ref) ||
+                       (ref!=SELECT_BOTTOM_TYPE && !is_reference_type(ref)) ||
+                       !nullable_reference_for_heap(eng,instr->block_type_index,&target))
+                        return SELECT_VALIDATION_INVALID;
+                    if(op>=0x16) {
+                        if(op==0x16) target=nonnullable_reference_type(target);
+                        if(!select_validation_push(stack,&top,target))
+                            return SELECT_VALIDATION_INCONCLUSIVE;
+                    } else if(!select_validation_push(stack,&top,WASM_VALTYPE_I32))
+                        return SELECT_VALIDATION_INCONCLUSIVE;
+                } else if(op==0x18 || op==0x19) {
+                    wasm_valtype source,target,operand;
+                    if(!nullable_reference_for_heap(eng,instr->block_type_index,&source) ||
+                       !nullable_reference_for_heap(eng,(int32_t)instr->lane_index,&target))
+                        return SELECT_VALIDATION_INVALID;
+                    if(!(instr->alignment&1u)) source=nonnullable_reference_type(source);
+                    if(!(instr->alignment&2u)) target=nonnullable_reference_type(target);
+                    if(!global_type_is_compat(eng,target,eng,source,0) ||
+                       !select_validation_pop(stack,&top,control,&operand) ||
+                       (operand!=SELECT_BOTTOM_TYPE &&
+                        !global_type_is_compat(eng,operand,eng,source,0)))
+                        return SELECT_VALIDATION_INVALID;
+                    uint32_t depth=instr->u32_imm;
+                    if(depth>(uint32_t)control_top) return SELECT_VALIDATION_INVALID;
+                    const wasm_valtype *label_types;
+                    int label_count;
+                    if(depth==(uint32_t)control_top){label_types=signature->results;label_count=signature->result_count;}
+                    else {
+                        const select_validation_control *target_control=&controls[control_top-(int)depth];
+                        label_types=target_control->kind==0x03?target_control->params:target_control->results;
+                        label_count=target_control->kind==0x03?target_control->param_count:target_control->result_count;
+                    }
+                    wasm_valtype diff_type=source;
+                    if((instr->alignment&3u)==3u)
+                        diff_type=nonnullable_reference_type(source);
+                    wasm_valtype carried=op==0x18?target:diff_type;
+                    if(label_count<1 || !global_type_is_compat(eng,carried,eng,
+                                                               label_types[label_count-1],0))
+                        return SELECT_VALIDATION_INVALID;
+                    /* The fall-through stack prefix is typed through the
+                     * branch label.  Replace the original (possibly more
+                     * precise) operands with the label's declared types,
+                     * matching the reference validator's pop/push rule. */
+                    for(int i=label_count-1;i>0;i--)
+                        if(!select_validation_pop_type(stack,&top,control,
+                                                       label_types[i-1]))
+                            return SELECT_VALIDATION_INVALID;
+                    for(int i=0;i<label_count-1;i++)
+                        if(!select_validation_push(stack,&top,label_types[i]))
+                            return SELECT_VALIDATION_INCONCLUSIVE;
+                    wasm_valtype fallthrough=op==0x18?diff_type:target;
+                    if(!select_validation_push(stack,&top,fallthrough))
+                        return SELECT_VALIDATION_INCONCLUSIVE;
+                } else if(op==0x1a) {
+                    if(!select_validation_unary(stack,&top,control,WASM_VALTYPE_EXTERNREF,
+                                                WASM_VALTYPE_ANYREF))
+                        return SELECT_VALIDATION_INVALID;
+                } else if(op==0x1b) {
+                    if(!select_validation_unary(stack,&top,control,WASM_VALTYPE_ANYREF,
+                                                WASM_VALTYPE_EXTERNREF))
+                        return SELECT_VALIDATION_INVALID;
+                } else if(op==0x1c) {
+                    if(!select_validation_unary(stack,&top,control,WASM_VALTYPE_I32,
+                                                WASM_VALTYPE_I31REF_NONNULL))
+                        return SELECT_VALIDATION_INVALID;
+                } else if(op==0x1d || op==0x1e) {
+                    if(!select_validation_unary(stack,&top,control,WASM_VALTYPE_I31REF,
+                                                WASM_VALTYPE_I32))
+                        return SELECT_VALIDATION_INVALID;
+                } else {
+                    return SELECT_VALIDATION_INCONCLUSIVE;
                 }
                 break;
             }
@@ -3033,6 +4000,68 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, exec_read
                 }
             }
             /* sub_op 0x00-0x07 (sat trunc) have no immediates */
+        } else if (byte == 0xFB) {
+            uint32_t sub_op;
+            if (!er_u32(body, &sub_op) || sub_op > 0x1e) {
+                FREE_CODE(code, code_size);
+                return exec_fail(err, EXEC_ERROR_FORMAT,
+                                 "invalid GC opcode");
+            }
+            instr.opcode = 0xFB;
+            instr.simd_op = sub_op;
+            if (sub_op <= 0x01 || (sub_op >= 0x06 && sub_op <= 0x07) ||
+                (sub_op >= 0x0b && sub_op <= 0x0e) ||
+                sub_op == 0x10) {
+                if (!er_u32(body, &instr.u32_imm)) {
+                    FREE_CODE(code, code_size);
+                    return exec_fail(err, EXEC_ERROR_FORMAT,
+                                     "invalid GC type immediate");
+                }
+            } else if (sub_op >= 0x02 && sub_op <= 0x05) {
+                if (!er_u32(body, &instr.u32_imm) ||
+                    !er_u32(body, &instr.memory_index)) {
+                    FREE_CODE(code, code_size);
+                    return exec_fail(err, EXEC_ERROR_FORMAT,
+                                     "invalid struct field immediate");
+                }
+            } else if (sub_op == 0x08) {
+                if (!er_u32(body, &instr.u32_imm) ||
+                    !er_u32(body, &instr.lane_index)) {
+                    FREE_CODE(code, code_size);
+                    return exec_fail(err, EXEC_ERROR_FORMAT,
+                                     "invalid array.new_fixed immediate");
+                }
+            } else if (sub_op == 0x09 || sub_op == 0x0a ||
+                       sub_op == 0x11 || sub_op == 0x12 || sub_op == 0x13) {
+                if (!er_u32(body, &instr.u32_imm) ||
+                    !er_u32(body, &instr.memory_index)) {
+                    FREE_CODE(code, code_size);
+                    return exec_fail(err, EXEC_ERROR_FORMAT,
+                                     "invalid GC dual immediate");
+                }
+            } else if (sub_op >= 0x14 && sub_op <= 0x17) {
+                int32_t heap_type;
+                if (!er_i32(body, &heap_type)) {
+                    FREE_CODE(code, code_size);
+                    return exec_fail(err, EXEC_ERROR_FORMAT,
+                                     "invalid GC heap type");
+                }
+                instr.block_type_index = heap_type;
+            } else if (sub_op == 0x18 || sub_op == 0x19) {
+                uint8_t flags;
+                int32_t source_type, target_type;
+                if (!er_u8(body, &flags) || flags > 3 ||
+                    !er_u32(body, &instr.u32_imm) ||
+                    !er_i32(body, &source_type) ||
+                    !er_i32(body, &target_type)) {
+                    FREE_CODE(code, code_size);
+                    return exec_fail(err, EXEC_ERROR_FORMAT,
+                                     "invalid br_on_cast immediate");
+                }
+                instr.alignment = flags;
+                instr.block_type_index = source_type;
+                instr.lane_index = (uint32_t)target_type;
+            }
         } else if (byte == 0xFD) {
             uint32_t simd_op;
             wast_simd_info simd_info;
@@ -3316,6 +4345,9 @@ void exec_free(waste_exec_engine *eng) {
         free(eng->elem_values[i]);
     for (uint32_t i = 0; i < eng->data_count; i++)
         free(eng->data_segs[i]);
+    for (uint32_t i = 0; i < eng->gc_object_count; i++)
+        free(eng->gc_objects[i].values);
+    free(eng->gc_objects);
     for (uint32_t i = 0; i < eng->func_count; i++) {
         if (eng->funcs[i].code) {
             /* Free br_table depth arrays */
@@ -3405,11 +4437,6 @@ exec_status exec_find_export_tag(const waste_exec_engine *eng, const char *name,
 }
 
 /* ---- Value stack ---- */
-
-typedef struct {
-    wasm_value vals[EXEC_MAX_STACK];
-    int        top;
-} exec_stack;
 
 typedef struct {
     uint32_t kind;
@@ -4364,6 +5391,109 @@ static wasm_value i64_value(uint64_t bits) {
     return value;
 }
 
+#define EXEC_GC_REF_BASE UINT32_C(0x80000000)
+
+/* References use nan_mode as engine-private metadata.  The field is otherwise
+ * irrelevant for reference values and travels with values through locals,
+ * globals, and aggregate fields.  Encoding type+1 leaves an all-zero value as
+ * the natural "use the public value type" default for host-provided refs. */
+static wasm_valtype reference_dynamic_type(const wasm_value *value) {
+    uint32_t encoded = 0;
+    memcpy(&encoded, value->nan_mode, sizeof(encoded));
+    return encoded ? (wasm_valtype)(encoded - 1u) : value->type;
+}
+
+static void set_reference_dynamic_type(wasm_value *value,
+                                       wasm_valtype dynamic_type) {
+    uint32_t encoded = (uint32_t)dynamic_type + 1u;
+    memcpy(value->nan_mode, &encoded, sizeof(encoded));
+}
+
+static exec_gc_object *gc_object(waste_exec_engine *eng,
+                                 const wasm_value *value) {
+    if (!eng || value->ref == UINT32_MAX ||
+        (value->ref & EXEC_GC_REF_BASE) == 0)
+        return NULL;
+    uint32_t index = value->ref & ~EXEC_GC_REF_BASE;
+    return index < eng->gc_object_count ? &eng->gc_objects[index] : NULL;
+}
+
+static wasm_value default_value(wasm_valtype type) {
+    wasm_value value;
+    memset(&value, 0, sizeof(value));
+    value.type = type;
+    if (is_reference_type(type)) {
+        value.ref = UINT32_MAX;
+        set_reference_dynamic_type(&value, type);
+    }
+    return value;
+}
+
+static int gc_allocate(waste_exec_engine *eng, wast_type_kind kind,
+                       uint32_t type_index, uint32_t length,
+                       wasm_value *out, exec_error *err) {
+    if (length > (uint32_t)(EXEC_MAX_GC_OBJECT_BYTES /
+                            sizeof(*eng->gc_objects[0].values))) {
+        exec_fail(err, EXEC_ERROR_TRAP, "GC allocation failed");
+        return 0;
+    }
+    if (eng->gc_object_count >= UINT32_C(0x7ffffffe)) {
+        exec_fail(err, EXEC_ERROR_TRAP, "GC object limit exceeded");
+        return 0;
+    }
+    if (eng->gc_object_count == eng->gc_object_capacity) {
+        uint32_t capacity;
+        if (!eng->gc_object_capacity)
+            capacity = 16u;
+        else if (eng->gc_object_capacity > UINT32_C(0x3fffffff))
+            capacity = UINT32_C(0x7ffffffe);
+        else
+            capacity = eng->gc_object_capacity * 2u;
+#if SIZE_MAX <= UINT32_MAX
+        if (capacity > SIZE_MAX / sizeof(*eng->gc_objects)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "GC allocation failed");
+            return 0;
+        }
+#endif
+        exec_gc_object *objects = (exec_gc_object *)realloc(
+            eng->gc_objects, (size_t)capacity * sizeof(*objects));
+        if (!objects) {
+            exec_fail(err, EXEC_ERROR_TRAP, "GC allocation failed");
+            return 0;
+        }
+        memset(objects + eng->gc_object_capacity, 0,
+               (size_t)(capacity - eng->gc_object_capacity) * sizeof(*objects));
+        eng->gc_objects = objects;
+        eng->gc_object_capacity = capacity;
+    }
+    uint32_t index = eng->gc_object_count++;
+    exec_gc_object *object = &eng->gc_objects[index];
+    memset(object, 0, sizeof(*object));
+    object->kind = kind;
+    object->type_index = type_index;
+    object->length = length;
+    if (length) {
+#if SIZE_MAX <= UINT32_MAX
+        if (length > SIZE_MAX / sizeof(*object->values)) {
+            exec_fail(err, EXEC_ERROR_TRAP, "GC allocation failed");
+            eng->gc_object_count--;
+            return 0;
+        }
+#endif
+        object->values = (wasm_value *)calloc(length, sizeof(*object->values));
+        if (!object->values) {
+            exec_fail(err, EXEC_ERROR_TRAP, "GC allocation failed");
+            eng->gc_object_count--;
+            return 0;
+        }
+    }
+    memset(out, 0, sizeof(*out));
+    out->type = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE + type_index);
+    out->ref = EXEC_GC_REF_BASE | index;
+    set_reference_dynamic_type(out, out->type);
+    return 1;
+}
+
 static int address_value(const wasm_value *value, int is_64, uint64_t *out) {
     if (value->type != (is_64 ? WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
         return 0;
@@ -5047,7 +6177,9 @@ tail_entry:
 
         if (instr->opcode == 0x0c || instr->opcode == 0x0d ||
             instr->opcode == 0x0e || instr->opcode == 0xd5 ||
-            instr->opcode == 0xd6) {
+            instr->opcode == 0xd6 ||
+            (instr->opcode == 0xfb &&
+             (instr->simd_op == 0x18 || instr->simd_op == 0x19))) {
             uint32_t depth = instr->u32_imm;
             if (instr->opcode == 0x0d) {
                 wasm_value condition;
@@ -5084,6 +6216,20 @@ tail_entry:
                 } else if (!stack_push(&stack, reference)) {
                     return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
                 }
+            } else if (instr->opcode == 0xfb) {
+                wasm_value reference;
+                int32_t target_heap = (int32_t)instr->lane_index;
+                if (!stack_pop(&stack, &reference) ||
+                    !is_reference_type(reference.type))
+                    return exec_fail(err, EXEC_ERROR_TRAP,
+                                     "br_on_cast reference missing");
+                int matches = reference_matches_heap(
+                    eng, &reference, target_heap,
+                    (instr->alignment & 2u) != 0);
+                int take = instr->simd_op == 0x18 ? matches : !matches;
+                if (!stack_push(&stack, reference))
+                    return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
+                if (!take) continue;
             }
             if (depth > (uint32_t)control_top)
                 return exec_fail(err, EXEC_ERROR_TRAP, "branch depth out of range");
@@ -5185,8 +6331,10 @@ tail_entry:
             if (instr->opcode == 0x25) {
                 exec_table_element element = table->elements[(size_t)element_index];
                 memset(&reference, 0, sizeof(reference));
-                reference.type = table->element_type;
+                reference.type = element.owner ? element.type : table->element_type;
                 reference.ref = element.owner ? element.func_idx : UINT32_MAX;
+                set_reference_dynamic_type(&reference,
+                    element.owner ? element.dynamic_type : table->element_type);
                 if (!stack_push(&stack, reference))
                     return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
             } else {
@@ -5195,10 +6343,13 @@ tail_entry:
                                            table->element_type, 0))
                     return exec_fail(err, EXEC_ERROR_TRAP,
                                      "table.set type mismatch");
-                exec_table_element element = {NULL, 0};
+                exec_table_element element = {NULL, 0, table->element_type,
+                                               table->element_type};
                 if (reference.ref != UINT32_MAX) {
                     element.owner = eng;
                     element.func_idx = reference.ref;
+                    element.type = reference.type;
+                    element.dynamic_type = reference_dynamic_type(&reference);
                 }
                 table->elements[(size_t)element_index] = element;
             }
@@ -5316,6 +6467,11 @@ tail_entry:
             if (!stack_push(&stack, old_value)) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
             continue;
         }
+        if (instr->opcode == 0xfb) {
+            int handled = exec_gc_instruction(eng, instr, &stack, err);
+            if (handled < 0) return err ? err->status : EXEC_ERROR_TRAP;
+            if (handled > 0) continue;
+        }
         if (instr->opcode == 0xd0 || instr->opcode == 0xd2) {
             wasm_value value; memset(&value,0,sizeof(value));
             if (instr->opcode == 0xd0) {
@@ -5333,6 +6489,7 @@ tail_entry:
                                             function_type);
             }
             value.ref = instr->opcode == 0xd0 ? UINT32_MAX : instr->u32_imm;
+            set_reference_dynamic_type(&value, value.type);
             if (instr->opcode == 0xd2 && instr->u32_imm >= eng->import_func_count + eng->func_count)
                 return exec_fail(err, EXEC_ERROR_TRAP, "ref.func index out of range");
             if (!stack_push(&stack,value)) return exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
@@ -5456,7 +6613,7 @@ tail_entry:
             uint32_t actual_type_index=target<teng->import_func_count?
                 teng->import_func_types[target]:
                 teng->funcs[target-teng->import_func_count].type_index;
-            if(!same_func_type(eng,instr->u32_imm,teng,actual_type_index))
+            if(!func_type_is_subtype(teng,actual_type_index,eng,instr->u32_imm))
                 return exec_fail(err,EXEC_ERROR_TRAP,"indirect call type mismatch");
             exec_func_type *expected=&eng->types[instr->u32_imm];
             if (instr->opcode == 0x13) {
@@ -5501,8 +6658,8 @@ tail_entry:
             uint32_t actual_type_index = target < eng->import_func_count ?
                 eng->import_func_types[target] :
                 eng->funcs[target - eng->import_func_count].type_index;
-            if (!same_func_type(eng, instr->u32_imm,
-                                eng, actual_type_index))
+            if (!func_type_is_subtype(eng, actual_type_index,
+                                      eng, instr->u32_imm))
                 return exec_fail(err, EXEC_ERROR_TRAP,
                                  "call_ref type mismatch");
             if (instr->opcode == 0x15) {
@@ -5728,6 +6885,10 @@ tail_entry:
                         for (uint64_t i=old_size;i<new_size;i++) {
                             nel[i].owner = init_v.ref == UINT32_MAX ? NULL : eng;
                             nel[i].func_idx = init_v.ref == UINT32_MAX ? 0 : init_v.ref;
+                            nel[i].type = init_v.ref == UINT32_MAX ?
+                                tbl->element_type : init_v.type;
+                            nel[i].dynamic_type = init_v.ref == UINT32_MAX ?
+                                tbl->element_type : reference_dynamic_type(&init_v);
                         }
                         tbl->elements=nel; tbl->size=new_size;
                         wasm_value old_value=tbl->is_64?i64_value(old_size):i32_value((uint32_t)old_size);
@@ -5777,8 +6938,8 @@ tail_entry:
                     return exec_fail(err,EXEC_ERROR_TRAP,"out of bounds table access");
                 /* set val_v as table element — only funcref/externref supported */
                 exec_table_element fill_el;
-                if (val_v.ref==UINT32_MAX) { fill_el.owner=NULL; fill_el.func_idx=0; }
-                else { fill_el.owner=eng; fill_el.func_idx=val_v.ref; }
+                if (val_v.ref==UINT32_MAX) { fill_el.owner=NULL; fill_el.func_idx=0; fill_el.type=tbl->element_type; fill_el.dynamic_type=tbl->element_type; }
+                else { fill_el.owner=eng; fill_el.func_idx=val_v.ref; fill_el.type=val_v.type; fill_el.dynamic_type=reference_dynamic_type(&val_v); }
                 for (uint64_t i=0;i<n;i++) tbl->elements[(size_t)(dst+i)]=fill_el;
             } else {
                 /* Unsupported 0xFC operation. */

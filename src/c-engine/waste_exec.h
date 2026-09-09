@@ -53,6 +53,8 @@ typedef struct {
 typedef struct {
     waste_exec_engine *owner;
     uint32_t func_idx;
+    wasm_valtype type;
+    wasm_valtype dynamic_type;
 } exec_table_element;
 
 typedef struct {

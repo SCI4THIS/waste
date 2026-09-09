@@ -148,6 +148,9 @@ MEMOP       (i32\.load|i64\.load|f32\.load|f64\.load|i32\.load8_s|i32\.load8_u|i
 \([ \t\r\n]*global\.get { yyextra->fold_depth++; return FOLD_GLOBAL_GET_START; }
 \([ \t\r\n]*global\.set { yyextra->fold_depth++; return FOLD_GLOBAL_SET_START; }
 \([ \t\r\n]*ref\.null { yyextra->fold_depth++; return FOLD_REF_NULL_START; }
+\([ \t\r\n]*ref\.i31 { yyextra->fold_depth++; return FOLD_REF_I31_START; }
+\([ \t\r\n]*array\.new_fixed { yyextra->fold_depth++; return FOLD_ARRAY_NEW_FIXED_START; }
+\([ \t\r\n]*array\.new { yyextra->fold_depth++; return FOLD_ARRAY_NEW_START; }
 \([ \t\r\n]*global { yyextra->fold_depth++; return MODULE_GLOBAL_START; }
 \([ \t\r\n]*mut { return MODULE_GLOBAL_MUT_START; }
 \([ \t\r\n]*module[ \t\r\n]+binary { yyextra->fold_depth++; return MODULE_BINARY_START; }
@@ -177,6 +180,16 @@ MEMOP       (i32\.load|i64\.load|f32\.load|f64\.load|i32\.load8_s|i32\.load8_u|i
 \([ \t\r\n]*catch { yyextra->fold_depth++; return FOLD_CATCH_START; }
 \([ \t\r\n]*throw { yyextra->fold_depth++; return FOLD_THROW_START; }
 \([ \t\r\n]*select { yyextra->fold_depth++; return FOLD_SELECT_START; }
+\([ \t\r\n]*br_on_cast(_fail)? {
+    const char *p = yytext + 1;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    size_t n = strlen(p);
+    if (n >= sizeof(yylval->str_val)) n = sizeof(yylval->str_val) - 1;
+    memcpy(yylval->str_val, p, n);
+    yylval->str_val[n] = '\0';
+    yyextra->fold_depth++;
+    return FOLD_ATOM_START;
+}
 \([ \t\r\n]*{MEMOP} {
     const char *p = yytext + 1;
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
@@ -186,18 +199,6 @@ MEMOP       (i32\.load|i64\.load|f32\.load|f64\.load|i32\.load8_s|i32\.load8_u|i
     yylval->str_val[n] = '\0';
     yyextra->fold_depth++;
     return FOLD_MEMOP_START;
-}
-\([ \t\r\n]*[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_.]+[ \t\r\n]*\) {
-    const char *p = yytext + 1;
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
-    const char *end = yytext + yyleng - 1;
-    while (end > p && (end[-1] == ' ' || end[-1] == '\t' ||
-                       end[-1] == '\r' || end[-1] == '\n')) end--;
-    size_t n = (size_t)(end - p);
-    if (n >= sizeof(yylval->str_val)) n = sizeof(yylval->str_val) - 1;
-    memcpy(yylval->str_val, p, n);
-    yylval->str_val[n] = '\0';
-    return FOLD_EMPTY_ATOM;
 }
 \([ \t\r\n]*[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_.]+ {
     const char *p = yytext + 1;
@@ -284,6 +285,10 @@ align=0x{HEXNUM}  {
 align={NUM}         { yylval->u32_val = (uint32_t)strtoul(yytext+6,NULL,10);  return ALIGN_IMM; }
 
     /* Dotted instruction keywords — must be before type keywords and ATOM */
+struct\.get_s    { return KW_STRUCT_GET_S; }
+struct\.get_u    { return KW_STRUCT_GET_U; }
+struct\.get      { return KW_STRUCT_GET; }
+struct\.set      { return KW_STRUCT_SET; }
 v128\.const      { return KW_V128_CONST; }
 local\.get       { return KW_LOCAL_GET; }
 local\.set       { return KW_LOCAL_SET; }
@@ -392,6 +397,8 @@ param        { return KW_PARAM; }
 result       { return KW_RESULT; }
 declare      { return KW_DECLARE; }
 rec          { return KW_REC; }
+sub          { return KW_SUB; }
+final        { return KW_FINAL; }
 item         { return KW_ITEM; }
 offset       { return KW_OFFSET_KW; }
 register     { return KW_REGISTER; }

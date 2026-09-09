@@ -1140,11 +1140,46 @@ static int value_matches(const wasm_value *actual, const wasm_value *expected) {
     if (expected->type == WASM_VALTYPE_EXTERNREF_NONNULL && expected->ref == UINT32_MAX)
         return (actual->type == WASM_VALTYPE_EXTERNREF || actual->type == WASM_VALTYPE_EXTERNREF_NONNULL)
                && actual->ref != UINT32_MAX;
+    if (expected->type == WASM_VALTYPE_I31REF_NONNULL && expected->ref == UINT32_MAX)
+        return (actual->type == WASM_VALTYPE_I31REF ||
+                actual->type == WASM_VALTYPE_I31REF_NONNULL) &&
+               actual->ref != UINT32_MAX;
+    if ((expected->type == WASM_VALTYPE_STRUCTREF_NONNULL ||
+         expected->type == WASM_VALTYPE_ARRAYREF_NONNULL ||
+         expected->type == WASM_VALTYPE_EQREF_NONNULL ||
+         expected->type == WASM_VALTYPE_ANYREF_NONNULL) &&
+        expected->ref == UINT32_MAX)
+        return actual->ref != UINT32_MAX &&
+               (WASM_VALTYPE_IS_TYPE_REF(actual->type) ||
+                actual->type == expected->type ||
+                (expected->type == WASM_VALTYPE_EQREF_NONNULL &&
+                 (actual->type == WASM_VALTYPE_I31REF_NONNULL ||
+                  actual->type == WASM_VALTYPE_STRUCTREF_NONNULL ||
+                  actual->type == WASM_VALTYPE_ARRAYREF_NONNULL)));
     /* A typed function reference is a subtype of funcref.  Assertions use
      * the source-level expected type, while execution retains the more precise
      * indexed type needed by call_ref. */
     if (expected->type == WASM_VALTYPE_FUNCREF &&
         WASM_VALTYPE_IS_TYPE_REF(actual->type))
+        return actual->ref == expected->ref;
+    if ((actual->type == WASM_VALTYPE_FUNCREF_NONNULL &&
+         expected->type == WASM_VALTYPE_FUNCREF) ||
+        (actual->type == WASM_VALTYPE_EXTERNREF_NONNULL &&
+         expected->type == WASM_VALTYPE_EXTERNREF) ||
+        (actual->type == WASM_VALTYPE_ANYREF_NONNULL &&
+         expected->type == WASM_VALTYPE_ANYREF) ||
+        (actual->type == WASM_VALTYPE_EQREF_NONNULL &&
+         expected->type == WASM_VALTYPE_EQREF) ||
+        (actual->type == WASM_VALTYPE_I31REF_NONNULL &&
+         expected->type == WASM_VALTYPE_I31REF) ||
+        (actual->type == WASM_VALTYPE_STRUCTREF_NONNULL &&
+         expected->type == WASM_VALTYPE_STRUCTREF) ||
+        (actual->type == WASM_VALTYPE_ARRAYREF_NONNULL &&
+         expected->type == WASM_VALTYPE_ARRAYREF))
+        return actual->ref == expected->ref;
+    if ((actual->type == WASM_VALTYPE_ANYREF ||
+         actual->type == WASM_VALTYPE_ANYREF_NONNULL) &&
+        expected->type == WASM_VALTYPE_EXTERNREF)
         return actual->ref == expected->ref;
     if (actual->type != expected->type) {
         if (actual->type == WASM_VALTYPE_V128 && expected->type == WASM_VALTYPE_V128)

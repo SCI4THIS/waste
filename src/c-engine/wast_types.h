@@ -153,7 +153,10 @@ typedef struct {
     wasm_valtype fields[WAST_MAX_TYPE_FIELDS];
     uint8_t      field_mutable[WAST_MAX_TYPE_FIELDS];
     uint8_t      field_packed[WAST_MAX_TYPE_FIELDS]; /* 0=valtype, 1=i8, 2=i16 */
+    char         field_names[WAST_MAX_TYPE_FIELDS][64]; /* optional $name */
     int          field_count;
+    int32_t      supertype;  /* -1 = none, >= 0 = parent type index */
+    uint8_t      is_final;   /* 1 = sub final */
 } wast_type;
 
 /* Import kinds */

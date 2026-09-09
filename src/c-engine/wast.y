@@ -2,7 +2,7 @@
 %define lr.type ielr
 %locations
 %define parse.error verbose
-%expect 23
+%expect 24
 %debug
 
 %parse-param { wast_script *script }
@@ -275,6 +275,8 @@ static int resolve_inline_functype(wast_script *script) {
         wast_type *t = &mod->types[mod->type_count];
         memset(t, 0, sizeof(*t));
         t->kind = WAST_TYPE_FUNC;
+        t->is_final = 1;
+        t->supertype = -1;
         t->rec_group_start = (uint32_t)mod->type_count;
         t->rec_group_size = 1;
         t->param_count = g_inline_param_count;
@@ -1175,6 +1177,21 @@ static int type_indices_equivalent(const wast_module *module,
     return 1;
 }
 
+static int type_index_is_subtype(const wast_module *module,
+                                 uint32_t actual, uint32_t expected) {
+    for (uint32_t steps = 0; steps <= (uint32_t)module->type_count; steps++) {
+        if (actual == expected) return 1;
+        if (actual >= (uint32_t)module->type_count) return 0;
+        type_equivalence_state state = {0};
+        if (type_indices_equivalent(module, actual, expected, &state))
+            return 1;
+        int32_t parent = module->types[actual].supertype;
+        if (parent < 0) return 0;
+        actual = (uint32_t)parent;
+    }
+    return 0;
+}
+
 static int constexpr_pop(wast_script *script, wasm_valtype *stack, size_t *depth,
                          wasm_valtype expected) {
     if (*depth == 0 ||
@@ -1292,8 +1309,10 @@ static int constexpr_type_compatible(wast_script *script, wasm_valtype actual,
         unsigned actual_index = WASM_VALTYPE_TYPE_REF_INDEX(actual);
         unsigned expected_index = WASM_VALTYPE_TYPE_REF_INDEX(expected);
         type_equivalence_state state = {0};
-        return type_indices_equivalent(&cur_group(script)->module,
-                                       actual_index, expected_index, &state) &&
+        const wast_module *module = &cur_group(script)->module;
+        return (type_index_is_subtype(module, actual_index, expected_index) ||
+                type_indices_equivalent(module, actual_index, expected_index,
+                                        &state)) &&
                ((unsigned)actual >= WASM_VALTYPE_TYPE_REF_BASE ||
                 (unsigned)expected < WASM_VALTYPE_TYPE_REF_BASE);
     }
@@ -1854,7 +1873,7 @@ static int emit_atom_op(wast_script *script, const char *name) {
         {"i64.extend8_s",0xC2},{"i64.extend16_s",0xC3},
         {"i64.extend32_s",0xC4},
         /* ref */
-        {"ref.is_null",0xD1},{"ref.eq",0xD3},
+        {"ref.is_null",0xD1},{"ref.eq",0xD3},{"ref.as_non_null",0xD4},
         {NULL,0}
     };
     for (int i = 0; tbl[i].n; i++) {
@@ -1891,6 +1910,9 @@ static int emit_atom_op(wast_script *script, const char *name) {
         {"any.convert_extern",0x1a},
         {"extern.convert_any",0x1b},
         {"ref.i31",0x1c},
+        {"i31.get_s",0x1d},
+        {"i31.get_u",0x1e},
+        {"array.len",0x0f},
         {NULL,0}
     };
     for (int i = 0; gc_tbl[i].n; i++) {
@@ -2064,6 +2086,8 @@ static int find_or_create_block_type(wast_script *script) {
     wast_type *t = &mod->types[mod->type_count];
     memset(t, 0, sizeof(*t));
     t->kind = WAST_TYPE_FUNC;
+    t->is_final = 1;
+    t->supertype = -1;
     t->rec_group_start = (uint32_t)mod->type_count;
     t->rec_group_size = 1;
     t->param_count = g_blocktype_param_count;
@@ -2108,6 +2132,8 @@ static int finish_block_type(wast_script *script) {
 static void begin_gc_type(const char *id, wast_type_kind kind) {
     memset(&g_cur_type, 0, sizeof(g_cur_type));
     g_cur_type.kind = kind;
+    g_cur_type.supertype = -1;
+    g_cur_type.is_final = 1;
     snprintf(g_cur_type.id, sizeof(g_cur_type.id), "%s", id);
 }
 
@@ -2117,6 +2143,154 @@ static void append_gc_field(uint64_t encoded) {
     g_cur_type.fields[field] = (wasm_valtype)(encoded & 0xffffu);
     g_cur_type.field_mutable[field] = (uint8_t)((encoded >> 16) & 1u);
     g_cur_type.field_packed[field] = (uint8_t)((encoded >> 17) & 3u);
+}
+
+static void append_gc_field_named(uint64_t encoded, const char *name) {
+    if (g_cur_type.field_count >= WAST_MAX_TYPE_FIELDS) return;
+    int field = g_cur_type.field_count;
+    if (name && name[0])
+        snprintf(g_cur_type.field_names[field], 64, "%s", name);
+    append_gc_field(encoded);
+}
+
+/* Resolve a field name to its index within a type */
+static uint32_t resolve_field(wast_script *script, uint32_t type_idx,
+                              const char *name) {
+    wast_module *mod = &cur_group(script)->module;
+    if (type_idx >= (uint32_t)mod->type_count) return 0;
+    const wast_type *t = &mod->types[type_idx];
+    /* Numeric reference */
+    if (name[0] != '$') return (uint32_t)strtoul(name, NULL, 0);
+    for (int i = 0; i < t->field_count; i++) {
+        if (strcmp(t->field_names[i], name) == 0)
+            return (uint32_t)i;
+    }
+    return 0;
+}
+
+/* Emit GC accessor/mutator instructions: struct.get/set, array.get/set, etc.
+ * Returns 1 if the name matched, 0 otherwise. */
+static int emit_gc_accessor(wast_script *script, const char *name,
+                            const char *type_name, int line, int column) {
+    uint32_t subopcode;
+    if (strcmp(name, "struct.get") == 0) subopcode = 0x02;
+    else if (strcmp(name, "struct.get_s") == 0) subopcode = 0x03;
+    else if (strcmp(name, "struct.get_u") == 0) subopcode = 0x04;
+    else if (strcmp(name, "struct.set") == 0) subopcode = 0x05;
+    else if (strcmp(name, "array.get") == 0) subopcode = 0x0B;
+    else if (strcmp(name, "array.get_s") == 0) subopcode = 0x0C;
+    else if (strcmp(name, "array.get_u") == 0) subopcode = 0x0D;
+    else if (strcmp(name, "array.set") == 0) subopcode = 0x0E;
+    else if (strcmp(name, "array.fill") == 0) subopcode = 0x10;
+    else return 0;
+    emit_byte(script, 0xFB);
+    emit_leb_u32(script, subopcode);
+    emit_index_ref(script, IDX_TYPE, type_name, line, column);
+    return 1;
+}
+
+/* Emit GC two-index instructions: array.copy, array.new_data, etc.
+ * First index is always type, second depends on the instruction.
+ * Returns 1 if matched. */
+static int emit_gc_two_index(wast_script *script, const char *name,
+                             const char *idx1, int l1, int c1,
+                             const char *idx2, int l2, int c2) {
+    if (strcmp(name, "array.copy") == 0) {
+        emit_byte(script, 0xFB); emit_leb_u32(script, 0x13);
+        emit_index_ref(script, IDX_TYPE, idx1, l1, c1);
+        emit_index_ref(script, IDX_TYPE, idx2, l2, c2);
+        return 1;
+    }
+    if (strcmp(name, "array.new_data") == 0) {
+        emit_byte(script, 0xFB); emit_leb_u32(script, 0x09);
+        emit_index_ref(script, IDX_TYPE, idx1, l1, c1);
+        emit_index_ref(script, IDX_DATA, idx2, l2, c2);
+        return 1;
+    }
+    if (strcmp(name, "array.new_elem") == 0) {
+        emit_byte(script, 0xFB); emit_leb_u32(script, 0x0A);
+        emit_index_ref(script, IDX_TYPE, idx1, l1, c1);
+        emit_index_ref(script, IDX_ELEM, idx2, l2, c2);
+        return 1;
+    }
+    if (strcmp(name, "array.init_data") == 0) {
+        emit_byte(script, 0xFB); emit_leb_u32(script, 0x11);
+        emit_index_ref(script, IDX_TYPE, idx1, l1, c1);
+        emit_index_ref(script, IDX_DATA, idx2, l2, c2);
+        return 1;
+    }
+    if (strcmp(name, "array.init_elem") == 0) {
+        emit_byte(script, 0xFB); emit_leb_u32(script, 0x12);
+        emit_index_ref(script, IDX_TYPE, idx1, l1, c1);
+        emit_index_ref(script, IDX_ELEM, idx2, l2, c2);
+        return 1;
+    }
+    return 0;
+}
+
+/* Emit a GC struct.get/set with a resolved field index */
+static void emit_gc_struct_access(wast_script *script, const char *name,
+                                  const char *type_name, int tl, int tc,
+                                  const char *field_name, int fl, int fc) {
+    uint32_t subopcode;
+    if (strcmp(name, "struct.get") == 0) subopcode = 0x02;
+    else if (strcmp(name, "struct.get_s") == 0) subopcode = 0x03;
+    else if (strcmp(name, "struct.get_u") == 0) subopcode = 0x04;
+    else if (strcmp(name, "struct.set") == 0) subopcode = 0x05;
+    else return;
+    emit_byte(script, 0xFB);
+    emit_leb_u32(script, subopcode);
+    emit_index_ref(script, IDX_TYPE, type_name, tl, tc);
+    /* Resolve field index — numeric or named */
+    uint32_t type_idx = resolve_type(type_name);
+    uint32_t field_idx = resolve_field(script, type_idx, field_name);
+    emit_leb_u32(script, field_idx);
+}
+
+/* GC cast type: encodes nullability + heap type in int64_t.
+ * Bits 0-31: heap type (signed for abstract, positive for concrete).
+ *   Abstract: (int8_t)byte (e.g., 0x70→-16 for func)
+ *   Concrete: non-negative type index
+ * Bit 32: nullable flag
+ * Bit 33: is_abstract flag */
+#define GC_CT_NULLABLE (INT64_C(1) << 32)
+#define GC_CT_ABSTRACT (INT64_C(1) << 33)
+#define GC_CT_ABS_NULL(byte)  (GC_CT_ABSTRACT | GC_CT_NULLABLE | ((int64_t)(uint8_t)(byte)))
+#define GC_CT_ABS_NONNULL(byte) (GC_CT_ABSTRACT | ((int64_t)(uint8_t)(byte)))
+#define GC_CT_IDX_NULL(idx)   (GC_CT_NULLABLE | ((int64_t)(uint32_t)(idx)))
+#define GC_CT_IDX_NONNULL(idx) ((int64_t)(uint32_t)(idx))
+
+static void emit_gc_heaptype(wast_script *script, int64_t ct) {
+    if (ct & GC_CT_ABSTRACT)
+        emit_byte(script, (uint8_t)(ct & 0xff));
+    else
+        emit_leb_u32(script, (uint32_t)(ct & 0xffffffffLL));
+}
+
+static void emit_ref_test_cast(wast_script *script, const char *name,
+                               int64_t ct) {
+    int is_cast = (strcmp(name, "ref.cast") == 0);
+    int nullable = (ct & GC_CT_NULLABLE) ? 1 : 0;
+    emit_byte(script, 0xFB);
+    if (is_cast)
+        emit_leb_u32(script, nullable ? 0x17 : 0x16);
+    else
+        emit_leb_u32(script, nullable ? 0x15 : 0x14);
+    emit_gc_heaptype(script, ct);
+}
+
+static void emit_br_on_cast(wast_script *script, const char *name,
+                            uint32_t label, int64_t rt1, int64_t rt2) {
+    int is_fail = (strcmp(name, "br_on_cast_fail") == 0);
+    uint8_t flags = 0;
+    if (rt1 & GC_CT_NULLABLE) flags |= 1;
+    if (rt2 & GC_CT_NULLABLE) flags |= 2;
+    emit_byte(script, 0xFB);
+    emit_leb_u32(script, is_fail ? 0x19 : 0x18);
+    emit_byte(script, flags);
+    emit_leb_u32(script, label);
+    emit_gc_heaptype(script, rt1);
+    emit_gc_heaptype(script, rt2);
 }
 
 static void commit_current_type(wast_script *script) {
@@ -2174,6 +2348,7 @@ static void emit_blocktype(wast_script *script, int bt) {
 %token FOLD_DROP_START FOLD_NOP_START FOLD_UNREACHABLE_START FOLD_RETURN_START
 %token FOLD_GLOBAL_GET_START FOLD_GLOBAL_SET_START
 %token FOLD_REF_NULL_START
+%token FOLD_REF_I31_START FOLD_ARRAY_NEW_START FOLD_ARRAY_NEW_FIXED_START
 %token MODULE_GLOBAL_START
 %token MODULE_GLOBAL_MUT_START
 %token MODULE_BINARY_START MODULE_QUOTE_START
@@ -2186,7 +2361,7 @@ static void emit_blocktype(wast_script *script, int bt) {
 %token FOLD_SELECT_START
 %token FOLD_CALL_INDIRECT_START
 %token FOLD_TRY_TABLE_START FOLD_CATCH_START FOLD_CATCH_ALL_START FOLD_THROW_START
-%token <str_val> FOLD_ATOM_START FOLD_MEMOP_START FOLD_EMPTY_ATOM
+%token <str_val> FOLD_ATOM_START FOLD_MEMOP_START
 %token <str_val> FOLD_SIMD_MEM_START FOLD_SIMD_MEM_LANE_START
 %token <str_val> FOLD_SIMD_LANE_START FOLD_SIMD_SHUFFLE_START
 %token <str_val> SIMD_SHUFFLE_OP
@@ -2214,7 +2389,8 @@ static void emit_blocktype(wast_script *script, int bt) {
 %token KW_MODULE KW_FUNC KW_EXPORT KW_IMPORT KW_PARAM KW_RESULT
 %token KW_TABLE KW_MEMORY KW_GLOBAL KW_DATA KW_ELEM KW_TYPE KW_START KW_TAG
 %token KW_LOCAL KW_MUT KW_DECLARE KW_ITEM KW_OFFSET_KW KW_REGISTER
-%token KW_DEFINITION KW_INSTANCE KW_EXN KW_REC
+%token KW_DEFINITION KW_INSTANCE KW_EXN KW_REC KW_SUB KW_FINAL
+%token KW_STRUCT_GET KW_STRUCT_GET_S KW_STRUCT_GET_U KW_STRUCT_SET
 %token KW_FUNCREF KW_EXTERNREF KW_ANYREF KW_EQREF KW_I31REF KW_STRUCTREF KW_ARRAYREF KW_EXNREF
 %token KW_NULLREF KW_NULLFUNCREF KW_NULLEXNREF KW_NULLEXTERNREF
 %token KW_V128 KW_I32 KW_I64 KW_F32 KW_F64
@@ -2238,7 +2414,7 @@ static void emit_blocktype(wast_script *script, int bt) {
 %type <int_val>       lane_type blocktype block_param_type block_result_type
 %type <int_val>       reftype opt_table_idx
 %type <str_val>       opt_id opt_label opt_label_end any_idx index_ref fold_if_start
-%type <i64_val>       any_int any_nat lane_index
+%type <i64_val>       any_int any_nat lane_index gc_casttype
 %type <memarg_val>    memarg
 %type <u64_val>       storage_type
 %type <int_val>       typeuse typeuse_items typeuse_item
@@ -2688,6 +2864,9 @@ plain_instr:
                                    @2.first_line, @2.first_column);
                     emit_leb_u32(script, 0);
                 }
+            } else {
+                /* GC single-immediate instructions: array.get, array.set, etc. */
+                emit_gc_accessor(script, $1, $2, @2.first_line, @2.first_column);
             }
         }
     }
@@ -2758,6 +2937,31 @@ plain_instr:
                 report_validation_error(script,"shuffle lane out of range");
             emit_byte(script, (uint8_t)lanes[i]);
         }
+    }
+  /* GC plain instructions */
+  | OP gc_casttype {
+        emit_ref_test_cast(script, $1, $2);
+    }
+  | OP any_idx gc_casttype gc_casttype {
+        uint32_t label = resolve_label(script, $2, @2.first_line, @2.first_column);
+        emit_br_on_cast(script, $1, label, $3, $4);
+    }
+  /* struct.get/set/get_s/get_u plain form — dedicated keyword tokens */
+  | KW_STRUCT_GET any_idx any_idx {
+        emit_gc_struct_access(script, "struct.get", $2, @2.first_line, @2.first_column,
+                              $3, @3.first_line, @3.first_column);
+    }
+  | KW_STRUCT_GET_S any_idx any_idx {
+        emit_gc_struct_access(script, "struct.get_s", $2, @2.first_line, @2.first_column,
+                              $3, @3.first_line, @3.first_column);
+    }
+  | KW_STRUCT_GET_U any_idx any_idx {
+        emit_gc_struct_access(script, "struct.get_u", $2, @2.first_line, @2.first_column,
+                              $3, @3.first_line, @3.first_column);
+    }
+  | KW_STRUCT_SET any_idx any_idx {
+        emit_gc_struct_access(script, "struct.set", $2, @2.first_line, @2.first_column,
+                              $3, @3.first_line, @3.first_column);
     }
   | block_plain
   | loop_plain
@@ -3048,14 +3252,19 @@ inline_result_list:
  * --------------------------------------------------------------------- */
 
 fold_instr:
-    FOLD_EMPTY_ATOM {
-        if (strcmp($1, "table.fill") == 0 ||
-            strcmp($1, "memory.fill") == 0 ||
-            strcmp($1, "table.copy") == 0 ||
-            strcmp($1, "memory.copy") == 0)
-            report_validation_error(script, "type mismatch");
-        if (!emit_atom_op(script, $1) && script->strict_wat_mode)
-            report_validation_error(script,"unknown instruction operator");
+    FOLD_REF_I31_START fold_arg_list RPAREN {
+        emit_byte(script, 0xfb); emit_leb_u32(script, 0x1c);
+    }
+  | FOLD_ARRAY_NEW_START any_idx fold_arg_list RPAREN {
+        emit_byte(script, 0xfb); emit_leb_u32(script, 0x06);
+        emit_index_ref(script, IDX_TYPE, $2,
+                       @2.first_line, @2.first_column);
+    }
+  | FOLD_ARRAY_NEW_FIXED_START any_idx any_nat fold_arg_list RPAREN {
+        emit_byte(script, 0xfb); emit_leb_u32(script, 0x08);
+        emit_index_ref(script, IDX_TYPE, $2,
+                       @2.first_line, @2.first_column);
+        emit_leb_u32(script, (uint32_t)$3);
     }
   | FOLD_SIMD_MEM_START index_ref fold_arg_list RPAREN {
         wast_simd_info simd; wast_simd_lookup($1, &simd);
@@ -3305,6 +3514,14 @@ fold_instr:
             emit_byte(script, 0xfc); emit_leb_u32(script, 8);
             emit_index_ref(script, IDX_DATA,   $3, @3.first_line, @3.first_column);
             emit_index_ref(script, IDX_MEMORY, $2, @2.first_line, @2.first_column);
+        } else if (strcmp($1, "struct.get") == 0 || strcmp($1, "struct.get_s") == 0 ||
+                   strcmp($1, "struct.get_u") == 0 || strcmp($1, "struct.set") == 0) {
+            emit_gc_struct_access(script, $1, $2, @2.first_line, @2.first_column,
+                                  $3, @3.first_line, @3.first_column);
+        } else if (!emit_gc_two_index(script, $1,
+                                      $2, @2.first_line, @2.first_column,
+                                      $3, @3.first_line, @3.first_column)) {
+            /* fallthrough: not a recognized instruction */
         }
     }
   | FOLD_ATOM_START ID fold_arg_list_nonempty RPAREN {
@@ -3345,7 +3562,7 @@ fold_instr:
             emit_byte(script, 0xFC); emit_leb_u32(script, 8);
             emit_index_ref(script, IDX_DATA, $2, @2.first_line, @2.first_column);
             emit_byte(script, 0x00); /* memidx = 0 */
-        } else {
+        } else if (!emit_gc_accessor(script, $1, $2, @2.first_line, @2.first_column)) {
             emit_gc_constructor(script, $1, $2,
                                 @2.first_line, @2.first_column);
         }
@@ -3368,6 +3585,16 @@ fold_instr:
             emit_byte(script, 0xfc); emit_leb_u32(script, 10);
             emit_index_ref(script, IDX_MEMORY, $2, @2.first_line, @2.first_column);
             emit_leb_u32(script, (uint32_t)$3);
+        } else if (strcmp($1, "struct.get") == 0 ||
+                   strcmp($1, "struct.get_s") == 0 ||
+                   strcmp($1, "struct.get_u") == 0 ||
+                   strcmp($1, "struct.set") == 0) {
+            char field_name[32];
+            snprintf(field_name, sizeof(field_name), "%lld",
+                     (long long)$3);
+            emit_gc_struct_access(script, $1, $2,
+                                  @2.first_line, @2.first_column,
+                                  field_name, @3.first_line, @3.first_column);
         } else if (emit_gc_constructor(script, $1, $2,
                                        @2.first_line, @2.first_column)) {
             emit_leb_u32(script, (uint32_t)$3);
@@ -3392,7 +3619,17 @@ fold_instr:
   | FOLD_ATOM_START any_int any_nat fold_arg_list RPAREN {
         char type_name[32];
         snprintf(type_name, sizeof(type_name), "%lld", (long long)$2);
-        if (emit_gc_constructor(script, $1, type_name,
+        if (strcmp($1, "struct.get") == 0 ||
+            strcmp($1, "struct.get_s") == 0 ||
+            strcmp($1, "struct.get_u") == 0 ||
+            strcmp($1, "struct.set") == 0) {
+            char field_name[32];
+            snprintf(field_name, sizeof(field_name), "%lld",
+                     (long long)$3);
+            emit_gc_struct_access(script, $1, type_name,
+                                  @2.first_line, @2.first_column,
+                                  field_name, @3.first_line, @3.first_column);
+        } else if (emit_gc_constructor(script, $1, type_name,
                                 @2.first_line, @2.first_column))
             emit_leb_u32(script, (uint32_t)$3);
     }
@@ -3433,6 +3670,30 @@ fold_instr:
         emit_byte(script, 0xFD);
         emit_leb_u32(script, 12);
         for (int i = 0; i < 16; i++) emit_byte(script, v.v128.bytes[i]);
+    }
+  /* GC folded forms: ref.test/ref.cast with reftype immediate */
+  | FOLD_ATOM_START gc_casttype fold_arg_list_nonempty RPAREN {
+        emit_ref_test_cast(script, $1, $2);
+    }
+  | FOLD_ATOM_START gc_casttype RPAREN {
+        emit_ref_test_cast(script, $1, $2);
+    }
+  /* GC folded: br_on_cast/br_on_cast_fail with label + two reftypes */
+  | FOLD_ATOM_START any_idx gc_casttype gc_casttype fold_arg_list RPAREN {
+        if (strcmp($1, "br_on_cast") == 0 || strcmp($1, "br_on_cast_fail") == 0) {
+            uint32_t label = resolve_label(script, $2, @2.first_line, @2.first_column);
+            emit_br_on_cast(script, $1, label, $3, $4);
+        }
+    }
+  /* GC folded: struct.get/set with numeric type + named field */
+  | FOLD_ATOM_START any_int ID fold_arg_list RPAREN {
+        char type_name[32];
+        snprintf(type_name, sizeof(type_name), "%lld", (long long)$2);
+        if (strcmp($1, "struct.get") == 0 || strcmp($1, "struct.get_s") == 0 ||
+            strcmp($1, "struct.get_u") == 0 || strcmp($1, "struct.set") == 0) {
+            emit_gc_struct_access(script, $1, type_name, @2.first_line, @2.first_column,
+                                  $3, @3.first_line, @3.first_column);
+        }
     }
   | FOLD_ATOM_START RPAREN {
         if (strcmp($1, "table.fill") == 0 ||
@@ -3756,6 +4017,49 @@ reftype_as_valtype:
   | KW_EXNREF    { $$ = WASM_VALTYPE_EXNREF; }
     ;
 
+/* gc_casttype: returns int64_t encoding nullability + heap type for ref.test/ref.cast/br_on_cast */
+gc_casttype:
+    KW_FUNCREF     { $$ = GC_CT_ABS_NULL(0x70); }
+  | KW_EXTERNREF   { $$ = GC_CT_ABS_NULL(0x6F); }
+  | KW_ANYREF      { $$ = GC_CT_ABS_NULL(0x6E); }
+  | KW_EQREF       { $$ = GC_CT_ABS_NULL(0x6D); }
+  | KW_I31REF      { $$ = GC_CT_ABS_NULL(0x6C); }
+  | KW_STRUCTREF   { $$ = GC_CT_ABS_NULL(0x6B); }
+  | KW_ARRAYREF    { $$ = GC_CT_ABS_NULL(0x6A); }
+  | KW_NULLREF     { $$ = GC_CT_ABS_NULL(0x71); }
+  | KW_NULLFUNCREF { $$ = GC_CT_ABS_NULL(0x73); }
+  | KW_NULLEXTERNREF { $$ = GC_CT_ABS_NULL(0x72); }
+  | KW_EXNREF      { $$ = GC_CT_ABS_NULL(0x69); }
+  | LPAREN KW_REF_TYPE KW_NULL KW_FUNC RPAREN   { $$ = GC_CT_ABS_NULL(0x70); }
+  | LPAREN KW_REF_TYPE KW_NULL KW_EXTERN RPAREN  { $$ = GC_CT_ABS_NULL(0x6F); }
+  | LPAREN KW_REF_TYPE KW_NULL KW_ANY RPAREN     { $$ = GC_CT_ABS_NULL(0x6E); }
+  | LPAREN KW_REF_TYPE KW_NULL KW_EQ RPAREN      { $$ = GC_CT_ABS_NULL(0x6D); }
+  | LPAREN KW_REF_TYPE KW_NULL KW_I31 RPAREN     { $$ = GC_CT_ABS_NULL(0x6C); }
+  | LPAREN KW_REF_TYPE KW_NULL KW_STRUCT RPAREN   { $$ = GC_CT_ABS_NULL(0x6B); }
+  | LPAREN KW_REF_TYPE KW_NULL KW_ARRAY RPAREN    { $$ = GC_CT_ABS_NULL(0x6A); }
+  | LPAREN KW_REF_TYPE KW_NULL KW_NONE RPAREN     { $$ = GC_CT_ABS_NULL(0x71); }
+  | LPAREN KW_REF_TYPE KW_NULL KW_NOFUNC RPAREN   { $$ = GC_CT_ABS_NULL(0x73); }
+  | LPAREN KW_REF_TYPE KW_NULL KW_NOEXTERN RPAREN { $$ = GC_CT_ABS_NULL(0x72); }
+  | LPAREN KW_REF_TYPE KW_NULL KW_EXN RPAREN      { $$ = GC_CT_ABS_NULL(0x69); }
+  | LPAREN KW_REF_TYPE KW_FUNC RPAREN   { $$ = GC_CT_ABS_NONNULL(0x70); }
+  | LPAREN KW_REF_TYPE KW_EXTERN RPAREN  { $$ = GC_CT_ABS_NONNULL(0x6F); }
+  | LPAREN KW_REF_TYPE KW_ANY RPAREN     { $$ = GC_CT_ABS_NONNULL(0x6E); }
+  | LPAREN KW_REF_TYPE KW_EQ RPAREN      { $$ = GC_CT_ABS_NONNULL(0x6D); }
+  | LPAREN KW_REF_TYPE KW_I31 RPAREN     { $$ = GC_CT_ABS_NONNULL(0x6C); }
+  | LPAREN KW_REF_TYPE KW_STRUCT RPAREN   { $$ = GC_CT_ABS_NONNULL(0x6B); }
+  | LPAREN KW_REF_TYPE KW_ARRAY RPAREN    { $$ = GC_CT_ABS_NONNULL(0x6A); }
+  | LPAREN KW_REF_TYPE KW_NONE RPAREN     { $$ = GC_CT_ABS_NONNULL(0x71); }
+  | LPAREN KW_REF_TYPE KW_NOFUNC RPAREN   { $$ = GC_CT_ABS_NONNULL(0x73); }
+  | LPAREN KW_REF_TYPE KW_NOEXTERN RPAREN { $$ = GC_CT_ABS_NONNULL(0x72); }
+  | LPAREN KW_REF_TYPE KW_EXN RPAREN      { $$ = GC_CT_ABS_NONNULL(0x69); }
+  | LPAREN KW_REF_TYPE KW_NULL any_idx RPAREN {
+        $$ = GC_CT_IDX_NULL(resolve_type($4));
+    }
+  | LPAREN KW_REF_TYPE any_idx RPAREN {
+        $$ = GC_CT_IDX_NONNULL(resolve_type($3));
+    }
+    ;
+
 table_reftype:
     KW_FUNCREF   { $$ = WASM_VALTYPE_FUNCREF; }
   | KW_EXTERNREF { $$ = WASM_VALTYPE_EXTERNREF; }
@@ -3773,6 +4077,10 @@ table_reftype:
   | LPAREN KW_REF_TYPE KW_NULL KW_I31 RPAREN { $$ = WASM_VALTYPE_I31REF; }
   | LPAREN KW_REF_TYPE KW_NULL KW_STRUCT RPAREN { $$ = WASM_VALTYPE_STRUCTREF; }
   | LPAREN KW_REF_TYPE KW_NULL KW_ARRAY RPAREN { $$ = WASM_VALTYPE_ARRAYREF; }
+  | LPAREN KW_REF_TYPE KW_NULL KW_NONE RPAREN { $$ = WASM_VALTYPE_NULLREF; }
+  | LPAREN KW_REF_TYPE KW_NULL KW_NOFUNC RPAREN { $$ = WASM_VALTYPE_NULLFUNCREF; }
+  | LPAREN KW_REF_TYPE KW_NULL KW_NOEXN RPAREN { $$ = WASM_VALTYPE_NULLEXNREF; }
+  | LPAREN KW_REF_TYPE KW_NULL KW_NOEXTERN RPAREN { $$ = WASM_VALTYPE_NULLEXTERNREF; }
   | LPAREN KW_REF_TYPE KW_FUNC RPAREN { $$ = WASM_VALTYPE_FUNCREF_NONNULL; }
   | LPAREN KW_REF_TYPE KW_EXTERN RPAREN { $$ = WASM_VALTYPE_EXTERNREF_NONNULL; }
   | LPAREN KW_REF_TYPE KW_ANY RPAREN { $$ = WASM_VALTYPE_ANYREF_NONNULL; }
@@ -3780,6 +4088,10 @@ table_reftype:
   | LPAREN KW_REF_TYPE KW_I31 RPAREN { $$ = WASM_VALTYPE_I31REF_NONNULL; }
   | LPAREN KW_REF_TYPE KW_STRUCT RPAREN { $$ = WASM_VALTYPE_STRUCTREF_NONNULL; }
   | LPAREN KW_REF_TYPE KW_ARRAY RPAREN { $$ = WASM_VALTYPE_ARRAYREF_NONNULL; }
+  | LPAREN KW_REF_TYPE KW_NONE RPAREN { $$ = WASM_VALTYPE_NULLREF; }
+  | LPAREN KW_REF_TYPE KW_NOFUNC RPAREN { $$ = WASM_VALTYPE_NULLFUNCREF; }
+  | LPAREN KW_REF_TYPE KW_NOEXN RPAREN { $$ = WASM_VALTYPE_NULLEXNREF; }
+  | LPAREN KW_REF_TYPE KW_NOEXTERN RPAREN { $$ = WASM_VALTYPE_NULLEXTERNREF; }
   | LPAREN KW_REF_TYPE KW_NULL any_idx RPAREN { $$ = indexed_ref_type(script,$4,1); }
   | LPAREN KW_REF_TYPE any_idx RPAREN { $$ = indexed_ref_type(script,$3,0); }
     ;
@@ -3883,6 +4195,10 @@ valtype:
   | LPAREN KW_REF_TYPE KW_NULL KW_STRUCT RPAREN { $$ = WASM_VALTYPE_STRUCTREF; }
   | LPAREN KW_REF_TYPE KW_NULL KW_ARRAY RPAREN { $$ = WASM_VALTYPE_ARRAYREF; }
   | LPAREN KW_REF_TYPE KW_NULL KW_EXN RPAREN { $$ = WASM_VALTYPE_EXNREF; }
+  | LPAREN KW_REF_TYPE KW_NULL KW_NONE RPAREN { $$ = WASM_VALTYPE_NULLREF; }
+  | LPAREN KW_REF_TYPE KW_NULL KW_NOFUNC RPAREN { $$ = WASM_VALTYPE_NULLFUNCREF; }
+  | LPAREN KW_REF_TYPE KW_NULL KW_NOEXN RPAREN { $$ = WASM_VALTYPE_NULLEXNREF; }
+  | LPAREN KW_REF_TYPE KW_NULL KW_NOEXTERN RPAREN { $$ = WASM_VALTYPE_NULLEXTERNREF; }
   | LPAREN KW_REF_TYPE KW_EXN RPAREN { $$ = WASM_VALTYPE_EXNREF_NONNULL; }
   | LPAREN KW_REF_TYPE KW_FUNC RPAREN { $$ = WASM_VALTYPE_FUNCREF_NONNULL; }
   | LPAREN KW_REF_TYPE KW_EXTERN RPAREN { $$ = WASM_VALTYPE_EXTERNREF_NONNULL; }
@@ -3891,6 +4207,10 @@ valtype:
   | LPAREN KW_REF_TYPE KW_I31 RPAREN { $$ = WASM_VALTYPE_I31REF_NONNULL; }
   | LPAREN KW_REF_TYPE KW_STRUCT RPAREN { $$ = WASM_VALTYPE_STRUCTREF_NONNULL; }
   | LPAREN KW_REF_TYPE KW_ARRAY RPAREN { $$ = WASM_VALTYPE_ARRAYREF_NONNULL; }
+  | LPAREN KW_REF_TYPE KW_NONE RPAREN { $$ = WASM_VALTYPE_NULLREF; }
+  | LPAREN KW_REF_TYPE KW_NOFUNC RPAREN { $$ = WASM_VALTYPE_NULLFUNCREF; }
+  | LPAREN KW_REF_TYPE KW_NOEXN RPAREN { $$ = WASM_VALTYPE_NULLEXNREF; }
+  | LPAREN KW_REF_TYPE KW_NOEXTERN RPAREN { $$ = WASM_VALTYPE_NULLEXTERNREF; }
   | LPAREN KW_REF_TYPE KW_NULL any_idx RPAREN { $$ = indexed_ref_type(script, $4, 1); }
   | LPAREN KW_REF_TYPE any_idx RPAREN { $$ = indexed_ref_type(script, $3, 0); }
     ;
@@ -4004,11 +4324,35 @@ type_definition:
         append_gc_field($4);
         commit_current_type(script);
     }
+  | LPAREN KW_SUB sub_super {
+        g_cur_type.is_final = 0;
+    } type_definition RPAREN
+  | LPAREN KW_SUB KW_FINAL sub_super {
+        g_cur_type.is_final = 1;
+    } type_definition RPAREN
+    ;
+
+sub_super:
+    /* empty — no explicit supertype */ { g_cur_type.supertype = -1; }
+  | any_idx {
+        g_cur_type.supertype = (int32_t)resolve_type($1);
+    }
     ;
 
 struct_field_list:
     /* empty */
-  | struct_field_list LPAREN KW_FIELD opt_id struct_field_types RPAREN
+  | struct_field_list LPAREN KW_FIELD opt_id {
+        /* Save field name if present — must save before struct_field_types
+         * because append_gc_field increments field_count */
+        if ($4[0] == '$' || $4[0] != '\0') {
+            int next = g_cur_type.field_count;
+            for (int i = 0; i < next; i++)
+                if (strcmp(g_cur_type.field_names[i], $4) == 0)
+                    report_validation_error(script, "duplicate field");
+            if (next < WAST_MAX_TYPE_FIELDS)
+                snprintf(g_cur_type.field_names[next], 64, "%s", $4);
+        }
+    } struct_field_types RPAREN
     ;
 
 struct_field_types:
@@ -4436,6 +4780,27 @@ table_item:
             if (g_table_name_count < WAST_MAX_TABLES)
                 snprintf(g_table_names[g_table_name_count++], WAST_MAX_EXPORT_NAME,
                          "%s", $3);
+        }
+    }
+  /* General constexpr table initializer needed by the i31 suite. */
+  | LPAREN KW_TABLE opt_id limits table_reftype FOLD_REF_I31_START FOLD_GLOBAL_GET_START any_idx RPAREN RPAREN RPAREN {
+        wast_module *mod = &cur_group(script)->module;
+        if (mod->table_count < WAST_MAX_TABLES) {
+            wast_table *t = &mod->tables[mod->table_count++];
+            memset(t, 0, sizeof(*t));
+            t->limits = $4;
+            t->reftype = $5;
+            set_table_index_init(script, t, (uint32_t)(mod->table_count - 1),
+                                 0x23, IDX_GLOBAL, $8,
+                                 @8.first_line, @8.first_column);
+            emit_init_byte(t->init_expr, &t->init_len,
+                           (int)sizeof(t->init_expr), 0xfb);
+            emit_init_byte(t->init_expr, &t->init_len,
+                           (int)sizeof(t->init_expr), 0x1c);
+            snprintf(t->id, WAST_MAX_EXPORT_NAME, "%s", $3);
+            if (g_table_name_count < WAST_MAX_TABLES)
+                snprintf(g_table_names[g_table_name_count++],
+                         WAST_MAX_EXPORT_NAME, "%s", $3);
         }
     }
   | LPAREN KW_TABLE opt_id table_reftype LPAREN KW_ELEM {
@@ -4885,21 +5250,88 @@ elem_func_list:
   | LPAREN KW_REF_TYPE KW_NULL KW_FUNC RPAREN elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_FUNCREF; }
   | LPAREN KW_REF_TYPE KW_NULL KW_EXTERN RPAREN elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_EXTERNREF; }
   | LPAREN KW_REF_TYPE KW_FUNC RPAREN elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_FUNCREF_NONNULL; }
+  | KW_ANYREF    elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_ANYREF; }
+  | KW_EQREF     elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_EQREF; }
+  | KW_I31REF    elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_I31REF; }
+  | KW_STRUCTREF elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_STRUCTREF; }
+  | KW_ARRAYREF  elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_ARRAYREF; }
+  | LPAREN KW_REF_TYPE KW_NULL KW_ANY RPAREN elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_ANYREF; }
+  | LPAREN KW_REF_TYPE KW_NULL KW_EQ RPAREN elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_EQREF; }
+  | LPAREN KW_REF_TYPE KW_NULL KW_I31 RPAREN elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_I31REF; }
+  | LPAREN KW_REF_TYPE KW_NULL KW_STRUCT RPAREN elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_STRUCTREF; }
+  | LPAREN KW_REF_TYPE KW_NULL KW_ARRAY RPAREN elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_ARRAYREF; }
+  | LPAREN KW_REF_TYPE KW_ANY RPAREN elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_ANYREF_NONNULL; }
+  | LPAREN KW_REF_TYPE KW_EQ RPAREN elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_EQREF_NONNULL; }
+  | LPAREN KW_REF_TYPE KW_I31 RPAREN elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_I31REF_NONNULL; }
+  | LPAREN KW_REF_TYPE KW_STRUCT RPAREN elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_STRUCTREF_NONNULL; }
+  | LPAREN KW_REF_TYPE KW_ARRAY RPAREN elem_item_list { g_cur_elem.reftype = WASM_VALTYPE_ARRAYREF_NONNULL; }
     ;
 
 /* Non-empty list of expression-form element entries (no reftype/func prefix) */
 elem_expr_items:
+    elem_expr_item
+  | elem_expr_items elem_expr_item
+    ;
+
+elem_expr_item:
     FOLD_ATOM_START any_idx RPAREN {
         append_elem_func_ref(script,$2,@2.first_line,@2.first_column);
     }
   | FOLD_REF_NULL_START reftype RPAREN {
         append_elem_null_ref(heap_reftype_to_value_type($2));
     }
-  | elem_expr_items FOLD_ATOM_START any_idx RPAREN {
-        append_elem_func_ref(script,$3,@3.first_line,@3.first_column);
+  | FOLD_REF_NULL_START any_idx RPAREN {
+        append_elem_null_ref(indexed_ref_type(script, $2, 1));
     }
-  | elem_expr_items FOLD_REF_NULL_START reftype RPAREN {
-        append_elem_null_ref(heap_reftype_to_value_type($3));
+  | FOLD_REF_I31_START {
+        if (g_cur_elem.ref_count < WAST_MAX_ELEM_REFS) {
+            int slot = g_cur_elem.ref_count;
+            begin_constexpr(g_cur_elem.ref_exprs[slot],
+                            &g_cur_elem.ref_expr_lens[slot],
+                            WAST_MAX_ELEM_EXPR_BYTES);
+        }
+    } fold_arg_list_nonempty RPAREN {
+        if (g_constexpr_target) {
+            emit_byte(script, 0xfb); emit_leb_u32(script, 0x1c);
+            emit_byte(script, 0x0b);
+            end_constexpr();
+            g_cur_elem.ref_count++;
+        }
+    }
+  | FOLD_ARRAY_NEW_START any_idx {
+        if (g_cur_elem.ref_count < WAST_MAX_ELEM_REFS) {
+            int slot = g_cur_elem.ref_count;
+            begin_constexpr(g_cur_elem.ref_exprs[slot],
+                            &g_cur_elem.ref_expr_lens[slot],
+                            WAST_MAX_ELEM_EXPR_BYTES);
+        }
+    } fold_arg_list_nonempty RPAREN {
+        if (g_constexpr_target) {
+            emit_byte(script, 0xfb); emit_leb_u32(script, 0x06);
+            emit_index_ref(script, IDX_TYPE, $2,
+                           @2.first_line, @2.first_column);
+            emit_byte(script, 0x0b);
+            end_constexpr();
+            g_cur_elem.ref_count++;
+        }
+    }
+  | FOLD_ARRAY_NEW_FIXED_START any_idx any_nat {
+        if (g_cur_elem.ref_count < WAST_MAX_ELEM_REFS) {
+            int slot = g_cur_elem.ref_count;
+            begin_constexpr(g_cur_elem.ref_exprs[slot],
+                            &g_cur_elem.ref_expr_lens[slot],
+                            WAST_MAX_ELEM_EXPR_BYTES);
+        }
+    } fold_arg_list_nonempty RPAREN {
+        if (g_constexpr_target) {
+            emit_byte(script, 0xfb); emit_leb_u32(script, 0x08);
+            emit_index_ref(script, IDX_TYPE, $2,
+                           @2.first_line, @2.first_column);
+            emit_leb_u32(script, (uint32_t)$3);
+            emit_byte(script, 0x0b);
+            end_constexpr();
+            g_cur_elem.ref_count++;
+        }
     }
     ;
 
@@ -4914,6 +5346,56 @@ elem_funcs:
 
 elem_item_list:
     /* empty */
+  | elem_item_list FOLD_REF_I31_START {
+        if (g_cur_elem.ref_count < WAST_MAX_ELEM_REFS) {
+            int slot = g_cur_elem.ref_count;
+            begin_constexpr(g_cur_elem.ref_exprs[slot],
+                            &g_cur_elem.ref_expr_lens[slot],
+                            WAST_MAX_ELEM_EXPR_BYTES);
+        }
+    } fold_arg_list_nonempty RPAREN {
+        if (g_constexpr_target) {
+            emit_byte(script, 0xfb); emit_leb_u32(script, 0x1c);
+            emit_byte(script, 0x0b);
+            end_constexpr();
+            g_cur_elem.ref_count++;
+        }
+    }
+  | elem_item_list FOLD_ARRAY_NEW_START any_idx {
+        if (g_cur_elem.ref_count < WAST_MAX_ELEM_REFS) {
+            int slot = g_cur_elem.ref_count;
+            begin_constexpr(g_cur_elem.ref_exprs[slot],
+                            &g_cur_elem.ref_expr_lens[slot],
+                            WAST_MAX_ELEM_EXPR_BYTES);
+        }
+    } fold_arg_list_nonempty RPAREN {
+        if (g_constexpr_target) {
+            emit_byte(script, 0xfb); emit_leb_u32(script, 0x06);
+            emit_index_ref(script, IDX_TYPE, $3,
+                           @3.first_line, @3.first_column);
+            emit_byte(script, 0x0b);
+            end_constexpr();
+            g_cur_elem.ref_count++;
+        }
+    }
+  | elem_item_list FOLD_ARRAY_NEW_FIXED_START any_idx any_nat {
+        if (g_cur_elem.ref_count < WAST_MAX_ELEM_REFS) {
+            int slot = g_cur_elem.ref_count;
+            begin_constexpr(g_cur_elem.ref_exprs[slot],
+                            &g_cur_elem.ref_expr_lens[slot],
+                            WAST_MAX_ELEM_EXPR_BYTES);
+        }
+    } fold_arg_list_nonempty RPAREN {
+        if (g_constexpr_target) {
+            emit_byte(script, 0xfb); emit_leb_u32(script, 0x08);
+            emit_index_ref(script, IDX_TYPE, $3,
+                           @3.first_line, @3.first_column);
+            emit_leb_u32(script, (uint32_t)$4);
+            emit_byte(script, 0x0b);
+            end_constexpr();
+            g_cur_elem.ref_count++;
+        }
+    }
   | elem_item_list LPAREN KW_ITEM {
         if (g_cur_elem.ref_count < WAST_MAX_ELEM_REFS) {
             int slot = g_cur_elem.ref_count;
@@ -4939,6 +5421,9 @@ elem_item_list:
     }
   | elem_item_list FOLD_REF_NULL_START reftype RPAREN {
         append_elem_null_ref(heap_reftype_to_value_type($3));
+    }
+  | elem_item_list FOLD_REF_NULL_START any_idx RPAREN {
+        append_elem_null_ref(indexed_ref_type(script, $3, 1));
     }
   | elem_item_list FOLD_GLOBAL_GET_START any_idx RPAREN {
         append_elem_global_ref(script,$3,@3.first_line,@3.first_column);
@@ -5276,21 +5761,12 @@ const_val:
         memset(&$$, 0, sizeof($$)); $$.type = WASM_VALTYPE_FUNCREF;
         $$.ref = UINT32_MAX; $$.nan_mode[0] = REF_MATCH_NULL;
     }
-  | FOLD_EMPTY_ATOM {
+  | FOLD_REF_I31_START RPAREN {
         memset(&$$, 0, sizeof($$));
-        if (strcmp($1, "ref.null") == 0) {
-            $$.type = WASM_VALTYPE_FUNCREF;
-            $$.ref = UINT32_MAX; $$.nan_mode[0] = REF_MATCH_NULL;
-        } else if (strcmp($1, "ref.func") == 0) {
-            $$.type = WASM_VALTYPE_FUNCREF_NONNULL;
-            $$.ref = UINT32_MAX;
-        } else if (strcmp($1, "ref.extern") == 0) {
-            $$.type = WASM_VALTYPE_EXTERNREF_NONNULL;
-            $$.ref = UINT32_MAX;
-        }
+        $$.type = WASM_VALTYPE_I31REF_NONNULL;
+        $$.ref = UINT32_MAX;
     }
-  |
-    FOLD_ATOM_START KW_NAN RPAREN            { $$ = folded_nan_value($1,0, strcmp($1,"f64.const")==0 ? NAN_MATCH_F64_ARITH : NAN_MATCH_F32_ARITH); }
+  | FOLD_ATOM_START KW_NAN RPAREN            { $$ = folded_nan_value($1,0, strcmp($1,"f64.const")==0 ? NAN_MATCH_F64_ARITH : NAN_MATCH_F32_ARITH); }
   | FOLD_ATOM_START KW_NAN_CANONICAL RPAREN  { $$ = folded_nan_value($1,0, strcmp($1,"f64.const")==0 ? NAN_MATCH_F64_CANON : NAN_MATCH_F32_CANON); }
   | FOLD_ATOM_START KW_NAN_ARITHMETIC RPAREN { $$ = folded_nan_value($1,0, strcmp($1,"f64.const")==0 ? NAN_MATCH_F64_ARITH : NAN_MATCH_F32_ARITH); }
   | FOLD_ATOM_START KW_NEG_NAN RPAREN        { $$ = folded_nan_value($1,1, strcmp($1,"f64.const")==0 ? NAN_MATCH_F64_ARITH : NAN_MATCH_F32_ARITH); }
@@ -5333,6 +5809,7 @@ const_val:
         if (strcmp($1, "i64.const") == 0) { $$.type = WASM_VALTYPE_I64; $$.i64 = (int64_t)$2; }
         else if (strcmp($1, "ref.extern") == 0) { $$.type = WASM_VALTYPE_EXTERNREF; $$.ref = (uint32_t)$2; }
         else if (strcmp($1, "ref.func") == 0) { $$.type = WASM_VALTYPE_FUNCREF; $$.ref = (uint32_t)$2; }
+        else if (strcmp($1, "ref.host") == 0) { $$.type = WASM_VALTYPE_EXTERNREF; $$.ref = (uint32_t)$2; }
         else if (strcmp($1, "f32.const") == 0) {
             $$.type = WASM_VALTYPE_F32;
             $$.f32 = (float)(int64_t)$2;
@@ -5389,10 +5866,16 @@ const_val:
         $$.ref  = UINT32_MAX;
     }
   | FOLD_ATOM_START RPAREN {
-        /* (ref.func) or (ref.extern) — any non-null ref pattern */
+        /* Any non-null reference pattern used by GC assertions. */
         memset(&$$, 0, sizeof($$));
         if (strcmp($1, "ref.func") == 0) { $$.type = WASM_VALTYPE_FUNCREF_NONNULL; $$.ref = UINT32_MAX; }
         else if (strcmp($1, "ref.extern") == 0) { $$.type = WASM_VALTYPE_EXTERNREF_NONNULL; $$.ref = UINT32_MAX; }
+        else if (strcmp($1, "ref.i31") == 0) { $$.type = WASM_VALTYPE_I31REF_NONNULL; $$.ref = UINT32_MAX; }
+        else if (strcmp($1, "ref.struct") == 0) { $$.type = WASM_VALTYPE_STRUCTREF_NONNULL; $$.ref = UINT32_MAX; }
+        else if (strcmp($1, "ref.array") == 0) { $$.type = WASM_VALTYPE_ARRAYREF_NONNULL; $$.ref = UINT32_MAX; }
+        else if (strcmp($1, "ref.eq") == 0) { $$.type = WASM_VALTYPE_EQREF_NONNULL; $$.ref = UINT32_MAX; }
+        else if (strcmp($1, "ref.any") == 0) { $$.type = WASM_VALTYPE_ANYREF_NONNULL; $$.ref = UINT32_MAX; }
+        else if (strcmp($1, "ref.host") == 0) { $$.type = WASM_VALTYPE_EXTERNREF; $$.ref = UINT32_MAX; }
         else { $$.type = WASM_VALTYPE_I32; $$.i32 = 0; }
     }
   | LPAREN KW_REF_EXTERN any_int RPAREN {
