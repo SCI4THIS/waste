@@ -105,6 +105,33 @@ all** selection therefore matches OCaml-Wasm at all 275 supported files; both
 pages display the same additional four orange legacy exception files without
 including them in that selection.
 
+### C-engine Bash browser page (2026-09-10)
+
+`./start.sh --c-engine-bash-html` now builds and verifies the self-contained
+`build/c-engine/bash.html`. Its regression gate waits for a real worker yield,
+sends `echo __C_ENGINE_BASH_OK__`, observes the next prompt, sends `exit`, and
+requires all five launch actions to pass. This delayed-input gate is in
+`tests/c-engine-bash-browser-runtime.cjs`; it prevents a synchronously queued
+line from hiding suspension bugs.
+
+Bash control flow does not use native C `setjmp`/`longjmp`. The executor marks
+host-backed `sigsetjmp` and `siglongjmp` imports and snapshots the interpreted
+PC, operand stack, structured-control stack, and locals. A long jump unwinds
+through ordinary C returns and restores the matching live interpreter frame.
+The guest `exit` import similarly becomes an explicit process-exit result, so
+the script runner can accept termination of a bare invocation without letting
+the guest's following `unreachable` execute. The generated runtime also binds
+Bash's three stdio pointer slots to the separately linked libc stream objects.
+
+The current browser I/O boundary still uses Binaryen Asyncify around only
+`waste_host.posix_read`. It is a transport bridge, not the Bash control-flow
+model. The worker must preserve the Asyncify data cursor written during
+unwind; resetting that cursor before `asyncify_start_rewind` corrupts the saved
+continuation. A future explicit scheduler can replace this remaining bridge
+by heap-owning every active interpreter frame. Until that frame-stack refactor
+lands, Asyncify keeps the page compatible with a self-contained `file://`
+document without SharedArrayBuffer or cross-origin isolation.
+
 Generate the matching self-contained C dashboard from the TUI with **Generate
 full C-engine browser dashboard (OCaml layout)**, or directly with:
 

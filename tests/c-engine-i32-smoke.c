@@ -67,7 +67,8 @@ static int test_imports(const char *path) {
         free(bytes); fclose(file); return 0;
     }
     fclose(file);
-    exec_host_import binding={"host","add",host_add,NULL,NULL,0,0};
+    exec_host_import binding={"host","add",host_add,NULL,NULL,0,0,
+                              EXEC_HOST_CONTROL_NONE};
     exec_imports imports={.functions=&binding,.function_count=1};
     waste_exec_engine *engine=NULL; exec_error error={0};
     exec_status status=exec_load_with_imports(bytes,(size_t)length,&imports,&engine,&error); free(bytes);

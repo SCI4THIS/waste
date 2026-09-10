@@ -119,8 +119,11 @@ i32 execve(const char*p,char*const*a,char*const*e){(void)p;(void)a;(void)e;retur
 i32 chown(const char*p,u32 u,u32 g){(void)p;(void)u;(void)g;return unsupported();}
 i32 readlink(const char*p,char*b,u32 n){(void)p;(void)b;(void)n;return unsupported();}
 void *opendir(const char*p){(void)p;unsupported();return 0;} i32 closedir(void*d){(void)d;return unsupported();} void *readdir(void*d){(void)d;unsupported();return 0;}
-i32 select(i32 n,void*r,void*w,void*x,void*t){(void)n;(void)r;(void)w;(void)x;(void)t;return unsupported();}
-i32 pselect(i32 n,void*r,void*w,void*x,const void*t,const void*m){(void)n;(void)r;(void)w;(void)x;(void)t;(void)m;return unsupported();}
+/* Readiness is ultimately decided by the engine-owned asynchronous descriptor
+   operation.  Reporting a requested descriptor as ready lets Bash enter
+   read(), where the browser runtime can suspend without blocking the worker. */
+i32 select(i32 n,void*r,void*w,void*x,void*t){(void)t;return n>0&&(r||w||x)?1:0;}
+i32 pselect(i32 n,void*r,void*w,void*x,const void*t,const void*m){(void)t;(void)m;return n>0&&(r||w||x)?1:0;}
 i32 ioctl(i32 fd,u32 request,void*argument){(void)fd;(void)request;(void)argument;return unsupported();}
 i32 socket(i32 domain,i32 type,i32 protocol){(void)domain;(void)type;(void)protocol;return unsupported();}
 i32 connect(i32 fd,const void*address,u32 length){(void)fd;(void)address;(void)length;return unsupported();}

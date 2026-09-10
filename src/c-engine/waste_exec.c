@@ -46,15 +46,15 @@ double sqrt(double x);
 
 enum {
     EXEC_MAX_TYPES    = 128,
-    EXEC_MAX_FUNCS    = WAST_MAX_FUNCS,
+    EXEC_MAX_FUNCS    = 8192,
     EXEC_MAX_EXPORTS  = 65536,
     EXEC_MAX_NAME     = WAST_MAX_EXPORT_NAME,
     EXEC_MAX_INSTRS   = 4096,
     EXEC_MAX_STACK    = 256,
     EXEC_MAX_LOCALS   = WAST_MAX_LOCALS,
-    EXEC_MAX_CONTROL  = 64,
+    EXEC_MAX_CONTROL  = 256,
     EXEC_MAX_CALL_DEPTH = 256,
-    EXEC_MAX_GLOBALS  = 128,
+    EXEC_MAX_GLOBALS  = 2048,
     EXEC_MAX_TABLES   = 16,
     EXEC_PAGE_SIZE    = 65536,
     EXEC_MAX_GC_OBJECT_BYTES = 64 * 1024 * 1024,
@@ -134,6 +134,11 @@ typedef struct {
     uint8_t  kind;
 } exec_export;
 
+typedef struct exec_jump_snapshot exec_jump_snapshot;
+typedef struct exec_stack exec_stack;
+typedef struct exec_control exec_control;
+static void free_jump_snapshots(waste_exec_engine *eng);
+
 static int valid_utf8(const uint8_t *bytes, size_t length) {
     size_t i = 0;
     while (i < length) {
@@ -176,6 +181,7 @@ struct waste_exec_engine {
     uint32_t        import_func_types[EXEC_MAX_FUNCS];
     exec_host_func  import_funcs[EXEC_MAX_FUNCS];
     void           *import_host_data[EXEC_MAX_FUNCS];
+    exec_host_control import_controls[EXEC_MAX_FUNCS];
     exec_export    *exports;
     uint32_t        export_count;
     exec_global    *globals[EXEC_MAX_GLOBALS];
@@ -225,7 +231,14 @@ struct waste_exec_engine {
     uint32_t        exception_object_capacity;
     char            instantiation_error[256];
     wasm_value      *local_frames[EXEC_MAX_CALL_DEPTH];
+    exec_stack      *operand_frames[EXEC_MAX_CALL_DEPTH];
+    exec_control    *control_frames[EXEC_MAX_CALL_DEPTH];
     uint32_t         local_frame_capacities[EXEC_MAX_CALL_DEPTH];
+    uint32_t         active_call_depth;
+    uint64_t         frame_generations[EXEC_MAX_CALL_DEPTH];
+    exec_jump_snapshot *jump_snapshots;
+    uint32_t         jump_snapshot_count;
+    uint32_t         jump_snapshot_capacity;
 };
 
 static int value_type_is_defined(const waste_exec_engine *eng,
@@ -1043,6 +1056,7 @@ static exec_status parse_imports(waste_exec_engine *eng, exec_reader *sec,
             uint32_t index=eng->import_func_count++;
             eng->import_func_types[index]=type_index; eng->import_funcs[index]=binding->function;
             eng->import_host_data[index]=binding->host_data;
+            eng->import_controls[index]=binding->control;
         } else if (kind == 1) {
             wasm_valtype type; uint8_t flags; uint64_t initial,maximum=0;
             if (!er_valtype(sec,&type) || !value_type_is_defined(eng, type) ||
@@ -1117,8 +1131,15 @@ static exec_status parse_funcs(waste_exec_engine *eng, exec_reader *sec, exec_er
     uint32_t count;
     if (!er_u32(sec, &count))
         return exec_fail(err, EXEC_ERROR_FORMAT, "invalid function count");
-    if (count > EXEC_MAX_FUNCS)
-        return exec_fail(err, EXEC_ERROR_FORMAT, "too many functions");
+    if (count > EXEC_MAX_FUNCS) {
+        if (err) {
+            err->status = EXEC_ERROR_FORMAT;
+            snprintf(err->message, sizeof(err->message),
+                     "too many functions: %u exceeds %u", count,
+                     (unsigned)EXEC_MAX_FUNCS);
+        }
+        return EXEC_ERROR_FORMAT;
+    }
     eng->funcs = (exec_func *)calloc(count, sizeof(*eng->funcs));
     if (count && !eng->funcs)
         return exec_fail(err, EXEC_ERROR_FORMAT, "func alloc failed");
@@ -1890,10 +1911,10 @@ static int select_validation_push(wasm_valtype *stack, int *top,
     return 1;
 }
 
-typedef struct {
+struct exec_stack {
     wasm_value vals[EXEC_MAX_STACK];
     int top;
-} exec_stack;
+};
 
 static int stack_push(exec_stack *s, wasm_value v);
 static int stack_pop(exec_stack *s, wasm_value *out);
@@ -4288,8 +4309,14 @@ static exec_status parse_code(waste_exec_engine *eng, exec_reader *sec, exec_err
             if (err && err->message[0]) {
                 char detail[sizeof(err->message)];
                 snprintf(detail, sizeof(detail), "%s", err->message);
-                snprintf(err->message, sizeof(err->message),
-                         "function %u: %.220s", i, detail);
+                int prefix = snprintf(err->message, sizeof(err->message),
+                                      "function %u: ", i);
+                size_t out = prefix > 0 ? (size_t)prefix : 0;
+                if (out >= sizeof(err->message)) out = sizeof(err->message) - 1;
+                for (size_t j = 0; detail[j] && out + 1 < sizeof(err->message);
+                     j++)
+                    err->message[out++] = detail[j];
+                err->message[out] = '\0';
             }
             return st;
         }
@@ -4446,8 +4473,12 @@ exec_status exec_load(const uint8_t *bytes, size_t size,
 
 void exec_free(waste_exec_engine *eng) {
     if (!eng) return;
-    for (uint32_t i = 0; i < EXEC_MAX_CALL_DEPTH; i++)
+    free_jump_snapshots(eng);
+    for (uint32_t i = 0; i < EXEC_MAX_CALL_DEPTH; i++) {
         free(eng->local_frames[i]);
+        free(eng->operand_frames[i]);
+        free(eng->control_frames[i]);
+    }
     for (uint32_t i = 0; i < eng->elem_count; i++)
         free(eng->elem_values[i]);
     for (uint32_t i = 0; i < eng->data_count; i++)
@@ -4546,14 +4577,150 @@ exec_status exec_find_export_tag(const waste_exec_engine *eng, const char *name,
 
 /* ---- Value stack ---- */
 
-typedef struct {
+struct exec_control {
     uint32_t kind;
     uint32_t start_pc;
     uint32_t end_pc;
     int stack_height;
     int branch_arity;
     int end_arity;
-} exec_control;
+};
+
+struct exec_jump_snapshot {
+    uint8_t valid;
+    uint32_t environment;
+    uint32_t depth;
+    uint32_t func_idx;
+    uint32_t pc;
+    uint64_t frame_generation;
+    exec_stack stack;
+    exec_control controls[EXEC_MAX_CONTROL];
+    int control_top;
+    wasm_value *locals;
+    uint32_t local_count;
+};
+
+static void free_jump_snapshots(waste_exec_engine *eng) {
+    for (uint32_t i = 0; i < eng->jump_snapshot_count; i++)
+        free(eng->jump_snapshots[i].locals);
+    free(eng->jump_snapshots);
+}
+
+static void invalidate_jump_depth(waste_exec_engine *eng, uint32_t depth) {
+    for (uint32_t i = 0; i < eng->jump_snapshot_count; i++)
+        if (eng->jump_snapshots[i].valid &&
+            eng->jump_snapshots[i].depth == depth)
+            eng->jump_snapshots[i].valid = 0;
+}
+
+static void invalidate_jump_frame(waste_exec_engine *eng, uint32_t depth,
+                                  uint64_t frame_generation) {
+    for (uint32_t i = 0; i < eng->jump_snapshot_count; i++) {
+        exec_jump_snapshot *snapshot = &eng->jump_snapshots[i];
+        if (snapshot->valid && snapshot->depth == depth &&
+            snapshot->frame_generation == frame_generation)
+            snapshot->valid = 0;
+    }
+}
+
+static exec_status save_jump_frame(waste_exec_engine *eng,
+                                   uint32_t environment, uint32_t depth,
+                                   uint64_t frame_generation,
+                                   uint32_t func_idx, uint32_t pc,
+                                   const exec_stack *stack,
+                                   const exec_control *controls,
+                                   int control_top,
+                                   const wasm_value *locals,
+                                   uint32_t local_count,
+                                   exec_error *err) {
+    exec_jump_snapshot *snapshot = (void *)0;
+    for (uint32_t i = 0; i < eng->jump_snapshot_count; i++)
+        if (eng->jump_snapshots[i].environment == environment) {
+            snapshot = &eng->jump_snapshots[i];
+            break;
+        }
+    if (!snapshot) {
+        if (eng->jump_snapshot_count == eng->jump_snapshot_capacity) {
+            uint32_t capacity = eng->jump_snapshot_capacity ?
+                                eng->jump_snapshot_capacity * 2u : 8u;
+            exec_jump_snapshot *next = (exec_jump_snapshot *)realloc(
+                eng->jump_snapshots, (size_t)capacity * sizeof(*next));
+            if (!next)
+                return exec_fail(err, EXEC_ERROR_TRAP,
+                                 "setjmp snapshot allocation failed");
+            memset(next + eng->jump_snapshot_capacity, 0,
+                   (size_t)(capacity - eng->jump_snapshot_capacity) *
+                   sizeof(*next));
+            eng->jump_snapshots = next;
+            eng->jump_snapshot_capacity = capacity;
+        }
+        snapshot = &eng->jump_snapshots[eng->jump_snapshot_count++];
+    }
+    if (local_count) {
+        wasm_value *next = (wasm_value *)realloc(
+            snapshot->locals, (size_t)local_count * sizeof(*next));
+        if (!next)
+            return exec_fail(err, EXEC_ERROR_TRAP,
+                             "setjmp locals allocation failed");
+        snapshot->locals = next;
+        memcpy(snapshot->locals, locals,
+               (size_t)local_count * sizeof(*locals));
+    }
+    snapshot->valid = 1;
+    snapshot->environment = environment;
+    snapshot->depth = depth;
+    snapshot->frame_generation = frame_generation;
+    snapshot->func_idx = func_idx;
+    snapshot->pc = pc;
+    snapshot->stack = *stack;
+    snapshot->control_top = control_top;
+    if (control_top)
+        memcpy(snapshot->controls, controls,
+               (size_t)control_top * sizeof(*controls));
+    snapshot->local_count = local_count;
+    return EXEC_OK;
+}
+
+static int restore_jump_frame(waste_exec_engine *eng, exec_error *err,
+                              uint32_t depth, uint64_t frame_generation,
+                              uint32_t func_idx, uint32_t *pc,
+                              exec_stack *stack, exec_control *controls,
+                              int *control_top, wasm_value *locals,
+                              uint32_t local_count) {
+    if (!err || err->status != EXEC_ERROR_LONGJMP ||
+        err->jump_owner != eng)
+        return 0;
+    for (uint32_t i = 0; i < eng->jump_snapshot_count; i++) {
+        exec_jump_snapshot *snapshot = &eng->jump_snapshots[i];
+        if (!snapshot->valid ||
+            snapshot->environment != err->jump_environment ||
+            snapshot->depth != depth ||
+            snapshot->frame_generation != frame_generation ||
+            snapshot->func_idx != func_idx)
+            continue;
+        if (snapshot->local_count != local_count) {
+            exec_fail(err, EXEC_ERROR_TRAP, "setjmp frame shape changed");
+            return -1;
+        }
+        *pc = snapshot->pc;
+        *stack = snapshot->stack;
+        *control_top = snapshot->control_top;
+        if (*control_top)
+            memcpy(controls, snapshot->controls,
+                   (size_t)*control_top * sizeof(*controls));
+        if (local_count)
+            memcpy(locals, snapshot->locals,
+                   (size_t)local_count * sizeof(*locals));
+        int32_t value = err->jump_value ? err->jump_value : 1;
+        memset(err, 0, sizeof(*err));
+        if (!stack_push(stack, i32_value((uint32_t)value))) {
+            exec_fail(err, EXEC_ERROR_TRAP, "stack overflow after longjmp");
+            return -1;
+        }
+        return 1;
+    }
+    return 0;
+}
 
 static int stack_push(exec_stack *s, wasm_value v) {
     if (s->top >= EXEC_MAX_STACK) return 0;
@@ -6238,7 +6405,31 @@ static exec_status exec_i32_numeric(uint32_t opcode, exec_stack *stack,
     return EXEC_OK;
 }
 
-static exec_status exec_invoke_depth(waste_exec_engine *eng,
+static exec_status exec_invoke_frame(waste_exec_engine *eng,
+                                     uint32_t func_idx,
+                                     const wasm_value *args, int arg_count,
+                                     wasm_value *results, int *result_count,
+                                     exec_error *err, uint32_t depth);
+
+static exec_status exec_invoke_managed(waste_exec_engine *eng,
+                                       uint32_t func_idx,
+                                       const wasm_value *args, int arg_count,
+                                       wasm_value *results,
+                                       int *result_count, exec_error *err) {
+    uint32_t depth;
+    exec_status status;
+    if (!eng) return exec_fail(err, EXEC_ERROR_NOT_FOUND, "null engine");
+    depth = eng->active_call_depth;
+    if (depth >= EXEC_MAX_CALL_DEPTH)
+        return exec_fail(err, EXEC_ERROR_TRAP, "call stack exhausted");
+    eng->active_call_depth = depth + 1;
+    status = exec_invoke_frame(eng, func_idx, args, arg_count, results,
+                               result_count, err, depth);
+    eng->active_call_depth = depth;
+    return status;
+}
+
+static exec_status exec_invoke_frame(waste_exec_engine *eng,
                                      uint32_t func_idx,
                                      const wasm_value *args, int arg_count,
                                      wasm_value *results, int *result_count,
@@ -6256,6 +6447,32 @@ tail_entry:
     if (func_idx < eng->import_func_count) {
         exec_func_type *type=&eng->types[eng->import_func_types[func_idx]];
         if (arg_count != type->param_count) return exec_fail(err, EXEC_ERROR_TRAP, "import argument count mismatch");
+        if (eng->import_controls[func_idx] == EXEC_HOST_CONTROL_EXIT) {
+            if (arg_count < 1 || args[0].type != WASM_VALTYPE_I32)
+                return exec_fail(err, EXEC_ERROR_TRAP,
+                                 "exit argument missing");
+            if (err) {
+                memset(err, 0, sizeof(*err));
+                err->status = EXEC_ERROR_EXIT;
+                err->exit_code = args[0].i32;
+            }
+            return EXEC_ERROR_EXIT;
+        }
+        if (eng->import_controls[func_idx] ==
+            EXEC_HOST_CONTROL_SIGLONGJMP) {
+            if (arg_count < 2 || args[0].type != WASM_VALTYPE_I32 ||
+                args[1].type != WASM_VALTYPE_I32)
+                return exec_fail(err, EXEC_ERROR_TRAP,
+                                 "siglongjmp arguments missing");
+            if (err) {
+                memset(err, 0, sizeof(*err));
+                err->status = EXEC_ERROR_LONGJMP;
+                err->jump_owner = eng;
+                err->jump_environment = (uint32_t)args[0].i32;
+                err->jump_value = args[1].i32 ? args[1].i32 : 1;
+            }
+            return EXEC_ERROR_LONGJMP;
+        }
         int count=0;
         exec_status status=eng->import_funcs[func_idx](eng->import_host_data[func_idx],args,arg_count,results,&count,err);
         if (status != EXEC_OK) return status;
@@ -6264,7 +6481,26 @@ tail_entry:
         return EXEC_OK;
     }
 
+    if (!eng->operand_frames[depth]) {
+        eng->operand_frames[depth] =
+            (exec_stack *)calloc(1, sizeof(*eng->operand_frames[depth]));
+        eng->control_frames[depth] = (exec_control *)calloc(
+            EXEC_MAX_CONTROL, sizeof(*eng->control_frames[depth]));
+        if (!eng->operand_frames[depth] || !eng->control_frames[depth])
+            return exec_fail(err, EXEC_ERROR_TRAP,
+                             "runtime frame allocation failed");
+    }
+    exec_stack *runtime_stack = eng->operand_frames[depth];
+    exec_control *controls = eng->control_frames[depth];
+#define stack (*runtime_stack)
+
     uint32_t defined_index=func_idx-eng->import_func_count;
+
+    /* Reusing an interpreter depth means the previous C/Wasm activation is
+     * gone.  This also runs for return_call, where the current activation is
+     * deliberately replaced. */
+    invalidate_jump_depth(eng, depth);
+    uint64_t frame_generation = ++eng->frame_generations[depth];
 
     exec_func      *func = &eng->funcs[defined_index];
     exec_func_type *type = &eng->types[func->type_index];
@@ -6297,9 +6533,7 @@ tail_entry:
     for (uint32_t i = 0; i < func->local_count; i++)
         locals[arg_count + i].type = func->locals[i];
 
-    exec_stack stack;
     stack.top = 0;
-    exec_control controls[EXEC_MAX_CONTROL];
     int control_top = 0;
 
     for (uint32_t pc = 0; pc < func->code_size; pc++) {
@@ -6374,7 +6608,14 @@ tail_entry:
         }
 
         if (instr->opcode == 0x00)
-            return exec_fail(err, EXEC_ERROR_TRAP, "unreachable");
+        {
+            if (err) {
+                err->status = EXEC_ERROR_TRAP;
+                snprintf(err->message, sizeof(err->message),
+                         "unreachable in function %u at pc %u", func_idx, pc);
+            }
+            return EXEC_ERROR_TRAP;
+        }
         if (instr->opcode == 0x01) continue;
 
         if (instr->opcode == 0x02 || instr->opcode == 0x03 ||
@@ -6818,8 +7059,28 @@ tail_entry:
                 if (!stack_pop(&stack, &call_args[i]))
                     return exec_fail(err, EXEC_ERROR_TRAP, "call arguments missing");
             }
-            exec_status status = exec_invoke_depth(eng, instr->u32_imm, call_args,
-                callee_type->param_count, call_results, &call_result_count, err, depth + 1);
+            if (instr->u32_imm < eng->import_func_count &&
+                eng->import_controls[instr->u32_imm] ==
+                    EXEC_HOST_CONTROL_SIGSETJMP) {
+                if (callee_type->param_count < 1 ||
+                    call_args[0].type != WASM_VALTYPE_I32 ||
+                    callee_type->result_count != 1 ||
+                    callee_type->results[0] != WASM_VALTYPE_I32)
+                    return exec_fail(err, EXEC_ERROR_TRAP,
+                                     "unsupported sigsetjmp signature");
+                exec_status saved = save_jump_frame(
+                    eng, (uint32_t)call_args[0].i32, depth,
+                    frame_generation, func_idx, pc, &stack, controls,
+                    control_top, locals, local_count, err);
+                if (saved != EXEC_OK) return saved;
+                if (!stack_push(&stack, i32_value(0)))
+                    return exec_fail(err, EXEC_ERROR_TRAP,
+                                     "stack overflow after setjmp");
+                continue;
+            }
+            exec_status status = exec_invoke_managed(
+                eng, instr->u32_imm, call_args, callee_type->param_count,
+                call_results, &call_result_count, err);
             if (status == EXEC_ERROR_EXCEPTION) {
                 int handled = handle_exception(
                     eng, func, &stack, controls, &control_top, &pc,
@@ -6830,6 +7091,15 @@ tail_entry:
                 if (handled == 0) return status;
                 if (handled == 2) goto func_return;
                 continue;
+            }
+            if (status == EXEC_ERROR_LONGJMP) {
+                int restored = restore_jump_frame(
+                    eng, err, depth, frame_generation, func_idx, &pc,
+                    &stack, controls, &control_top, locals, local_count);
+                if (restored < 0) return err->status;
+                if (restored > 0) continue;
+                invalidate_jump_frame(eng, depth, frame_generation);
+                return status;
             }
             if (status != EXEC_OK) return status;
             for (int i = 0; i < call_result_count; i++)
@@ -6855,14 +7125,28 @@ tail_entry:
             uint32_t actual_type_index=target<teng->import_func_count?
                 teng->import_func_types[target]:
                 teng->funcs[target-teng->import_func_count].type_index;
-            if(!func_type_is_subtype(teng,actual_type_index,eng,instr->u32_imm))
-                return exec_fail(err,EXEC_ERROR_TRAP,"indirect call type mismatch");
+            if(!func_type_is_subtype(teng,actual_type_index,eng,instr->u32_imm)) {
+                if (err) {
+                    err->status = EXEC_ERROR_TRAP;
+                    snprintf(err->message, sizeof(err->message),
+                             "indirect call type mismatch: function %u pc %u, "
+                             "table element %u targets function %u type %u, "
+                             "expected type %u",
+                             func_idx, pc, (unsigned)element, target,
+                             actual_type_index, instr->u32_imm);
+                }
+                return EXEC_ERROR_TRAP;
+            }
             exec_func_type *expected=&eng->types[instr->u32_imm];
             if (instr->opcode == 0x13) {
                 /* return_call_indirect: tail call — restart without recursion */
                 for(int i=expected->param_count;i-->0;)
                     if(!stack_pop(&stack,&tail_args[i]))
                         return exec_fail(err,EXEC_ERROR_TRAP,"call_indirect arguments missing");
+                if (teng != eng)
+                    return exec_invoke_managed(
+                        teng, target, tail_args, expected->param_count,
+                        results, result_count, err);
                 eng = teng;
                 func_idx = target;
                 args = tail_args;
@@ -6873,8 +7157,9 @@ tail_entry:
             for(int i=expected->param_count;i-->0;)
                 if(!stack_pop(&stack,&call_args[i]))
                     return exec_fail(err,EXEC_ERROR_TRAP,"call_indirect arguments missing");
-            exec_status status=exec_invoke_depth(teng,target,call_args,expected->param_count,
-                call_results,&call_result_count,err,depth+1);
+            exec_status status=exec_invoke_managed(
+                teng, target, call_args, expected->param_count,
+                call_results, &call_result_count, err);
             if(status==EXEC_ERROR_EXCEPTION){
                 int handled=handle_exception(eng,func,&stack,controls,
                     &control_top,&pc,err->exception_tag,
@@ -6884,6 +7169,15 @@ tail_entry:
                 if(handled==0)return status;
                 if(handled==2)goto func_return;
                 continue;
+            }
+            if(status==EXEC_ERROR_LONGJMP){
+                int restored=restore_jump_frame(
+                    eng,err,depth,frame_generation,func_idx,&pc,&stack,
+                    controls,&control_top,locals,local_count);
+                if(restored<0)return err->status;
+                if(restored>0)continue;
+                invalidate_jump_frame(eng,depth,frame_generation);
+                return status;
             }
             if(status!=EXEC_OK)return status;
             for(int i=0;i<call_result_count;i++)if(!stack_push(&stack,call_results[i]))
@@ -6932,9 +7226,9 @@ tail_entry:
                 if (!stack_pop(&stack, &call_args[i]))
                     return exec_fail(err, EXEC_ERROR_TRAP,
                                      "call_ref arguments missing");
-            exec_status status = exec_invoke_depth(
+            exec_status status = exec_invoke_managed(
                 eng, target, call_args, callee_type->param_count,
-                call_results, &call_result_count, err, depth + 1);
+                call_results, &call_result_count, err);
             if (status == EXEC_ERROR_EXCEPTION) {
                 int handled = handle_exception(
                     eng, func, &stack, controls, &control_top, &pc,
@@ -6945,6 +7239,15 @@ tail_entry:
                 if (handled == 0) return status;
                 if (handled == 2) goto func_return;
                 continue;
+            }
+            if (status == EXEC_ERROR_LONGJMP) {
+                int restored = restore_jump_frame(
+                    eng, err, depth, frame_generation, func_idx, &pc,
+                    &stack, controls, &control_top, locals, local_count);
+                if (restored < 0) return err->status;
+                if (restored > 0) continue;
+                invalidate_jump_frame(eng, depth, frame_generation);
+                return status;
             }
             if (status != EXEC_OK) return status;
             for (int i = 0; i < call_result_count; i++)
@@ -7465,6 +7768,7 @@ tail_entry:
         return exec_fail(err, EXEC_ERROR_UNSUPPORTED, "unsupported opcode");
     }
 func_return:
+    invalidate_jump_frame(eng, depth, frame_generation);
     /* Collect results */
     if (stack.top < type->result_count)
         return exec_fail(err, EXEC_ERROR_TRAP, "missing result");
@@ -7474,6 +7778,7 @@ func_return:
 
     return EXEC_OK;
 }
+#undef stack
 
 exec_status exec_invoke(waste_exec_engine *eng,
                         uint32_t func_idx,
@@ -7486,6 +7791,6 @@ exec_status exec_invoke(waste_exec_engine *eng,
         local_error.exception_ref = UINT32_MAX;
         err = &local_error;
     }
-    return exec_invoke_depth(eng, func_idx, args, arg_count, results,
-                             result_count, err, 0);
+    return exec_invoke_managed(eng, func_idx, args, arg_count, results,
+                               result_count, err);
 }

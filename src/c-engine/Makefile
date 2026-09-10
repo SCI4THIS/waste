@@ -35,7 +35,7 @@ EXTERN_PROVIDER_WASM := $(WAST_BUILD_DIR)/extern-provider.wasm
 EXTERN_CONSUMER_WASM := $(WAST_BUILD_DIR)/extern-consumer.wasm
 I32_SMOKE_TARGET := $(WAST_BUILD_DIR)/i32-smoke-sanitize
 
-.PHONY: all browser clean sanitize wast-native wast-browser wast-mmap-test i32-smoke
+.PHONY: all browser clean sanitize wast-native wast-browser wast-browser-async wast-mmap-test i32-smoke
 
 all: $(TARGET)
 
@@ -113,6 +113,18 @@ $(WAST_TARGET): $(WAST_SOURCES) $(WAST_HEADERS) $(WAST_TAB_NATIVE_O) $(WAST_LEX_
 
 wast-browser: $(WAST_WASM_TARGET)
 
+# Asyncify-transformed variant for interactive I/O (Bash page).
+# The transform lets posix_read yield to the JS event loop when no input
+# is available, removing the SharedArrayBuffer requirement.
+WAST_WASM_ASYNC_TARGET := $(WAST_BUILD_DIR)/waste-wast-async.wasm
+WASM_OPT ?= wasm-opt
+
+wast-browser-async: $(WAST_WASM_ASYNC_TARGET)
+
+$(WAST_WASM_ASYNC_TARGET): $(WAST_WASM_TARGET)
+	$(WASM_OPT) --asyncify \
+		--pass-arg=asyncify-imports@waste_host.posix_read $< -o $@
+
 i32-smoke: $(I32_SMOKE_TARGET) $(I32_SMOKE_WASM) $(IMPORT_SMOKE_WASM) $(EXTERN_PROVIDER_WASM) $(EXTERN_CONSUMER_WASM)
 	ASAN_OPTIONS=detect_leaks=0 $(I32_SMOKE_TARGET) $(I32_SMOKE_WASM) $(IMPORT_SMOKE_WASM) $(EXTERN_PROVIDER_WASM) $(EXTERN_CONSUMER_WASM)
 
@@ -132,11 +144,11 @@ $(EXTERN_CONSUMER_WASM): ../../tests/c-engine-extern-consumer.wat
 	mkdir -p $(WAST_BUILD_DIR)
 	wasm-as --enable-reference-types $< -o $@
 
-$(I32_SMOKE_TARGET): ../../tests/c-engine-i32-smoke.c waste_exec.c waste_exec.h wast_types.h
+$(I32_SMOKE_TARGET): ../../tests/c-engine-i32-smoke.c waste_exec.c wast_simd.c waste_exec.h wast_simd.h wast_types.h
 	mkdir -p $(WAST_BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -I. \
-		../../tests/c-engine-i32-smoke.c waste_exec.c -lm -o $@
+		../../tests/c-engine-i32-smoke.c waste_exec.c wast_simd.c -lm -o $@
 
 WASM_CC_FLAGS := --target=wasm32 -O2 -std=c11 -Wall -Wextra \
 	-fno-builtin -DWASTE_FREESTANDING -DYYDEBUG=0 -nostdlib \

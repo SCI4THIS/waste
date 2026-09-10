@@ -14,6 +14,12 @@ typedef enum {
     EXEC_ERROR_TRAP,
     EXEC_ERROR_EXCEPTION,
     EXEC_ERROR_NOT_FOUND,
+    /* Internal non-local control transfer.  Embedders should never manufacture
+     * this status; it is consumed by an active interpreted frame. */
+    EXEC_ERROR_LONGJMP,
+    /* Guest process termination.  Script runners may accept this for a bare
+     * invocation while still keeping it distinct from a normal Wasm return. */
+    EXEC_ERROR_EXIT,
 } exec_status;
 
 typedef struct {
@@ -27,12 +33,23 @@ typedef struct {
     int exception_payload_count;
     waste_exec_engine *exception_owner;
     uint32_t exception_ref;
+    waste_exec_engine *jump_owner;
+    uint32_t jump_environment;
+    int32_t jump_value;
+    int32_t exit_code;
 } exec_error;
 
 typedef exec_status (*exec_host_func)(void *host_data,
                                       const wasm_value *args, int arg_count,
                                       wasm_value *results, int *result_count,
                                       exec_error *error);
+
+typedef enum {
+    EXEC_HOST_CONTROL_NONE = 0,
+    EXEC_HOST_CONTROL_SIGSETJMP,
+    EXEC_HOST_CONTROL_SIGLONGJMP,
+    EXEC_HOST_CONTROL_EXIT,
+} exec_host_control;
 
 typedef struct {
     const char *module;
@@ -42,6 +59,7 @@ typedef struct {
     const waste_exec_engine *type_owner;
     uint32_t type_index;
     uint8_t has_wasm_type;
+    exec_host_control control;
 } exec_host_import;
 
 typedef struct {

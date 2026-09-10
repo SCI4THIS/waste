@@ -96,6 +96,21 @@ i32 waste_stdio_init(u32 capacity) {
   return standard_input && standard_output && standard_error;
 }
 
+/* A separately linked guest may retain C runtime pointer slots for stdin,
+   stdout, and stderr in the shared address space. Populate those slots with
+   this libc instance's handles after waste_stdio_init(). */
+i32 waste_stdio_bind(u32 input_slot, u32 output_slot, u32 error_slot) {
+  u32 memory_size = __builtin_wasm_memory_size(0) * 65536U;
+  if (!standard_input || !standard_output || !standard_error ||
+      memory_size < 4 || input_slot > memory_size - 4 ||
+      output_slot > memory_size - 4 || error_slot > memory_size - 4)
+    return 0;
+  *(FILE **)(unsigned long)input_slot = standard_input;
+  *(FILE **)(unsigned long)output_slot = standard_output;
+  *(FILE **)(unsigned long)error_slot = standard_error;
+  return 1;
+}
+
 FILE *waste_stdin(void) { return standard_input; }
 FILE *waste_stdout(void) { return standard_output; }
 FILE *waste_stderr(void) { return standard_error; }
@@ -189,17 +204,39 @@ i32 putchar(i32 character) { return fputc(character, standard_output); }
 i32 fflush(FILE *file) { (void)file; return 0; }
 i32 fileno(FILE *file) {
 #ifdef WASTE_POSIX_IO
-  if (file && file->magic != FILE_MAGIC) return 1;
+  /* Bash owns its historical FILE objects.  They are opaque to this compact
+     libc, and its readline path primarily asks for stdin's descriptor. */
+  if (file && file->magic != FILE_MAGIC) return 0;
 #endif
   return file && file->magic == FILE_MAGIC ? file->descriptor : -1;
 }
-i32 ferror(FILE *file) { return file ? file->error : 1; }
-void clearerr(FILE *file) { if (file) { file->error = 0; file->end_of_file = 0; } }
-i32 fpurge(FILE *file) { if (!file) return -1; file->length = file->position = 0; return 0; }
+i32 ferror(FILE *file) {
+#ifdef WASTE_POSIX_IO
+  if (file && file->magic != FILE_MAGIC) return 0;
+#endif
+  return file ? file->error : 1;
+}
+void clearerr(FILE *file) {
+#ifdef WASTE_POSIX_IO
+  if (file && file->magic != FILE_MAGIC) return;
+#endif
+  if (file) { file->error = 0; file->end_of_file = 0; }
+}
+i32 fpurge(FILE *file) {
+  if (!file) return -1;
+#ifdef WASTE_POSIX_IO
+  if (file->magic != FILE_MAGIC) return 0;
+#endif
+  file->length = file->position = 0;
+  return 0;
+}
 i32 __fpurge(FILE *file) { return fpurge(file); }
 i32 setvbuf(FILE *file, char *buffer, i32 mode, u32 size) {
   (void)mode;
   if (!file || !buffer || !size) return -1;
+#ifdef WASTE_POSIX_IO
+  if (file->magic != FILE_MAGIC) return 0;
+#endif
   file->data = (unsigned char *)buffer;
   file->capacity = size;
   file->length = file->position = 0;
@@ -208,7 +245,16 @@ i32 setvbuf(FILE *file, char *buffer, i32 mode, u32 size) {
 }
 
 char *fgets(char *destination, i32 count, FILE *file) {
-  if (!destination || count <= 0 || !file || !(file->flags & FILE_READ)) return 0;
+  if (!destination || count <= 0 || !file) return 0;
+#ifdef WASTE_POSIX_IO
+  if (file->magic != FILE_MAGIC) {
+    i32 received = read(0, destination, (u32)(count - 1));
+    if (received <= 0) return 0;
+    destination[received] = 0;
+    return destination;
+  }
+#endif
+  if (!(file->flags & FILE_READ)) return 0;
 #ifdef WASTE_POSIX_IO
   if (file->position >= file->length && file->descriptor >= 0) {
     i32 received = read(file->descriptor, file->data, file->capacity);

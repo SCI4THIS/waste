@@ -51,6 +51,11 @@ C_ENGINE_MEMORY64_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/memory64"
 C_ENGINE_BULK_MEMORY_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/bulk-memory"
 C_ENGINE_DIY_POSIX_TESTS="$REPO_ROOT/tests/diy-posix-test"
 C_ENGINE_BROWSER_TEST="$REPO_ROOT/tests/c-engine-browser-runtime.cjs"
+C_ENGINE_BASH_GENERATOR="$REPO_ROOT/tools/generate-c-engine-bash-html.py"
+C_ENGINE_BASH_BROWSER_TEST="$REPO_ROOT/tests/c-engine-bash-browser-runtime.cjs"
+C_ENGINE_BASH_RUNTIME_WAST="$REPO_ROOT/build/c-engine-bash/bash-runtime.wast"
+C_ENGINE_BASH_HTML="$C_ENGINE_BUILD/bash.html"
+C_ENGINE_BASH_LOG="$C_ENGINE_BUILD/bash.log"
 
 SWITCH_NAME="${WASTE_OCAML_SWITCH:-waste-wasm}"
 OCAML_VERSION="${WASTE_OCAML_VERSION:-5.3.0}"
@@ -77,6 +82,8 @@ interpreter to WebAssembly.
   --c-tail-poc     build native/browser C tail-call proofs and run native benchmark
   --c-engine-tests build C engine and run relaxed-SIMD spec tests, generate HTML report
   --c-engine-html  generate the full C-engine dashboard in OCaml-Wasm layout
+  --c-engine-bash-html
+                   generate the self-contained C-engine Bash page
   --c-engine-core-tests
                    generate/run the C-engine browser dashboard for core WAST files
   --patch-status   show the Wasm32 compatibility patch status
@@ -933,6 +940,7 @@ generate_c_engine_tests() {
 generate_c_engine_dashboard_html() {
   if ! have_command cc || ! have_command clang || ! have_command make ||
       ! have_command flex || ! have_command bison || ! have_command python3 ||
+      ! have_command node ||
       ! have_command wasm-as || ! wasm_ld_is_usable; then
     show_message "C-engine browser dashboard" \
       "cc, clang, make, flex, bison, wasm-ld, wasm-as, and Python 3 are required."
@@ -987,6 +995,81 @@ generate_c_engine_dashboard_html() {
   printf 'Completed: %s\n' "$(date --iso-8601=seconds)" >>"$C_ENGINE_HTML_LOG"
   show_message "C-engine browser dashboard generated" \
     "A self-contained C-engine dashboard was generated with the same groups as the OCaml-Wasm dashboard, including signaling/POSIX and libc tests.\n\nOutput: $C_ENGINE_OCAML_LAYOUT_HTML\nLog: $C_ENGINE_HTML_LOG"
+}
+
+generate_c_engine_bash_html() {
+  if ! have_command cc || ! have_command clang || ! have_command make ||
+      ! have_command flex || ! have_command bison || ! have_command python3 ||
+      ! have_command node ||
+      ! have_command wasm-as || ! have_command wasm-merge || ! have_command wasm-dis ||
+      ! have_command wasm-opt || ! wasm_ld_is_usable; then
+    show_message "C-engine Bash" \
+      "cc, clang, make, flex, bison, wasm-ld, wasm-as, wasm-merge, wasm-dis, wasm-opt, Node.js, and Python 3 are required."
+    return 1
+  fi
+  if [[ ! -f "$REPO_ROOT/src/bash.wat" || ! -f "$BASH_RUNTIME_BUILDER" ||
+        ! -f "$C_ENGINE_BASH_GENERATOR" ||
+        ! -f "$C_ENGINE_BASH_BROWSER_TEST" ]]; then
+    show_message "C-engine Bash" \
+      "Bash source or a generation tool is missing."
+    return 1
+  fi
+
+  mkdir -p "$C_ENGINE_BUILD"
+  : >"$C_ENGINE_BASH_LOG"
+  {
+    printf 'WASTE C-engine Bash static HTML generation\n'
+    printf 'Started: %s\n' "$(date --iso-8601=seconds)"
+    printf 'Output: %s\n\n' "$C_ENGINE_BASH_HTML"
+  } >>"$C_ENGINE_BASH_LOG"
+
+  if have_command whiptail && [[ -t 0 && -t 1 ]]; then
+    whiptail --title "C-engine Bash" --infobox \
+      "Building the C engine and relinking Bash, then generating the static page...\n\nLog: $C_ENGINE_BASH_LOG" 9 84
+  else
+    printf 'Generating self-contained C-engine Bash page...\n'
+  fi
+
+  # Build the C engine Wasm with asyncify (lets posix_read yield to JS)
+  if ! make -C "$REPO_ROOT/src/c-engine" BUILD_DIR="$C_ENGINE_BUILD" \
+      WAST_BUILD_DIR="$C_ENGINE_BUILD" wast-browser-async \
+      >>"$C_ENGINE_BASH_LOG" 2>&1; then
+    show_message "C-engine Bash failed" \
+      "The C engine build failed.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
+  # Build the bash-runtime.wast (interactive mode for terminal I/O)
+  if ! python3 "$BASH_RUNTIME_BUILDER" --repo-root "$REPO_ROOT" \
+      --interactive --output "$C_ENGINE_BASH_RUNTIME_WAST" \
+      >>"$C_ENGINE_BASH_LOG" 2>&1; then
+    show_message "C-engine Bash failed" \
+      "Could not build the bash runtime.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
+  # Generate the HTML page (uses asyncify-transformed Wasm)
+  if ! python3 "$C_ENGINE_BASH_GENERATOR" \
+      --repo-root "$REPO_ROOT" \
+      --wasm "$C_ENGINE_BUILD/waste-wast-async.wasm" \
+      --launch "$C_ENGINE_BASH_RUNTIME_WAST" \
+      --output "$C_ENGINE_BASH_HTML" \
+      >>"$C_ENGINE_BASH_LOG" 2>&1; then
+    show_message "C-engine Bash generation failed" \
+      "Could not generate the static page.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
+  if ! node "$C_ENGINE_BASH_BROWSER_TEST" "$C_ENGINE_BASH_HTML" \
+      >>"$C_ENGINE_BASH_LOG" 2>&1; then
+    show_message "C-engine Bash browser test failed" \
+      "The generated worker did not survive prompt, delayed input, command execution, and exit.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
+  printf 'Completed: %s\n' "$(date --iso-8601=seconds)" >>"$C_ENGINE_BASH_LOG"
+  show_message "C-engine Bash generated" \
+    "The static page embeds the C engine, shared runtime, waste-libc, and Bash. It can be opened directly with file:// and requires no server.\n\nOutput: $C_ENGINE_BASH_HTML\nLog: $C_ENGINE_BASH_LOG"
 }
 
 generate_c_engine_core_tests() {
@@ -1169,11 +1252,12 @@ main_menu() {
     local choice
     patch_state="$(i31_patch_status)"
     choice="$(whiptail --title "OCaml to WebAssembly" --menu \
-      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 30 94 13 \
+      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 30 94 14 \
       compile "Compile the OCaml interpreter to Wasm" \
       c-tail "Build native/browser C tail-call proof and benchmark" \
       c-engine "Build C engine and run relaxed-SIMD spec tests" \
       c-html "Generate full C-engine browser dashboard (OCaml layout)" \
+      c-bash "Generate self-contained C-engine Bash page" \
       libc "Build waste-libc.wasm and tests" \
       html "Generate embedded browser test dashboard" \
       bash "Generate self-contained WASTE Bash page" \
@@ -1189,6 +1273,7 @@ main_menu() {
       c-tail) run_test_group c-tail || true ;;
       c-engine) generate_c_engine_tests || true ;;
       c-html) generate_c_engine_dashboard_html || true ;;
+      c-bash) generate_c_engine_bash_html || true ;;
       libc) build_waste_libc || true ;;
       html) generate_browser_test_html || true ;;
       bash) generate_bash_html || true ;;
@@ -1241,6 +1326,7 @@ main() {
       printf '\nFinished: %s\n' "$(date --iso-8601=seconds)" >>"$TEST_LOG"
       return "$c_engine_status" ;;
     --c-engine-html) generate_c_engine_dashboard_html ;;
+    --c-engine-bash-html) generate_c_engine_bash_html ;;
     --c-engine-core-tests)
       : >"$TEST_LOG"
       c_engine_status=0

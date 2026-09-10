@@ -575,6 +575,10 @@ async function runWastScript(wasmBytes, testSpec) {
   const imports = {waste_host: {
     strtod: (ptr, length) => hostFloat(ptr, length, false),
     strtof: (ptr, length) => hostFloat(ptr, length, true),
+    posix_open: () => -1,
+    posix_close: () => 0,
+    posix_read: () => 0,
+    posix_write: (descriptor, ptr, count) => count,
   }};
   const {instance} = await WebAssembly.instantiate(wasmBytes, imports);
   engineMemory = instance.exports.memory;
