@@ -20,6 +20,9 @@ typedef enum {
     /* Guest process termination.  Script runners may accept this for a bare
      * invocation while still keeping it distinct from a normal Wasm return. */
     EXEC_ERROR_EXIT,
+    /* Host import requested a yield; interpreter frames are saved on the engine
+     * for resume.  Only produced by browser builds when posix_read has no data. */
+    EXEC_YIELD,
 } exec_status;
 
 typedef struct {

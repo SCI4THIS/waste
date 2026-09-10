@@ -1041,9 +1041,9 @@ static exec_status native_posix_read(void *data, const wasm_value *args,
                  "POSIX read buffer is outside guest memory");
         return error->status;
     }
-    return native_posix_result(
-        waste_host_posix_read(args[0].i32, buffer, count), results,
-        result_count);
+    int32_t read_result = waste_host_posix_read(args[0].i32, buffer, count);
+    if (read_result == -2) return EXEC_YIELD;
+    return native_posix_result(read_result, results, result_count);
 }
 
 static exec_status native_posix_write(void *data, const wasm_value *args,
@@ -2149,6 +2149,26 @@ static const wast_module *browser_find_definition(
     return (void *)0;
 }
 
+/* ---- Yield/resume state for interactive (bash) mode ---- */
+static int g_yield_active;
+static browser_wast_context g_yield_context;
+static wast_stream g_yield_stream;
+static waste_exec_engine *g_yield_engine;
+static uint32_t g_yield_func_idx;
+static wasm_value g_yield_args[WAST_MAX_ARGS];
+static int g_yield_arg_count;
+
+static void browser_yield_cleanup(void) {
+    native_store_free(&g_yield_context.store);
+    for (uint32_t i = 0; i < g_yield_context.retained_count; i++) {
+        if (!g_yield_context.retained[i]) continue;
+        wast_script_free(g_yield_context.retained[i]);
+        free(g_yield_context.retained[i]);
+    }
+    free(g_yield_context.retained);
+    memset(&g_yield_context, 0, sizeof(g_yield_context));
+}
+
 static void browser_run_assertions(browser_wast_context *context,
                                    const wast_script *script,
                                    const wast_group *group) {
@@ -2166,6 +2186,16 @@ static void browser_run_assertions(browser_wast_context *context,
             status = EXEC_ERROR_NOT_FOUND;
         } else {
             status = wast_run_assertion(selected, assertion, &error);
+        }
+        if (status == EXEC_YIELD) {
+            g_yield_active = 1;
+            g_yield_engine = selected;
+            exec_find_export(selected, assertion->func_name,
+                             &g_yield_func_idx, &error);
+            g_yield_arg_count = assertion->arg_count;
+            for (int j = 0; j < assertion->arg_count; j++)
+                g_yield_args[j] = assertion->args[j];
+            return;
         }
         add_result(status == EXEC_OK, assertion->func_name,
                    status == EXEC_OK ? (void *)0 : error.message);
@@ -2320,6 +2350,22 @@ static int browser_process_command(wast_stream_command_kind kind,
     return 0;
 }
 
+static int browser_stream_loop(void) {
+    for (;;) {
+        int status = wast_stream_next(&g_yield_stream,
+                                      browser_process_command,
+                                      &g_yield_context);
+        if (status == 0) break;
+        if (status < 0) {
+            add_result(0, "(parse)", g_yield_stream.error);
+            break;
+        }
+        if (g_yield_active) return 1;
+    }
+    browser_yield_cleanup();
+    return 0;
+}
+
 __attribute__((export_name("waste_wast_run_script")))
 uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
     /* text_ptr is allocated from this same bump heap by waste_wast_alloc().
@@ -2334,29 +2380,33 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
     g_module_count = 0;
     g_linked_func_count = 0;
     g_engine = (void *)0;
+    g_yield_active = 0;
 
-    browser_wast_context context;
-    memset(&context, 0, sizeof(context));
-    native_store_init(&context.store);
-    wast_stream stream;
-    wast_stream_init(&stream, (const char *)(uintptr_t)text_ptr, text_len);
-    for (;;) {
-        int status = wast_stream_next(&stream, browser_process_command,
-                                      &context);
-        if (status == 0) break;
-        if (status < 0) {
-            add_result(0, "(parse)", stream.error);
-            break;
-        }
-    }
-    native_store_free(&context.store);
-    for (uint32_t i = 0; i < context.retained_count; i++) {
-        if (!context.retained[i]) continue;
-        wast_script_free(context.retained[i]);
-        free(context.retained[i]);
-    }
-    free(context.retained);
-    return 0;
+    memset(&g_yield_context, 0, sizeof(g_yield_context));
+    native_store_init(&g_yield_context.store);
+    wast_stream_init(&g_yield_stream,
+                     (const char *)(uintptr_t)text_ptr, text_len);
+    return browser_stream_loop();
+}
+
+__attribute__((export_name("waste_wast_resume")))
+uint32_t waste_wast_resume(void) {
+    if (!g_yield_active) return 0;
+
+    wasm_value results[WAST_MAX_RESULTS];
+    int result_count = 0;
+    exec_error error;
+    memset(&error, 0, sizeof(error));
+    exec_status st = exec_invoke(g_yield_engine, g_yield_func_idx,
+                                 g_yield_args, g_yield_arg_count,
+                                 results, &result_count, &error);
+    if (st == EXEC_YIELD) return 1;
+
+    g_yield_active = 0;
+    add_result(st == EXEC_OK || st == EXEC_ERROR_EXIT, "main",
+               (st == EXEC_OK || st == EXEC_ERROR_EXIT)
+                   ? (void *)0 : error.message);
+    return browser_stream_loop();
 }
 
 /* ---- Result accessor exports ---- */

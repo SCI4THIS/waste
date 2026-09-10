@@ -137,6 +137,18 @@ typedef struct {
 typedef struct exec_jump_snapshot exec_jump_snapshot;
 typedef struct exec_stack exec_stack;
 typedef struct exec_control exec_control;
+
+/* Per-depth yield frame: saves only the C-stack-local state (pc, control_top,
+ * func_idx) when the interpreter yields.  Operand stack, control stack, and
+ * locals are already on the heap (eng->operand_frames, control_frames,
+ * local_frames) and survive across yield/resume automatically. */
+typedef struct {
+    uint8_t  valid;
+    uint32_t func_idx;
+    uint32_t pc;
+    int      control_top;
+} exec_yield_frame;
+
 static void free_jump_snapshots(waste_exec_engine *eng);
 
 static int valid_utf8(const uint8_t *bytes, size_t length) {
@@ -239,6 +251,7 @@ struct waste_exec_engine {
     exec_jump_snapshot *jump_snapshots;
     uint32_t         jump_snapshot_count;
     uint32_t         jump_snapshot_capacity;
+    exec_yield_frame  yield_frames[EXEC_MAX_CALL_DEPTH];
 };
 
 static int value_type_is_defined(const waste_exec_engine *eng,
@@ -6494,49 +6507,67 @@ tail_entry:
     exec_control *controls = eng->control_frames[depth];
 #define stack (*runtime_stack)
 
+    int resuming = eng->yield_frames[depth].valid;
+    uint32_t start_pc = 0;
+    int control_top = 0;
+
+    if (resuming) {
+        func_idx = eng->yield_frames[depth].func_idx;
+        control_top = eng->yield_frames[depth].control_top;
+        start_pc = eng->yield_frames[depth].pc;
+        eng->yield_frames[depth].valid = 0;
+    }
+
     uint32_t defined_index=func_idx-eng->import_func_count;
 
-    /* Reusing an interpreter depth means the previous C/Wasm activation is
-     * gone.  This also runs for return_call, where the current activation is
-     * deliberately replaced. */
-    invalidate_jump_depth(eng, depth);
-    uint64_t frame_generation = ++eng->frame_generations[depth];
+    if (!resuming) {
+        /* Reusing an interpreter depth means the previous C/Wasm activation is
+         * gone.  This also runs for return_call, where the current activation is
+         * deliberately replaced. */
+        invalidate_jump_depth(eng, depth);
+    }
+    uint64_t frame_generation = resuming ? eng->frame_generations[depth]
+                                         : ++eng->frame_generations[depth];
 
     exec_func      *func = &eng->funcs[defined_index];
     exec_func_type *type = &eng->types[func->type_index];
 
-    /* Validate arg count */
-    if (arg_count != type->param_count)
-        return exec_fail(err, EXEC_ERROR_TRAP, "argument count mismatch");
+    if (!resuming) {
+        /* Validate arg count */
+        if (arg_count != type->param_count)
+            return exec_fail(err, EXEC_ERROR_TRAP, "argument count mismatch");
 
-    /* Locals are engine-owned per invocation depth.  Their storage therefore
-     * scales with the module declaration without consuming the browser/C
-     * control stack (the guard-page conformance case has 1,056 i64 locals). */
-    uint32_t local_count = (uint32_t)arg_count + func->local_count;
-    if (local_count > EXEC_MAX_LOCALS)
-        return exec_fail(err, EXEC_ERROR_TRAP, "too many runtime locals");
-    uint32_t storage_count = local_count ? local_count : 1;
-    if (eng->local_frame_capacities[depth] < storage_count) {
-        wasm_value *next = (wasm_value *)realloc(
-            eng->local_frames[depth],
-            (size_t)storage_count * sizeof(*next));
-        if (!next)
-            return exec_fail(err, EXEC_ERROR_TRAP,
-                             "runtime locals allocation failed");
-        eng->local_frames[depth] = next;
-        eng->local_frame_capacities[depth] = storage_count;
+        /* Locals are engine-owned per invocation depth.  Their storage therefore
+         * scales with the module declaration without consuming the browser/C
+         * control stack (the guard-page conformance case has 1,056 i64 locals). */
+        uint32_t local_count = (uint32_t)arg_count + func->local_count;
+        if (local_count > EXEC_MAX_LOCALS)
+            return exec_fail(err, EXEC_ERROR_TRAP, "too many runtime locals");
+        uint32_t storage_count = local_count ? local_count : 1;
+        if (eng->local_frame_capacities[depth] < storage_count) {
+            wasm_value *next = (wasm_value *)realloc(
+                eng->local_frames[depth],
+                (size_t)storage_count * sizeof(*next));
+            if (!next)
+                return exec_fail(err, EXEC_ERROR_TRAP,
+                                 "runtime locals allocation failed");
+            eng->local_frames[depth] = next;
+            eng->local_frame_capacities[depth] = storage_count;
+        }
+        memset(eng->local_frames[depth], 0,
+               (size_t)storage_count * sizeof(*eng->local_frames[depth]));
+        for (int i = 0; i < arg_count; i++)
+            eng->local_frames[depth][i] = args[i];
+        for (uint32_t i = 0; i < func->local_count; i++)
+            eng->local_frames[depth][arg_count + i].type = func->locals[i];
+
+        stack.top = 0;
     }
+
+    uint32_t local_count = (uint32_t)type->param_count + func->local_count;
     wasm_value *locals = eng->local_frames[depth];
-    memset(locals, 0, (size_t)storage_count * sizeof(*locals));
-    for (int i = 0; i < arg_count; i++)
-        locals[i] = args[i];
-    for (uint32_t i = 0; i < func->local_count; i++)
-        locals[arg_count + i].type = func->locals[i];
 
-    stack.top = 0;
-    int control_top = 0;
-
-    for (uint32_t pc = 0; pc < func->code_size; pc++) {
+    for (uint32_t pc = start_pc; pc < func->code_size; pc++) {
         exec_instr *instr = &func->code[pc];
 
         if (instr->opcode == 0x0B) {
@@ -7101,6 +7132,15 @@ tail_entry:
                 invalidate_jump_frame(eng, depth, frame_generation);
                 return status;
             }
+            if (status == EXEC_YIELD) {
+                for (int i = 0; i < callee_type->param_count; i++)
+                    stack_push(&stack, call_args[i]);
+                eng->yield_frames[depth].valid = 1;
+                eng->yield_frames[depth].func_idx = func_idx;
+                eng->yield_frames[depth].pc = pc;
+                eng->yield_frames[depth].control_top = control_top;
+                return EXEC_YIELD;
+            }
             if (status != EXEC_OK) return status;
             for (int i = 0; i < call_result_count; i++)
                 if (!stack_push(&stack, call_results[i]))
@@ -7179,6 +7219,16 @@ tail_entry:
                 invalidate_jump_frame(eng,depth,frame_generation);
                 return status;
             }
+            if (status == EXEC_YIELD) {
+                for (int i = 0; i < expected->param_count; i++)
+                    stack_push(&stack, call_args[i]);
+                stack_push(&stack, table_operand);
+                eng->yield_frames[depth].valid = 1;
+                eng->yield_frames[depth].func_idx = func_idx;
+                eng->yield_frames[depth].pc = pc;
+                eng->yield_frames[depth].control_top = control_top;
+                return EXEC_YIELD;
+            }
             if(status!=EXEC_OK)return status;
             for(int i=0;i<call_result_count;i++)if(!stack_push(&stack,call_results[i]))
                 return exec_fail(err,EXEC_ERROR_TRAP,"stack overflow");
@@ -7248,6 +7298,16 @@ tail_entry:
                 if (restored > 0) continue;
                 invalidate_jump_frame(eng, depth, frame_generation);
                 return status;
+            }
+            if (status == EXEC_YIELD) {
+                for (int i = 0; i < callee_type->param_count; i++)
+                    stack_push(&stack, call_args[i]);
+                stack_push(&stack, reference);
+                eng->yield_frames[depth].valid = 1;
+                eng->yield_frames[depth].func_idx = func_idx;
+                eng->yield_frames[depth].pc = pc;
+                eng->yield_frames[depth].control_top = control_top;
+                return EXEC_YIELD;
             }
             if (status != EXEC_OK) return status;
             for (int i = 0; i < call_result_count; i++)

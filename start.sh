@@ -1002,9 +1002,9 @@ generate_c_engine_bash_html() {
       ! have_command flex || ! have_command bison || ! have_command python3 ||
       ! have_command node ||
       ! have_command wasm-as || ! have_command wasm-merge || ! have_command wasm-dis ||
-      ! have_command wasm-opt || ! wasm_ld_is_usable; then
+      ! wasm_ld_is_usable; then
     show_message "C-engine Bash" \
-      "cc, clang, make, flex, bison, wasm-ld, wasm-as, wasm-merge, wasm-dis, wasm-opt, Node.js, and Python 3 are required."
+      "cc, clang, make, flex, bison, wasm-ld, wasm-as, wasm-merge, wasm-dis, Node.js, and Python 3 are required."
     return 1
   fi
   if [[ ! -f "$REPO_ROOT/src/bash.wat" || ! -f "$BASH_RUNTIME_BUILDER" ||
@@ -1030,9 +1030,9 @@ generate_c_engine_bash_html() {
     printf 'Generating self-contained C-engine Bash page...\n'
   fi
 
-  # Build the C engine Wasm with asyncify (lets posix_read yield to JS)
+  # Build the C engine Wasm (native yield/resume, no asyncify)
   if ! make -C "$REPO_ROOT/src/c-engine" BUILD_DIR="$C_ENGINE_BUILD" \
-      WAST_BUILD_DIR="$C_ENGINE_BUILD" wast-browser-async \
+      WAST_BUILD_DIR="$C_ENGINE_BUILD" wast-browser \
       >>"$C_ENGINE_BASH_LOG" 2>&1; then
     show_message "C-engine Bash failed" \
       "The C engine build failed.\n\nLog: $C_ENGINE_BASH_LOG"
@@ -1048,10 +1048,10 @@ generate_c_engine_bash_html() {
     return 1
   fi
 
-  # Generate the HTML page (uses asyncify-transformed Wasm)
+  # Generate the HTML page
   if ! python3 "$C_ENGINE_BASH_GENERATOR" \
       --repo-root "$REPO_ROOT" \
-      --wasm "$C_ENGINE_BUILD/waste-wast-async.wasm" \
+      --wasm "$C_ENGINE_BUILD/waste-wast.wasm" \
       --launch "$C_ENGINE_BASH_RUNTIME_WAST" \
       --output "$C_ENGINE_BASH_HTML" \
       >>"$C_ENGINE_BASH_LOG" 2>&1; then

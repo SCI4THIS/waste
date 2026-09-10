@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Generate a self-contained C-engine Bash page.
 
-Embeds the compiled C engine (waste-wast-async.wasm, processed with binaryen
-asyncify) and the bash-runtime.wast launch script into a single offline HTML
-file.  The C engine processes the WAST script in a Web Worker.
+Embeds the compiled C engine (waste-wast.wasm) and the bash-runtime.wast
+launch script into a single offline HTML file.  The C engine processes the
+WAST script in a Web Worker.
 
 Terminal output is captured through the posix_write host import.  Interactive
-input uses the binaryen asyncify transform: when posix_read has no data, the
-Wasm call stack is unwound and the worker yields to the JavaScript event loop.
-When the main thread posts input, the worker resumes the Wasm execution from
-where it left off.  This works on file:// without SharedArrayBuffer.
+input uses native yield/resume: when posix_read has no data, waste_host_posix_read
+returns -2, the interpreter saves its frames and returns EXEC_YIELD.  The worker
+awaits input then calls waste_wast_resume to continue.  No asyncify transform,
+no SharedArrayBuffer, works on file://.
 """
 
 import argparse
@@ -107,21 +107,12 @@ HTML = r'''<!doctype html>
         return asF32 ? Math.fround(Number(text)) : Number(text);
       }
 
-      /* ---- Asyncify I/O state ---- */
-      /* The interpreter's hottest frame contains the decoded operand/control
-         state. Asyncify saves that native Wasm frame as well as its callers,
-         so a small application-style unwind buffer is insufficient. */
-      const ASYNCIFY_DATA_SIZE = 8 * 1024 * 1024;
       let exp = null;
       let engineMemory = null;
-      let asyncifyDataAddr = 0;
       let inputQueue = [];
       let pendingSignal = -1;
       let ioResolve = null;
       let terminated = false;
-      let readCalls = 0;
-      let readUnwinds = 0;
-      let inputBytesRead = 0;
 
       function waitForIO() {
         return new Promise(resolve => { ioResolve = resolve; });
@@ -130,28 +121,7 @@ HTML = r'''<!doctype html>
       const decoder = new TextDecoder();
 
       function posixRead(fd, ptr, count) {
-        readCalls++;
         if (fd !== 0) return 0;
-        const state = exp.asyncify_get_state();
-
-        if (state === 2) {
-          /* Rewinding: we were resumed with data or a signal. */
-          exp.asyncify_stop_rewind();
-          if (terminated) return 0;
-          if (pendingSignal >= 0) { pendingSignal = -1; return -1; }
-          if (inputQueue.length > 0) {
-            const input = inputQueue[0];
-            const n = Math.min(input.length, count);
-            new Uint8Array(engineMemory.buffer, ptr, n).set(input.subarray(0, n));
-            if (n >= input.length) inputQueue.shift();
-            else inputQueue[0] = input.subarray(n);
-            inputBytesRead += n;
-            return n;
-          }
-          return 0;
-        }
-
-        /* Normal state: check for immediately available data. */
         if (terminated) return 0;
         if (pendingSignal >= 0) { pendingSignal = -1; return -1; }
         if (inputQueue.length > 0) {
@@ -160,17 +130,9 @@ HTML = r'''<!doctype html>
           new Uint8Array(engineMemory.buffer, ptr, n).set(input.subarray(0, n));
           if (n >= input.length) inputQueue.shift();
           else inputQueue[0] = input.subarray(n);
-          inputBytesRead += n;
           return n;
         }
-
-        /* No data: trigger asyncify unwind to yield to the event loop. */
-        const view = new DataView(engineMemory.buffer);
-        view.setInt32(asyncifyDataAddr, asyncifyDataAddr + 8, true);
-        view.setInt32(asyncifyDataAddr + 4, asyncifyDataAddr + ASYNCIFY_DATA_SIZE, true);
-        exp.asyncify_start_unwind(asyncifyDataAddr);
-        readUnwinds++;
-        return 0;
+        return -2;
       }
 
       function posixWrite(fd, ptr, count) {
@@ -205,20 +167,13 @@ HTML = r'''<!doctype html>
         if (!scriptPtr) throw new Error("C engine script allocation failed");
         new Uint8Array(engineMemory.buffer, scriptPtr, sourceBytes.length).set(sourceBytes);
 
-        asyncifyDataAddr = exp.waste_wast_alloc(ASYNCIFY_DATA_SIZE);
-        if (!asyncifyDataAddr) throw new Error("asyncify buffer allocation failed");
-
         self.postMessage({type: "started"});
 
-        exp.waste_wast_run_script(scriptPtr, sourceBytes.length);
-
-        /* Asyncify loop: each iteration waits for I/O then resumes. */
-        while (exp.asyncify_get_state() === 1) {
-          exp.asyncify_stop_unwind();
+        let yielded = exp.waste_wast_run_script(scriptPtr, sourceBytes.length);
+        while (yielded) {
           await waitForIO();
           if (terminated) break;
-          exp.asyncify_start_rewind(asyncifyDataAddr);
-          exp.waste_wast_run_script(scriptPtr, sourceBytes.length);
+          yielded = exp.waste_wast_resume();
         }
 
         const total = exp.waste_wast_results_total();
@@ -239,7 +194,7 @@ HTML = r'''<!doctype html>
           });
         }
         self.postMessage({type: "done", ok: total === 0 || passed === total,
-          total, passed, results, readCalls, readUnwinds, inputBytesRead});
+          total, passed, results});
       }
 
       self.onmessage = function(e) {
@@ -373,7 +328,7 @@ def main() -> None:
     parser.add_argument("--repo-root", type=Path,
                         default=Path(__file__).resolve().parents[1])
     parser.add_argument("--wasm", type=Path, required=True,
-                        help="Path to waste-wast-async.wasm (asyncify-transformed C engine)")
+                        help="Path to waste-wast.wasm (C engine)")
     parser.add_argument("--launch", type=Path, required=True,
                         help="Path to bash-runtime.wast (interactive mode)")
     parser.add_argument("--output", type=Path, required=True,
