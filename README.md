@@ -1,8 +1,10 @@
 # WASTE
 
-This repository is exploring a browser-hosted WebAssembly execution environment.
-The official WebAssembly specification and its OCaml reference interpreter live
-in `submodules/wasm-spec`.
+Webassembly Threading Environment is a browser targeted webassembly implementation
+that provides threading functionality.  This implementation compiles into webassembly
+so that it can be ran in a browser.  The nested approach allows for the waste
+implementation to provide features that aren't available in the browser.  It allows
+for threading and for process yielding and restarting without use of asyncify.
 
 ## Runtime direction
 

@@ -61,8 +61,8 @@ Inline exports recurse at phase boundaries for compatibility with existing
 C-engine fixtures. This lets an opening parenthesis be classified by the next
 field or instruction keyword without a function-body lexer sentinel.
 
-`tests/c-engine-block-fields.wast` applies the same boundary to folded control
-instructions. A block type is accumulated through type-use, parameter, and
-result phases before its body is parsed; multi-value signatures are reused or
-synthesized in the module type section. Dedicated folded-start tokens keep
-body instructions out of the nullable block-field decision.
+Folded control instructions apply the same boundary: a block type is
+accumulated through type-use, parameter, and result phases before its body is
+parsed; multi-value signatures are reused or synthesized in the module type
+section. Dedicated folded-start tokens keep body instructions out of the
+nullable block-field decision.

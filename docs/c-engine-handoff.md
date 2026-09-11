@@ -287,12 +287,10 @@ node tests/c-engine-browser-runtime.cjs \
 The developing WAST path now uses dynamically grown per-module function
 storage (bounded at 1024 functions) and emits canonical core sections in Wasm
 order: type, import, function, table, memory, global, export, start, element,
-code, and data. `tests/c-engine-many-functions.wast` is the capacity gate;
-`tests/c-engine-sections.wast` covers declared types, a table, memory, global,
-element segment, data segment, exports, and executable code. Both pass through
-the self-contained browser C engine, and their generated modules pass an
-independent Binaryen decode. `tests/c-engine-import-smoke.wat` independently
-checks imported-function type and index encoding.
+code, and data. `tests/c-engine-many-functions.wast` is the capacity gate.
+Both pass through the self-contained browser C engine, and their generated
+modules pass an independent Binaryen decode. `tests/c-engine-import-smoke.wat`
+independently checks imported-function type and index encoding.
 
 This is an encoder milestone, not core-suite completion. The earlier 30-file
 measurement (10 preprocessing, 20 stopped in the grammar) is retained as
@@ -401,8 +399,7 @@ Folded `block`, `loop`, and `if` instructions now apply the same approach to
 block type fields: type use, parameters, and results are parsed before the
 instruction body. Composite lexer starts keep the nullable field/body handoff
 deterministic, including `unreachable`, tail-call, `br_on_*`, and vector
-constant forms. `tests/c-engine-block-fields.wast` is the focused native and
-browser gate. The combined function/block work reduces the expected Bison
+constant forms. The combined function/block work reduces the expected Bison
 shift/reduce conflict count from 38 to 23 and moves strict top-level core
 preprocessing from 63/97 to 85/97; all seven relaxed-SIMD files still pass.
 
@@ -437,8 +434,7 @@ The browser adapter retains provider engines, resolves a consumer's function,
 table, memory, and global imports against registered exports, and keeps shared
 extern owners alive until the test resets its registry. Actions with an
 explicit module ID select that instance; unqualified actions return to the
-latest module. `tests/c-engine-linking.wast` is the registered function-import
-gate, while the existing extern provider/consumer fixtures cover linkage for
+latest module. The existing extern provider/consumer fixtures cover linkage for
 tables, memories, and mutable globals.
 
 The reentrant lexer now tracks line and column positions, and every deferred
@@ -454,8 +450,6 @@ null extern)` normalize losslessly to the core reference types already carried
 by the C representation. The executor now decodes and validates expression-form
 element sections (flags 4 through 7), installs active segments, and validates
 passive and declarative expressions instead of silently skipping section 9.
-`tests/c-engine-declarative-element.wast` and
-`tests/c-engine-nullable-ref-types.wast` are the focused gates.
 
 The C value-type representation now distinguishes nullable and non-null
 function/extern references and reserves bounded values for nullable and
@@ -472,8 +466,7 @@ metadata carries inline `assert_invalid`, `assert_malformed`, and
 `assert_unlinkable` modules. Browser execution checks the loader status, with
 instantiation traps distinguished from ordinary decode/link failures. Active
 element and data bounds failures now return the trap category needed by these
-assertions. `tests/c-engine-inline-module-assertions.wast` covers an
-out-of-bounds element initializer and an unresolved inline-module import.
+assertions.
 
 Table declarations and imports now use a dedicated reference-type production
 that retains nullability and indexed heap identity. The encoder emits typed
@@ -505,16 +498,14 @@ including table bounds, null entries, structural signature checks, argument
 transfer, and result transfer. The browser adapter also supplies the standard
 no-result `spectest` print functions used by linking fixtures. Consequently no
 `unresolved registered module import` failures remain: the current run passes
-101 of 136 emitted results. `tests/c-engine-call-indirect.wast` is the focused
-execution gate.
+101 of 136 emitted results.
 
 Wasm-to-Wasm function bindings now retain the provider engine and declared type
 index. Consumer loading structurally compares parameter and result types,
 including indexed reference types across different module-local type spaces,
 before accepting an import. Native host callbacks can explicitly remain
-untyped, which is used for the standard `spectest` print helpers. The focused
-`tests/c-engine-function-import-signatures.wast` gate accepts an exact signature
-and rejects parameter and result mismatches. This raises the current official
+untyped, which is used for the standard `spectest` print helpers.
+This raises the current official
 `linking.wast` browser result to 103 of 136; one unexpectedly successful module
 instantiation remains in a different extern-import category.
 
@@ -524,7 +515,6 @@ executor trap as success only for the latter two kinds; export lookup and other
 engine errors still fail the assertion, and a successful invocation fails when
 a trap was expected. Browser execution uses a 1 MiB native stack and a bounded
 64-call limit so exhaustion is reported by the engine before the host Wasm
-stack overflows. `tests/c-engine-assertion-kinds.wast` covers return,
-unreachable-trap, and recursive exhaustion. This removes all 16 previously
+stack overflows. This removes all 16 previously
 misclassified invocation traps from `linking.wast`, raising it to 119 of 136
 emitted results.
