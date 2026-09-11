@@ -37,25 +37,11 @@ This opens an interactive wizard for dependency checks, compilation, dashboard g
 ./start.sh --build-libc         # Build waste-libc.wasm and its tests
 ./start.sh --generate-html      # Generate offline browser test dashboard
 ./start.sh --generate-bash-html # Generate self-contained WASTE Bash page
-./start.sh --c-tail-poc         # Build and benchmark C tail-call proof
 ./start.sh --patch-status       # Show Wasm32 compatibility patch status
 ./start.sh --apply-i31          # Apply Wasm32 i31-int32 patch
 ./start.sh --revert-i31         # Revert Wasm32 patch
 ./start.sh --update             # Safe git pull, submodule update, restore patch
 ```
-
-### C Tail-Call Proof of Concept
-
-The C engine proof is in `src/c-engine/` and demonstrates allocation-free tail transfers:
-
-```sh
-./start.sh --c-tail-poc                              # Full build + benchmark + HTML
-tests/c-tail-poc/run.sh 5000000                      # Native gate (specify iteration count)
-make -C src/c-engine sanitize                        # Build with AddressSanitizer/UBSanitizer
-make -C src/c-engine BUILD_DIR=path all              # Build with custom output directory
-```
-
-The proof is intentionally restricted: `(i64) -> i64` functions only, supporting `local.get`, `i64.const`, `i64.eqz`, `i64.sub`, `if/else/end`, `ref.func`, `return_call`, and `return_call_ref`. See `docs/c-engine-handoff.md` for performance baselines and next expansion steps.
 
 ### Test Suites
 
@@ -68,9 +54,6 @@ node tests/diy-posix-test/posix-kernel-runtime.cjs threaded
 node tests/libc-test/libc-runtime.cjs
 node tests/libc-test/libc-runtime.cjs threaded
 node tests/libc-test/allocator-native.cjs
-
-# C tail-call proof of concept
-./start.sh --c-tail-poc
 ```
 
 ### Build Output Locations
@@ -81,7 +64,6 @@ build/ocaml-wasm/dist-threaded/                 # CPS OCaml-Wasm interpreter + a
 build/ocaml-wasm/browser-tests.html             # Offline test dashboard (embeds spec tests)
 build/ocaml-wasm/bash.html                      # Self-contained Bash interpreter
 build/waste-libc/waste-libc.wasm                # Guest libc binary
-build/c-tail-poc/tail-call-poc.html             # C engine proof of concept page
 ```
 
 ### Build Logs
@@ -140,7 +122,7 @@ The C engine (`src/c-engine/`) provides:
 - **Parser:** Flex/Bison grammar (`wast.l` / `wast.y`) for the full Wasm text format including GC, exceptions, tail calls, relaxed SIMD, multi-memory, and WAST script commands
 - **Encoder:** Converts parsed text format to binary Wasm opcodes (`wast_encode.c`)
 - **Executor:** Custom frame-based interpreter with fuel metering (`waste_exec.c`)
-- **WAST runner:** Spec test harness with JSON output (`wast_runner.c`, `wast_general.c`)
+- **WAST runner:** Spec test harness with JSON output (`wast_runner.c`)
 - **Freestanding library:** Portable C implementations of string, math, and formatting functions shared by both native and Wasm builds (`freestanding_lib.c`)
 - **Platform backends:** Native Linux x86_64 via raw syscalls (`freestanding_native.c`) and Wasm browser adapter (`browser_wast.c`)
 
@@ -193,7 +175,7 @@ Test fixture:
 ### Documentation
 - `README.md` — High-level project overview, build directions, dashboard usage
 - `docs/c-engine-port-plan.md` — Detailed C port strategy, phased gates, execution architecture, build integration
-- `docs/c-engine-handoff.md` — C proof baseline performance, current implementation, reproduction, next safe expansion
+- `docs/c-engine-handoff.md` — C engine conformance status, browser baseline, implementation history
 - `docs/posix-runtime.md` — Browser POSIX runtime tiers, control-page ABI, signal delivery, broker protocol
 - `AGENTS.md` — Repository guidelines, coding style, testing conventions, commit practices
 
@@ -201,25 +183,21 @@ Test fixture:
 - `src/c-engine/wast.y` — Bison parser for Wasm text format (MVP + GC + exceptions + tail calls + SIMD + WAST script)
 - `src/c-engine/wast.l` — Flex lexer with dedicated tokens for structural keywords and generic OP for dotted instructions
 - `src/c-engine/wast_runner.c/h` — WAST script runner: module instantiation, assertion dispatch, JSON output
-- `src/c-engine/wast_general.c/h` — General WAST execution: file loading, module groups, cross-module linking
 - `src/c-engine/wast_encode.c/h` — Text-to-binary encoder: converts parsed AST to Wasm binary opcodes
 - `src/c-engine/wast_stream.c/h` — Byte stream utilities for binary encoding
 - `src/c-engine/wast_simd.c/h` — SIMD instruction lookup tables (0xFD prefix)
 - `src/c-engine/wast_types.h` — Shared type definitions for the parser/encoder pipeline
 - `src/c-engine/waste_exec.c/h` — Frame-based Wasm interpreter with fuel metering
-- `src/c-engine/waste_tail.c/h` — Tail-call proof: bounded reader, decoder, validator, single-frame execution loop
 - `src/c-engine/freestanding_lib.c` — Portable freestanding library (string, math, snprintf, conversions) shared by native and Wasm
 - `src/c-engine/freestanding_native.c` — Native Linux x86_64 platform backend (raw syscalls, mmap allocator, FILE I/O)
 - `src/c-engine/freestanding/` — Freestanding headers (stdio.h, stdlib.h, string.h, math.h, etc.) used via `-Ifreestanding`
 - `src/c-engine/browser_wast.c` — Wasm browser backend (JS host imports, allocator, I/O stubs, WAST API exports)
-- `src/c-engine/browser.c` — Minimal Wasm adapter with bump allocator (tail-call proof only)
-- `src/c-engine/main.c` — Native command-line runner for tail-call proof
 - `src/c-engine/main_wast.c` — Native command-line WAST spec test runner
 - `src/c-engine/wast_mmap_test.c` — Native WAST parse-only benchmark (mmap-based)
 - `src/c-engine/Makefile` — Build rules for native and Wasm targets
 
-### Source: Bash Binaries
-- `src/bash.wat`, `bash-i.wat` — Compiled Bash binaries (for browser testing)
+### Examples
+- `examples/bash.wat`, `bash-i.wat` — Compiled Bash binaries (for browser testing)
 
 ### Source: Guest libc
 - `libc/waste-libc.wat` — WebAssembly libc core (memory, allocator, exports)
@@ -231,11 +209,8 @@ Test fixture:
 - `tools/generate-bash-html.py` — Generates self-contained Bash interpreter page with CPS loader and libc
 - `tools/build-bash-runtime.py` — Relinks Bash and libc binaries to shared `waste-runtime` module
 - `tools/build-waste-libc.py` — Builds libc Wasm binary and test fixtures
-- `tools/generate-c-tail-poc.py` — Generates C proof HTML with embedded Wasm engine and tail-call test module
 
 ### Tests
-- `tests/c-tail-poc/tail-call.wat` — Tail-call proof fixture
-- `tests/c-tail-poc/run.sh` — Native benchmark and truncated-module rejection test
 - `tests/diy-posix-test/*.wast` — POSIX regression probes (process control, signals, VFS, clock)
 - `tests/diy-posix-test/*-runtime.cjs` — Node.js harnesses for running probes against both interpreters
 - `tests/libc-test/*.wast.inc` — libc test clients
@@ -258,8 +233,6 @@ Test fixture:
 1. **Spec oracle:** The OCaml reference interpreter in `submodules/wasm-spec` is the behavioral standard. Both implementations must agree on all spec tests.
 
 2. **Differential testing:** Each C feature expansion must include a fixture and compare results with OCaml before marking as complete. See `docs/c-engine-port-plan.md` for staged gates.
-
-3. **No early optimization:** Preserve C proof as a regression gate via `docs/c-engine-handoff.md` baseline.
 
 ### Ownership & Memory Safety
 
@@ -299,7 +272,6 @@ Test fixture:
 ### Testing Checklist
 
 - **Direct and threaded:** When changing scheduler, evaluator, signal, or POSIX behavior, test both `libc-runtime.cjs` and `libc-runtime.cjs threaded`
-- **C proof stability:** Do not widen the C engine subset without a new fixture and updated `docs/c-engine-handoff.md`
 - **Spec tests:** Compare all new C behavior with OCaml oracle on official core tests
 - **Browser page:** Verify dashboard remains a single offline HTML; do not introduce server requirements or external assets
 - **POSIX regression:** Local fixtures in `tests/diy-posix-test/` and `tests/libc-test/` are regression probes; keep them in sync with both interpreters
@@ -328,14 +300,6 @@ The CPS interpreter executes `WASTE_INSTRUCTION_QUANTUM` guest opcodes per time 
 
 Enable in the Bash HTML generator to print cumulative millisecond timestamps for parsing, decoding, validation, import resolution, evaluator initialization, registration, invocation, opcode-category sampling, and browser markers (Date.now vs performance.now deltas).
 
-### Tail-Call Performance Gates
-
-The C proof baseline (Firefox):
-- `return_call`: 1,122 ms for 5M transfers = 4.5M transfers/sec, 1 frame, 0 allocations
-- `return_call_ref`: 465 ms for 5M transfers = 10.7M transfers/sec, 1 frame, 0 allocations
-
-Preserve this fixture and environment; any regression indicates a run-loop or dispatch issue. See `docs/c-engine-handoff.md`.
-
 ### WebSocket Broker Protocol
 
 If implementing broker-backed capabilities, design the protocol to be versioned, asynchronous, capability-scoped, with explicit `errno` translation, cancellation, and readiness notifications. The C engine must retain descriptor identity and blocking behavior; the broker is a capability transport only.
@@ -354,27 +318,26 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 ├── start.sh                           # Main build wizard
 ├── LICENSE, .gitignore, .gitmodules
 │
-├── src/                               # C engine & Bash binaries
-│   ├── c-engine/                      # Parser, encoder, executor, test runner
+├── src/                               # C engine
+│   └── c-engine/                      # Parser, encoder, executor, test runner
 │   │   ├── wast.y, wast.l            # Bison/Flex parser for Wasm text format
 │   │   ├── wast_runner.c/h           # WAST script runner
-│   │   ├── wast_general.c/h          # File loading, module groups, linking
 │   │   ├── wast_encode.c/h           # Text-to-binary encoder
 │   │   ├── wast_stream.c/h           # Byte stream utilities
 │   │   ├── wast_simd.c/h             # SIMD instruction lookup
 │   │   ├── wast_types.h              # Shared type definitions
 │   │   ├── waste_exec.c/h            # Frame-based interpreter
-│   │   ├── waste_tail.c/h            # Tail-call proof decoder/executor
 │   │   ├── freestanding_lib.c        # Portable freestanding library
 │   │   ├── freestanding_native.c     # Native Linux x86_64 syscall backend
 │   │   ├── freestanding/             # Freestanding C headers
 │   │   ├── browser_wast.c            # Wasm browser backend
-│   │   ├── browser.c                 # Minimal Wasm adapter (tail-call proof)
-│   │   ├── main.c                    # Native tail-call proof runner
 │   │   ├── main_wast.c              # Native WAST spec test runner
 │   │   ├── wast_mmap_test.c          # Parse-only benchmark
 │   │   └── Makefile                  # Build rules
-│   └── bash.wat, bash-i.wat          # Compiled Bash binaries
+│
+├── examples/                          # Example Wasm binaries
+│   ├── bash.wat                       # Compiled Bash (interactive)
+│   └── bash-i.wat                     # Compiled Bash (non-interactive)
 │
 ├── libc/                              # Guest libc for Bash & applications
 │   ├── waste-libc.wat                 # Wasm core (memory, allocator)
@@ -385,16 +348,12 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 │   ├── generate-browser-tests.py      # Dashboard generation
 │   ├── generate-bash-html.py          # Bash page generation
 │   ├── build-bash-runtime.py          # Bash + libc relinking
-│   ├── build-waste-libc.py            # libc compilation
-│   └── generate-c-tail-poc.py         # C proof HTML generation
+│   └── build-waste-libc.py            # libc compilation
 │
 ├── tests/                             # Test suites
 │   ├── c-engine-*.wast                # C engine regression fixtures
 │   ├── c-engine-*.wat                 # C engine test modules
 │   ├── c-engine-i32-smoke.c           # Sanitizer smoke test source
-│   ├── c-tail-poc/                    # Tail-call proof fixture & runner
-│   │   ├── run.sh                     # Native benchmark & tests
-│   │   └── tail-call.wat              # Proof fixture
 │   ├── diy-posix-test/                # POSIX regression probes
 │   │   ├── *.wast                     # Fixtures
 │   │   └── *-runtime.cjs             # Node harnesses
@@ -406,7 +365,7 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 │
 ├── docs/                              # Architecture & planning
 │   ├── c-engine-port-plan.md          # Detailed C port roadmap
-│   ├── c-engine-handoff.md            # Proof baseline & next steps
+│   ├── c-engine-handoff.md            # C engine conformance & implementation history
 │   ├── posix-runtime.md               # POSIX tiers, control-page ABI
 │   └── return-call-two-iteration-trace.md
 │
@@ -424,7 +383,7 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 │   │   ├── bash.html                  # Bash interpreter page
 │   │   └── staging/                   # Build overlay
 │   ├── waste-libc/                    # libc artifacts
-│   ├── c-tail-poc/                    # C engine build artifacts
+│   ├── c-engine/                      # C engine build artifacts
 │   └── toolchain/                     # Wasm toolchain (if built locally)
 │
 ├── build.log, test.log, *.log        # Build transcripts
@@ -433,4 +392,4 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 
 ---
 
-For questions about specific areas, refer to the detailed docs in `docs/` and comments in `AGENTS.md`. When implementing new C features, see `docs/c-engine-handoff.md` for the next safe expansion sequence.
+For questions about specific areas, refer to the detailed docs in `docs/` and comments in `AGENTS.md`.

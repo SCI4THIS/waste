@@ -2,7 +2,6 @@
 #include "wast_encode.h"
 #include "waste_exec.h"
 #include "wast_runner.h"
-#include "wast_general.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -816,13 +815,11 @@ static int run_count(const char *path) {
 int main(int argc, char *argv[]) {
     if (argc == 3 && strcmp(argv[1], "--browser-spec") == 0)
         return run_browser_spec(argv[2]);
-    if (argc == 3 && strcmp(argv[1], "--general") == 0)
-        return wast_general_run(argv[2]);
     if (argc == 3 && strcmp(argv[1], "--count") == 0)
         return run_count(argv[2]);
     if (argc == 2) {
         return run_normal(argv[1]);
     }
-    fprintf(stderr, "usage: %s [--browser-spec|--general|--count] <file.wast>\n", argv[0]);
+    fprintf(stderr, "usage: %s [--browser-spec|--count] <file.wast>\n", argv[0]);
     return 1;
 }

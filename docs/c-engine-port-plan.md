@@ -47,30 +47,6 @@ src/
 Generated Flex/Bison files belong under `build/`, not source control. Grammar,
 scanner, opcode metadata, and generation scripts remain repository sources.
 
-## Tail-Call Proof Status
-
-The first bounded execution slice now lives in `src/c-engine/`. It loads an
-actual Wasm binary and supports only the types, structured conditional, integer
-operations, function references, exports, `return_call`, and `return_call_ref`
-needed by `tests/c-tail-poc/tail-call.wat`. Both tail instructions reset the
-active function, argument, value-stack cursor, and numeric PC in a single frame;
-the run loop performs no allocation.
-
-`./start.sh --c-tail-poc` runs a five-million-transfer native gate for each
-instruction and emits the self-contained
-`build/c-tail-poc/tail-call-poc.html`, which embeds the same C interpreter
-compiled to Wasm and the guest counter module. This is evidence for the dispatch
-architecture, not completion of the minimal-executor phase. The next expansion
-must retain bounded decoding, structured errors, one-frame tail transfers, and
-native/browser differential fixtures.
-
-The first Firefox browser baseline confirmed constant frame depth and zero
-run-loop allocation: five million `return_call` transfers took 1,122 ms
-(4,456,328/s), while five million `return_call_ref` transfers took 465 ms
-(10,752,688/s). Preserve the environment and raw values when comparing future
-changes; the concise continuation notes are in
-[c-engine-handoff.md](c-engine-handoff.md).
-
 ## Ownership Hierarchy
 
 Do not use scheduler tasks, POSIX processes, and guest threads as synonyms. The
@@ -197,7 +173,7 @@ WAT translation uses two passes:
    could reach unread lexer input.
 
 The first grammar milestone targets flat numeric WAT emitted by `wasm-dis`,
-including `src/bash.wat`. Named references, inline import/export/type sugar,
+including `examples/bash.wat`. Named references, inline import/export/type sugar,
 folded instruction expressions, exact floating-point/NaN syntax, UTF-8 escapes,
 and proposal syntax follow. Do not silently accept unsupported constructs.
 
@@ -240,9 +216,8 @@ copy-on-write replaces that operation behind one memory-clone interface later.
    `hello.wasm`, the smoke fixtures, and selected official core groups in both
    native and browser builds.
 3. **Tail-call engine:** add reusable frames, `return_call`, and
-   `return_call_ref`. Gate: official tail-call tests match the OCaml oracle and
-   five million simple tail transfers complete without per-transfer allocation;
-   publish instructions/second and elapsed browser time.
+   `return_call_ref`. Gate: official tail-call tests match the OCaml oracle;
+   tail transfers must not allocate per transfer.
 4. **WAT front end:** implement flat numeric grammar and separate-buffer
    two-pass encoder, then guarded in-place compaction. Gate: byte-equivalent or
    semantically equivalent output to `wasm-as` for generated fixtures and Bash.

@@ -189,7 +189,7 @@ Implemented imports now cover the signal functions plus `getpid`, `getppid`,
 `alarm`, `sleep`, and `setitimer`.
 
 The OCaml host and guest-libc exports now cover all 231 named imports in
-`src/bash.wat`. The Bash launch relinker gives Bash and libc a shared memory and
+`examples/bash.wat`. The Bash launch relinker gives Bash and libc a shared memory and
 function table owned by the neutral `waste-runtime` module. Registering libc as
 `env` overlays its exports on the OCaml host namespace, so unresolved process,
 descriptor, VFS, signal, and clock imports continue to reach the kernel. The current `stat`

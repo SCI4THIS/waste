@@ -33,10 +33,6 @@ LIBC_BUILDER="$REPO_ROOT/tools/build-waste-libc.py"
 LIBC_OUTPUT="$REPO_ROOT/build/waste-libc/waste-libc.wasm"
 LIBC_LOG="$REPO_ROOT/build/waste-libc/build.log"
 TEST_LOG="$REPO_ROOT/test.log"
-C_TAIL_POC="$REPO_ROOT/tests/c-tail-poc/run.sh"
-C_TAIL_BUILD="$REPO_ROOT/build/c-tail-poc"
-C_TAIL_GENERATOR="$REPO_ROOT/tools/generate-c-tail-poc.py"
-C_TAIL_HTML="$C_TAIL_BUILD/tail-call-poc.html"
 C_ENGINE_BUILD="$REPO_ROOT/build/c-engine"
 C_ENGINE_RUNNER="$C_ENGINE_BUILD/waste-wast"
 C_ENGINE_WASM="$C_ENGINE_BUILD/waste-wast.wasm"
@@ -79,7 +75,6 @@ interpreter to WebAssembly.
   --generate-html  generate the embedded browser test dashboard
   --generate-bash-html
                    generate the self-contained WASTE Bash page
-  --c-tail-poc     build native/browser C tail-call proofs and run native benchmark
   --c-engine-tests build C engine and run relaxed-SIMD spec tests, generate HTML report
   --c-engine-html  generate the full C-engine dashboard in OCaml-Wasm layout
   --c-engine-bash-html
@@ -99,8 +94,6 @@ Environment overrides:
                        threaded scheduler quantum (default: 10000)
   WASTE_BASH_INSTRUCTION_QUANTUM
                        WASTE Bash scheduler quantum (default: 1000000)
-  WASTE_C_TAIL_ITERATIONS
-                       C tail-call proof transfers per export (default: 5000000)
 EOF
 }
 
@@ -761,7 +754,7 @@ generate_bash_html() {
     show_message "WASTE Bash" "Compile the OCaml interpreter first.\n\nLog: $BASH_HTML_LOG"
     return 1
   fi
-  if [[ ! -f "$REPO_ROOT/src/bash.wat" || ! -f "$BASH_RUNTIME_BUILDER" ||
+  if [[ ! -f "$REPO_ROOT/examples/bash.wat" || ! -f "$BASH_RUNTIME_BUILDER" ||
         ! -f "$BASH_HTML_GENERATOR" ]]; then
     printf 'error: Bash source or generator is missing\n' >>"$BASH_HTML_LOG"
     show_message "WASTE Bash" "Bash source or a generation tool is missing.\n\nLog: $BASH_HTML_LOG"
@@ -885,27 +878,6 @@ run_sandbox_isolation_tests() {
     "${contamination_args[@]}" >>"$TEST_LOG" 2>&1
 }
 
-run_c_tail_poc() {
-  local iterations="${WASTE_C_TAIL_ITERATIONS:-5000000}"
-  if [[ ! "$iterations" =~ ^[1-9][0-9]*$ ]]; then
-    printf 'error: WASTE_C_TAIL_ITERATIONS must be a positive integer\n' >>"$TEST_LOG"
-    return 2
-  fi
-  if ! have_command cc || ! have_command clang || ! have_command make ||
-      ! have_command wasm-as || ! have_command python3 || ! wasm_ld_is_usable; then
-    printf 'error: cc, clang, make, wasm-ld, wasm-as, and Python 3 are required for the C tail-call proof\n' >>"$TEST_LOG"
-    return 1
-  fi
-  printf '\n== Native C tail-call proof (%s transfers) ==\n' "$iterations" >>"$TEST_LOG"
-  "$C_TAIL_POC" "$iterations" >>"$TEST_LOG" 2>&1 || return 1
-  make -C "$REPO_ROOT/src/c-engine" BUILD_DIR="$C_TAIL_BUILD" browser \
-    >>"$TEST_LOG" 2>&1 || return 1
-  python3 "$C_TAIL_GENERATOR" \
-    --engine "$C_TAIL_BUILD/waste-tail-poc.wasm" \
-    --guest "$C_TAIL_BUILD/tail-call.wasm" \
-    --output "$C_TAIL_HTML" >>"$TEST_LOG" 2>&1
-}
-
 generate_c_engine_tests() {
   if ! have_command cc || ! have_command make || ! have_command flex ||
       ! have_command bison || ! have_command python3 || ! have_command node; then
@@ -1007,7 +979,7 @@ generate_c_engine_bash_html() {
       "cc, clang, make, flex, bison, wasm-ld, wasm-as, wasm-merge, wasm-dis, Node.js, and Python 3 are required."
     return 1
   fi
-  if [[ ! -f "$REPO_ROOT/src/bash.wat" || ! -f "$BASH_RUNTIME_BUILDER" ||
+  if [[ ! -f "$REPO_ROOT/examples/bash.wat" || ! -f "$BASH_RUNTIME_BUILDER" ||
         ! -f "$C_ENGINE_BASH_GENERATOR" ||
         ! -f "$C_ENGINE_BASH_BROWSER_TEST" ]]; then
     show_message "C-engine Bash" \
@@ -1094,7 +1066,7 @@ generate_c_engine_core_tests() {
 run_test_group() {
   local group="$1"
   if [[ "$group" != spec && "$group" != tail && "$group" != tail-smoke &&
-        "$group" != isolation && "$group" != c-tail && "$group" != c-engine ]] && ! have_command node; then
+        "$group" != isolation && "$group" != c-engine ]] && ! have_command node; then
     show_message "Runtime tests" "Node.js is required to run the runtime test suites."
     return 1
   fi
@@ -1133,9 +1105,6 @@ run_test_group() {
     isolation)
       run_sandbox_isolation_tests || status=1
       ;;
-    c-tail)
-      run_c_tail_poc || status=1
-      ;;
     c-engine)
       generate_c_engine_tests || status=1
       ;;
@@ -1157,7 +1126,6 @@ run_test_group() {
       run_logged_test "Bash interactive smoke test" node "$REPO_ROOT/tests/bash-interactive-runtime.cjs" || status=1
       ;;
     all)
-      run_c_tail_poc || status=1
       generate_c_engine_tests || status=1
       run_official_core_tests || status=1
       run_sandbox_isolation_tests || status=1
@@ -1190,7 +1158,6 @@ test_suite_menu() {
       "Tests run locally against the native, sequential, and CPS interpreters." \
       28 88 12 \
       all "Run official core, DIY POSIX, libc, and Bash suites" \
-      c-tail "Build native/browser C tail-call proof and benchmark" \
       c-engine "Build C engine and run relaxed-SIMD spec tests" \
       c-engine-core "Generate/run C engine official core WAST dashboard" \
       spec "Run the official WebAssembly core suite" \
@@ -1203,7 +1170,7 @@ test_suite_menu() {
       log "Show the last test log" \
       back "Return to the main menu" 3>&1 1>&2 2>&3)" || return 0
     case "$choice" in
-      all|c-tail|c-engine|c-engine-core|spec|isolation|tail|tail-smoke|posix|libc|bash) run_test_group "$choice" || true ;;
+      all|c-engine|c-engine-core|spec|isolation|tail|tail-smoke|posix|libc|bash) run_test_group "$choice" || true ;;
       log)
         if [[ -s "$TEST_LOG" ]]; then
           whiptail --title "Last test log" --textbox "$TEST_LOG" 28 100
@@ -1254,7 +1221,6 @@ main_menu() {
     choice="$(whiptail --title "OCaml to WebAssembly" --menu \
       "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 30 94 14 \
       compile "Compile the OCaml interpreter to Wasm" \
-      c-tail "Build native/browser C tail-call proof and benchmark" \
       c-engine "Build C engine and run relaxed-SIMD spec tests" \
       c-html "Generate full C-engine browser dashboard (OCaml layout)" \
       c-bash "Generate self-contained C-engine Bash page" \
@@ -1270,7 +1236,6 @@ main_menu() {
 
     case "$choice" in
       compile) compile_interpreter || true ;;
-      c-tail) run_test_group c-tail || true ;;
       c-engine) generate_c_engine_tests || true ;;
       c-html) generate_c_engine_dashboard_html || true ;;
       c-bash) generate_c_engine_bash_html || true ;;
@@ -1318,7 +1283,6 @@ main() {
     --build-libc) build_waste_libc ;;
     --generate-html) generate_browser_test_html ;;
     --generate-bash-html) generate_bash_html ;;
-    --c-tail-poc) run_test_group c-tail ;;
     --c-engine-tests)
       : >"$TEST_LOG"
       c_engine_status=0

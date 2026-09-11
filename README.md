@@ -1,270 +1,101 @@
 # WASTE
 
-Webassembly Threading Environment is a browser targeted webassembly implementation
-that provides threading functionality.  This implementation compiles into webassembly
-so that it can be ran in a browser.  The nested approach allows for the waste
-implementation to provide features that aren't available in the browser.  It allows
-for threading and for process yielding and restarting without use of asyncify.
+Webassembly Threading Environment is webassembly implementation targeting web browsers
+that provides threading functionality.  It compiles to webassembly that can be 
+ran in a browser's webassembly module.  The nested approach allows for the waste
+implementation to provide features that aren't available in the browser.  
+It allows for threading and for process yielding and restarting without use of asyncify.
 
-## Runtime direction
+## Webassembly terms
 
-The OCaml interpreter established the specification oracle, cooperative
-scheduler, POSIX model, and browser testing harness. WASTE is now incrementally
-porting the production execution path to a repository-owned C engine compiled
-to WebAssembly. The C engine will use predecoded fixed-width instructions,
-numeric PCs, reusable frames, explicit instruction fuel, and an allocation-free
-tail-call path. OCaml remains available for differential testing until the C
-engine passes each declared compatibility gate.
+.wasm files are binary files that contain webassembly op-codes and can be ran by a web assembly machine
 
-The same migration adds a reentrant Flex/Bison front end. It will translate WAT
-to canonical binary in two passes, initially into a separate arena and later
-with guarded in-place compaction. Known assets such as `src/bash.wat` can be
-assembled while generating the static HTML; runtime parsing remains available
-for uploaded input. The architecture, delivery phases, test gates, cutover, and
-rollback rules are defined in
-[docs/c-engine-port-plan.md](docs/c-engine-port-plan.md).
-The current `src/` code provides binary decoding, lookup, validation, and
-disassembly foundations; its `execute.c` does not yet execute guest opcodes.
+.wat files are text files that are able to be converted directly to a .wasm file
 
-The C design distinguishes engine-global immutable code, isolated test or
-application sandboxes, POSIX processes, and threads. Independently scheduled
-`.wast` files receive fresh host imports and mutable module stores. Processes
-receive private address spaces (copied by `fork` until COW is implemented),
-while threads within a process share memory. Explicit WebAssembly imports may
-still alias memory between modules inside one address space.
+.wast files are text files that are for scripting.  These are meant to be ran in a streaming mode where if an error occurs, the execution will continue.  The wasm specification
+is encoded in several wast files, so in order to run the spec tests directly an
+implementation must be able to execute .wast files.
 
-### C tail-call proof of concept
+## POSIX environment
 
-The first C execution slice is under `src/c-engine/`. It deliberately supports
-only enough binary decoding and execution for direct and reference tail-call
-counters. Tail transfers replace the current function, argument, and numeric PC
-without pushing a frame or allocating in the run loop.
+This project is evolving towards a POSIX environment that can run in the browser.
+Because of the sandbox nature of the browser it won't be able to offer an entire
+POSIX environment.  The problem can be understood by the example of the POSIX socket
+library.  Web browsers do not have the ability to create raw sockets.  The best they can
+do is to create websockets.  So a complete POSIX environment can't exist within a
+browser.  This project recognizes 3 categories of posix libraries:
 
-Run the native five-million-transfer gate and generate its static browser page:
+1. Pure computation - string, math, conversion, formatting.  Entirely self-contained
+in C, no environment interaction
 
-```sh
-./start.sh --c-tail-poc
-```
+2. Emulatable environment - memory allocation, file I/O, clock, signal.  Require an
+an action from the environment but can be emulated in-memory (VFS, virtual process,
+virtual clock)
 
-The output page is `build/c-tail-poc/tail-call-poc.html`. This proof is not a
-general Wasm implementation and must not be used to bypass the staged feature
-and conformance gates in the C port plan.
+3. Physical hardware - sockets, serial, USB.  Require control over a physical NIC, 
+serial or USB port.
 
-The first Firefox run sustained 4.46 million `return_call` and 10.75 million
-`return_call_ref` transfers per second with one frame and no run-loop
-allocations. See [docs/c-engine-handoff.md](docs/c-engine-handoff.md) for the
-measured baseline, current limitations, and next implementation sequence.
+Categories 1 and 2 can run in the browser, but category 3 can't.  The idea for
+the implementation of 3 is to have a peer server hosted on the machine that is able 
+to handle the category 3 functionality.  It would be controlled from the browser over 
+a websocket connection.
 
-## Compile the OCaml interpreter to WebAssembly
+## Development Timeline
 
-This remains the current runnable implementation and the reference used to
-evaluate the C port.
+This started as an exploratory project in 2024.  Originally, I was looking
+at the fantastic wasm3 project (https://github.com/wasm3/wasm3).  While looking
+through the comments I saw Volodymyr briefly mention using asyncify to add threading
+into wasm3.  I put together a small proof of concept compiling wasm3 with clang
+to a wasm target and then asyncifying the webassembly.  The wasm3 interpreter
+was then able to run a simple sleep program (that wasn't asyncified) to show that
+asyncify may only be needed on the implementation and not on the execution target.
 
-Run the dependency-first terminal wizard:
+I was interested trying to get bash running in the browser, so I had compiled a
+bash wasm target, but I ran into a major hangup with the signal handling that
+bash needs.  wasm3 is highly optimized for speed and as a result its architecture
+does not lend itself to the execution framing needed for signal handling.
 
-```sh
-./start.sh
-```
+The reference OCaml interpreter has an execution model that lends itself to
+signal handling much better than wasm3 and I had poked at it a little bit, but
+I did not have very much experience with OCaml, which was hindering the progress.
+I had started working on building a C based wasm implementation to handle this, getting
+to the point of writing a wasm disassembler which could parse the op codes.  The
+development just stalled out at that point.
 
-On Omarchy/Arch, the system prerequisites are:
+August 2026 I decided to get a Claude and Codex subscription and try them out on
+this large project and really go to town on this project.
 
-```sh
-sudo pacman -S --needed git opam bubblewrap base-devel binaryen libnewt
-```
+I had the agents build a patch file to apply to the OCaml reference interpreter
+which inject a threading environment onto it.  This is able to run all the spec
+tests in parallel.  It doesn't really run any faster, but the tests will start
+finishing about the same time.  The OCaml implementation does poorly with the
+tail call functions.  After trying to performance tweak the return call functions
+would take about 60 seconds to complete.
 
-The wizard creates an isolated opam switch named `waste-wasm` using OCaml 5.3.0
-and installs Dune, Menhir, `wasm_of_ocaml-compiler`, `js_of_ocaml`, and
-`js_of_ocaml-ppx`. Binaryen must provide `wasm-opt` version 119 or newer.
+I got the bash prompt to run through the OCaml interpreter.  Initially it would
+take 26 seconds to display, after some performance tweaks I was able to get it
+down to 6 seconds, but that was much too slow.
 
-The compile command builds from a temporary overlay, so it does not edit or
-dirty the spec submodule. Its output is written to:
+I put together a small proof of concept running a c-engine based frame system to
+run the return call functions.  This was able to complete in under a seconds, compared
+to the 60 seconds in OCaml, so I decided to try to build out a full implementation.
 
-```text
-build/ocaml-wasm/dist/wasm_cli.bc.wasm.js
-build/ocaml-wasm/dist/wasm_cli.bc.wasm.assets/
-build/ocaml-wasm/dist-threaded/wasm_cli.bc.wasm.js
-build/ocaml-wasm/dist-threaded/wasm_cli.bc.wasm.assets/
-```
+After draining several AI weekly usage alotments I was able to put together a
+flex/bison based parser for .wat and .wast along with a .wasm execution engine.
+This is able to complete the return call functions in seconds instead of minutes.
+It is able to get to the bash prompt in 300ms instead of 6 seconds.  This is
+fast enough to be practical.
 
-The `dist` interpreter preserves the original direct build. The
-`dist-threaded` interpreter uses the CPS effect backend required to suspend and
-resume evaluator continuations. The browser dashboard embeds the CPS artifact
-and controls how many logical test tasks may be runnable at once.
+## TUI
 
-The most recent build transcript is written to `build.log` in the repository
-root, including dependency failures and the Dune compiler output.
+Leveraging the AI I have created a TUI that can be started by running `./start.sh`
+It has a pre-check to ensure that all the required tools are installed then it
+launches a menu where specific compilations can be performed.  This allows for
+spec-testing the OCaml impelementation and the waste engine.  Generating a bash
+shell static HTML using OCaml and C-engine, and running unit tests on the compiled
+code.
 
-The main menu also manages `submodules/wasm-spec-i31-int32.patch`. This optional
-Wasm32 compatibility patch removes assumptions that an OCaml `int` is wider
-than 32 bits. It preserves unsigned i31 and decoded u32 values, prevents
-alignment-shift overflow, and rejects unrepresentable local counts before they
-trigger an enormous allocation. The menu reports the patch as `available`,
-`applied`, or `conflict` and provides confirmed apply and revert operations.
-The `--apply-i31` and `--revert-i31` names are retained for compatibility with
-the original i31-only version of the patch.
-Apply and revert affect source used by the next compilation; they do not replace
-already-generated files in `build/ocaml-wasm/dist` until you compile again.
+I have only tested it on Omarchy / Arch.  Other Linux distros will need some tweaks 
+to get it to work.  It has a secondary mode where you can feed it arguments to 
+execute specific components. 
 
-Useful non-interactive commands are:
-
-```sh
-./start.sh --check
-./start.sh --install-deps
-./start.sh --compile
-./start.sh --build-libc
-./start.sh --generate-html
-./start.sh --generate-bash-html
-./start.sh --patch-status
-./start.sh --apply-i31
-./start.sh --revert-i31
-./start.sh --update
-```
-
-The **Generate embedded browser test dashboard** entry creates the self-contained
-`build/ocaml-wasm/browser-tests.html`. It embeds the compiled OCaml Wasm runtime
-and every source `.wast` file under `submodules/wasm-spec/test`, groups tests by their
-source directory, and provides Run, Test module, and Test all controls with live
-pass/fail indicators. Each result shows its elapsed time, and the header shows
-the cumulative time for completed tests. A Download results button exports a
-JSON report with the summary, timings, exit codes, captured output, and errors.
-If the shared cooperative worker aborts, tests it never reported are marked
-aborted with no invented duration rather than counted as individual failures.
-Test all records and displays its local start and finish times; both timestamps
-are included in the downloaded report. Test all runs each displayed directory
-group in order. Legacy exception groups are highlighted as unsupported and are
-excluded from Test all, while remaining available for explicit runs. All custom
-annotation handlers are enabled for browser tests. Generated compiler artifacts
-under test `_output` directories are excluded from discovery.
-
-The **Generate self-contained WASTE Bash page** entry creates
-`build/ocaml-wasm/bash.html`. It embeds the CPS interpreter, the relinked Bash
-and waste-libc binaries, and their shared runtime namespace in one file that can
-be opened directly with `file://`. It starts one persistent
-`bash --norc --noediting -i` process and feeds submitted lines into the OCaml
-virtual terminal, so shell state such as the current directory survives between
-commands. The page provides instruction-quantum control, terminal output,
-pause/resume, signal, restart, and worker-stop controls. Set
-`WASTE_BASH_INSTRUCTION_QUANTUM` to change the generator's default quantum.
-Generation validates the complete relinked launch script with the native OCaml
-reference interpreter and embeds SHA-256 identities for the launch source, CPS
-loader, and interpreter Wasm. The browser skips duplicate runtime validation
-only when all three identities match; otherwise it validates normally.
-Startup is intentionally visible and can be slow: the browser is decoding,
-validating, and interpreting Bash inside the OCaml interpreter; restarting the
-worker repeats that work. Enable **profile startup phases** before restarting to
-print cumulative millisecond timestamps for parsing, decoding, validation,
-import resolution, detailed evaluator initialization, registration, and
-invocation directly in the terminal. It also reports exact evaluator-step and
-slice timings plus an opcode-category sample taken at each completed quantum;
-sampling adds no branch to the ordinary instruction path. Browser markers
-additionally report the first-prompt duration from both `Date.now()` and
-`performance.now()`, plus their difference and the browser's local timestamp.
-
-The CPS evaluator keeps execution focused inside active labels, call frames,
-exception handlers, and signal frames until they complete or the scheduler
-quantum expires. This avoids rebuilding and revisiting the same administrative
-wrapper for every inner guest instruction while preserving pause, resume, and
-signal delivery at quantum boundaries.
-
-The patched evaluator executes `memory.fill`, `memory.copy`, `memory.init`,
-`table.fill`, `table.copy`, and `table.init` as bounds-checked runtime loops.
-Each remains one scheduler-visible guest instruction; overlapping copies retain
-memmove behavior without allocating recursive interpreter instruction lists.
-
-## Guest libc
-
-`libc/waste-libc.wat` and `libc/waste-libc-helpers.c` form the guest-side libc
-used by Bash. The merged module owns and exports application linear memory. Its
-`sbrk` implementation provides a dlmalloc-compatible MORECORE boundary and
-expands through a series of `memory.grow 1` calls. The current boundary-tag
-allocator exports `malloc`, `calloc`, `realloc`, `free`, `sbrk`, and
-`__errno_location`.
-
-The helper layer adds memory-backed `FILE` streams, wasm32 variadic formatting,
-UTF-8 multibyte and wide-character conversion, C.UTF-8 locale behavior, and
-configurable in-memory identity, passwd, group, and service records. It also
-provides Bash's string, conversion, compiler-runtime, sorting, matching, basic
-regex, resource-limit, UTC time-formatting, terminal, and diagnostic helpers.
-Together with the OCaml host, its exports cover every named import currently in
-`src/bash.wat`. `tools/build-bash-runtime.py` relinks Bash and libc to a neutral
-`waste-runtime` owner for their shared memory and function table, then registers
-libc as an overlay on the OCaml host's `env` namespace.
-
-Operations that require evaluator state deliberately return `ENOSYS` here,
-including directory traversal, `execve`, descriptor readiness, dynamic loading,
-and direct socket creation. They must cross the existing OCaml process/VFS layer
-or the optional WebSocket broker rather than create a second, inconsistent OS
-model inside libc. The deterministic entropy generator is for repeatable tests;
-a production adapter must seed it from browser cryptography.
-
-Build `build/waste-libc/waste-libc.wasm` and regenerate its WAST fixture with:
-
-```sh
-./start.sh --build-libc
-```
-
-Libc tests appear in the dashboard's `libc-test` group and can also run
-against both generated interpreters:
-
-```sh
-node tests/libc-test/libc-runtime.cjs
-node tests/libc-test/libc-runtime.cjs threaded
-node tests/libc-test/allocator-native.cjs
-```
-
-The dashboard offers thread-count choices of **1**, **#tests** (derived from
-all supported embedded suites), or a custom positive integer. Test all passes
-every supported script to one OCaml Wasm interpreter instance. The interpreter
-starts at most the selected number of isolated test sandboxes and backfills from
-the ordered queue as they finish. Each sandbox retains its own continuation and
-runner state. The instruction-quantum input controls how many evaluator steps
-a runnable task receives before it yields. The default is 10,000 and can also be set during
-non-interactive generation with `WASTE_INSTRUCTION_QUANTUM`.
-
-This is deterministic cooperative scheduling on one browser execution thread,
-not multicore WebAssembly shared-memory threading. The thread-count control is
-currently a concurrency limit for isolated test sandboxes. Logical tests share
-only the OCaml implementation heap and immutable interpreter code; their host
-imports, WebAssembly module instances, memories, tables, script registries,
-POSIX kernels, stacks, and program counters remain isolated. Modules within one
-test may still share explicitly imported memory as required by the specification.
-Because `core/custom.wast` intentionally triggers the accepted `-c custom`
-handler failure, and CPS turns that recursive handler path into a non-terminating
-loop rather than a promptly catchable host stack overflow, the cooperative runner
-records it as the known failure after all runnable test sandboxes finish. Its
-source is included in the batch, but the recursive handler is not entered.
-
-The **Safe pull/rebase and submodule update** menu entry temporarily removes the
-managed Wasm32 patch, runs `git pull --rebase --autostash`, updates initialized
-submodules, and reapplies the patch only when the updated spec does not already
-contain it. It refuses to proceed over unmanaged submodule changes. Its latest
-transcript is stored in `update.log`.
-
-The generated dashboard remains a single, self-contained HTML file that can be
-opened directly with `file://`. **Pause**, **Resume**, and **Send signal** use
-worker messages: the CPS interpreter returns to the worker event loop after
-each instruction quantum, then continues with the same evaluator continuation.
-Signals enter a versioned command ring at quantum boundaries. Signals produced
-or unmasked by a guest syscall are injected directly before guest execution
-continues. No server, cross-origin isolation, `SharedArrayBuffer`, or browser
-flag is required. The signal and non-local-jump ABI, verification commands, and
-remaining POSIX boundary are documented in
-[docs/posix-runtime.md](docs/posix-runtime.md).
-
-The POSIX kernel integration probe runs against both generated runtimes:
-
-```sh
-node tests/diy-posix-test/posix-kernel-runtime.cjs
-node tests/diy-posix-test/posix-kernel-runtime.cjs threaded
-```
-
-The **Run runtime test suites** wizard entry runs the official WebAssembly core
-suite against the native interpreter, the sequential and threaded DIY POSIX
-and libc probes, and the CPS Bash smoke test. It records every suite in
-`test.log` and continues through later suites after a failure.
-
-The `diy-posix-test` suite validates WASTE's interpreter ABI and is embedded in
-the browser dashboard alongside the WebAssembly spec tests. It is not an
-official POSIX conformance suite. Test sourcing and the browser/emulation/
-WebSocket-broker policy are documented in
-[docs/posix-runtime.md](docs/posix-runtime.md).

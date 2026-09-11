@@ -2771,7 +2771,7 @@ index 000000000..6e6acabf5
 +    if how < 0l || how > 2l then return_i32 (-1l) else return_i32 0l
 +  | _ -> invalid_arg "sigprocmask"
 +
-+(* wasm32 glibc layout used by src/bash.wat:
++(* wasm32 glibc layout used by examples/bash.wat:
 +   sa_handler +0, sa_mask +4 (128 bytes), sa_flags +132. *)
 +let sigaction state inst = function
 +  | [signal_value; action_value; old_value] ->

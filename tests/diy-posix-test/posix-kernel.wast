@@ -1,5 +1,5 @@
 ;; diy-posix-test kernel integration tests. These deliberately use the same env
-;; ABI as src/bash.wat and run under --schedule so blocking syscalls and fork
+;; ABI as examples/bash.wat and run under --schedule so blocking syscalls and fork
 ;; are serviced by the cooperative process scheduler.
 (module
   (import "env" "open" (func $open (param i32 i32 i32) (result i32)))

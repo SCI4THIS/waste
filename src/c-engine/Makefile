@@ -6,11 +6,7 @@ WASM_LD_LIB ?= $(if $(filter ../../build/toolchain/%,$(WASM_LD)),../../build/too
 CPPFLAGS ?=
 CFLAGS ?= -O3 -std=c11 -Wall -Wextra -Wpedantic -Werror
 FREESTANDING_FLAGS := -Ifreestanding -fno-builtin -fno-stack-protector
-BUILD_DIR ?= ../../build/c-tail-poc
-TARGET := $(BUILD_DIR)/waste-tail-poc
-WASM_TARGET := $(BUILD_DIR)/waste-tail-poc.wasm
-SOURCES := main.c waste_tail.c freestanding_lib.c freestanding_native.c
-HEADERS := waste_tail.h
+BUILD_DIR ?= ../../build/c-engine
 
 # WAST runner targets
 WAST_BUILD_DIR ?= $(BUILD_DIR)
@@ -23,8 +19,8 @@ WAST_TAB_NATIVE_O := $(WAST_BUILD_DIR)/wast.tab.native.o
 WAST_LEX_NATIVE_O := $(WAST_BUILD_DIR)/wast.lex.native.o
 WAST_TAB_WASM_O := $(WAST_BUILD_DIR)/wast.tab.wasm.o
 WAST_LEX_WASM_O := $(WAST_BUILD_DIR)/wast.lex.wasm.o
-WAST_SOURCES := main_wast.c waste_exec.c wast_encode.c wast_runner.c wast_stream.c wast_general.c wast_simd.c
-WAST_HEADERS := wast_types.h wast_encode.h waste_exec.h wast_runner.h wast_stream.h wast_general.h wast_simd.h
+WAST_SOURCES := main_wast.c waste_exec.c wast_encode.c wast_runner.c wast_stream.c wast_simd.c
+WAST_HEADERS := wast_types.h wast_encode.h waste_exec.h wast_runner.h wast_stream.h wast_simd.h
 WAST_GENERATED_CFLAGS ?= -O2 -std=c11 -Wall -Wextra -Wno-unused-but-set-variable
 WAST_LEX_CFLAGS ?= -O2 -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -Wno-sign-compare
 
@@ -36,32 +32,7 @@ EXTERN_PROVIDER_WASM := $(WAST_BUILD_DIR)/extern-provider.wasm
 EXTERN_CONSUMER_WASM := $(WAST_BUILD_DIR)/extern-consumer.wasm
 I32_SMOKE_TARGET := $(WAST_BUILD_DIR)/i32-smoke-sanitize
 
-.PHONY: all browser clean sanitize wast-native wast-browser wast-mmap-test i32-smoke
-
-all: $(TARGET)
-
-$(TARGET): $(SOURCES) $(HEADERS)
-	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(FREESTANDING_FLAGS) -nostdlib -static $(SOURCES) -o $@
-
-sanitize:
-	mkdir -p $(BUILD_DIR)
-	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
-		-fsanitize=address,undefined -fno-omit-frame-pointer \
-		main.c waste_tail.c -lm -o $(BUILD_DIR)/waste-tail-poc-sanitize
-
-browser: $(WASM_TARGET)
-
-$(WASM_TARGET): browser.c waste_tail.c $(HEADERS)
-	mkdir -p $(BUILD_DIR)
-	clang --target=wasm32 -O3 -std=c11 -Wall -Wextra -Wpedantic -Werror \
-		-fno-builtin -nostdlib -Ifreestanding -c browser.c -o $(BUILD_DIR)/browser.o
-	clang --target=wasm32 -O3 -std=c11 -Wall -Wextra -Wpedantic -Werror \
-		-fno-builtin -nostdlib -Ifreestanding -c waste_tail.c -o $(BUILD_DIR)/waste_tail.o
-	clang --target=wasm32 -O3 -std=c11 -Wall -Wextra -Wpedantic -Werror \
-		-fno-builtin -nostdlib -Ifreestanding -c freestanding_lib.c -o $(BUILD_DIR)/freestanding_lib.o
-	env LD_LIBRARY_PATH=$(WASM_LD_LIB) $(WASM_LD) --no-entry --export-memory --initial-memory=262144 \
-		--max-memory=67108864 $(BUILD_DIR)/browser.o $(BUILD_DIR)/waste_tail.o $(BUILD_DIR)/freestanding_lib.o -o $@
+.PHONY: clean wast-native wast-browser wast-mmap-test i32-smoke
 
 # ---- WAST native runner ----
 
@@ -73,12 +44,12 @@ WAST_MMAP_TEST := $(WAST_BUILD_DIR)/wast-mmap-test
 
 wast-mmap-test: $(WAST_MMAP_TEST)
 
-$(WAST_MMAP_TEST): wast_mmap_test.c wast_runner.c wast_encode.c waste_exec.c wast_stream.c wast_general.c wast_simd.c \
+$(WAST_MMAP_TEST): wast_mmap_test.c wast_runner.c wast_encode.c waste_exec.c wast_stream.c wast_simd.c \
 		freestanding_lib.c freestanding_native.c \
 		$(WAST_HEADERS) $(WAST_TAB_NATIVE_O) $(WAST_LEX_NATIVE_O)
 	mkdir -p $(WAST_BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(FREESTANDING_FLAGS) -I. -I$(WAST_GEN_DIR) \
-		wast_mmap_test.c wast_runner.c wast_encode.c waste_exec.c wast_stream.c wast_general.c wast_simd.c \
+		wast_mmap_test.c wast_runner.c wast_encode.c waste_exec.c wast_stream.c wast_simd.c \
 		freestanding_lib.c freestanding_native.c \
 		$(WAST_TAB_NATIVE_O) $(WAST_LEX_NATIVE_O) -nostdlib -static -o $@
 
@@ -150,7 +121,7 @@ WASM_CC_FLAGS := --target=wasm32 -O2 -std=c11 -Wall -Wextra \
 	-fno-builtin -DYYDEBUG=0 -nostdlib \
 	-I. -Ifreestanding
 
-$(WAST_WASM_TARGET): browser_wast.c freestanding_lib.c waste_exec.c wast_general.c wast_runner.c wast_encode.c wast_stream.c wast_simd.c \
+$(WAST_WASM_TARGET): browser_wast.c freestanding_lib.c waste_exec.c wast_runner.c wast_encode.c wast_stream.c wast_simd.c \
 		$(WAST_TAB_C) $(WAST_LEX_C) $(WAST_HEADERS) waste_exec.h
 	mkdir -p $(WAST_BUILD_DIR)
 	clang $(WASM_CC_FLAGS) \
@@ -159,8 +130,6 @@ $(WAST_WASM_TARGET): browser_wast.c freestanding_lib.c waste_exec.c wast_general
 		-c browser_wast.c -o $(WAST_BUILD_DIR)/browser_wast.o
 	clang $(WASM_CC_FLAGS) \
 		-c waste_exec.c -o $(WAST_BUILD_DIR)/waste_exec.o
-	clang $(WASM_CC_FLAGS) \
-		-c wast_general.c -o $(WAST_BUILD_DIR)/wast_general.o
 	clang $(WASM_CC_FLAGS) \
 		-c wast_runner.c -o $(WAST_BUILD_DIR)/wast_runner.o
 	clang $(WASM_CC_FLAGS) \
@@ -179,15 +148,13 @@ $(WAST_WASM_TARGET): browser_wast.c freestanding_lib.c waste_exec.c wast_general
 		--initial-memory=33554432 --max-memory=268435456 -z stack-size=8388608 \
 		$(WAST_BUILD_DIR)/freestanding_lib.o \
 		$(WAST_BUILD_DIR)/browser_wast.o $(WAST_BUILD_DIR)/waste_exec.o \
-		$(WAST_BUILD_DIR)/wast_general.o $(WAST_BUILD_DIR)/wast_runner.o \
+		$(WAST_BUILD_DIR)/wast_runner.o \
 		$(WAST_BUILD_DIR)/wast_encode.o $(WAST_BUILD_DIR)/wast_stream.o \
 		$(WAST_BUILD_DIR)/wast_simd.o \
 		$(WAST_TAB_WASM_O) $(WAST_LEX_WASM_O) \
 		-o $(WAST_WASM_TARGET)
 
 clean:
-	rm -f $(TARGET) $(WASM_TARGET) $(BUILD_DIR)/waste-tail-poc-sanitize \
-		$(BUILD_DIR)/browser.o $(BUILD_DIR)/waste_tail.o
 	rm -f $(WAST_TARGET) $(WAST_WASM_TARGET) \
 		$(WAST_BUILD_DIR)/browser_wast.o $(WAST_BUILD_DIR)/waste_exec.o
 	rm -rf $(WAST_GEN_DIR)

@@ -1,6 +1,6 @@
 ;; Appended to a named copy of libc/waste-libc.wat by
 ;; tools/build-waste-libc.py. This client imports the same memory and functions
-;; that a future relinked src/bash.wat will consume.
+;; that a future relinked examples/bash.wat will consume.
 (register "waste-libc" $waste_libc)
 
 (module $allocator_tests

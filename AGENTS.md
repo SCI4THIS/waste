@@ -2,12 +2,10 @@
 
 ## Project Structure & Module Organization
 
-The developing C engine is in `src/`, including `src/bash.wat`; generated
-reference material is under `src/gen/`. Follow `docs/c-engine-port-plan.md`: C
+The developing C engine is in `src/c-engine/`; compiled Bash binaries are in
+`examples/`. Follow `docs/c-engine-port-plan.md`: C
 is the planned browser runtime, while the official OCaml interpreter in
 `submodules/wasm-spec` remains the differential oracle during migration.
-Read `docs/c-engine-handoff.md` before extending the C proof; it records the
-supported subset, verified Firefox baseline, reproduction gate, and next steps.
 Represent repository-owned OCaml changes in
 `submodules/wasm-spec-i31-int32.patch`, never in submodule history. Dashboard
 code is in `tools/`, the guest libc is in `libc/`, architecture notes are in
@@ -33,11 +31,6 @@ document; broker use is optional.
 - `./start.sh --build-libc`: build the guest allocator module and test fixture.
 - `./start.sh --generate-html`: generate the offline dashboard.
 - `./start.sh --generate-bash-html`: generate the offline WASTE Bash page.
-- `./build.sh`: extract legacy grammar fragments into `gen/`.
-- `(cd src && ./m.sh)`: build the current native C prototype.
-- `./start.sh --c-tail-poc`: build and benchmark the bounded C tail-call proof
-  and generate its self-contained browser page.
-- `tests/c-tail-poc/run.sh 5000000`: run direct and reference tail-call gates.
 - `node tests/diy-posix-test/posix-{kernel,control}-runtime.cjs [threaded]`:
   run DIY POSIX probes.
 - `node tests/libc-test/libc-runtime.cjs [threaded]`: run guest allocator probes.
@@ -77,9 +70,7 @@ Keep engine-global data immutable. Give each scheduled test an isolated host
 store and kernel; model processes with private address spaces and threads with
 shared process memory. Preserve explicit imported-memory aliasing within one
 test sandbox.
-Treat `src/c-engine/` as the new port and the older flat `src/*.c` files as
-reference groundwork. Do not broaden the proof subset without a fixture and a
-documented delivery-phase gate.
+Treat `src/c-engine/` as the production engine.
 
 ## Commit & Pull Request Guidelines
 
