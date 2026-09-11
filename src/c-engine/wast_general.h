@@ -8,10 +8,8 @@
 #ifndef WAST_GENERAL_H
 #define WAST_GENERAL_H
 
-#ifndef WASTE_FREESTANDING
 #include <stddef.h>
 #include <stdint.h>
-#endif
 
 /* ---- Opaque instance ---- */
 typedef struct gen_instance gen_instance;

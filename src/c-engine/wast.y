@@ -374,11 +374,9 @@ static int captures_validation_error(wast_script *script) {
 }
 
 static void report_validation_error(wast_script *script, const char *message) {
-#ifndef WASTE_FREESTANDING
     if (getenv("WAST_DEBUG_VALIDATION"))
         fprintf(stderr, "parser validation group=%d: %s\n", g_cur_group,
                 message);
-#endif
     if (captures_validation_error(script)) {
         wast_group *group = cur_group(script);
         if (!group->has_validation_error) {
@@ -506,12 +504,10 @@ static void append_instance_arg(wast_script *script, const char *arg) {
 
 static void finish_module_instance(wast_script *script) {
     wast_module *module = &cur_group(script)->module;
-#ifndef WASTE_FREESTANDING
     if (getenv("WAST_DEBUG_INSTANCE"))
         fprintf(stderr, "instance group=%d argc=%d arg0='%s' arg1='%s'\n",
                 g_cur_group, g_instance_arg_count, g_instance_args[0],
                 g_instance_args[1]);
-#endif
     if (g_instance_arg_count == 1) {
         snprintf(module->instance_of, sizeof(module->instance_of), "%s",
                  g_instance_args[0]);
@@ -927,7 +923,6 @@ static void apply_func_fixups(wast_script *script) {
             if (global->is_import) continue;
             constexpr_check check = check_global_constexpr(script, global);
             if (check != CONSTEXPR_VALID) {
-#ifndef WASTE_FREESTANDING
                 if (getenv("WAST_DEBUG_CONSTEXPR")) {
                     fprintf(stderr, "constexpr group=%d global=%d type=%d check=%d types=%d funcs=%d func0_type=%d bytes=",
                             g_cur_group, i, (int)global->valtype, (int)check,
@@ -937,7 +932,6 @@ static void apply_func_fixups(wast_script *script) {
                         fprintf(stderr, "%02x", global->init_expr[j]);
                     fputc('\n', stderr);
                 }
-#endif
                 report_validation_error(script,
                     check == CONSTEXPR_NOT_CONSTANT ?
                     "constant expression required" : "type mismatch");

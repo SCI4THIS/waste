@@ -1,16 +1,8 @@
 #include "waste_tail.h"
 
 #include <stdbool.h>
-#ifndef WASTE_FREESTANDING
 #include <stdlib.h>
 #include <string.h>
-#else
-void *calloc(size_t count, size_t size);
-void free(void *pointer);
-void *memcpy(void *destination, const void *source, size_t count);
-int memcmp(const void *left, const void *right, size_t count);
-int strcmp(const char *left, const char *right);
-#endif
 
 enum {
   WASTE_MAX_TYPES = 64,

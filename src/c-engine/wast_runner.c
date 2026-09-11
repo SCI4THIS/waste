@@ -1329,11 +1329,7 @@ static int wast_parse_bytes_mode(const char *bytes, size_t length,
         return -1;
     }
 
-#ifndef WASTE_FREESTANDING
-    yydebug = getenv("WAST_YYDEBUG") != NULL;
-#else
     yydebug = 0;
-#endif
 
     /* Detect inline module sugar: bare module fields without (module ...) wrapper */
     int inline_mod = is_inline_module(bytes, length);
@@ -1391,7 +1387,6 @@ int wast_parse_bytes(const char *bytes, size_t length, wast_script *script) {
     return wast_parse_bytes_mode(bytes, length, script, 0);
 }
 
-#ifndef WASTE_FREESTANDING
 int wast_parse_file(const char *path, wast_script *script) {
     memset(script, 0, sizeof(*script));
 
@@ -1425,7 +1420,6 @@ int wast_parse_file(const char *path, wast_script *script) {
     free(source);
     return rc;
 }
-#endif
 
 void wast_script_free(wast_script *script) {
     if (!script) return;

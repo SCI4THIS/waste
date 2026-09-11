@@ -5,10 +5,11 @@ WASM_LD ?= $(shell command -v wasm-ld 2>/dev/null || printf '%s' ../../build/too
 WASM_LD_LIB ?= $(if $(filter ../../build/toolchain/%,$(WASM_LD)),../../build/toolchain/usr/lib,)
 CPPFLAGS ?=
 CFLAGS ?= -O3 -std=c11 -Wall -Wextra -Wpedantic -Werror
+FREESTANDING_FLAGS := -Ifreestanding -fno-builtin -fno-stack-protector
 BUILD_DIR ?= ../../build/c-tail-poc
 TARGET := $(BUILD_DIR)/waste-tail-poc
 WASM_TARGET := $(BUILD_DIR)/waste-tail-poc.wasm
-SOURCES := main.c waste_tail.c
+SOURCES := main.c waste_tail.c freestanding_lib.c freestanding_native.c
 HEADERS := waste_tail.h
 
 # WAST runner targets
@@ -25,7 +26,7 @@ WAST_LEX_WASM_O := $(WAST_BUILD_DIR)/wast.lex.wasm.o
 WAST_SOURCES := main_wast.c waste_exec.c wast_encode.c wast_runner.c wast_stream.c wast_general.c wast_simd.c
 WAST_HEADERS := wast_types.h wast_encode.h waste_exec.h wast_runner.h wast_stream.h wast_general.h wast_simd.h
 WAST_GENERATED_CFLAGS ?= -O2 -std=c11 -Wall -Wextra -Wno-unused-but-set-variable
-WAST_LEX_CFLAGS ?= -O2 -std=c11 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -Wno-unused-function -Wno-unused-parameter -Wno-sign-compare
+WAST_LEX_CFLAGS ?= -O2 -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -Wno-sign-compare
 
 # WAST browser Wasm target
 WAST_WASM_TARGET := $(WAST_BUILD_DIR)/waste-wast.wasm
@@ -41,22 +42,26 @@ all: $(TARGET)
 
 $(TARGET): $(SOURCES) $(HEADERS)
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(SOURCES) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(FREESTANDING_FLAGS) -nostdlib -static $(SOURCES) -o $@
 
 sanitize:
-	$(MAKE) CFLAGS="-O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-omit-frame-pointer" \
-		TARGET="$(BUILD_DIR)/waste-tail-poc-sanitize"
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		main.c waste_tail.c -lm -o $(BUILD_DIR)/waste-tail-poc-sanitize
 
 browser: $(WASM_TARGET)
 
 $(WASM_TARGET): browser.c waste_tail.c $(HEADERS)
 	mkdir -p $(BUILD_DIR)
 	clang --target=wasm32 -O3 -std=c11 -Wall -Wextra -Wpedantic -Werror \
-		-fno-builtin -DWASTE_FREESTANDING -nostdlib -c browser.c -o $(BUILD_DIR)/browser.o
+		-fno-builtin -nostdlib -Ifreestanding -c browser.c -o $(BUILD_DIR)/browser.o
 	clang --target=wasm32 -O3 -std=c11 -Wall -Wextra -Wpedantic -Werror \
-		-fno-builtin -DWASTE_FREESTANDING -nostdlib -c waste_tail.c -o $(BUILD_DIR)/waste_tail.o
+		-fno-builtin -nostdlib -Ifreestanding -c waste_tail.c -o $(BUILD_DIR)/waste_tail.o
+	clang --target=wasm32 -O3 -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-fno-builtin -nostdlib -Ifreestanding -c freestanding_lib.c -o $(BUILD_DIR)/freestanding_lib.o
 	env LD_LIBRARY_PATH=$(WASM_LD_LIB) $(WASM_LD) --no-entry --export-memory --initial-memory=262144 \
-		--max-memory=67108864 $(BUILD_DIR)/browser.o $(BUILD_DIR)/waste_tail.o -o $@
+		--max-memory=67108864 $(BUILD_DIR)/browser.o $(BUILD_DIR)/waste_tail.o $(BUILD_DIR)/freestanding_lib.o -o $@
 
 # ---- WAST native runner ----
 
@@ -69,11 +74,13 @@ WAST_MMAP_TEST := $(WAST_BUILD_DIR)/wast-mmap-test
 wast-mmap-test: $(WAST_MMAP_TEST)
 
 $(WAST_MMAP_TEST): wast_mmap_test.c wast_runner.c wast_encode.c waste_exec.c wast_stream.c wast_general.c wast_simd.c \
+		freestanding_lib.c freestanding_native.c \
 		$(WAST_HEADERS) $(WAST_TAB_NATIVE_O) $(WAST_LEX_NATIVE_O)
 	mkdir -p $(WAST_BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -I. -I$(WAST_GEN_DIR) \
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(FREESTANDING_FLAGS) -I. -I$(WAST_GEN_DIR) \
 		wast_mmap_test.c wast_runner.c wast_encode.c waste_exec.c wast_stream.c wast_general.c wast_simd.c \
-		$(WAST_TAB_NATIVE_O) $(WAST_LEX_NATIVE_O) -lm -o $@
+		freestanding_lib.c freestanding_native.c \
+		$(WAST_TAB_NATIVE_O) $(WAST_LEX_NATIVE_O) -nostdlib -static -o $@
 
 # Generate Bison parser (tab.c and tab.h)
 $(WAST_TAB_C) $(WAST_TAB_H): wast.y
@@ -89,24 +96,25 @@ $(WAST_LEX_C): wast.l $(WAST_TAB_H)
 # Compile bison-generated parser (with relaxed warnings for generated code)
 $(WAST_TAB_NATIVE_O): $(WAST_TAB_C) $(WAST_TAB_H) $(WAST_HEADERS)
 	$(CC) $(CPPFLAGS) $(WAST_GENERATED_CFLAGS) \
-		-I. -I$(WAST_GEN_DIR) \
+		$(FREESTANDING_FLAGS) -I. -I$(WAST_GEN_DIR) \
 		-c $(WAST_TAB_C) -o $@
 
 # Compile flex-generated scanner (with relaxed warnings for generated code)
 $(WAST_LEX_NATIVE_O): $(WAST_LEX_C) $(WAST_TAB_H) $(WAST_HEADERS)
 	$(CC) $(CPPFLAGS) $(WAST_LEX_CFLAGS) \
-		-I. -I$(WAST_GEN_DIR) \
+		$(FREESTANDING_FLAGS) -I. -I$(WAST_GEN_DIR) \
 		-c $(WAST_LEX_C) -o $@
 
 # Compile the WAST runner
-$(WAST_TARGET): $(WAST_SOURCES) $(WAST_HEADERS) $(WAST_TAB_NATIVE_O) $(WAST_LEX_NATIVE_O)
+$(WAST_TARGET): $(WAST_SOURCES) freestanding_lib.c freestanding_native.c $(WAST_HEADERS) $(WAST_TAB_NATIVE_O) $(WAST_LEX_NATIVE_O)
 	mkdir -p $(WAST_BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) \
-		-I. -I$(WAST_GEN_DIR) \
+		$(FREESTANDING_FLAGS) -I. -I$(WAST_GEN_DIR) \
 		$(WAST_SOURCES) \
+		freestanding_lib.c freestanding_native.c \
 		$(WAST_TAB_NATIVE_O) \
 		$(WAST_LEX_NATIVE_O) \
-		-lm \
+		-nostdlib -static \
 		-o $(WAST_TARGET)
 
 # ---- WAST browser Wasm ----
@@ -139,12 +147,14 @@ $(I32_SMOKE_TARGET): ../../tests/c-engine-i32-smoke.c waste_exec.c wast_simd.c w
 		../../tests/c-engine-i32-smoke.c waste_exec.c wast_simd.c -lm -o $@
 
 WASM_CC_FLAGS := --target=wasm32 -O2 -std=c11 -Wall -Wextra \
-	-fno-builtin -DWASTE_FREESTANDING -DYYDEBUG=0 -nostdlib \
+	-fno-builtin -DYYDEBUG=0 -nostdlib \
 	-I. -Ifreestanding
 
-$(WAST_WASM_TARGET): browser_wast.c waste_exec.c wast_general.c wast_runner.c wast_encode.c wast_stream.c wast_simd.c \
+$(WAST_WASM_TARGET): browser_wast.c freestanding_lib.c waste_exec.c wast_general.c wast_runner.c wast_encode.c wast_stream.c wast_simd.c \
 		$(WAST_TAB_C) $(WAST_LEX_C) $(WAST_HEADERS) waste_exec.h
 	mkdir -p $(WAST_BUILD_DIR)
+	clang $(WASM_CC_FLAGS) \
+		-c freestanding_lib.c -o $(WAST_BUILD_DIR)/freestanding_lib.o
 	clang $(WASM_CC_FLAGS) \
 		-c browser_wast.c -o $(WAST_BUILD_DIR)/browser_wast.o
 	clang $(WASM_CC_FLAGS) \
@@ -167,6 +177,7 @@ $(WAST_WASM_TARGET): browser_wast.c waste_exec.c wast_general.c wast_runner.c wa
 		-c $(WAST_LEX_C) -o $(WAST_LEX_WASM_O)
 	env LD_LIBRARY_PATH=$(WASM_LD_LIB) $(WASM_LD) --no-entry --export-memory \
 		--initial-memory=33554432 --max-memory=268435456 -z stack-size=8388608 \
+		$(WAST_BUILD_DIR)/freestanding_lib.o \
 		$(WAST_BUILD_DIR)/browser_wast.o $(WAST_BUILD_DIR)/waste_exec.o \
 		$(WAST_BUILD_DIR)/wast_general.o $(WAST_BUILD_DIR)/wast_runner.o \
 		$(WAST_BUILD_DIR)/wast_encode.o $(WAST_BUILD_DIR)/wast_stream.o \

@@ -6,147 +6,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 
-/* ---- Freestanding stubs ---- */
-
-void *memcpy(void *dst, const void *src, size_t n) {
-    unsigned char *d = dst;
-    const unsigned char *s = src;
-    for (size_t i = 0; i < n; i++) d[i] = s[i];
-    return dst;
-}
-
-int memcmp(const void *a, const void *b, size_t n) {
-    const unsigned char *p = a, *q = b;
-    for (size_t i = 0; i < n; i++) {
-        if (p[i] != q[i]) return p[i] < q[i] ? -1 : 1;
-    }
-    return 0;
-}
-
-void *memset(void *dst, int c, size_t n) {
-    unsigned char *d = dst;
-    for (size_t i = 0; i < n; i++) d[i] = (unsigned char)c;
-    return dst;
-}
-
-int strcmp(const char *a, const char *b) {
-    while (*a && *a == *b) { a++; b++; }
-    return (unsigned char)*a - (unsigned char)*b;
-}
-
-size_t strlen(const char *s) {
-    size_t n = 0;
-    while (s[n]) n++;
-    return n;
-}
-
-char *strncpy(char *dst, const char *src, size_t n) {
-    size_t i = 0;
-    for (; i < n && src[i]; i++) dst[i] = src[i];
-    for (; i < n; i++) dst[i] = '\0';
-    return dst;
-}
-
-char *strcpy(char *dst, const char *src) {
-    char *d = dst;
-    while ((*d++ = *src++)) ;
-    return dst;
-}
-
-int strncmp(const char *a, const char *b, size_t n) {
-    for (size_t i = 0; i < n; i++) {
-        if (a[i] != b[i]) return (unsigned char)a[i] - (unsigned char)b[i];
-        if (a[i] == '\0') return 0;
-    }
-    return 0;
-}
-
-long strtol(const char *s, char **endptr, int base) {
-    const char *start = s;
-    long result = 0;
-    int negative = 0;
-    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
-    if (*s == '-') { negative = 1; s++; }
-    else if (*s == '+') { s++; }
-    if (base == 0) {
-        if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) { base = 16; s += 2; }
-        else if (s[0] == '0') { base = 8; }
-        else { base = 10; }
-    } else if (base == 16 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
-        s += 2;
-    }
-    const char *digits_start = s;
-    while (*s) {
-        int digit;
-        if (*s >= '0' && *s <= '9') digit = *s - '0';
-        else if (*s >= 'a' && *s <= 'f') digit = *s - 'a' + 10;
-        else if (*s >= 'A' && *s <= 'F') digit = *s - 'A' + 10;
-        else break;
-        if (digit >= base) break;
-        result = result * base + digit;
-        s++;
-    }
-    if (s == digits_start && endptr) { *endptr = (char *)start; return 0; }
-    if (endptr) *endptr = (char *)s;
-    return negative ? -result : result;
-}
-
-unsigned long strtoul(const char *s, char **endptr, int base) {
-    const char *start = s;
-    unsigned long result = 0;
-    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
-    if (*s == '+') s++;
-    if (base == 0) {
-        if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) { base = 16; s += 2; }
-        else if (s[0] == '0') { base = 8; }
-        else { base = 10; }
-    } else if (base == 16 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
-        s += 2;
-    }
-    const char *digits_start = s;
-    while (*s) {
-        int digit;
-        if (*s >= '0' && *s <= '9') digit = *s - '0';
-        else if (*s >= 'a' && *s <= 'f') digit = *s - 'a' + 10;
-        else if (*s >= 'A' && *s <= 'F') digit = *s - 'A' + 10;
-        else break;
-        if (digit >= base) break;
-        result = result * (unsigned long)base + (unsigned long)digit;
-        s++;
-    }
-    if (s == digits_start && endptr) { *endptr = (char *)start; return 0; }
-    if (endptr) *endptr = (char *)s;
-    return result;
-}
-
-unsigned long long strtoull(const char *s, char **endptr, int base) {
-    const char *start = s;
-    unsigned long long result = 0;
-    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
-    if (*s == '+') s++;
-    if (base == 0) {
-        if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) { base = 16; s += 2; }
-        else if (s[0] == '0') { base = 8; }
-        else { base = 10; }
-    } else if (base == 16 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
-        s += 2;
-    }
-    const char *digits_start = s;
-    while (*s) {
-        int digit;
-        if (*s >= '0' && *s <= '9') digit = *s - '0';
-        else if (*s >= 'a' && *s <= 'f') digit = *s - 'a' + 10;
-        else if (*s >= 'A' && *s <= 'F') digit = *s - 'A' + 10;
-        else break;
-        if (digit >= base) break;
-        result = result * (unsigned long long)base + (unsigned long long)digit;
-        s++;
-    }
-    if (s == digits_start && endptr) { *endptr = (char *)start; return 0; }
-    if (endptr) *endptr = (char *)s;
-    return result;
-}
+/* Declarations from freestanding_lib.c used by strtod/strtof */
+const char *scan_float_end(const char *s);
 
 __attribute__((import_module("waste_host"), import_name("strtod")))
 extern double waste_host_strtod(const char *text, size_t length);
@@ -168,31 +33,6 @@ extern int32_t waste_host_posix_read(int32_t descriptor, void *buffer,
 __attribute__((import_module("waste_host"), import_name("posix_write")))
 extern int32_t waste_host_posix_write(int32_t descriptor, const void *buffer,
                                       uint32_t count);
-
-static const char *scan_float_end(const char *s) {
-    int hexadecimal = s[0] == '0' && (s[1] == 'x' || s[1] == 'X');
-    if (hexadecimal) s += 2;
-    while ((*s >= '0' && *s <= '9') ||
-           (hexadecimal && ((*s >= 'a' && *s <= 'f') ||
-                            (*s >= 'A' && *s <= 'F'))))
-        s++;
-    if (*s == '.') {
-        s++;
-        while ((*s >= '0' && *s <= '9') ||
-               (hexadecimal && ((*s >= 'a' && *s <= 'f') ||
-                                (*s >= 'A' && *s <= 'F'))))
-            s++;
-    }
-    if ((!hexadecimal && (*s == 'e' || *s == 'E')) ||
-        (hexadecimal && (*s == 'p' || *s == 'P'))) {
-        const char *exponent = s++;
-        if (*s == '+' || *s == '-') s++;
-        const char *digits = s;
-        while (*s >= '0' && *s <= '9') s++;
-        if (s == digits) s = exponent;
-    }
-    return s;
-}
 
 double strtod(const char *s, char **endptr) {
     const char *start = s;
@@ -253,12 +93,13 @@ float strtof(const char *s, char **endptr) {
 
 char *getenv(const char *name) { (void)name; return (void *)0; }
 int isatty(int fd) { (void)fd; return 0; }
-int abs(int x) { return x < 0 ? -x : x; }
 
 _Noreturn void exit(int status) { (void)status; __builtin_trap(); }
 
-/* File I/O no-ops */
-typedef struct { int dummy; } FILE;
+/* File I/O: globals for stdin/stdout/stderr, all operations are no-ops */
+FILE __stdin_file  = { .fd = 0, .error = 0, .eof = 0 };
+FILE __stdout_file = { .fd = 1, .error = 0, .eof = 0 };
+FILE __stderr_file = { .fd = 2, .error = 0, .eof = 0 };
 int fprintf(FILE *f, const char *fmt, ...) { (void)f; (void)fmt; return 0; }
 size_t fwrite(const void *p, size_t sz, size_t n, FILE *f) { (void)p; (void)sz; (void)n; (void)f; return 0; }
 size_t fread(void *p, size_t sz, size_t n, FILE *f) { (void)p; (void)sz; (void)n; (void)f; return 0; }
@@ -274,294 +115,11 @@ int printf(const char *fmt, ...) { (void)fmt; return 0; }
 int getc(FILE *f) { (void)f; return -1; }
 void clearerr(FILE *f) { (void)f; }
 int fileno(FILE *f) { (void)f; return -1; }
+void perror(const char *s) { (void)s; }
+char *strerror(int n) { (void)n; return "error"; }
 
 int errno = 0;
 int yydebug = 0;
-
-/* Math stubs.  __builtin_ldexp is not a Wasm instruction: Clang lowers it
- * back to a call to ldexp, so using it here recursively called this shim.
- * Construct exact powers of two from their IEEE-754 representation instead. */
-static double double_power_of_two(int exp) {
-    union { uint64_t bits; double value; } power;
-    if (exp > 1023) return __builtin_inf();
-    if (exp < -1074) return 0.0;
-    if (exp >= -1022)
-        power.bits = (uint64_t)(exp + 1023) << 52;
-    else
-        power.bits = UINT64_C(1) << (exp + 1074);
-    return power.value;
-}
-
-double ldexp(double x, int exp) {
-    while (exp > 1023) {
-        x *= double_power_of_two(1023);
-        exp -= 1023;
-    }
-    while (exp < -1074) {
-        x *= double_power_of_two(-1074);
-        exp += 1074;
-    }
-    return x * double_power_of_two(exp);
-}
-
-static float float_power_of_two(int exp) {
-    union { uint32_t bits; float value; } power;
-    if (exp > 127) return __builtin_inff();
-    if (exp < -149) return 0.0f;
-    if (exp >= -126)
-        power.bits = (uint32_t)(exp + 127) << 23;
-    else
-        power.bits = UINT32_C(1) << (exp + 149);
-    return power.value;
-}
-
-float ldexpf(float x, int exp) {
-    while (exp > 127) {
-        x *= float_power_of_two(127);
-        exp -= 127;
-    }
-    while (exp < -149) {
-        x *= float_power_of_two(-149);
-        exp += 149;
-    }
-    return x * float_power_of_two(exp);
-}
-
-double frexp(double x, int *exp) {
-    if (x == 0.0) { *exp = 0; return 0.0; }
-    union { double d; uint64_t u; } u;
-    u.d = x;
-    int e = (int)((u.u >> 52) & 0x7FF);
-    if (e == 0) {
-        /* denormal: multiply up to normalize */
-        u.d = x * 4503599627370496.0; /* 2^52 */
-        e = (int)((u.u >> 52) & 0x7FF) - 52;
-    }
-    *exp = e - 1022;
-    u.u = (u.u & 0x800FFFFFFFFFFFFFULL) | 0x3FE0000000000000ULL;
-    return u.d;
-}
-
-float frexpf(float x, int *exp) {
-    if (x == 0.0f) { *exp = 0; return 0.0f; }
-    union { float f; uint32_t u; } u;
-    u.f = x;
-    int e = (int)((u.u >> 23) & 0xFF);
-    if (e == 0) {
-        u.f = x * 8388608.0f; /* 2^23 */
-        e = (int)((u.u >> 23) & 0xFF) - 23;
-    }
-    *exp = e - 126;
-    u.u = (u.u & 0x807FFFFFU) | 0x3F000000U;
-    return u.f;
-}
-
-double copysign(double x, double y) { return __builtin_copysign(x, y); }
-double fmin(double a, double b) { return __builtin_fmin(a, b); }
-double fmax(double a, double b) { return __builtin_fmax(a, b); }
-
-/* ---- snprintf: working implementation ---- */
-
-static int snprintf_uint(char *buf, size_t n, size_t pos,
-                         uint64_t val, int width, int zero_pad) {
-    char tmp[20];
-    int len = 0;
-    if (val == 0) { tmp[len++] = '0'; }
-    else { while (val) { tmp[len++] = '0' + (int)(val % 10); val /= 10; } }
-    int pad = width > len ? width - len : 0;
-    for (int i = 0; i < pad; i++)
-        if (pos < n - 1) buf[pos++] = zero_pad ? '0' : ' ';
-    for (int i = len - 1; i >= 0; i--)
-        if (pos < n - 1) buf[pos++] = tmp[i];
-    return (int)pos;
-}
-
-static int snprintf_int(char *buf, size_t n, size_t pos,
-                        int64_t val, int width, int zero_pad) {
-    if (val < 0) {
-        if (pos < n - 1) buf[pos++] = '-';
-        if (width > 0) width--;
-        val = -val;
-    }
-    return snprintf_uint(buf, n, pos, (uint64_t)val, width, zero_pad);
-}
-
-static int snprintf_hex(char *buf, size_t n, size_t pos,
-                        uint64_t val, int width, int zero_pad) {
-    static const char digits[] = "0123456789abcdef";
-    char tmp[16];
-    int len = 0;
-    if (val == 0) { tmp[len++] = '0'; }
-    else { while (val) { tmp[len++] = digits[val & 0xF]; val >>= 4; } }
-    int pad = width > len ? width - len : 0;
-    for (int i = 0; i < pad; i++)
-        if (pos < n - 1) buf[pos++] = zero_pad ? '0' : ' ';
-    for (int i = len - 1; i >= 0; i--)
-        if (pos < n - 1) buf[pos++] = tmp[i];
-    return (int)pos;
-}
-
-static int snprintf_hex_float(char *buf, size_t n, size_t pos, double val) {
-    /* %a format: [-]0x1.XXXXXXXXXXXXXp[+-]DDD */
-    static const char hex[] = "0123456789abcdef";
-    union { double d; uint64_t u; } u;
-    u.d = val;
-    int sign = (int)(u.u >> 63);
-    int biased_exp = (int)((u.u >> 52) & 0x7FF);
-    uint64_t mant = u.u & 0x000FFFFFFFFFFFFFULL;
-
-    if (sign && pos < n - 1) buf[pos++] = '-';
-
-    if (biased_exp == 0x7FF) {
-        /* inf or nan */
-        const char *s = mant ? "nan" : "inf";
-        while (*s && pos < n - 1) buf[pos++] = *s++;
-        return (int)pos;
-    }
-
-    if (pos < n - 1) buf[pos++] = '0';
-    if (pos < n - 1) buf[pos++] = 'x';
-
-    if (biased_exp == 0 && mant == 0) {
-        /* zero: 0x0p+0 */
-        if (pos < n - 1) buf[pos++] = '0';
-        if (pos < n - 1) buf[pos++] = 'p';
-        if (pos < n - 1) buf[pos++] = '+';
-        if (pos < n - 1) buf[pos++] = '0';
-        return (int)pos;
-    }
-
-    int exponent;
-    if (biased_exp == 0) {
-        /* denormal: 0x0.XXXXXp-1022 */
-        if (pos < n - 1) buf[pos++] = '0';
-        if (pos < n - 1) buf[pos++] = '.';
-        /* output mantissa as 13 hex digits */
-        for (int i = 12; i >= 0; i--) {
-            int nibble = (int)((mant >> (i * 4)) & 0xF);
-            if (pos < n - 1) buf[pos++] = hex[nibble];
-        }
-        /* strip trailing zeros */
-        while (pos > 0 && buf[pos - 1] == '0') pos--;
-        if (pos > 0 && buf[pos - 1] == '.') pos--;
-        exponent = -1022;
-    } else {
-        /* normal: 1.XXXXXXXXXXXXXpEEE */
-        if (pos < n - 1) buf[pos++] = '1';
-        if (mant != 0) {
-            if (pos < n - 1) buf[pos++] = '.';
-            /* output mantissa as 13 hex digits */
-            for (int i = 12; i >= 0; i--) {
-                int nibble = (int)((mant >> (i * 4)) & 0xF);
-                if (pos < n - 1) buf[pos++] = hex[nibble];
-            }
-            /* strip trailing zeros */
-            while (pos > 0 && buf[pos - 1] == '0') pos--;
-        }
-        exponent = biased_exp - 1023;
-    }
-    if (pos < n - 1) buf[pos++] = 'p';
-    if (exponent < 0) {
-        if (pos < n - 1) buf[pos++] = '-';
-        exponent = -exponent;
-    } else {
-        if (pos < n - 1) buf[pos++] = '+';
-    }
-    /* write exponent digits */
-    if (exponent == 0) {
-        if (pos < n - 1) buf[pos++] = '0';
-    } else {
-        char etmp[8];
-        int elen = 0;
-        while (exponent) { etmp[elen++] = '0' + (exponent % 10); exponent /= 10; }
-        for (int i = elen - 1; i >= 0; i--)
-            if (pos < n - 1) buf[pos++] = etmp[i];
-    }
-    return (int)pos;
-}
-
-int snprintf(char *buf, size_t n, const char *fmt, ...) {
-    if (n == 0) return 0;
-    __builtin_va_list ap;
-    __builtin_va_start(ap, fmt);
-    size_t pos = 0;
-    while (*fmt && pos < n - 1) {
-        if (*fmt != '%') { buf[pos++] = *fmt++; continue; }
-        fmt++;
-        /* Parse flags */
-        int zero_pad = 0;
-        if (*fmt == '0') { zero_pad = 1; fmt++; }
-        /* Parse width */
-        int width = 0;
-        while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt - '0'); fmt++; }
-        /* Parse length modifier */
-        int length = 0; /* 0=int, 1=long, 2=long long */
-        if (*fmt == 'l') { length = 1; fmt++; if (*fmt == 'l') { length = 2; fmt++; } }
-        /* Conversion */
-        switch (*fmt) {
-        case 'd': {
-            int64_t val;
-            if (length == 2) val = __builtin_va_arg(ap, long long);
-            else if (length == 1) val = __builtin_va_arg(ap, long);
-            else val = __builtin_va_arg(ap, int);
-            pos = (size_t)snprintf_int(buf, n, pos, val, width, zero_pad);
-            break;
-        }
-        case 'u': {
-            uint64_t val;
-            if (length == 2) val = __builtin_va_arg(ap, unsigned long long);
-            else if (length == 1) val = __builtin_va_arg(ap, unsigned long);
-            else val = __builtin_va_arg(ap, unsigned int);
-            pos = (size_t)snprintf_uint(buf, n, pos, val, width, zero_pad);
-            break;
-        }
-        case 'x': {
-            uint64_t val;
-            if (length == 2) val = __builtin_va_arg(ap, unsigned long long);
-            else if (length == 1) val = __builtin_va_arg(ap, unsigned long);
-            else val = __builtin_va_arg(ap, unsigned int);
-            pos = (size_t)snprintf_hex(buf, n, pos, val, width, zero_pad);
-            break;
-        }
-        case 's': {
-            const char *s = __builtin_va_arg(ap, const char *);
-            if (!s) s = "(null)";
-            while (*s && pos < n - 1) buf[pos++] = *s++;
-            break;
-        }
-        case 'c': {
-            int c = __builtin_va_arg(ap, int);
-            if (pos < n - 1) buf[pos++] = (char)c;
-            break;
-        }
-        case 'p': {
-            uintptr_t val = (uintptr_t)__builtin_va_arg(ap, void *);
-            if (pos < n - 1) buf[pos++] = '0';
-            if (pos < n - 1) buf[pos++] = 'x';
-            pos = (size_t)snprintf_hex(buf, n, pos, (uint64_t)val, 0, 0);
-            break;
-        }
-        case 'a': {
-            double val = __builtin_va_arg(ap, double);
-            pos = (size_t)snprintf_hex_float(buf, n, pos, val);
-            break;
-        }
-        case '%':
-            if (pos < n - 1) buf[pos++] = '%';
-            break;
-        case '\0':
-            goto done;
-        default:
-            if (pos < n - 1) buf[pos++] = *fmt;
-            break;
-        }
-        fmt++;
-    }
-done:
-    buf[pos] = '\0';
-    __builtin_va_end(ap);
-    return (int)pos;
-}
 
 /* ---- Freestanding heap allocator ---- */
 extern unsigned char __heap_base;
@@ -666,17 +224,6 @@ void free(void *ptr) {
     }
 }
 
-void *memmove(void *dst, const void *src, size_t n) {
-    unsigned char *d = dst;
-    const unsigned char *s = src;
-    if (d < s) {
-        for (size_t i = 0; i < n; i++) d[i] = s[i];
-    } else if (d > s) {
-        for (size_t i = n; i > 0; i--) d[i - 1] = s[i - 1];
-    }
-    return dst;
-}
-
 void *realloc(void *ptr, size_t size) {
     if (!ptr) return malloc(size);
     if (size == 0) { free(ptr); return (void *)0; }
@@ -700,30 +247,6 @@ void *realloc(void *ptr, size_t size) {
     free(ptr);
     return fresh;
 }
-
-/* ---- Math stubs (relaxed semantics are sufficient) ---- */
-
-float fmaf(float a, float b, float c) {
-    /* Relaxed FMA: a*b+c without strict rounding guarantee */
-    return (float)((double)a * (double)b + (double)c);
-}
-
-double fma(double a, double b, double c) {
-    return a * b + c;
-}
-
-float  fabsf(float x)      { return __builtin_fabsf(x); }
-float  ceilf(float x)      { return __builtin_ceilf(x); }
-float  floorf(float x)     { return __builtin_floorf(x); }
-float  truncf(float x)     { return __builtin_truncf(x); }
-float  nearbyintf(float x) { return __builtin_nearbyintf(x); }
-float  sqrtf(float x)      { return __builtin_sqrtf(x); }
-double fabs(double x)      { return __builtin_fabs(x); }
-double ceil(double x)      { return __builtin_ceil(x); }
-double floor(double x)     { return __builtin_floor(x); }
-double trunc(double x)     { return __builtin_trunc(x); }
-double nearbyint(double x) { return __builtin_nearbyint(x); }
-double sqrt(double x)      { return __builtin_sqrt(x); }
 
 /* ---- Engine state (existing per-module API) ---- */
 

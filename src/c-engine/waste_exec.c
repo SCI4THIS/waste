@@ -1,46 +1,11 @@
 #include "waste_exec.h"
 #include "wast_simd.h"
 
-#ifdef WASTE_FREESTANDING
-/* Freestanding build: use only clang built-in headers; implementations
- * are provided by browser_wast.c (bump allocator + stubs). */
-#include <stddef.h>
-#include <stdint.h>
-void *malloc(size_t size);
-void *calloc(size_t count, size_t size);
-void *realloc(void *ptr, size_t size);
-void  free(void *p);
-int   snprintf(char *buf, size_t n, const char *fmt, ...);
-void *memcpy(void *dst, const void *src, size_t n);
-void *memmove(void *dst, const void *src, size_t n);
-void *memset(void *dst, int c, size_t n);
-int   memcmp(const void *a, const void *b, size_t n);
-int   strcmp(const char *a, const char *b);
-/* isnan/isinf: use compiler builtins */
-#define isnan(x)   __builtin_isnan(x)
-#define isinf(x)   __builtin_isinf(x)
-/* math functions provided by browser_wast.c */
-float  fmaf(float a, float b, float c);
-double fma(double a, double b, double c);
-float  fabsf(float x);
-float  ceilf(float x);
-float  floorf(float x);
-float  truncf(float x);
-float  nearbyintf(float x);
-float  sqrtf(float x);
-double fabs(double x);
-double ceil(double x);
-double floor(double x);
-double trunc(double x);
-double nearbyint(double x);
-double sqrt(double x);
-#else
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
 #include <stdint.h>
-#endif
 
 /* ---- Engine internal constants ---- */
 
@@ -2414,12 +2379,11 @@ static select_validation_result validate_select_function(
     for (uint32_t pc = 0; pc < code_size; pc++) {
         const exec_instr *instr = &code[pc];
         select_validation_control *control = &controls[control_top];
-#ifndef WASTE_FREESTANDING
+
         if (getenv("WAST_DEBUG_VALIDATE_TRACE"))
             fprintf(stderr, "validate pc=%u op=%02x top=%d control=%d height=%d unreachable=%d\n",
                     pc, instr->opcode, top, control_top, control->height,
                     control->unreachable);
-#endif
         switch (instr->opcode) {
             case 0x00:
                 top = control->height;
@@ -2489,12 +2453,11 @@ static select_validation_result validate_select_function(
                         }
                         if (catch_value_count != label_count)
                         {
-#ifndef WASTE_FREESTANDING
+
                             if (getenv("WAST_DEBUG_VALIDATION"))
                                 fprintf(stderr, "try catch arity pc=%u kind=%u depth=%u values=%d labels=%d\n",
                                         pc, catch_->kind, catch_->depth,
                                         catch_value_count, label_count);
-#endif
                             return SELECT_VALIDATION_INVALID;
                         }
                         for (int value = 0;
@@ -2504,13 +2467,12 @@ static select_validation_result validate_select_function(
                                     eng, tag_type->params[value], eng,
                                     label_types[value], 0))
                             {
-#ifndef WASTE_FREESTANDING
+
                                 if (getenv("WAST_DEBUG_VALIDATION"))
                                     fprintf(stderr, "try catch payload pc=%u kind=%u value=%d actual=%u expected=%u\n",
                                             pc, catch_->kind, value,
                                             (unsigned)tag_type->params[value],
                                             (unsigned)label_types[value]);
-#endif
                                 return SELECT_VALIDATION_INVALID;
                             }
                         if ((catch_->kind & 1u) &&
@@ -2518,13 +2480,12 @@ static select_validation_result validate_select_function(
                                 eng, WASM_VALTYPE_EXNREF_NONNULL, eng,
                                 label_types[label_count - 1], 0))
                         {
-#ifndef WASTE_FREESTANDING
+
                             if (getenv("WAST_DEBUG_VALIDATION"))
                                 fprintf(stderr, "try catch ref pc=%u kind=%u actual=%u expected=%u\n",
                                         pc, catch_->kind,
                                         (unsigned)WASM_VALTYPE_EXNREF_NONNULL,
                                         (unsigned)label_types[label_count - 1]);
-#endif
                             return SELECT_VALIDATION_INVALID;
                         }
                     }
@@ -2698,12 +2659,11 @@ static select_validation_result validate_select_function(
                 if (!select_validation_pop(stack, &top, control, &reference) ||
                     (reference != SELECT_BOTTOM_TYPE &&
                      !is_reference_type(reference))) {
-#ifndef WASTE_FREESTANDING
+
                     if (getenv("WAST_DEBUG_VALIDATION"))
                         fprintf(stderr, "ref-branch pop/type pc=%u op=%x ref=%u top=%d height=%d unreachable=%d\n",
                                 pc, instr->opcode, (unsigned)reference, top,
                                 control->height, control->unreachable);
-#endif
                     return SELECT_VALIDATION_INVALID;
                 }
                 if (!select_validation_push(
@@ -2719,23 +2679,21 @@ static select_validation_result validate_select_function(
                 if (!select_validation_pop(stack, &top, control, &reference) ||
                     (reference != SELECT_BOTTOM_TYPE &&
                      !is_reference_type(reference))) {
-#ifndef WASTE_FREESTANDING
+
                     if (getenv("WAST_DEBUG_VALIDATION"))
                         fprintf(stderr, "ref-branch pop/type pc=%u op=%x ref=%u top=%d height=%d unreachable=%d\n",
                                 pc, instr->opcode, (unsigned)reference, top,
                                 control->height, control->unreachable);
-#endif
                     return SELECT_VALIDATION_INVALID;
                 }
                 wasm_valtype refined = reference == SELECT_BOTTOM_TYPE ?
                     reference : nonnullable_reference_type(reference);
                 uint32_t depth = instr->u32_imm;
                 if (depth > (uint32_t)control_top) {
-#ifndef WASTE_FREESTANDING
+
                     if (getenv("WAST_DEBUG_VALIDATION"))
                         fprintf(stderr, "ref-branch depth pc=%u depth=%u control=%d\n",
                                 pc, depth, control_top);
-#endif
                     return SELECT_VALIDATION_INVALID;
                 }
                 const wasm_valtype *label_types;
@@ -2758,13 +2716,12 @@ static select_validation_result validate_select_function(
                          !global_type_is_compat(eng, refined, eng,
                                                 label_types[label_count - 1],
                                                 0))) {
-#ifndef WASTE_FREESTANDING
+
                         if (getenv("WAST_DEBUG_VALIDATION"))
                             fprintf(stderr, "ref-branch result pc=%u ref=%u refined=%u labels=%d last=%u\n",
                                     pc, (unsigned)reference, (unsigned)refined,
                                     label_count, label_count ?
                                     (unsigned)label_types[label_count - 1] : 0u);
-#endif
                         return SELECT_VALIDATION_INVALID;
                     }
                     carried_count--;
@@ -2776,13 +2733,12 @@ static select_validation_result validate_select_function(
                         (carried[i - 1] != SELECT_BOTTOM_TYPE &&
                          !global_type_is_compat(eng, carried[i - 1], eng,
                                                 label_types[i - 1], 0))) {
-#ifndef WASTE_FREESTANDING
+
                         if (getenv("WAST_DEBUG_VALIDATION"))
                             fprintf(stderr, "ref-branch carried pc=%u i=%d actual=%u expected=%u top=%d height=%d\n",
                                     pc, i, (unsigned)carried[i - 1],
                                     (unsigned)label_types[i - 1], top,
                                     control->height);
-#endif
                         return SELECT_VALIDATION_INVALID;
                     }
                 for (int i = 0; i < carried_count; i++)

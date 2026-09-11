@@ -11,30 +11,6 @@ static waste_error last_error;
 static waste_run_stats last_stats;
 static int64_t last_result;
 
-void *memcpy(void *destination, const void *source, size_t count) {
-  unsigned char *to = destination;
-  const unsigned char *from = source;
-  for (size_t index = 0; index < count; ++index) to[index] = from[index];
-  return destination;
-}
-
-int memcmp(const void *left, const void *right, size_t count) {
-  const unsigned char *a = left;
-  const unsigned char *b = right;
-  for (size_t index = 0; index < count; ++index) {
-    if (a[index] != b[index]) return a[index] < b[index] ? -1 : 1;
-  }
-  return 0;
-}
-
-int strcmp(const char *left, const char *right) {
-  while (*left != '\0' && *left == *right) {
-    ++left;
-    ++right;
-  }
-  return (unsigned char)*left - (unsigned char)*right;
-}
-
 void *malloc(size_t size) {
   uintptr_t start;
   uintptr_t limit;

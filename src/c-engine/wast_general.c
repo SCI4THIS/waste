@@ -6,22 +6,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
-
-#ifdef WASTE_FREESTANDING
-void *malloc(size_t);
-void *calloc(size_t, size_t);
-void  free(void *);
-void *memcpy(void *, const void *, size_t);
-void *memset(void *, int, size_t);
-int   memcmp(const void *, const void *, size_t);
-int   snprintf(char *, size_t, const char *, ...);
-int   strcmp(const char *, const char *);
-size_t strlen(const char *);
-#else
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#endif
 
 #include "wast_general.h"
 #include "wast_types.h"
@@ -1060,7 +1047,6 @@ static int ginvoke(GInst *inst, const char *name,
 /* =========================================================
  * JSON output helpers (no-alloc)
  * ========================================================= */
-#ifndef WASTE_FREESTANDING
 static void json_str(const char *s) {
     putchar('"');
     for(;*s;s++) {
@@ -1071,8 +1057,6 @@ static void json_str(const char *s) {
     }
     putchar('"');
 }
-#endif
-
 /* =========================================================
  * WAST script value parser
  * ========================================================= */
@@ -1102,7 +1086,6 @@ static int parse_val(Lex *L, GVal *out, char *err) {
  * WAST script runner
  * ========================================================= */
 
-#ifndef WASTE_FREESTANDING
 int wast_general_run(const char *path) {
     /* Read file */
     FILE *f=fopen(path,"rb");
@@ -1304,7 +1287,6 @@ int wast_general_run(const char *path) {
     if(has_inst) ginst_free(&inst);
     return (passed==total)?0:1;
 }
-#endif /* !WASTE_FREESTANDING */
 
 /* =========================================================
  * Browser / freestanding API
