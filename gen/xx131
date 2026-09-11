@@ -1,2 +1,0 @@
-\production{unsigned integer} & \TuN &::=& n{:}\Tnum &\Rightarrow& n & (\iff n < 2^N)  
-| "0x"~~n{:}\Thexnum &\Rightarrow& n & (\iff n < 2^N) 

@@ -1,1 +1,0 @@
-\production{type definition} & \Ttype &::=& "("~"type"~~\Tid^?~~\X{ft}{:}\Tfunctype~")" &\Rightarrow& \X{ft} 

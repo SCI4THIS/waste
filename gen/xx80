@@ -1,1 +1,0 @@
-\production{local} & \Tlocal &::=& "("~"local"~~\Tid^?~~t{:}\Tvaltype~")" \quad\Rightarrow\quad t 

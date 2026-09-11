@@ -1,1 +1,0 @@
-\production{table} & \Ttable_I &::=& "("~"table"~~\Tid^?~~\X{tt}{:}\Ttabletype~")" &\Rightarrow& \{ \TTYPE~\X{tt} \} 

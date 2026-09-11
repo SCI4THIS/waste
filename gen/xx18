@@ -1,2 +1,0 @@
-\production{memory alignment} & \Talign_N &::=& "align{="}a{:}\Tu32 &\Rightarrow& a  
-| \epsilon &\Rightarrow& N 

@@ -1,2 +1,0 @@
-\production{global index} & \Tglobalidx_I &::=& x{:}\Tu32 &\Rightarrow& x 
-| v{:}\Tid &\Rightarrow& x & (\iff I.\IGLOBALS[x] = v) 

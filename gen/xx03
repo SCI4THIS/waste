@@ -1,1 +1,0 @@
-\production{vector} & \Tvec(\T{A}) &::=& (x{:}\T{A})^n &\Rightarrow& x^n & (\iff n < 2^{32}) 

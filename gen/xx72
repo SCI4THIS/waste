@@ -1,2 +1,0 @@
-\production{local index} & \Tlocalidx_I &::=& x{:}\Tu32 &\Rightarrow& x 
-| v{:}\Tid &\Rightarrow& x & (\iff I.\ILOCALS[x] = v) 

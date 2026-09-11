@@ -1,1 +1,0 @@
-\production{memory type} & \Tmemtype &::=& \X{lim}{:}\Tlimits &\Rightarrow& \X{lim} 

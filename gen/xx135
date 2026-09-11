@@ -1,2 +1,0 @@
-\production{hexadecimal floating-point fraction} & \Thexfrac &::=& h{:}\Thexdigit &\Rightarrow& h/16  
-| h{:}\Thexdigit~~\text{\_}^?~~p{:}\Thexfrac &\Rightarrow& (h+p/16)/16 

@@ -1,2 +1,0 @@
-\production{heap type} & \Theaptype &::=& "func" &\Rightarrow& \FUNCREF  
-| "extern" &\Rightarrow& \EXTERNREF 

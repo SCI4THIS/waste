@@ -1,3 +1,0 @@
-\production{instruction} & \Tplaininstr_I &::=& \dots  
-| "drop" &\Rightarrow& \DROP  
-| "select"~((t{:}\Tresult)^\ast)^? &\Rightarrow& \SELECT~(t^\ast)^? 

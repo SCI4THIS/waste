@@ -1,2 +1,0 @@
-\production{global type} & \Tglobaltype &::=& t{:}\Tvaltype &\Rightarrow& \MCONST~t  
-| "("~"mut"~~t{:}\Tvaltype~")" &\Rightarrow& \MVAR~t 

@@ -1,1 +1,0 @@
-\production{plain instruction} & \text{call\_indirect}~~\Ttypeuse &\equiv& \text{call\_indirect}~~0~~\Ttypeuse

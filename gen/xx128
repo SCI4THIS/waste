@@ -1,3 +1,0 @@
-\production{hexadecimal digit} & \Thexdigit &::=& d{:}\Tdigit \Rightarrow d  
-| "A" \Rightarrow 10 ~~|~~ \dots ~~|~~ "F" \Rightarrow 15  
-| "a" \Rightarrow 10 ~~|~~ \dots ~~|~~ "f" \Rightarrow 15 [1ex]

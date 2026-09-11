@@ -1,1 +1,0 @@
-\production{memory use} & \Tmemuse_I &::=& "("~"memory"~~x{:}\Tmemidx_I ~")" \quad\Rightarrow\quad x 

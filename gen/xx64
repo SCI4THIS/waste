@@ -1,4 +1,0 @@
-\production{block character} & \Tblockchar &::=& c{:}\Tchar & (\iff c \neq ";" \land c \neq "(")  
-| ";" & (\iff~\mbox{the next character is not}~")")  
-| "(" & (\iff~\mbox{the next character is not}~";")  
-| \Tblockcomment 

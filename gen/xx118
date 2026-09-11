@@ -1,1 +1,0 @@
-\production{parameter} & \Tparam &::=& "("~"param"~~\Tid^?~~t{:}\Tvaltype~")" &\Rightarrow& t 
