@@ -8,7 +8,6 @@ void *memset(void *dst, int c, size_t n);
 void *memcpy(void *dst, const void *src, size_t n);
 size_t strlen(const char *s);
 const char *scan_float_end(const char *s);
-double ldexp(double x, int exp);
 
 /* Forward declarations */
 void *malloc(size_t size);
@@ -32,6 +31,7 @@ typedef struct heap_block {
     struct heap_block *next;
     uint32_t is_free;
     uint32_t reserved;
+    uint64_t alignment_padding;
 } heap_block;
 
 static heap_block *heap_blocks;
@@ -78,6 +78,7 @@ static void heap_split(heap_block *block, size_t size) {
     rest->next = block->next;
     rest->is_free = 1;
     rest->reserved = 0;
+    rest->alignment_padding = 0;
     block->size = size;
     block->next = rest;
 }
@@ -104,6 +105,7 @@ void *malloc(size_t size) {
     block->next = (void *)0;
     block->is_free = 0;
     block->reserved = 0;
+    block->alignment_padding = 0;
     if (!heap_blocks) {
         heap_blocks = block;
     } else {
@@ -163,6 +165,7 @@ void *realloc(void *ptr, size_t size) {
         return ptr;
     }
     if (block->next && block->next->is_free &&
+        heap_blocks_adjacent(block, block->next) &&
         block->size + header_size + block->next->size >= aligned) {
         block->size += header_size + block->next->size;
         block->next = block->next->next;
@@ -185,104 +188,315 @@ static int hex_digit_value(char c) {
     return -1;
 }
 
-static double parse_hex_float(const char *s, const char *end) {
-    /* Parse 0xH.HHHpE format */
-    int negative = 0;
-    if (*s == '-') { negative = 1; s++; }
-    else if (*s == '+') { s++; }
+/* The lexer accepts literals substantially longer than a machine integer.
+ * Keep the significand exact until the one and only IEEE-754 rounding step.
+ * 640 limbs cover the lexer's 4096-byte numeric scratch buffer. */
+#define FLOAT_BIG_LIMBS 640
+typedef struct {
+    uint32_t limb[FLOAT_BIG_LIMBS];
+    int length;
+    int overflow;
+} float_bigint;
 
-    /* Skip 0x prefix */
-    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
-
-    uint64_t mantissa = 0;
-    int mantissa_bits = 0;
-    int exponent = 0;
-    int has_dot = 0;
-    int frac_digits = 0;
-
-    /* Parse hex digits before and after dot */
-    while (s < end && (hex_digit_value(*s) >= 0 || *s == '.')) {
-        if (*s == '.') { has_dot = 1; s++; continue; }
-        int digit = hex_digit_value(*s);
-        if (mantissa_bits < 60) {
-            mantissa = (mantissa << 4) | (uint64_t)digit;
-            mantissa_bits += 4;
-        } else {
-            if (!has_dot) exponent += 4;
-        }
-        if (has_dot) frac_digits++;
-        s++;
-    }
-    (void)has_dot;
-
-    exponent -= frac_digits * 4;
-
-    /* Parse 'p' exponent */
-    if (s < end && (*s == 'p' || *s == 'P')) {
-        s++;
-        int exp_sign = 1;
-        if (s < end && *s == '-') { exp_sign = -1; s++; }
-        else if (s < end && *s == '+') { s++; }
-        int exp_val = 0;
-        while (s < end && *s >= '0' && *s <= '9') {
-            exp_val = exp_val * 10 + (*s - '0');
-            s++;
-        }
-        exponent += exp_sign * exp_val;
-    }
-
-    if (mantissa == 0) return negative ? -0.0 : 0.0;
-
-    double result = ldexp((double)mantissa, exponent);
-    return negative ? -result : result;
+static void big_normalize(float_bigint *value) {
+    while (value->length && value->limb[value->length - 1] == 0)
+        value->length--;
 }
 
-static double parse_decimal_float(const char *s, const char *end) {
-    int negative = 0;
-    if (*s == '-') { negative = 1; s++; }
-    else if (*s == '+') { s++; }
+static void big_set_one(float_bigint *value) {
+    memset(value, 0, sizeof(*value));
+    value->limb[0] = 1;
+    value->length = 1;
+}
 
-    /* Accumulate integer part */
-    double result = 0.0;
-    while (s < end && *s >= '0' && *s <= '9') {
-        result = result * 10.0 + (double)(*s - '0');
-        s++;
+static void big_multiply_small(float_bigint *value, uint32_t factor) {
+    uint64_t carry = 0;
+    for (int i = 0; i < value->length; i++) {
+        uint64_t product = (uint64_t)value->limb[i] * factor + carry;
+        value->limb[i] = (uint32_t)product;
+        carry = product >> 32;
     }
+    if (carry) {
+        if (value->length == FLOAT_BIG_LIMBS) {
+            value->overflow = 1;
+            return;
+        }
+        value->limb[value->length++] = (uint32_t)carry;
+    }
+}
 
-    /* Fractional part */
-    if (s < end && *s == '.') {
-        s++;
-        double place = 0.1;
-        while (s < end && *s >= '0' && *s <= '9') {
-            result += (double)(*s - '0') * place;
-            place *= 0.1;
-            s++;
+static void big_add_small(float_bigint *value, uint32_t addend) {
+    uint64_t carry = addend;
+    int i = 0;
+    while (carry && i < value->length) {
+        carry += value->limb[i];
+        value->limb[i++] = (uint32_t)carry;
+        carry >>= 32;
+    }
+    if (carry) {
+        if (value->length == FLOAT_BIG_LIMBS) value->overflow = 1;
+        else value->limb[value->length++] = (uint32_t)carry;
+    }
+}
+
+static int big_bit_length(const float_bigint *value) {
+    if (!value->length) return 0;
+    return (value->length - 1) * 32 +
+           32 - __builtin_clz(value->limb[value->length - 1]);
+}
+
+static uint32_t big_shifted_limb(const float_bigint *value, int index,
+                                 int word_shift, int bit_shift) {
+    int source = index - word_shift;
+    uint32_t result = 0;
+    if (source >= 0 && source < value->length)
+        result = value->limb[source] << bit_shift;
+    if (bit_shift && source > 0 && source - 1 < value->length)
+        result |= value->limb[source - 1] >> (32 - bit_shift);
+    return result;
+}
+
+/* Compare left with right * 2^shift.  shift is non-negative. */
+static int big_compare_shift(const float_bigint *left,
+                             const float_bigint *right, int shift) {
+    int word_shift = shift / 32;
+    int bit_shift = shift % 32;
+    int right_length = right->length + word_shift;
+    if (bit_shift && right->length &&
+        (right->limb[right->length - 1] >> (32 - bit_shift)))
+        right_length++;
+    if (left->length != right_length)
+        return left->length < right_length ? -1 : 1;
+    for (int i = left->length - 1; i >= 0; i--) {
+        uint32_t r = big_shifted_limb(right, i, word_shift, bit_shift);
+        if (left->limb[i] != r) return left->limb[i] < r ? -1 : 1;
+    }
+    return 0;
+}
+
+static int big_compare(const float_bigint *left,
+                       const float_bigint *right) {
+    return big_compare_shift(left, right, 0);
+}
+
+/* Subtract right * 2^shift.  The caller has established left >= right. */
+static void big_subtract_shift(float_bigint *left,
+                               const float_bigint *right, int shift) {
+    int word_shift = shift / 32;
+    int bit_shift = shift % 32;
+    uint64_t borrow = 0;
+    for (int i = 0; i < left->length; i++) {
+        uint64_t subtrahend =
+            (uint64_t)big_shifted_limb(right, i, word_shift, bit_shift) +
+            borrow;
+        uint64_t original = left->limb[i];
+        left->limb[i] = (uint32_t)(original - subtrahend);
+        borrow = original < subtrahend;
+    }
+    big_normalize(left);
+}
+
+static int big_shift_left(float_bigint *output,
+                          const float_bigint *input, int shift) {
+    int word_shift = shift / 32;
+    int bit_shift = shift % 32;
+    memset(output, 0, sizeof(*output));
+    if (!input->length) return 1;
+    int output_length = input->length + word_shift + (bit_shift != 0);
+    if (output_length > FLOAT_BIG_LIMBS) return 0;
+    for (int i = 0; i < output_length; i++)
+        output->limb[i] = big_shifted_limb(input, i, word_shift, bit_shift);
+    output->length = output_length;
+    big_normalize(output);
+    return 1;
+}
+
+static int ratio_at_least_power_two(const float_bigint *numerator,
+                                    const float_bigint *denominator,
+                                    int exponent) {
+    if (exponent >= 0)
+        return big_compare_shift(numerator, denominator, exponent) >= 0;
+    return big_compare_shift(denominator, numerator, -exponent) <= 0;
+}
+
+static int ratio_floor_log2(const float_bigint *numerator,
+                            const float_bigint *denominator) {
+    int exponent = big_bit_length(numerator) - big_bit_length(denominator);
+    if (!ratio_at_least_power_two(numerator, denominator, exponent))
+        exponent--;
+    return exponent;
+}
+
+/* Round numerator * 2^shift / denominator to uint64_t, ties to even. */
+static uint64_t round_scaled_ratio(const float_bigint *numerator,
+                                   const float_bigint *denominator,
+                                   int shift) {
+    float_bigint remainder;
+    float_bigint divisor;
+    if (shift >= 0) {
+        if (!big_shift_left(&remainder, numerator, shift)) return UINT64_MAX;
+        divisor = *denominator;
+    } else {
+        remainder = *numerator;
+        if (!big_shift_left(&divisor, denominator, -shift)) return 0;
+    }
+    int quotient_bits = big_bit_length(&remainder) - big_bit_length(&divisor);
+    uint64_t quotient = 0;
+    for (int bit = quotient_bits; bit >= 0; bit--) {
+        if (bit >= 64) return UINT64_MAX;
+        if (big_compare_shift(&remainder, &divisor, bit) >= 0) {
+            big_subtract_shift(&remainder, &divisor, bit);
+            quotient |= UINT64_C(1) << bit;
         }
     }
+    float_bigint twice_remainder = remainder;
+    big_multiply_small(&twice_remainder, 2);
+    int halfway = big_compare(&twice_remainder, &divisor);
+    if (halfway > 0 || (halfway == 0 && (quotient & 1))) quotient++;
+    return quotient;
+}
 
-    /* Exponent */
+/* Return an IEEE bit pattern.  precision includes the implicit leading bit. */
+static uint64_t ratio_to_ieee(const float_bigint *numerator,
+                              const float_bigint *denominator,
+                              int binary_exponent, int negative,
+                              int precision, int minimum_exponent,
+                              int maximum_exponent, int exponent_bits) {
+    uint64_t sign = (uint64_t)negative << (precision - 1 + exponent_bits);
+    if (!numerator->length) return sign;
+    int exponent = ratio_floor_log2(numerator, denominator) + binary_exponent;
+    uint64_t infinity = ((UINT64_C(1) << exponent_bits) - 1)
+                        << (precision - 1);
+    if (exponent > maximum_exponent) return sign | infinity;
+
+    int quantum_exponent = exponent >= minimum_exponent ?
+                           exponent - (precision - 1) :
+                           minimum_exponent - (precision - 1);
+    int shift = binary_exponent - quantum_exponent;
+    uint64_t significand = round_scaled_ratio(numerator, denominator, shift);
+    uint64_t implicit_bit = UINT64_C(1) << (precision - 1);
+    if (significand >= (implicit_bit << 1)) {
+        significand >>= 1;
+        exponent++;
+    }
+    if (exponent > maximum_exponent) return sign | infinity;
+    if (exponent < minimum_exponent) {
+        if (significand >= implicit_bit)
+            return sign | (UINT64_C(1) << (precision - 1));
+        return sign | significand;
+    }
+    uint64_t exponent_field =
+        (uint64_t)(exponent + maximum_exponent) << (precision - 1);
+    return sign | exponent_field | (significand - implicit_bit);
+}
+
+static int parse_bounded_exponent(const char **cursor, const char *end) {
+    int negative = 0;
+    int value = 0;
+    if (*cursor < end && (**cursor == '+' || **cursor == '-')) {
+        negative = **cursor == '-';
+        (*cursor)++;
+    }
+    while (*cursor < end && **cursor >= '0' && **cursor <= '9') {
+        if (value < 100000) value = value * 10 + (**cursor - '0');
+        (*cursor)++;
+    }
+    return negative ? -value : value;
+}
+
+static uint64_t parse_finite_bits(const char *s, const char *end,
+                                  int precision, int minimum_exponent,
+                                  int maximum_exponent, int exponent_bits) {
+    int negative = 0;
+    if (*s == '-' || *s == '+') { negative = *s == '-'; s++; }
+    float_bigint numerator = {{0}, 0, 0};
+    float_bigint denominator;
+    big_set_one(&denominator);
+
+    if (s + 2 <= end && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        s += 2;
+        int fractional_digits = 0;
+        int after_point = 0;
+        while (s < end && *s != 'p' && *s != 'P') {
+            if (*s == '.') { after_point = 1; s++; continue; }
+            int digit = hex_digit_value(*s++);
+            if (digit < 0) break;
+            big_multiply_small(&numerator, 16);
+            big_add_small(&numerator, (uint32_t)digit);
+            if (after_point) fractional_digits++;
+        }
+        int exponent = -4 * fractional_digits;
+        if (s < end && (*s == 'p' || *s == 'P')) {
+            s++;
+            exponent += parse_bounded_exponent(&s, end);
+        }
+        if (!numerator.length)
+            return (uint64_t)negative <<
+                   (precision - 1 + exponent_bits);
+        int magnitude = big_bit_length(&numerator) - 1 + exponent;
+        if (magnitude > maximum_exponent + 2)
+            exponent = maximum_exponent + 2;
+        else if (magnitude < minimum_exponent - precision - 2)
+            return (uint64_t)negative <<
+                   (precision - 1 + exponent_bits);
+        return ratio_to_ieee(&numerator, &denominator, exponent, negative,
+                             precision, minimum_exponent, maximum_exponent,
+                             exponent_bits);
+    }
+
+    int fractional_digits = 0;
+    int after_point = 0;
+    int significant_digits = 0;
+    int seen_nonzero = 0;
+    while (s < end && *s != 'e' && *s != 'E') {
+        if (*s == '.') { after_point = 1; s++; continue; }
+        int digit = *s++ - '0';
+        if (digit < 0 || digit > 9) break;
+        big_multiply_small(&numerator, 10);
+        big_add_small(&numerator, (uint32_t)digit);
+        if (after_point) fractional_digits++;
+        if (digit || seen_nonzero) { seen_nonzero = 1; significant_digits++; }
+    }
+    int decimal_exponent = -fractional_digits;
     if (s < end && (*s == 'e' || *s == 'E')) {
         s++;
-        int exp_sign = 1;
-        if (s < end && *s == '-') { exp_sign = -1; s++; }
-        else if (s < end && *s == '+') { s++; }
-        int exp_val = 0;
-        while (s < end && *s >= '0' && *s <= '9') {
-            exp_val = exp_val * 10 + (*s - '0');
-            s++;
-        }
-        /* Apply exponent via repeated multiply/divide */
-        int e = exp_val * exp_sign;
-        double factor = 10.0;
-        if (e < 0) { factor = 0.1; e = -e; }
-        while (e > 0) {
-            if (e & 1) result *= factor;
-            factor *= factor;
-            e >>= 1;
-        }
+        decimal_exponent += parse_bounded_exponent(&s, end);
     }
+    if (!numerator.length)
+        return (uint64_t)negative << (precision - 1 + exponent_bits);
+    int decimal_magnitude = significant_digits + decimal_exponent - 1;
+    if (decimal_magnitude > 400) {
+        uint64_t infinity = ((UINT64_C(1) << exponent_bits) - 1)
+                            << (precision - 1);
+        return ((uint64_t)negative << (precision - 1 + exponent_bits)) |
+               infinity;
+    }
+    if (decimal_magnitude < -500)
+        return (uint64_t)negative << (precision - 1 + exponent_bits);
 
-    return negative ? -result : result;
+    int binary_exponent = decimal_exponent;
+    if (decimal_exponent >= 0) {
+        for (int i = 0; i < decimal_exponent; i++)
+            big_multiply_small(&numerator, 5);
+    } else {
+        for (int i = 0; i < -decimal_exponent; i++)
+            big_multiply_small(&denominator, 5);
+    }
+    return ratio_to_ieee(&numerator, &denominator, binary_exponent, negative,
+                         precision, minimum_exponent, maximum_exponent,
+                         exponent_bits);
+}
+
+static double bits_to_double(uint64_t bits) {
+    double result;
+    memcpy(&result, &bits, sizeof(result));
+    return result;
+}
+
+static float bits_to_float(uint32_t bits) {
+    float result;
+    memcpy(&result, &bits, sizeof(result));
+    return result;
 }
 
 double strtod(const char *s, char **endptr) {
@@ -322,13 +536,45 @@ double strtod(const char *s, char **endptr) {
     }
     if (endptr) *endptr = (char *)end;
 
-    /* Detect hex float */
-    const char *digits = (s[0] == '+' || s[0] == '-') ? s + 1 : s;
-    if (digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X'))
-        return parse_hex_float(s, end);
-    return parse_decimal_float(s, end);
+    return bits_to_double(parse_finite_bits(s, end, 53, -1022, 1023, 11));
 }
 
 float strtof(const char *s, char **endptr) {
-    return (float)strtod(s, endptr);
+    const char *start = s;
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
+    const char *number_start = s;
+    int negative = 0;
+    if (*s == '-') { negative = 1; s++; }
+    else if (*s == '+') { s++; }
+    if ((s[0] == 'i' || s[0] == 'I') && (s[1] == 'n' || s[1] == 'N') &&
+        (s[2] == 'f' || s[2] == 'F')) {
+        s += 3;
+        if ((s[0] == 'i' || s[0] == 'I') &&
+            (s[1] == 'n' || s[1] == 'N') &&
+            (s[2] == 'i' || s[2] == 'I') &&
+            (s[3] == 't' || s[3] == 'T') &&
+            (s[4] == 'y' || s[4] == 'Y'))
+            s += 5;
+        if (endptr) *endptr = (char *)s;
+        return negative ? -__builtin_inff() : __builtin_inff();
+    }
+    if ((s[0] == 'n' || s[0] == 'N') && (s[1] == 'a' || s[1] == 'A') &&
+        (s[2] == 'n' || s[2] == 'N')) {
+        s += 3;
+        if (*s == '(') {
+            while (*s && *s != ')') s++;
+            if (*s == ')') s++;
+        }
+        if (endptr) *endptr = (char *)s;
+        return __builtin_nanf("");
+    }
+    s = number_start;
+    const char *end = scan_float_end(s[0] == '+' || s[0] == '-' ? s + 1 : s);
+    if (end == s || (end == s + 1 && (s[0] == '+' || s[0] == '-'))) {
+        if (endptr) *endptr = (char *)start;
+        return 0.0f;
+    }
+    if (endptr) *endptr = (char *)end;
+    return bits_to_float((uint32_t)parse_finite_bits(
+        s, end, 24, -126, 127, 8));
 }

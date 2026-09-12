@@ -15,8 +15,8 @@ SPEC_DIR="$REPO_ROOT/submodules/wasm-spec"
 INTERPRETER_DIR="$SPEC_DIR/interpreter"
 NATIVE_INTERPRETER="$INTERPRETER_DIR/_build/default/wasm.exe"
 I31_PATCH_FILE="$REPO_ROOT/submodules/wasm-spec-i31-int32.patch"
+OCAML_BUILD_DIR="$REPO_ROOT/submodules"
 BUILD_ROOT="$REPO_ROOT/build/ocaml-wasm"
-STAGING_DIR="$BUILD_ROOT/staging/interpreter"
 DIST_DIR="$BUILD_ROOT/dist"
 THREADED_DIST_DIR="$BUILD_ROOT/dist-threaded"
 LOG_DIR="$REPO_ROOT/build/logs"
@@ -68,26 +68,36 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") [OPTION]
 
-Dependency-first wizard for compiling the official OCaml WebAssembly
-interpreter to WebAssembly.
+WASTE — WebAssembly Threading Environment build wizard.
 
+  --sync           git pull/rebase with autostash and submodule update
   --check          print dependency status and exit
   --install-deps   interactively install missing dependencies
-  --compile        compile without opening the main menu
-  --build-libc     build waste-libc.wasm and its libc tests
+
+Engine (C):
+  --cli-compile    build the C engine with the CLI runtime
+  --cli-test       run the full core spec test suite via the CLI runner
+  --html-test      generate the full C-engine browser test dashboard
+  --html-bash      generate the self-contained C-engine Bash page
+
+OCaml:
+  --compile        compile the OCaml interpreter to Wasm
   --generate-html  generate the embedded browser test dashboard
   --generate-bash-html
                    generate the self-contained WASTE Bash page
-  --c-engine-tests build C engine and run relaxed-SIMD spec tests, generate HTML report
-  --c-engine-html  generate the full C-engine dashboard in OCaml-Wasm layout
+
+Legacy / advanced:
+  --build-libc     build waste-libc.wasm and its libc tests
+  --c-engine-tests build C engine and run relaxed-SIMD spec tests
+  --c-engine-html  alias for --html-test
   --c-engine-bash-html
-                   generate the self-contained C-engine Bash page
+                   alias for --html-bash
   --c-engine-core-tests
-                   generate/run the C-engine browser dashboard for core WAST files
+                   generate/run the C-engine core WAST browser dashboard
   --patch-status   show the Wasm32 compatibility patch status
-  --apply-i31      apply the Wasm32 patch (legacy option name)
-  --revert-i31     revert the Wasm32 patch (legacy option name)
-  --update         safely pull, update submodules, and restore the patch
+  --apply-i31      apply the Wasm32 patch
+  --revert-i31     revert the Wasm32 patch
+  --update         alias for --sync
   --help           show this help
 
 Environment overrides:
@@ -508,29 +518,12 @@ install_missing_dependencies() {
   check_dependencies
 }
 
-prepare_overlay() {
-  rm -rf -- "$STAGING_DIR"
-  mkdir -p -- "$STAGING_DIR" "$DIST_DIR"
-  cp -a -- "$INTERPRETER_DIR/." "$STAGING_DIR/"
-  rm -rf -- "$STAGING_DIR/_build"
-
-  sed -i 's/^(lang dune 2\.9)$/\(lang dune 3.17\)/' "$STAGING_DIR/dune-project"
-  sed -i 's/(modules :standard \\ main wasm wast smallint)/(modules :standard \\ main wasm_cli wast smallint)/' "$STAGING_DIR/dune"
-  sed -i '/^(executable$/ { n; s/^  (public_name wasm)$/  (name wasm_cli)\n  (public_name wasm)/; }' "$STAGING_DIR/dune"
-  sed -i '0,/^  (modules wasm)$/s//  (modules wasm_cli)\n  (modes exe wasm)/' "$STAGING_DIR/dune"
-  sed -i '0,/^  (libraries wasm)$/s//  (libraries wasm)\n  (wasm_of_ocaml (javascript_files host\/control_runtime.js host\/control_runtime.wat))/' "$STAGING_DIR/dune"
-  sed -i 's/(targets wasm\.ml)/(targets wasm_cli.ml)/' "$STAGING_DIR/dune"
-  sed -i 's/wasm\.ml))$/wasm_cli.ml))/' "$STAGING_DIR/dune"
-
-  grep -Fqx '(lang dune 3.17)' "$STAGING_DIR/dune-project" &&
-    grep -Fqx '  (modes exe wasm)' "$STAGING_DIR/dune" &&
-    grep -Fqx '  (name wasm_cli)' "$STAGING_DIR/dune" &&
-    grep -Fqx '  (wasm_of_ocaml (javascript_files host/control_runtime.js host/control_runtime.wat))' "$STAGING_DIR/dune"
+build_ocaml_wasm() {
+  make -C "$OCAML_BUILD_DIR" SWITCH_NAME="$SWITCH_NAME" wasm
 }
 
-enable_threaded_overlay() {
-  sed -i 's#(wasm_of_ocaml (javascript_files host/control_runtime.js host/control_runtime.wat))#(wasm_of_ocaml (flags (:standard --effects cps)) (javascript_files host/control_runtime.js host/control_runtime.wat))#' "$STAGING_DIR/dune"
-  grep -Fqx '  (wasm_of_ocaml (flags (:standard --effects cps)) (javascript_files host/control_runtime.js host/control_runtime.wat))' "$STAGING_DIR/dune"
+build_ocaml_native() {
+  make -C "$OCAML_BUILD_DIR" SWITCH_NAME="$SWITCH_NAME" native
 }
 
 compile_interpreter() {
@@ -561,63 +554,15 @@ compile_interpreter() {
     printf 'Compiling the OCaml reference interpreter to Wasm...\n'
   fi
 
-  if ! prepare_overlay >>"$LOG_FILE" 2>&1; then
-    show_message "Build failed" "Could not prepare the Dune overlay.\n\nLog: $LOG_FILE"
-    return 1
-  fi
-
-  {
-    printf 'Overlay: %s\n' "$STAGING_DIR"
-    printf 'Sequential command: opam exec --switch=%s -- dune build --profile release ./wasm_cli.bc.wasm.js\n\n' "$SWITCH_NAME"
-  } >>"$LOG_FILE"
-
-  if ! (
-    cd -- "$STAGING_DIR"
-    opam exec --switch="$SWITCH_NAME" -- \
-      dune build --profile release ./wasm_cli.bc.wasm.js
-  ) >>"$LOG_FILE" 2>&1; then
-    show_message "Build failed" "Dune or wasm_of_ocaml failed.\n\nLog: $LOG_FILE"
-    return 1
-  fi
-
-  if [[ ! -f "$STAGING_DIR/_build/default/wasm_cli.bc.wasm.js" ||
-        ! -d "$STAGING_DIR/_build/default/wasm_cli.bc.wasm.assets" ]]; then
-    show_message "Build failed" "Dune reported success but did not produce the expected Wasm files.\n\nLog: $LOG_FILE"
-    return 1
-  fi
-
-  rm -rf -- "$DIST_DIR"
-  mkdir -p -- "$DIST_DIR"
-  if ! cp -- "$STAGING_DIR/_build/default/wasm_cli.bc.wasm.js" "$DIST_DIR/" ||
-     ! cp -a -- "$STAGING_DIR/_build/default/wasm_cli.bc.wasm.assets" "$DIST_DIR/"; then
-    show_message "Build failed" "The Wasm files were built but could not be copied to the output directory.\n\nLog: $LOG_FILE"
-    return 1
-  fi
-
-  {
-    printf '\nEnabling CPS continuations for the cooperative threaded build.\n'
-    printf 'Threaded command: opam exec --switch=%s -- dune build --profile release ./wasm_cli.bc.wasm.js\n\n' "$SWITCH_NAME"
-  } >>"$LOG_FILE"
-
-  if ! enable_threaded_overlay >>"$LOG_FILE" 2>&1 || ! (
-    cd -- "$STAGING_DIR"
-    opam exec --switch="$SWITCH_NAME" -- \
-      dune build --profile release ./wasm_cli.bc.wasm.js
-  ) >>"$LOG_FILE" 2>&1; then
-    show_message "Threaded build failed" "The sequential build succeeded, but the CPS threaded build failed.\n\nLog: $LOG_FILE"
-    return 1
-  fi
-
-  rm -rf -- "$THREADED_DIST_DIR"
-  mkdir -p -- "$THREADED_DIST_DIR"
-  if ! cp -- "$STAGING_DIR/_build/default/wasm_cli.bc.wasm.js" "$THREADED_DIST_DIR/" ||
-     ! cp -a -- "$STAGING_DIR/_build/default/wasm_cli.bc.wasm.assets" "$THREADED_DIST_DIR/"; then
-    show_message "Threaded build failed" "The CPS Wasm files were built but could not be copied to the threaded output directory.\n\nLog: $LOG_FILE"
+  if ! build_ocaml_wasm >>"$LOG_FILE" 2>&1; then
+    show_message "Build failed" \
+      "The patched OCaml-to-Wasm build failed. The Makefile attempted to restore the spec submodule.\n\nPatch status: $(i31_patch_status)\nLog: $LOG_FILE"
     return 1
   fi
 
   {
     printf '\nCompleted: %s\n' "$(date --iso-8601=seconds)"
+    printf 'Final Wasm32 patch state: %s\n' "$(i31_patch_status)"
     printf 'Loader: %s\n' "$DIST_DIR/wasm_cli.bc.wasm.js"
     printf 'Assets: %s\n' "$DIST_DIR/wasm_cli.bc.wasm.assets"
     printf 'Threaded loader: %s\n' "$THREADED_DIST_DIR/wasm_cli.bc.wasm.js"
@@ -625,7 +570,7 @@ compile_interpreter() {
   } >>"$LOG_FILE"
 
   show_message "Build complete" \
-    "The spec interpreter was compiled using Wasm32 patch state: $compile_patch_state. The compilation itself did not modify the submodule.\n\nSequential: $DIST_DIR/wasm_cli.bc.wasm.js\nThreaded CPS: $THREADED_DIST_DIR/wasm_cli.bc.wasm.js\nLog: $LOG_FILE"
+    "The Makefile temporarily applied the Wasm32 patch, built both OCaml-to-Wasm variants, and restored the spec submodule.\n\nSequential: $DIST_DIR/wasm_cli.bc.wasm.js\nThreaded CPS: $THREADED_DIST_DIR/wasm_cli.bc.wasm.js\nLog: $LOG_FILE"
 }
 
 build_waste_libc() {
@@ -684,19 +629,26 @@ generate_browser_test_html() {
     printf 'Instruction quantum: %s\n\n' "$quantum"
   } >>"$html_log"
 
-  if ! have_command python3; then
-    printf 'error: Python 3 is not installed\n' >>"$html_log"
-    show_message "Browser test dashboard" "Python 3 is required to generate the HTML.\n\nLog: $html_log"
-    return 1
-  fi
-  if [[ ! -f "$loader_dist/wasm_cli.bc.wasm.js" ]]; then
-    printf 'error: compiled Wasm loader is missing\n' >>"$html_log"
-    show_message "Browser test dashboard" "Compile the OCaml interpreter to Wasm first.\n\nLog: $html_log"
+  if ! have_command python3 || ! have_command make || ! have_command opam; then
+    printf 'error: Python 3, make, and opam are required\n' >>"$html_log"
+    show_message "Browser test dashboard" \
+      "Python 3, make, and opam are required to build and generate the HTML.\n\nLog: $html_log"
     return 1
   fi
   if [[ ! -f "$BROWSER_TEST_GENERATOR" ]]; then
     printf 'error: generator is missing: %s\n' "$BROWSER_TEST_GENERATOR" >>"$html_log"
     show_message "Browser test dashboard" "The HTML generator is missing.\n\nLog: $html_log"
+    return 1
+  fi
+  if ! build_ocaml_wasm >>"$html_log" 2>&1; then
+    show_message "Browser test dashboard" \
+      "The OCaml-to-Wasm build failed. The Makefile attempted to restore the spec submodule.\n\nPatch status: $(i31_patch_status)\nLog: $html_log"
+    return 1
+  fi
+  if [[ ! -f "$loader_dist/wasm_cli.bc.wasm.js" ]]; then
+    printf 'error: compiled Wasm loader is missing after the build\n' >>"$html_log"
+    show_message "Browser test dashboard" \
+      "The OCaml build completed without the expected CPS loader.\n\nLog: $html_log"
     return 1
   fi
   if ! build_waste_libc true; then
@@ -752,11 +704,6 @@ generate_bash_html() {
     show_message "WASTE Bash" "Python 3, opam, clang/lld, and Binaryen are required.\n\nLog: $BASH_HTML_LOG"
     return 1
   fi
-  if [[ ! -f "$THREADED_DIST_DIR/wasm_cli.bc.wasm.js" ]]; then
-    printf 'error: CPS interpreter loader is missing\n' >>"$BASH_HTML_LOG"
-    show_message "WASTE Bash" "Compile the OCaml interpreter first.\n\nLog: $BASH_HTML_LOG"
-    return 1
-  fi
   if [[ ! -f "$REPO_ROOT/examples/bash.wat" || ! -f "$BASH_RUNTIME_BUILDER" ||
         ! -f "$BASH_HTML_GENERATOR" ]]; then
     printf 'error: Bash source or generator is missing\n' >>"$BASH_HTML_LOG"
@@ -770,11 +717,10 @@ generate_bash_html() {
   else
     printf 'Generating self-contained WASTE Bash page...\n'
   fi
-  if ! python3 "$BASH_RUNTIME_BUILDER" --repo-root "$REPO_ROOT" \
+  if ! build_ocaml_wasm >>"$BASH_HTML_LOG" 2>&1 ||
+     ! build_ocaml_native >>"$BASH_HTML_LOG" 2>&1 ||
+     ! python3 "$BASH_RUNTIME_BUILDER" --repo-root "$REPO_ROOT" \
       --interactive --output "$BASH_RUNTIME_WAST" >>"$BASH_HTML_LOG" 2>&1 ||
-     ! (cd -- "$INTERPRETER_DIR" &&
-       opam exec --switch="$SWITCH_NAME" -- dune build ./wasm.exe) \
-      >>"$BASH_HTML_LOG" 2>&1 ||
      ! python3 "$BASH_HTML_GENERATOR" --repo-root "$REPO_ROOT" \
       --launch "$BASH_RUNTIME_WAST" --output "$BASH_HTML" --quantum "$quantum" \
       --validator "$NATIVE_INTERPRETER" \
@@ -796,11 +742,6 @@ run_logged_test() {
 
 run_official_core_tests() {
   printf '\n== Official WebAssembly core suite ==\n' >>"$TEST_LOG"
-  if ! (cd -- "$INTERPRETER_DIR" &&
-      opam exec --switch="$SWITCH_NAME" -- dune build ./wasm.exe) \
-      >>"$TEST_LOG" 2>&1; then
-    return 1
-  fi
   python3 "$SPEC_DIR/test/core/run.py" \
     --wasm "$INTERPRETER_DIR/_build/default/wasm.exe" \
     >>"$TEST_LOG" 2>&1
@@ -815,11 +756,6 @@ run_official_tail_call_tests() {
   printf '\n== Official WebAssembly tail-call tests ==\n' >>"$TEST_LOG"
   printf 'Files:\n' >>"$TEST_LOG"
   printf '  %s\n' "${files[@]}" >>"$TEST_LOG"
-  if ! (cd -- "$INTERPRETER_DIR" &&
-      opam exec --switch="$SWITCH_NAME" -- dune build ./wasm.exe) \
-      >>"$TEST_LOG" 2>&1; then
-    return 1
-  fi
   local file status=0 started
   for file in "${files[@]}"; do
     started=$SECONDS
@@ -835,14 +771,8 @@ run_official_tail_call_tests() {
 }
 
 run_tail_call_smoke() {
-  local build_started=$SECONDS started
+  local started
   printf '\n== Short tail-call smoke benchmark ==\n' >>"$TEST_LOG"
-  if ! (cd -- "$INTERPRETER_DIR" &&
-      opam exec --switch="$SWITCH_NAME" -- dune build ./wasm.exe) \
-      >>"$TEST_LOG" 2>&1; then
-    return 1
-  fi
-  printf 'Build duration: %ds\n' "$((SECONDS - build_started))" >>"$TEST_LOG"
   started=$SECONDS
   "$NATIVE_INTERPRETER" "$REPO_ROOT/tests/tail-call-smoke.wast" \
     >>"$TEST_LOG" 2>&1
@@ -870,15 +800,103 @@ run_sandbox_isolation_tests() {
     contamination_args+=(-i "$file")
   done
   printf '\n== Scheduled test-sandbox isolation ==\n' >>"$TEST_LOG"
-  if ! (cd -- "$INTERPRETER_DIR" &&
-      opam exec --switch="$SWITCH_NAME" -- dune build ./wasm.exe) \
-      >>"$TEST_LOG" 2>&1; then
-    return 1
-  fi
   "$NATIVE_INTERPRETER" -ca --schedule --threads 2 -q 1 \
     "${isolation_args[@]}" >>"$TEST_LOG" 2>&1 || return 1
   "$NATIVE_INTERPRETER" -ca --schedule --threads 2 -q 10000 \
     "${contamination_args[@]}" >>"$TEST_LOG" 2>&1
+}
+
+compile_cli_engine() {
+  if ! have_command cc || ! have_command make || ! have_command flex || ! have_command bison; then
+    show_message "CLI engine compile" \
+      "cc, make, flex, and bison are required."
+    return 1
+  fi
+  mkdir -p "$C_ENGINE_BUILD"
+  : >"$C_ENGINE_HTML_LOG"
+  {
+    printf 'CLI engine compile\n'
+    printf 'Started: %s\n\n' "$(date --iso-8601=seconds)"
+  } >>"$C_ENGINE_HTML_LOG"
+
+  if have_command whiptail && [[ -t 0 && -t 1 ]]; then
+    whiptail --title "CLI engine compile" --infobox \
+      "Building the C engine with the CLI runtime...\n\nLog: $C_ENGINE_HTML_LOG" 9 78
+  else
+    printf 'Building the C engine with the CLI runtime...\n'
+  fi
+
+  if ! make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$C_ENGINE_BUILD" \
+      wast-native >>"$C_ENGINE_HTML_LOG" 2>&1; then
+    show_message "CLI engine compile failed" \
+      "The build failed.\n\nLog: $C_ENGINE_HTML_LOG"
+    return 1
+  fi
+  printf 'Completed: %s\n' "$(date --iso-8601=seconds)" >>"$C_ENGINE_HTML_LOG"
+  show_message "CLI engine compile" \
+    "The native WAST runner was built successfully.\n\nOutput: $C_ENGINE_RUNNER\nLog: $C_ENGINE_HTML_LOG"
+}
+
+run_cli_tests() {
+  if ! have_command cc || ! have_command make || ! have_command flex || ! have_command bison; then
+    show_message "CLI test suite" \
+      "cc, make, flex, and bison are required."
+    return 1
+  fi
+  if [[ ! -d "$C_ENGINE_CORE_TESTS" ]]; then
+    show_message "CLI test suite" \
+      "Core tests not found. Initialize the wasm-spec submodule first."
+    return 1
+  fi
+
+  : >"$TEST_LOG"
+  {
+    printf 'CLI engine full test suite\n'
+    printf 'Started: %s\n\n' "$(date --iso-8601=seconds)"
+  } >>"$TEST_LOG"
+
+  if have_command whiptail && [[ -t 0 && -t 1 ]]; then
+    whiptail --title "CLI test suite" --infobox \
+      "Building the engine and running all core WAST spec tests...\n\nLog: $TEST_LOG" 9 78
+  else
+    printf 'Running CLI test suite; log: %s\n' "$TEST_LOG"
+  fi
+
+  if ! make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$C_ENGINE_BUILD" \
+      wast-native >>"$TEST_LOG" 2>&1; then
+    show_message "CLI test suite failed" \
+      "The engine build failed.\n\nLog: $TEST_LOG"
+    return 1
+  fi
+
+  local total=0 passed=0 failed=0 status=0
+  local file
+  for file in "$C_ENGINE_CORE_TESTS"/*.wast; do
+    [[ -f "$file" ]] || continue
+    local name="${file##*/}"
+    printf '  %s ... ' "$name" >>"$TEST_LOG"
+    if "$C_ENGINE_RUNNER" "$file" >>"$TEST_LOG" 2>&1; then
+      printf 'ok\n' >>"$TEST_LOG"
+      ((passed++))
+    else
+      printf 'FAIL\n' >>"$TEST_LOG"
+      ((failed++))
+      status=1
+    fi
+    ((total++))
+  done
+
+  printf '\nFinished: %s\n' "$(date --iso-8601=seconds)" >>"$TEST_LOG"
+  printf 'Results: %d/%d passed, %d failed\n' "$passed" "$total" "$failed" >>"$TEST_LOG"
+
+  if ((status == 0)); then
+    show_message "CLI test suite passed" \
+      "$passed/$total spec tests passed.\n\nLog: $TEST_LOG"
+  else
+    show_message "CLI test suite failed" \
+      "$passed/$total passed, $failed failed.\n\nLog: $TEST_LOG"
+  fi
+  return "$status"
 }
 
 generate_c_engine_tests() {
@@ -1074,10 +1092,12 @@ run_test_group() {
     show_message "Runtime tests" "Node.js is required to run the runtime test suites."
     return 1
   fi
-  if [[ "$group" == spec || "$group" == tail || "$group" == tail-smoke || "$group" == isolation || "$group" == all ]] &&
-      { ! have_command opam || ! have_command python3; }; then
+  if [[ "$group" == spec || "$group" == tail || "$group" == tail-smoke ||
+        "$group" == isolation || "$group" == posix || "$group" == libc ||
+        "$group" == bash || "$group" == all ]] &&
+      { ! have_command make || ! have_command opam || ! have_command python3; }; then
     show_message "Runtime tests" \
-      "opam and Python 3 are required to run the official interpreter suite."
+      "make, opam, and Python 3 are required to build and run the OCaml interpreter suite."
     return 1
   fi
 
@@ -1096,6 +1116,29 @@ run_test_group() {
   fi
 
   local status=0
+  case "$group" in
+    spec|tail|tail-smoke|isolation)
+      printf '\n== Patched native OCaml interpreter build ==\n' >>"$TEST_LOG"
+      build_ocaml_native >>"$TEST_LOG" 2>&1 || status=1
+      ;;
+    posix|libc|bash)
+      printf '\n== Patched OCaml-to-Wasm interpreter build ==\n' >>"$TEST_LOG"
+      build_ocaml_wasm >>"$TEST_LOG" 2>&1 || status=1
+      ;;
+    all)
+      printf '\n== Patched OCaml interpreter builds ==\n' >>"$TEST_LOG"
+      build_ocaml_wasm >>"$TEST_LOG" 2>&1 || status=1
+      build_ocaml_native >>"$TEST_LOG" 2>&1 || status=1
+      ;;
+  esac
+  if ((status != 0)); then
+    printf '\nBuild failed; final patch state: %s\n' \
+      "$(i31_patch_status)" >>"$TEST_LOG"
+    show_message "Runtime tests failed" \
+      "The OCaml interpreter build failed. The Makefile attempted to restore the spec submodule.\n\nPatch status: $(i31_patch_status)\nLog: $TEST_LOG"
+    return 1
+  fi
+
   case "$group" in
     spec)
       run_official_core_tests || status=1
@@ -1219,39 +1262,37 @@ dependency_menu() {
 
 main_menu() {
   while true; do
-    local patch_state
     local choice
-    patch_state="$(i31_patch_status)"
-    choice="$(whiptail --title "OCaml to WebAssembly" --menu \
-      "Switch: $SWITCH_NAME    Spec: submodules/wasm-spec" 30 94 14 \
-      compile "Compile the OCaml interpreter to Wasm" \
-      c-engine "Build C engine and run relaxed-SIMD spec tests" \
-      c-html "Generate full C-engine browser dashboard (OCaml layout)" \
-      c-bash "Generate self-contained C-engine Bash page" \
-      libc "Build waste-libc.wasm and tests" \
-      html "Generate embedded browser test dashboard" \
-      bash "Generate self-contained WASTE Bash page" \
-      tests "Run runtime test suites" \
-      patch "Manage Wasm32 compatibility patch [$patch_state]" \
-      update "Safe pull/rebase and submodule update" \
-      status "Show dependency status" \
-      log "Show the last build log" \
-      quit "Exit" 3>&1 1>&2 2>&3)" || return 0
+    choice="$(whiptail --title "WASTE" --menu \
+      "WebAssembly Threading Environment" 28 78 16 \
+      -- \
+      sync    "Git pull/rebase with autostash" \
+      ---     "── Engine ──────────────────────────────────" \
+      cli-compile "Build engine with cli runtime" \
+      cli-test    "Run the full test suite in the cli runtime" \
+      html-test   "Compile engine into static HTML for browser tests" \
+      html-bash   "Compile engine and example bash into static HTML" \
+      ----    "── OCaml ───────────────────────────────────" \
+      ocaml-compile "Compile the OCaml interpreter to Wasm" \
+      ocaml-test    "Run the full test suite with OCaml interpreter" \
+      ocaml-html    "Generate embedded browser test dashboard" \
+      ocaml-bash    "Generate self-contained WASTE Bash page" \
+      -----   "────────────────────────────────────────────" \
+      libc    "Build waste-libc.wasm and tests" \
+      log     "Show the last build log" \
+      quit    "Exit" 3>&1 1>&2 2>&3)" || return 0
 
     case "$choice" in
-      compile) compile_interpreter || true ;;
-      c-engine) generate_c_engine_tests || true ;;
-      c-html) generate_c_engine_dashboard_html || true ;;
-      c-bash) generate_c_engine_bash_html || true ;;
+      sync) safe_repository_update || true ;;
+      cli-compile) compile_cli_engine || true ;;
+      cli-test) run_cli_tests || true ;;
+      html-test) generate_c_engine_dashboard_html || true ;;
+      html-bash) generate_c_engine_bash_html || true ;;
+      ocaml-compile) compile_interpreter || true ;;
+      ocaml-test) test_suite_menu ;;
+      ocaml-html) generate_browser_test_html || true ;;
+      ocaml-bash) generate_bash_html || true ;;
       libc) build_waste_libc || true ;;
-      html) generate_browser_test_html || true ;;
-      bash) generate_bash_html || true ;;
-      tests) test_suite_menu ;;
-      patch) i31_patch_menu ;;
-      update) safe_repository_update || true ;;
-      status)
-        check_dependencies || true
-        show_message "Dependency status" "$STATUS_TEXT" ;;
       log)
         if [[ -s "$LOG_FILE" ]]; then
           whiptail --title "Last build log" --textbox "$LOG_FILE" 28 100
@@ -1283,6 +1324,9 @@ main() {
       printf '%s\n\nSuggested system command:\n%s\n' "$STATUS_TEXT" "$(system_install_command)"
       return 1 ;;
     --install-deps) install_missing_dependencies ;;
+    --sync|--update) safe_repository_update ;;
+    --cli-compile) compile_cli_engine ;;
+    --cli-test) run_cli_tests ;;
     --compile) compile_interpreter ;;
     --build-libc) build_waste_libc ;;
     --generate-html) generate_browser_test_html ;;
@@ -1293,8 +1337,8 @@ main() {
       generate_c_engine_tests || c_engine_status=$?
       printf '\nFinished: %s\n' "$(date --iso-8601=seconds)" >>"$TEST_LOG"
       return "$c_engine_status" ;;
-    --c-engine-html) generate_c_engine_dashboard_html ;;
-    --c-engine-bash-html) generate_c_engine_bash_html ;;
+    --c-engine-html|--html-test) generate_c_engine_dashboard_html ;;
+    --c-engine-bash-html|--html-bash) generate_c_engine_bash_html ;;
     --c-engine-core-tests)
       : >"$TEST_LOG"
       c_engine_status=0
@@ -1304,7 +1348,6 @@ main() {
     --patch-status) i31_patch_status ;;
     --apply-i31) apply_i31_patch ;;
     --revert-i31) revert_i31_patch ;;
-    --update) safe_repository_update ;;
     wizard)
       dependency_menu || return 1
       main_menu ;;
