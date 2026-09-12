@@ -9,7 +9,7 @@ ENGINE_BUILD_DIR ?= ../../build/engine
 WAST_GEN_DIR := $(ENGINE_BUILD_DIR)/gen
 
 WASM_CC_FLAGS := --target=wasm32 -O2 -std=c11 -Wall -Wextra \
-	-fno-builtin -DYYDEBUG=0 -nostdlib \
+	-fno-builtin -DYYDEBUG=0 -DWASTE_ENGINE -nostdlib \
 	-I$(ENGINE_DIR) -I$(ENGINE_DIR)/lib/include
 
 # Engine core sources (platform-independent)
@@ -23,11 +23,11 @@ ENGINE_HEADERS := $(ENGINE_DIR)/wast_types.h $(ENGINE_DIR)/wast_linker.h \
 	$(ENGINE_DIR)/wast_simd.h
 
 # Freestanding library: shared (portable) sources from engine
-LIB_SHARED_SRC := $(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdio_1.c \
-	$(ENGINE_DIR)/lib/stdlib_1.c $(ENGINE_DIR)/lib/math.c $(ENGINE_DIR)/lib/errno.c
+LIB_SHARED_SRC := $(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdio.c \
+	$(ENGINE_DIR)/lib/stdlib.c $(ENGINE_DIR)/lib/math.c $(ENGINE_DIR)/lib/errno.c
 
 # Freestanding library: Wasm platform backend (local to html-rt)
-LIB_WASM_SRC := lib/stdlib_2.c lib/stdio_2.c lib/unistd_2.c
+LIB_WASM_SRC := lib/stdlib.c lib/stdio.c lib/unistd.c
 
 # Object files
 ENGINE_OBJS := $(BUILD_DIR)/wast_linker.o $(BUILD_DIR)/waste_exec.o \
@@ -49,8 +49,10 @@ WAST_WASM_TARGET := $(BUILD_DIR)/waste-wast.wasm
 
 LIBC_BUILDER := tools/build-waste-libc.py
 LIBC_CLIENTS := $(wildcard $(REPO_ROOT)/tests/libc-test/*-client.wast.inc)
-LIBC_SOURCES := lib-impl/waste-libc.wat lib-impl/waste-libc-helpers.c \
-	lib-impl/waste-libc-extra.c $(LIBC_CLIENTS) $(LIBC_BUILDER)
+LIBC_SOURCES := lib/stdlib.wat lib/stdio.c lib/wchar.c \
+	lib/locale.c lib/identity.c lib/string.c \
+	lib/stdlib.c lib/pattern.c lib/misc.c \
+	lib/common.h $(LIBC_CLIENTS) $(LIBC_BUILDER)
 LIBC_OUTPUT := $(BUILD_DIR)/waste-libc/waste-libc.wasm
 LIBC_FIXTURES := $(patsubst $(REPO_ROOT)/tests/libc-test/%-client.wast.inc,\
 	$(BUILD_DIR)/waste-libc/tests/%.wast,$(LIBC_CLIENTS))

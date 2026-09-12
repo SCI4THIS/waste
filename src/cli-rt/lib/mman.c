@@ -1,5 +1,5 @@
-/* mman_2_native.c -- Native mmap, munmap, and fstat via raw syscalls. */
-#include "syscall_native.h"
+/* mman.c -- Native mmap, munmap, and fstat via raw syscalls. */
+#include "include/syscall.h"
 
 /* fstat: copy from kernel stat to our freestanding stat layout.
  * Both layouts are identical on x86_64 so we can cast directly. */

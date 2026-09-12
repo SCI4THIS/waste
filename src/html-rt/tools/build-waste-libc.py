@@ -11,7 +11,7 @@ from pathlib import Path
 def named_module(source: str) -> str:
     marker = "(module"
     if not source.lstrip().startswith(marker):
-        raise RuntimeError("waste-libc.wat must contain one top-level module")
+        raise RuntimeError("stdlib.wat must contain one top-level module")
     offset = source.index(marker)
     return source[:offset] + "(module $waste_libc" + source[offset + len(marker) :]
 
@@ -23,7 +23,7 @@ def main() -> None:
     args = parser.parse_args()
 
     root = args.repo_root.resolve()
-    source_path = root / "src" / "html-rt" / "lib-impl" / "waste-libc.wat"
+    source_path = root / "src" / "html-rt" / "lib" / "stdlib.wat"
     client_root = root / "tests" / "libc-test"
     output_path = root / "build" / "html-rt" / "waste-libc" / "waste-libc.wasm"
     fixture_root = root / "build" / "html-rt" / "waste-libc" / "tests"
@@ -49,8 +49,14 @@ def main() -> None:
         subprocess.run(
             [
                 "clang", "--target=wasm32", "-O2", "-nostdlib", "-fno-builtin",
-                str(root / "src" / "html-rt" / "lib-impl" / "waste-libc-helpers.c"),
-                str(root / "src" / "html-rt" / "lib-impl" / "waste-libc-extra.c"),
+                str(root / "src" / "html-rt" / "lib" / "stdio.c"),
+                str(root / "src" / "html-rt" / "lib" / "wchar.c"),
+                str(root / "src" / "html-rt" / "lib" / "locale.c"),
+                str(root / "src" / "html-rt" / "lib" / "identity.c"),
+                str(root / "src" / "html-rt" / "lib" / "string.c"),
+                str(root / "src" / "html-rt" / "lib" / "stdlib.c"),
+                str(root / "src" / "html-rt" / "lib" / "pattern.c"),
+                str(root / "src" / "html-rt" / "lib" / "misc.c"),
                 "-Wl,--no-entry", "-Wl,--import-memory", "-Wl,--initial-memory=262144",
                 "-Wl,--allow-undefined", "-Wl,--export-all", "-Wl,--strip-all",
                 "-o", str(helpers_path),

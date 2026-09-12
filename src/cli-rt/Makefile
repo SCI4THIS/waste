@@ -19,12 +19,12 @@ ENGINE_HEADERS := $(ENGINE_DIR)/wast_types.h $(ENGINE_DIR)/wast_linker.h \
 	$(ENGINE_DIR)/wast_simd.h
 
 # Freestanding library: shared (portable) sources from engine
-LIB_SHARED := $(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdio_1.c \
-	$(ENGINE_DIR)/lib/stdlib_1.c $(ENGINE_DIR)/lib/math.c $(ENGINE_DIR)/lib/errno.c
+LIB_SHARED := $(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdio.c \
+	$(ENGINE_DIR)/lib/stdlib.c $(ENGINE_DIR)/lib/math.c $(ENGINE_DIR)/lib/errno.c
 
 # Freestanding library: native platform backend (local to cli-rt)
-LIB_NATIVE := lib/stdlib_2_native.c lib/stdio_2_native.c lib/fcntl_2_native.c \
-	lib/mman_2_native.c lib/time_2_native.c lib/unistd_2_native.c
+LIB_NATIVE := lib/stdlib.c lib/stdio.c lib/fcntl.c \
+	lib/mman.c lib/time.c lib/unistd.c
 
 # Generated parser objects
 WAST_TAB_C := $(WAST_GEN_DIR)/wast.tab.c

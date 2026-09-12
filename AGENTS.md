@@ -20,7 +20,7 @@ directory split, so use the commands below for current builds.
 Represent repository-owned OCaml changes in
 `submodules/wasm-spec-i31-int32.patch`, never in submodule history. Dashboard
 and packaging tools are in `src/html-rt/tools/`; guest libc sources are in
-`src/html-rt/lib-impl/`. Architecture notes are in `docs/`, and project probes
+`src/html-rt/lib/`. Architecture notes are in `docs/`, and project probes
 are in `tests/`, especially `tests/diy-posix-test/` and `tests/libc-test/`.
 Treat all of `build/` as generated output. Shared generated engine sources and
 logs go under `build/engine/`, native executables under `build/cli-rt/`, browser

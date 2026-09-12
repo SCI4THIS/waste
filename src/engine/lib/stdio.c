@@ -1,5 +1,5 @@
 /*
- * stdio_1.c — Portable snprintf/vsnprintf implementation.
+ * stdio.c — Portable snprintf/vsnprintf implementation.
  *
  * Shared by both native and Wasm builds.  Extracted from freestanding_lib.c.
  */

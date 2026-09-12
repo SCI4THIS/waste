@@ -1,6 +1,6 @@
-/* syscall_native.h -- Private Linux x86_64 syscall interface for native platform files. */
-#ifndef SYSCALL_NATIVE_H
-#define SYSCALL_NATIVE_H
+/* syscall.h -- Linux x86_64 syscall interface for native platform files. */
+#ifndef WASTE_SYSCALL_H
+#define WASTE_SYSCALL_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -135,4 +135,4 @@ _Noreturn static inline void sys_exit_group(int status) {
     __builtin_unreachable();
 }
 
-#endif /* SYSCALL_NATIVE_H */
+#endif /* WASTE_SYSCALL_H */

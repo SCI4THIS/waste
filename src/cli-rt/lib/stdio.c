@@ -1,5 +1,5 @@
-/* stdio_2_native.c -- Native FILE I/O via raw syscalls. */
-#include "syscall_native.h"
+/* stdio.c -- Native FILE I/O via raw syscalls. */
+#include "include/syscall.h"
 #include <stdio.h>
 
 /* Forward declarations for functions from category 1 files */

@@ -607,7 +607,7 @@ build_waste_libc() {
   {
     printf 'WASTE guest libc build\n'
     printf 'Started: %s\n' "$(date --iso-8601=seconds)"
-    printf 'Source: %s\n' "$REPO_ROOT/src/html-rt/lib-impl/waste-libc.wat"
+    printf 'Source: %s\n' "$REPO_ROOT/src/html-rt/lib/stdlib.wat"
     printf 'Output: %s\n\n' "$LIBC_OUTPUT"
   } >>"$LIBC_LOG"
 

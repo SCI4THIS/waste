@@ -1,5 +1,5 @@
-/* unistd_2_native.c -- Native close, isatty, and _start entry point. */
-#include "syscall_native.h"
+/* unistd.c -- Native close, isatty, and _start entry point. */
+#include "include/syscall.h"
 
 int close(int fd) {
     return (int)sys_close(fd);

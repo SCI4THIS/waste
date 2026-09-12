@@ -1,5 +1,5 @@
 /*
- * stdlib_1.c — Integer conversions, float scanning helper, and misc utilities.
+ * stdlib.c — Integer conversions, float scanning helper, and misc utilities.
  *
  * Shared by both native and Wasm builds.  Extracted from freestanding_lib.c.
  */

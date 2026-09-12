@@ -215,7 +215,7 @@ def main() -> None:
         optimized_libc_wasm = temporary / "optimized-libc.wasm"
         optimized_bash_wasm = temporary / "optimized-bash.wasm"
 
-        core_source = (root / "src" / "html-rt" / "lib-impl" / "waste-libc.wat").read_text(encoding="utf-8")
+        core_source = (root / "src" / "html-rt" / "lib" / "stdlib.wat").read_text(encoding="utf-8")
         core_source, changed = re.subn(
             r'\(memory \(export "memory"\) 4\)',
             '(memory (export "memory") 5)', core_source, count=1,
@@ -226,8 +226,16 @@ def main() -> None:
         run(["wasm-as", str(core_wat), "-o", str(core_wasm), "--enable-bulk-memory"])
         run([
             "clang", "--target=wasm32", "-O2", "-nostdlib", "-fno-builtin",
-            "-DWASTE_POSIX_IO", str(root / "src" / "html-rt" / "lib-impl" / "waste-libc-helpers.c"),
-            str(root / "src" / "html-rt" / "lib-impl" / "waste-libc-extra.c"), "-Wl,--no-entry",
+            "-DWASTE_POSIX_IO",
+            str(root / "src" / "html-rt" / "lib" / "stdio.c"),
+            str(root / "src" / "html-rt" / "lib" / "wchar.c"),
+            str(root / "src" / "html-rt" / "lib" / "locale.c"),
+            str(root / "src" / "html-rt" / "lib" / "identity.c"),
+            str(root / "src" / "html-rt" / "lib" / "string.c"),
+            str(root / "src" / "html-rt" / "lib" / "stdlib.c"),
+            str(root / "src" / "html-rt" / "lib" / "pattern.c"),
+            str(root / "src" / "html-rt" / "lib" / "misc.c"),
+            "-Wl,--no-entry",
             "-Wl,--import-memory", "-Wl,--import-table", "-Wl,--global-base=262144",
             "-Wl,-z,stack-size=16384", "-Wl,--initial-memory=327680",
             "-Wl,--allow-undefined", "-Wl,--export-all", "-Wl,--strip-all",

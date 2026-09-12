@@ -1,4 +1,11 @@
-/* Wasm stdlib implementation (category 2: emulated in-browser) */
+/* stdlib.c — Wasm stdlib implementation.
+ *
+ * WASTE_ENGINE build: JS-hosted float conversion, getenv, exit, heap allocator.
+ * Guest libc build:   number parsing, float conversion, arithmetic, sorting.
+ */
+
+#ifdef WASTE_ENGINE
+/* ---- Engine build: strtod/strtof via JS host, heap allocator ---- */
 #include <stddef.h>
 #include <stdint.h>
 
@@ -201,3 +208,38 @@ void *realloc(void *ptr, size_t size) {
     free(ptr);
     return fresh;
 }
+
+#else
+/* ---- Guest libc: number parsing, float conversion, arithmetic, sorting ---- */
+#include "common.h"
+
+/* Forward declaration from string.c */
+extern void *memset(void *d, i32 c, u32 n);
+
+static i32 digit_value(i32 c){if(c>='0'&&c<='9')return c-'0';c=lower_ascii(c);return c>='a'&&c<='z'?c-'a'+10:-1;}
+static u64 parse_unsigned(const char*s,char**end,i32 base,i32*negative){while(*s==' '||*s=='\t'||*s=='\n')s++;*negative=0;if(*s=='+'||*s=='-'){*negative=*s=='-';s++;}if((base==0||base==16)&&s[0]=='0'&&(s[1]=='x'||s[1]=='X')){base=16;s+=2;}else if(base==0)base=*s=='0'?8:10;const char*start=s;u64 value=0;i32 d;while((d=digit_value(*s))>=0&&d<base){u64 next=value*(u32)base+(u32)d;if(next<value){value=~0ULL;*__errno_location()=34;}else value=next;s++;}if(end)*end=(char*)(s==start?start:s);return value;}
+i32 strtol(const char*s,char**end,i32 base){i32 neg;u64 v=parse_unsigned(s,end,base,&neg);if(neg)return v>0x80000000ULL?(*__errno_location()=34,0x80000000U):(i32)(0-(u32)v);if(v>0x7fffffffULL){*__errno_location()=34;return 0x7fffffff;}return(i32)v;}
+i64 strtoimax(const char*s,char**end,i32 base){i32 neg;u64 v=parse_unsigned(s,end,base,&neg);if(neg)return v>0x8000000000000000ULL?(*__errno_location()=34,(i64)0x8000000000000000ULL):(i64)(0-v);if(v>0x7fffffffffffffffULL){*__errno_location()=34;return 0x7fffffffffffffffLL;}return(i64)v;}
+u64 strtoumax(const char*s,char**end,i32 base){i32 neg;u64 v=parse_unsigned(s,end,base,&neg);return neg?0-v:v;}
+i32 atoi(const char*s){return strtol(s,0,10);}
+
+static double power10(i32 exponent){double value=1.0;if(exponent>0)while(exponent--)value*=10.0;else while(exponent++)value/=10.0;return value;}
+double strtod(const char*s,char**end){while(*s==' '||*s=='\t')s++;i32 neg=0;if(*s=='+'||*s=='-'){neg=*s=='-';s++;}const char*start=s;double value=0;while(*s>='0'&&*s<='9')value=value*10+(*s++-'0');if(*s=='.'){s++;double place=.1;while(*s>='0'&&*s<='9'){value+=(*s++-'0')*place;place*=.1;}}if(*s=='e'||*s=='E'){const char*mark=s++;i32 eneg=0;if(*s=='+'||*s=='-'){eneg=*s=='-';s++;}i32 e=0,any=0;while(*s>='0'&&*s<='9'){any=1;e=e*10+(*s++-'0');}if(any)value*=power10(eneg?-e:e);else s=mark;}if(end)*end=(char*)(s==start?start:s);return neg?-value:value;}
+
+static void double_to_quad(u64*out,double value){union{double d;u64 u;}bits;bits.d=value;u64 sign=bits.u>>63,exp=(bits.u>>52)&0x7ff,frac=bits.u&0xfffffffffffffULL;if(exp==0){out[0]=0;out[1]=sign<<63;return;}if(exp==0x7ff){out[0]=0;out[1]=(sign<<63)|(0x7fffULL<<48)|(frac?1ULL<<47:0);return;}u64 qexp=exp-1023+16383;out[0]=frac<<60;out[1]=(sign<<63)|(qexp<<48)|(frac>>4);}
+void strtold(u64*out,const char*s,char**end){double_to_quad(out,strtod(s,end));}
+void __floatditf(u64*out,i64 value){u64 sign=value<0,magnitude=sign?(u64)(-(value+1))+1:(u64)value;if(!magnitude){out[0]=out[1]=0;return;}u32 top=0;for(u64 scan=magnitude;scan>>=1;)top++;u64 fraction=magnitude-(1ULL<<top),shift=112-top,low=0,high=0;if(shift>=64)high=fraction<<(shift-64);else{low=fraction<<shift;high=fraction>>(64-shift);}out[0]=low;out[1]=(sign<<63)|((u64)(16383+top)<<48)|high;}
+/* Keep this as explicit word arithmetic.  Clang otherwise recognizes the
+   usual 32-bit decomposition and lowers it back to a call to __multi3. */
+__attribute__((noinline)) static u64 multiply_high(u64 a,u64 b){volatile u64 lo=0,hi=0,mlo=a,mhi=0,bits=b;for(u32 i=0;i<64;i++){if(bits&1){u64 old=lo;lo+=mlo;hi+=mhi+(lo<old);}bits>>=1;mhi=(mhi<<1)|(mlo>>63);mlo<<=1;}return hi;}
+void __multi3(u64*out,u64 a0,u64 a1,u64 b0,u64 b1){out[0]=a0*b0;out[1]=multiply_high(a0,b0)+a0*b1+a1*b0;}
+void imaxdiv(i64*out,i64 numerator,i64 denominator){out[0]=numerator/denominator;out[1]=numerator%denominator;}
+
+void *sh_malloc(u32 size,const char*file,i32 line){(void)file;(void)line;return malloc(size);}
+void *sh_realloc(void*p,u32 size,const char*file,i32 line){(void)file;(void)line;return realloc(p,size);}
+void sh_free(void*p,const char*file,i32 line){(void)file;(void)line;free(p);}
+
+static void swap_bytes(unsigned char*a,unsigned char*b,u32 n){while(n--){unsigned char t=*a;*a++=*b;*b++=t;}}
+void qsort(void*base,u32 count,u32 size,i32(*compare)(const void*,const void*)){unsigned char*p=base;if(!size)return;for(u32 i=1;i<count;i++)for(u32 j=i;j&&compare(p+(j-1)*size,p+j*size)>0;j--)swap_bytes(p+(j-1)*size,p+j*size,size);}
+
+#endif /* WASTE_ENGINE */

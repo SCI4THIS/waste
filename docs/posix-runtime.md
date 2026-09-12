@@ -216,7 +216,7 @@ descriptor, permission, blocking, and signal semantics in one place.
 
 ## Guest libc and allocator
 
-`libc/waste-libc.wat` owns and exports a linear memory intended to be imported
+`lib/stdlib.wat` owns and exports a linear memory intended to be imported
 by a relinked application module. Its boundary-tag allocator provides
 `malloc`, `calloc`, `realloc`, `free`, `sbrk`, and `__errno_location`.
 Initialization receives the application's exported `__heap_base`; `errno`
@@ -226,8 +226,8 @@ when a request needs multiple pages. This supplies the MORECORE behavior needed
 to substitute dlmalloc later without exposing allocator metadata to OCaml or
 JavaScript.
 
-`libc/waste-libc-helpers.c` and `libc/waste-libc-extra.c` are compiled with
-clang's wasm32 ABI and merged with that allocator. They supply memory-backed
+The libc C sources (`lib/stdio.c`, `lib/string.c`, etc.) are compiled
+with clang's wasm32 ABI and merged with that allocator. They supply memory-backed
 `FILE` streams and formatting; UTF-8 multibyte/wide conversion; C.UTF-8 locale
 behavior; configurable identity databases; memory/string and numeric helpers;
 compiler ABI arithmetic; sorting, glob and basic regex matching; resource

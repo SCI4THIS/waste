@@ -1,4 +1,4 @@
-;; Appended to a named copy of libc/waste-libc.wat by
+;; Appended to a named copy of lib/stdlib.wat by
 ;; tools/build-waste-libc.py. This client imports the same memory and functions
 ;; that a future relinked examples/bash.wat will consume.
 (register "waste-libc" $waste_libc)

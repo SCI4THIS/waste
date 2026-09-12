@@ -1,5 +1,5 @@
-/* stdlib_2_native.c -- Native getenv, exit, heap allocator, strtod/strtof. */
-#include "syscall_native.h"
+/* stdlib.c -- Native getenv, exit, heap allocator, strtod/strtof. */
+#include "include/syscall.h"
 
 /* Forward declarations for functions from category 1 files */
 int snprintf(char *buf, size_t n, const char *fmt, ...);

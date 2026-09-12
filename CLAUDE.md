@@ -161,13 +161,16 @@ See `docs/posix-runtime.md` for control-page ABI, signal delivery, non-local-jum
 
 ### Guest libc: waste-libc
 
-Located in `src/html-rt/lib-impl/waste-libc.wat` and `src/html-rt/lib-impl/waste-libc-helpers.c`, this owns guest linear memory and provides:
+Split across `src/html-rt/lib/` in focused modules, this owns guest linear memory and provides:
 
-- Boundary-tag allocator exporting `malloc`, `calloc`, `realloc`, `free`, `sbrk`, `__errno_location`
+- Boundary-tag allocator exporting `malloc`, `calloc`, `realloc`, `free`, `sbrk`, `__errno_location` (`lib/stdlib.wat`)
 - `memory.grow`-backed MORECORE for heap expansion
-- Memory-backed `FILE` streams, wasm32 variadic formatting, UTF-8 multibyte/wide-char conversion
-- C.UTF-8 locale, identity/passwd/group/service records
-- String, conversion, regex, resource-limit, time-formatting, terminal, and diagnostic helpers
+- Memory-backed `FILE` streams and wasm32 variadic formatting (`lib/stdio.c`)
+- UTF-8 multibyte/wide-char conversion (`lib/wchar.c`)
+- C.UTF-8 locale (`lib/locale.c`), identity/passwd/group/service records (`lib/identity.c`)
+- String and conversion helpers (`lib/string.c`, `lib/stdlib.c`)
+- Regex and pattern matching (`lib/pattern.c`), resource-limit, time-formatting, terminal, and diagnostic helpers (`lib/misc.c`)
+- Shared declarations across libc modules (`lib/common.h`)
 
 `src/html-rt/tools/build-bash-runtime.py` relinks Bash and libc to a neutral `waste-runtime` owner, then registers libc as an overlay on the OCaml host's `env` namespace. Operations requiring evaluator state (directory traversal, execve, descriptor readiness, dynamic loading, raw socket creation) deliberately return `ENOSYS` and must cross the OCaml process/VFS layer or the optional WebSocket broker.
 
@@ -226,10 +229,15 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 ### Source: Browser/Wasm Runtime (`src/html-rt/`)
 - `browser_api.c` — Exported WAST API, legacy per-module linking, browser streaming, yield/resume
 - `posix_stubs.c/h` — POSIX host function dispatch tables and `browser_host_resolver`
-- `lib/stdlib_2.c`, `lib/stdio_2.c`, `lib/unistd_2.c` — Wasm platform backend (allocator, I/O stubs, imports)
-- `lib-impl/waste-libc.wat` — WebAssembly guest libc core (memory, allocator, exports)
-- `lib-impl/waste-libc-helpers.c` — C helpers (FILE, formatting, locale, accounts, time, regex)
-- `lib-impl/waste-libc-extra.c` — Additional utilities
+- `lib/stdlib.c`, `lib/stdio.c`, `lib/unistd.c` — Wasm platform backend and guest libc (guarded by `WASTE_ENGINE`)
+- `lib/stdlib.wat` — WebAssembly guest libc core (memory, allocator, exports)
+- `lib/wchar.c` — UTF-8 multibyte/wide-char conversion
+- `lib/locale.c` — C.UTF-8 locale support
+- `lib/identity.c` — passwd/group/service records
+- `lib/string.c` — String and conversion helpers
+- `lib/pattern.c` — Regex and pattern matching
+- `lib/misc.c` — Resource-limit, time-formatting, terminal, and diagnostic helpers
+- `lib/common.h` — Shared declarations across guest libc modules
 - `tools/generate-browser-tests.py` — Collects `.wast` files, embeds interpreter, produces offline dashboard HTML
 - `tools/generate-bash-html.py` — Generates self-contained Bash interpreter page with CPS loader and libc
 - `tools/build-bash-runtime.py` — Relinks Bash and libc binaries to shared `waste-runtime` module
@@ -368,10 +376,16 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 │   │       └── include/              # Freestanding C headers
 │   │
 │   └── browser/                       # Browser packaging layer
-│       ├── lib-impl/                  # Guest libc (category 2 POSIX)
-│       │   ├── waste-libc.wat         # Wasm core (memory, allocator)
-│       │   ├── waste-libc-helpers.c   # C helpers (FILE, locale, time)
-│       │   └── waste-libc-extra.c     # Additional utilities
+│       ├── lib/                       # Platform backend + guest libc
+│       │   ├── stdlib.c, stdio.c, unistd.c  # Wasm platform backend
+│       │   ├── stdlib.wat             # Wasm core (memory, allocator)
+│       │   ├── wchar.c               # UTF-8 multibyte/wide-char
+│       │   ├── locale.c              # C.UTF-8 locale
+│       │   ├── identity.c            # passwd/group/service records
+│       │   ├── string.c              # String/conversion helpers
+│       │   ├── pattern.c             # Regex and pattern matching
+│       │   ├── misc.c                # Resource, time, terminal, diag
+│       │   └── common.h              # Shared guest libc declarations
 │       └── tools/                     # HTML generators & builders
 │           ├── generate-browser-tests.py
 │           ├── generate-bash-html.py
