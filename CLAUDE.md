@@ -161,7 +161,7 @@ See `docs/posix-runtime.md` for control-page ABI, signal delivery, non-local-jum
 
 ### Guest libc: waste-libc
 
-Located in `src/browser/lib-impl/waste-libc.wat` and `src/browser/lib-impl/waste-libc-helpers.c`, this owns guest linear memory and provides:
+Located in `src/html-rt/lib-impl/waste-libc.wat` and `src/html-rt/lib-impl/waste-libc-helpers.c`, this owns guest linear memory and provides:
 
 - Boundary-tag allocator exporting `malloc`, `calloc`, `realloc`, `free`, `sbrk`, `__errno_location`
 - `memory.grow`-backed MORECORE for heap expansion
@@ -169,7 +169,7 @@ Located in `src/browser/lib-impl/waste-libc.wat` and `src/browser/lib-impl/waste
 - C.UTF-8 locale, identity/passwd/group/service records
 - String, conversion, regex, resource-limit, time-formatting, terminal, and diagnostic helpers
 
-`src/browser/tools/build-bash-runtime.py` relinks Bash and libc to a neutral `waste-runtime` owner, then registers libc as an overlay on the OCaml host's `env` namespace. Operations requiring evaluator state (directory traversal, execve, descriptor readiness, dynamic loading, raw socket creation) deliberately return `ENOSYS` and must cross the OCaml process/VFS layer or the optional WebSocket broker.
+`src/html-rt/tools/build-bash-runtime.py` relinks Bash and libc to a neutral `waste-runtime` owner, then registers libc as an overlay on the OCaml host's `env` namespace. Operations requiring evaluator state (directory traversal, execve, descriptor readiness, dynamic loading, raw socket creation) deliberately return `ENOSYS` and must cross the OCaml process/VFS layer or the optional WebSocket broker.
 
 Test fixture:
 ```sh
@@ -223,7 +223,10 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 - `lib/include/` — Freestanding headers (stdio.h, stdlib.h, string.h, math.h, etc.) used via `-Ilib/include`
 - `Makefile` — Build rules for native and Wasm targets
 
-### Source: Browser (`src/browser/`)
+### Source: Browser/Wasm Runtime (`src/html-rt/`)
+- `browser_api.c` — Exported WAST API, legacy per-module linking, browser streaming, yield/resume
+- `posix_stubs.c/h` — POSIX host function dispatch tables and `browser_host_resolver`
+- `lib/stdlib_2.c`, `lib/stdio_2.c`, `lib/unistd_2.c` — Wasm platform backend (allocator, I/O stubs, imports)
 - `lib-impl/waste-libc.wat` — WebAssembly guest libc core (memory, allocator, exports)
 - `lib-impl/waste-libc-helpers.c` — C helpers (FILE, formatting, locale, accounts, time, regex)
 - `lib-impl/waste-libc-extra.c` — Additional utilities
@@ -290,7 +293,7 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 ### Before Committing
 
 - Run `bash -n start.sh` to check shell syntax
-- Run Python bytecode checks for changed `src/browser/tools/*.py` files
+- Run Python bytecode checks for changed `src/html-rt/tools/*.py` files
 - Run `git diff --check` to catch trailing whitespace
 - Verify shell and Python conform to surrounding indentation style
 

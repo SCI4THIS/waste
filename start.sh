@@ -22,22 +22,22 @@ THREADED_DIST_DIR="$BUILD_ROOT/dist-threaded"
 LOG_DIR="$REPO_ROOT/build/logs"
 LOG_FILE="$LOG_DIR/build.log"
 UPDATE_LOG="$LOG_DIR/update.log"
-BROWSER_TEST_GENERATOR="$REPO_ROOT/src/browser/tools/generate-browser-tests.py"
+BROWSER_TEST_GENERATOR="$REPO_ROOT/src/html-rt/tools/generate-browser-tests.py"
 BROWSER_TEST_HTML="$BUILD_ROOT/browser-tests.html"
 HTML_LOG="$LOG_DIR/html.log"
-BASH_RUNTIME_BUILDER="$REPO_ROOT/src/browser/tools/build-bash-runtime.py"
-BASH_HTML_GENERATOR="$REPO_ROOT/src/browser/tools/generate-bash-html.py"
+BASH_RUNTIME_BUILDER="$REPO_ROOT/src/html-rt/tools/build-bash-runtime.py"
+BASH_HTML_GENERATOR="$REPO_ROOT/src/html-rt/tools/generate-bash-html.py"
 BASH_RUNTIME_WAST="$REPO_ROOT/build/bash/bash-runtime.wast"
 BASH_HTML="$BUILD_ROOT/bash.html"
 BASH_HTML_LOG="$LOG_DIR/bash-html.log"
-LIBC_BUILDER="$REPO_ROOT/src/browser/tools/build-waste-libc.py"
+LIBC_BUILDER="$REPO_ROOT/src/html-rt/tools/build-waste-libc.py"
 LIBC_OUTPUT="$REPO_ROOT/build/waste-libc/waste-libc.wasm"
 LIBC_LOG="$LOG_DIR/libc-build.log"
 TEST_LOG="$LOG_DIR/test.log"
 C_ENGINE_BUILD="$REPO_ROOT/build/engine"
 C_ENGINE_RUNNER="$C_ENGINE_BUILD/waste-wast"
 C_ENGINE_WASM="$C_ENGINE_BUILD/waste-wast.wasm"
-C_ENGINE_GENERATOR="$REPO_ROOT/src/browser/tools/generate-c-engine-tests.py"
+C_ENGINE_GENERATOR="$REPO_ROOT/src/html-rt/tools/generate-c-engine-tests.py"
 C_ENGINE_HTML="$C_ENGINE_BUILD/browser-tests-c-engine.html"
 C_ENGINE_CORE_HTML="$C_ENGINE_BUILD/browser-tests-c-engine-core.html"
 C_ENGINE_OCAML_LAYOUT_HTML="$C_ENGINE_BUILD/browser-tests-c-engine-ocaml-layout.html"
@@ -48,7 +48,7 @@ C_ENGINE_MEMORY64_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/memory64"
 C_ENGINE_BULK_MEMORY_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/bulk-memory"
 C_ENGINE_DIY_POSIX_TESTS="$REPO_ROOT/tests/diy-posix-test"
 C_ENGINE_BROWSER_TEST="$REPO_ROOT/tests/c-engine-browser-runtime.cjs"
-C_ENGINE_BASH_GENERATOR="$REPO_ROOT/src/browser/tools/generate-c-engine-bash-html.py"
+C_ENGINE_BASH_GENERATOR="$REPO_ROOT/src/html-rt/tools/generate-c-engine-bash-html.py"
 C_ENGINE_BASH_BROWSER_TEST="$REPO_ROOT/tests/c-engine-bash-browser-runtime.cjs"
 C_ENGINE_BASH_RUNTIME_WAST="$REPO_ROOT/build/engine-bash/bash-runtime.wast"
 C_ENGINE_BASH_HTML="$C_ENGINE_BUILD/bash.html"
@@ -635,7 +635,7 @@ build_waste_libc() {
   {
     printf 'WASTE guest libc build\n'
     printf 'Started: %s\n' "$(date --iso-8601=seconds)"
-    printf 'Source: %s\n' "$REPO_ROOT/src/browser/lib-impl/waste-libc.wat"
+    printf 'Source: %s\n' "$REPO_ROOT/src/html-rt/lib-impl/waste-libc.wat"
     printf 'Output: %s\n\n' "$LIBC_OUTPUT"
   } >>"$LIBC_LOG"
 
@@ -893,13 +893,11 @@ generate_c_engine_tests() {
     return 1
   fi
   printf '\n== C engine browser tests (relaxed-SIMD and DIY POSIX) ==\n' >>"$TEST_LOG"
-  make -C "$REPO_ROOT/src/engine" \
+  make -C "$REPO_ROOT/src/cli-rt" \
     BUILD_DIR="$C_ENGINE_BUILD" \
-    WAST_BUILD_DIR="$C_ENGINE_BUILD" \
     wast-native >>"$TEST_LOG" 2>&1 || return 1
-  make -C "$REPO_ROOT/src/engine" \
+  make -C "$REPO_ROOT/src/html-rt" \
     BUILD_DIR="$C_ENGINE_BUILD" \
-    WAST_BUILD_DIR="$C_ENGINE_BUILD" \
     wast-browser >>"$TEST_LOG" 2>&1 || return 1
   python3 "$C_ENGINE_GENERATOR" \
     --runner "$C_ENGINE_RUNNER" \
@@ -947,9 +945,10 @@ generate_c_engine_dashboard_html() {
     printf 'Generating C-engine browser dashboard in OCaml-Wasm layout...\n'
   fi
 
-  if ! make -C "$REPO_ROOT/src/engine" BUILD_DIR="$C_ENGINE_BUILD" \
-      WAST_BUILD_DIR="$C_ENGINE_BUILD" wast-native wast-browser \
-      >>"$C_ENGINE_HTML_LOG" 2>&1; then
+  if ! { make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$C_ENGINE_BUILD" \
+      wast-native >>"$C_ENGINE_HTML_LOG" 2>&1 && \
+    make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$C_ENGINE_BUILD" \
+      wast-browser >>"$C_ENGINE_HTML_LOG" 2>&1; }; then
     show_message "C-engine browser dashboard failed" \
       "The C engine build failed.\n\nLog: $C_ENGINE_HTML_LOG"
     return 1
@@ -1006,8 +1005,8 @@ generate_c_engine_bash_html() {
   fi
 
   # Build the C engine Wasm (native yield/resume, no asyncify)
-  if ! make -C "$REPO_ROOT/src/engine" BUILD_DIR="$C_ENGINE_BUILD" \
-      WAST_BUILD_DIR="$C_ENGINE_BUILD" wast-browser \
+  if ! make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$C_ENGINE_BUILD" \
+      wast-browser \
       >>"$C_ENGINE_BASH_LOG" 2>&1; then
     show_message "C-engine Bash failed" \
       "The C engine build failed.\n\nLog: $C_ENGINE_BASH_LOG"
@@ -1059,8 +1058,10 @@ generate_c_engine_core_tests() {
     return 1
   fi
   printf '\n== C engine browser tests (official core WAST) ==\n' >>"$TEST_LOG"
-  make -C "$REPO_ROOT/src/engine" BUILD_DIR="$C_ENGINE_BUILD" \
-    WAST_BUILD_DIR="$C_ENGINE_BUILD" wast-native wast-browser >>"$TEST_LOG" 2>&1 || return 1
+  make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$C_ENGINE_BUILD" \
+    wast-native >>"$TEST_LOG" 2>&1 || return 1
+  make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$C_ENGINE_BUILD" \
+    wast-browser >>"$TEST_LOG" 2>&1 || return 1
   python3 "$C_ENGINE_GENERATOR" --runner "$C_ENGINE_RUNNER" --wasm "$C_ENGINE_WASM" \
     --tests "$C_ENGINE_CORE_TESTS" --output "$C_ENGINE_CORE_HTML" >>"$TEST_LOG" 2>&1 || return 1
   node "$C_ENGINE_BROWSER_TEST" "$C_ENGINE_CORE_HTML" >>"$TEST_LOG" 2>&1
