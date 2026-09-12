@@ -80,7 +80,7 @@ Clang, Wasm linker, and Binaryen checks. Replace the ad hoc C build scripts with
 one reproducible build description that provides at least:
 
 ```text
-build/cli-rt/waste-wast
+build/cli-rt/waste-cli
 build/cli-rt/i32-smoke-sanitize
 build/html-rt/waste-wast.wasm
 ```

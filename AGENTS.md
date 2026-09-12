@@ -58,14 +58,14 @@ document; broker use is optional.
   artifacts, and restore the spec submodule even if the build fails.
 - `make -C submodules SWITCH_NAME=waste-wasm native`: use the same patch
   transaction to build the native OCaml differential oracle.
-- `make -C src/cli-rt BUILD_DIR=../../build/cli-rt wast-native
-  wast-mmap-test`: build the native runner and fast mmap parser harness.
+- `make -C src/cli-rt BUILD_DIR=../../build/cli-rt wast-native`: build the
+  native CLI runner.
 - `make -C src/cli-rt BUILD_DIR=../../build/cli-rt i32-smoke`: run the native
   warnings-as-errors ASan/UBSan executor smoke gate.
 - `make -C src/html-rt BUILD_DIR=../../build/html-rt wast-browser`: compile the
   same engine semantics for the browser.
-- `build/cli-rt/wast-mmap-test FILE...`: rapidly parse selected WAST files
-  without Node or a browser.
+- `build/cli-rt/waste-cli --parse-only FILE...`: rapidly parse selected WAST
+  files without Node or a browser.
 - `node tests/c-engine-browser-runtime.cjs build/html-rt/test.html`: exercise a
   generated offline C-engine dashboard through its worker harness.
 - `node tests/c-engine-bash-browser-runtime.cjs build/html-rt/bash.html`: verify

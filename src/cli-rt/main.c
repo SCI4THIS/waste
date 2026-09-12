@@ -1,9 +1,17 @@
+/* main.c -- WASTE CLI entry point: WAST spec runner, browser-spec JSON
+ * emitter, assertion counter, and parse-only benchmark. */
+
 #include "wast_linker.h"
 #include "wast_runner.h"
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
 static const char *basename_simple(const char *path) {
     const char *last = path;
@@ -384,11 +392,7 @@ static int run_browser_spec(const char *path) {
     return 0;
 }
 
-/* ---- detect whether a file needs the general interpreter ----
-   Files with SIMD keywords go through the flex/bison path;
-   everything else goes through the general WAT interpreter.      */
-
-/* ---- entry point ---- */
+/* ---- count mode ---- */
 
 static int run_count(const char *path) {
     wast_script *script = (wast_script *)calloc(1, sizeof(*script));
@@ -406,14 +410,83 @@ static int run_count(const char *path) {
     return 0;
 }
 
+/* ---- parse-only mode (mmap benchmark) ---- */
+
+static double elapsed_ms(const struct timespec *a, const struct timespec *b) {
+    return (double)(b->tv_sec - a->tv_sec) * 1000.0 +
+           (double)(b->tv_nsec - a->tv_nsec) / 1000000.0;
+}
+
+static int parse_only_file(const char *path, size_t *bytes_out, double *ms_out) {
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) { perror(path); return 1; }
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size < 0) {
+        perror(path); close(fd); return 1;
+    }
+    size_t length = (size_t)st.st_size;
+    void *mapped = NULL;
+    if (length != 0) {
+        mapped = mmap(NULL, length, PROT_READ, MAP_PRIVATE, fd, 0);
+        if (mapped == MAP_FAILED) { perror(path); close(fd); return 1; }
+    }
+    struct timespec begin, end;
+    clock_gettime(CLOCK_MONOTONIC, &begin);
+    wast_script *script = (wast_script *)calloc(1, sizeof(*script));
+    if (!script) {
+        fprintf(stderr, "FAIL %s: out of memory\n", path);
+        if (mapped) munmap(mapped, length);
+        close(fd);
+        return 1;
+    }
+    int rc = wast_parse_bytes((const char *)(length ? mapped : ""), length, script);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    if (mapped) munmap(mapped, length);
+    close(fd);
+    *bytes_out = length;
+    *ms_out = elapsed_ms(&begin, &end);
+    if (rc != 0) {
+        fprintf(stderr, "FAIL %s: %s\n", path,
+                script->error[0] ? script->error : "parse failed");
+        wast_script_free(script);
+        free(script);
+        return 1;
+    }
+    printf("PASS %s (%zu bytes, %.3f ms, %d commands, %d module group%s, %d assertions)\n",
+           path, length, *ms_out, script->command_count, script->group_count,
+           script->group_count == 1 ? "" : "s", script->assertion_count);
+    wast_script_free(script);
+    free(script);
+    return 0;
+}
+
+static int run_parse_only(int count, char **files) {
+    int failures = 0;
+    size_t total_bytes = 0;
+    double total_ms = 0.0;
+    for (int i = 0; i < count; i++) {
+        size_t bytes = 0;
+        double ms = 0.0;
+        failures += parse_only_file(files[i], &bytes, &ms);
+        total_bytes += bytes;
+        total_ms += ms;
+    }
+    printf("SUMMARY files=%d failures=%d bytes=%zu parse_ms=%.3f\n",
+           count, failures, total_bytes, total_ms);
+    return failures ? 1 : 0;
+}
+
+/* ---- entry point ---- */
+
 int main(int argc, char *argv[]) {
+    if (argc >= 3 && strcmp(argv[1], "--parse-only") == 0)
+        return run_parse_only(argc - 2, argv + 2);
     if (argc == 3 && strcmp(argv[1], "--browser-spec") == 0)
         return run_browser_spec(argv[2]);
     if (argc == 3 && strcmp(argv[1], "--count") == 0)
         return run_count(argv[2]);
-    if (argc == 2) {
+    if (argc == 2)
         return run_normal(argv[1]);
-    }
-    fprintf(stderr, "usage: %s [--browser-spec|--count] <file.wast>\n", argv[0]);
+    fprintf(stderr, "usage: %s [--browser-spec|--count|--parse-only] <file.wast> [...]\n", argv[0]);
     return 1;
 }

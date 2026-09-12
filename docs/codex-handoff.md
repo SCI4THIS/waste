@@ -2,14 +2,14 @@
 
 **Current:** 79/127 green files (19,464/20,074 assertions)  
 **Target:** 96/97 green files  
-**Binary:** `build/cli-rt/waste-wast`
+**Binary:** `build/cli-rt/waste-cli`
 **Build:** `cd src/c-engine && make wast-native`
 
 ## Test Runner
 
 ```bash
 # Single file (use ABSOLUTE paths):
-build/cli-rt/waste-wast /home/a/Work/waste/submodules/wasm-spec/test/core/call.wast
+build/cli-rt/waste-cli /home/a/Work/waste/submodules/wasm-spec/test/core/call.wast
 
 # Full suite (Python):
 python3 -c "
@@ -18,7 +18,7 @@ green = 0; total = 0
 for path in sorted(glob.glob('/home/a/Work/waste/submodules/wasm-spec/test/core/*.wast') + 
                    glob.glob('/home/a/Work/waste/tests/c-engine-*.wast')):
     try:
-        r = subprocess.run(['/home/a/Work/waste/build/cli-rt/waste-wast', path],
+        r = subprocess.run(['/home/a/Work/waste/build/cli-rt/waste-cli', path],
                           capture_output=True, text=True, timeout=30)
         d = json.loads(r.stdout)
         total += 1
@@ -98,7 +98,7 @@ Files affected: token.wast (20), annotations.wast (13), float_literals.wast (78)
 - **wast_encode.c** — Binary encoder: `wast_module` → Wasm binary bytes
 - **waste_exec.c** — Binary decoder + validator + executor: Wasm bytes → execution
 - **wast_runner.c** — Test runner: parses .wast file, encodes modules, loads into executor, runs assertions
-- **main_wast.c** — Entry point: outputs JSON with pass/fail for each assertion
+- **main.c** — CLI entry point: outputs JSON with pass/fail for each assertion
 
 ### Key functions in waste_exec.c:
 - `exec_load_module()` — decode + validate binary module

@@ -219,8 +219,7 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 - `browser_wast.c` — Wasm browser platform backend (strtod/strtof via JS, heap allocator, FILE I/O no-ops, getenv/isatty/exit stubs)
 - `posix_stubs.c/h` — POSIX host function dispatch tables and `browser_host_resolver` for the browser build
 - `browser_api.c` — Exported WAST API, legacy per-module linking, browser streaming, flat value helpers, yield/resume
-- `main_wast.c` — Native command-line WAST spec test runner
-- `wast_mmap_test.c` — Native WAST parse-only benchmark (mmap-based)
+- `main.c` — CLI entry point: WAST spec runner, browser-spec JSON, assertion count, parse-only benchmark
 - `lib/freestanding_lib.c` — Portable freestanding library (string, math, snprintf, conversions) shared by native and Wasm
 - `lib/freestanding_native.c` — Native Linux x86_64 platform backend (raw syscalls, mmap allocator, FILE I/O)
 - `lib/include/` — Freestanding headers (stdio.h, stdlib.h, string.h, math.h, etc.) used via `-Ilib/include`
@@ -367,8 +366,7 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 │   │   ├── browser_wast.c            # Wasm browser platform backend
 │   │   ├── posix_stubs.c/h           # POSIX host function dispatch
 │   │   ├── browser_api.c             # Exported WAST API + browser streaming
-│   │   ├── main_wast.c              # Native WAST spec test runner
-│   │   ├── wast_mmap_test.c          # Parse-only benchmark
+│   │   ├── main.c                    # CLI entry point (runner + parse benchmark)
 │   │   ├── Makefile                  # Build rules
 │   │   └── lib/                      # Freestanding support library
 │   │       ├── freestanding_lib.c    # Portable freestanding library

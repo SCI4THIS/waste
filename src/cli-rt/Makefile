@@ -37,15 +37,14 @@ WAST_GENERATED_CFLAGS ?= -O2 -std=c11 -Wall -Wextra -Wno-unused-but-set-variable
 WAST_LEX_CFLAGS ?= -O2 -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -Wno-sign-compare
 
 # Targets
-WAST_TARGET := $(BUILD_DIR)/waste-wast
-WAST_MMAP_TEST := $(BUILD_DIR)/wast-mmap-test
+WAST_TARGET := $(BUILD_DIR)/waste-cli
 I32_SMOKE_TARGET := $(BUILD_DIR)/i32-smoke-sanitize
 I32_SMOKE_WASM := $(BUILD_DIR)/i32-smoke.wasm
 IMPORT_SMOKE_WASM := $(BUILD_DIR)/import-smoke.wasm
 EXTERN_PROVIDER_WASM := $(BUILD_DIR)/extern-provider.wasm
 EXTERN_CONSUMER_WASM := $(BUILD_DIR)/extern-consumer.wasm
 
-.PHONY: wast-native wast-mmap-test i32-smoke gen clean
+.PHONY: wast-native i32-smoke gen clean
 
 # ---- Parser generation (delegate to engine) ----
 
@@ -70,28 +69,16 @@ $(WAST_LEX_O): $(WAST_LEX_C) $(WAST_TAB_H) $(ENGINE_HEADERS)
 
 wast-native: gen $(WAST_TARGET)
 
-$(WAST_TARGET): main_wast.c $(ENGINE_SOURCES) $(LIB_SHARED) $(LIB_NATIVE) \
+$(WAST_TARGET): main.c $(ENGINE_SOURCES) $(LIB_SHARED) $(LIB_NATIVE) \
 		$(ENGINE_HEADERS) $(WAST_TAB_O) $(WAST_LEX_O)
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) \
 		$(FREESTANDING_FLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
-		main_wast.c $(ENGINE_SOURCES) \
+		main.c $(ENGINE_SOURCES) \
 		$(LIB_SHARED) $(LIB_NATIVE) \
 		$(WAST_TAB_O) $(WAST_LEX_O) \
 		-nostdlib -static \
 		-o $(WAST_TARGET)
-
-# ---- WAST mmap parse benchmark ----
-
-wast-mmap-test: gen $(WAST_MMAP_TEST)
-
-$(WAST_MMAP_TEST): wast_mmap_test.c $(ENGINE_SOURCES) $(LIB_SHARED) $(LIB_NATIVE) \
-		$(ENGINE_HEADERS) $(WAST_TAB_O) $(WAST_LEX_O)
-	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(FREESTANDING_FLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
-		wast_mmap_test.c $(ENGINE_SOURCES) \
-		$(LIB_SHARED) $(LIB_NATIVE) \
-		$(WAST_TAB_O) $(WAST_LEX_O) -nostdlib -static -o $@
 
 # ---- i32 smoke test (ASan/UBSan, uses system libc) ----
 
@@ -122,5 +109,5 @@ $(I32_SMOKE_TARGET): ../../tests/c-engine-i32-smoke.c $(ENGINE_DIR)/waste_exec.c
 		../../tests/c-engine-i32-smoke.c $(ENGINE_DIR)/waste_exec.c $(ENGINE_DIR)/wast_simd.c -lm -o $@
 
 clean:
-	rm -f $(WAST_TARGET) $(WAST_MMAP_TEST) $(I32_SMOKE_TARGET) \
+	rm -f $(WAST_TARGET) $(I32_SMOKE_TARGET) \
 		$(WAST_TAB_O) $(WAST_LEX_O)

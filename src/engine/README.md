@@ -7,20 +7,20 @@ library (`freestanding_lib.c`) is shared by both targets; platform-specific code
 lives in `freestanding_native.c` (native) and `browser_wast.c` (Wasm).
 
 ```sh
-make -C src/cli-rt wast-native wast-mmap-test
+make -C src/cli-rt wast-native
 make -C src/html-rt wast-browser
 ```
 
 ## Fast WAST parser checks
 
-The native parser harness memory-maps each input before passing it through the
+The `--parse-only` mode memory-maps each input before passing it through the
 same `wast_parse_bytes` entry point used by the runner. This keeps grammar
 iteration out of Node and the browser while preserving parser diagnostics:
 
 ```sh
 make -C src/cli-rt BUILD_DIR=../../build/cli-rt \
-  ENGINE_BUILD_DIR=../../build/engine wast-mmap-test
-build/cli-rt/wast-mmap-test tests/example.wast \
+  ENGINE_BUILD_DIR=../../build/engine wast-native
+build/cli-rt/waste-cli --parse-only tests/example.wast \
   submodules/wasm-spec/test/core/forward.wast
 ```
 

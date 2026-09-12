@@ -90,9 +90,9 @@ the corresponding self-contained browser gate with:
 
 ```sh
 make -C src/c-engine WAST_BUILD_DIR=../../build/c-engine \
-  wast-native wast-mmap-test wast-browser
+  wast-native wast-browser
 python3 tools/generate-c-engine-tests.py \
-  --runner build/c-engine/waste-wast \
+  --runner build/c-engine/waste-cli \
   --wasm build/c-engine/waste-wast.wasm \
   --tests submodules/wasm-spec/test/custom/custom \
   --tests submodules/wasm-spec/test/custom/metadata.code.branch_hint \
@@ -111,7 +111,7 @@ DataCount emission before code, and runtime semantics for `memory.init`,
 ```sh
 make -C src/c-engine WAST_BUILD_DIR=../../build/c-engine wast-native wast-browser
 python3 tools/generate-c-engine-tests.py \
-  --runner build/c-engine/waste-wast \
+  --runner build/c-engine/waste-cli \
   --wasm build/c-engine/waste-wast.wasm \
   --tests submodules/wasm-spec/test/core/multi-memory \
   --output build/c-engine/browser-tests-c-engine-multi-memory.html
@@ -129,7 +129,7 @@ Reproduce the dedicated offline browser gate with:
 ```sh
 make -C src/c-engine WAST_BUILD_DIR=../../build/c-engine wast-native wast-browser
 python3 tools/generate-c-engine-tests.py \
-  --runner build/c-engine/waste-wast \
+  --runner build/c-engine/waste-cli \
   --wasm build/c-engine/waste-wast.wasm \
   --tests submodules/wasm-spec/test/core/simd \
   --count \
@@ -149,11 +149,11 @@ Reproduce the memory64 offline-browser gate with:
 
 ```sh
 make -C src/c-engine WAST_BUILD_DIR=../../build/c-engine \
-  wast-native wast-browser wast-mmap-test
-build/c-engine/wast-mmap-test \
+  wast-native wast-browser
+build/c-engine/waste-cli --parse-only \
   submodules/wasm-spec/test/core/memory64/*.wast
 python3 tools/generate-c-engine-tests.py \
-  --runner build/c-engine/waste-wast \
+  --runner build/c-engine/waste-cli \
   --wasm build/c-engine/waste-wast.wasm \
   --tests submodules/wasm-spec/test/core/memory64 \
   --count \
@@ -174,11 +174,11 @@ offline-browser gate with:
 
 ```sh
 make -C src/c-engine WAST_BUILD_DIR=../../build/c-engine \
-  wast-native wast-browser wast-mmap-test
-build/c-engine/wast-mmap-test \
+  wast-native wast-browser
+build/c-engine/waste-cli --parse-only \
   submodules/wasm-spec/test/core/gc/*.wast
 python3 tools/generate-c-engine-tests.py \
-  --runner build/c-engine/waste-wast \
+  --runner build/c-engine/waste-cli \
   --wasm build/c-engine/waste-wast.wasm \
   --tests submodules/wasm-spec/test/core/gc \
   --count \
@@ -200,11 +200,11 @@ and every catch destination signature.  Reproduce the dedicated gate with:
 
 ```sh
 make -C src/c-engine WAST_BUILD_DIR=../../build/c-engine \
-  wast-native wast-browser wast-mmap-test
-build/c-engine/wast-mmap-test \
+  wast-native wast-browser
+build/c-engine/waste-cli --parse-only \
   submodules/wasm-spec/test/core/exceptions/*.wast
 python3 tools/generate-c-engine-tests.py \
-  --runner build/c-engine/waste-wast \
+  --runner build/c-engine/waste-cli \
   --wasm build/c-engine/waste-wast.wasm \
   --tests submodules/wasm-spec/test/core/exceptions \
   --count \
