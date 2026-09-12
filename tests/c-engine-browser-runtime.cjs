@@ -5,7 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const root = path.resolve(__dirname, "..");
-const htmlPath = process.argv[2] || path.join(root, "build/engine/browser-tests-c-engine.html");
+const htmlPath = process.argv[2] || path.join(root, "build/html-rt/test.html");
 const requestedFiles = new Set(process.argv.slice(3));
 const html = fs.readFileSync(htmlPath, "utf8");
 const pageScripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];

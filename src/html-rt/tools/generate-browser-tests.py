@@ -867,13 +867,13 @@ def main():
     # The dashboard uses the CPS artifact so running evaluator tasks can retain
     # their continuations while yielding to a static page's worker event loop.
     dist_name = "dist-threaded"
-    dist = root / "build" / "ocaml-wasm" / dist_name
+    dist = root / "build" / "ocaml" / dist_name
     loader_path = dist / "wasm_cli.bc.wasm.js"
     asset_dir = dist / "wasm_cli.bc.wasm.assets"
     test_root = root / "submodules" / "wasm-spec" / "test"
     diy_posix_root = root / "tests" / "diy-posix-test"
-    libc_test_root = root / "build" / "waste-libc" / "tests"
-    output = args.output or root / "build" / "ocaml-wasm" / "browser-tests.html"
+    libc_test_root = root / "build" / "html-rt" / "waste-libc" / "tests"
+    output = args.output or root / "build" / "html-rt" / "test.html"
 
     if not loader_path.is_file():
         raise SystemExit(f"compiled loader not found: {loader_path}")

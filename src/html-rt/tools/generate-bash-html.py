@@ -318,11 +318,11 @@ def main() -> None:
         parser.error("--quantum must be positive")
 
     root = args.repo_root.resolve()
-    dist = root / "build" / "ocaml-wasm" / "dist-threaded"
+    dist = root / "build" / "ocaml" / "dist-threaded"
     loader_path = dist / "wasm_cli.bc.wasm.js"
     asset_dir = dist / "wasm_cli.bc.wasm.assets"
-    launch_path = args.launch or root / "build" / "bash" / "bash-runtime.wast"
-    output = args.output or root / "build" / "ocaml-wasm" / "bash.html"
+    launch_path = args.launch or root / "build" / "ocaml" / "bash-runtime.wast"
+    output = args.output or root / "build" / "html-rt" / "bash-ocaml.html"
     validator = args.validator or root / "submodules" / "wasm-spec" / "interpreter" / "_build" / "default" / "wasm.exe"
     wasm_files = sorted(asset_dir.glob("*.wasm"))
     if not loader_path.is_file():

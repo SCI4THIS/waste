@@ -29,10 +29,10 @@ if (process.env.WASTE_BASH_SMOKE_CHILD !== "1") {
 }
 const loaderPath = path.join(
   root,
-  mode === "threaded" ? "build/ocaml-wasm/dist-threaded" : "build/ocaml-wasm/dist",
+  mode === "threaded" ? "build/ocaml/dist-threaded" : "build/ocaml/dist",
   "wasm_cli.bc.wasm.js"
 );
-const source = fs.readFileSync(path.join(root, "build/bash/bash-runtime.wast"), "utf8")
+const source = fs.readFileSync(path.join(root, "build/ocaml/bash-runtime.wast"), "utf8")
   .replace("__WASTE_BASH_COMMAND__", command);
 
 globalThis.waste_exit_code = 0;

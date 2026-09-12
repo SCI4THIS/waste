@@ -22,8 +22,9 @@ Represent repository-owned OCaml changes in
 and packaging tools are in `src/html-rt/tools/`; guest libc sources are in
 `src/html-rt/lib-impl/`. Architecture notes are in `docs/`, and project probes
 are in `tests/`, especially `tests/diy-posix-test/` and `tests/libc-test/`.
-Treat all of `build/` as generated output. Current C outputs and logs go to
-`build/engine/` and `build/logs/`, respectively.
+Treat all of `build/` as generated output. Shared generated engine sources and
+logs go under `build/engine/`, native executables under `build/cli-rt/`, browser
+artifacts under `build/html-rt/`, and OCaml intermediates under `build/ocaml/`.
 
 ## POSIX Capability Policy
 
@@ -57,17 +58,17 @@ document; broker use is optional.
   artifacts, and restore the spec submodule even if the build fails.
 - `make -C submodules SWITCH_NAME=waste-wasm native`: use the same patch
   transaction to build the native OCaml differential oracle.
-- `make -C src/cli-rt BUILD_DIR=../../build/engine wast-native
+- `make -C src/cli-rt BUILD_DIR=../../build/cli-rt wast-native
   wast-mmap-test`: build the native runner and fast mmap parser harness.
-- `make -C src/cli-rt BUILD_DIR=../../build/engine i32-smoke`: run the native
+- `make -C src/cli-rt BUILD_DIR=../../build/cli-rt i32-smoke`: run the native
   warnings-as-errors ASan/UBSan executor smoke gate.
-- `make -C src/html-rt BUILD_DIR=../../build/engine wast-browser`: compile the
+- `make -C src/html-rt BUILD_DIR=../../build/html-rt wast-browser`: compile the
   same engine semantics for the browser.
-- `build/engine/wast-mmap-test FILE...`: rapidly parse selected WAST files
+- `build/cli-rt/wast-mmap-test FILE...`: rapidly parse selected WAST files
   without Node or a browser.
-- `node tests/c-engine-browser-runtime.cjs build/engine/FILE.html`: exercise a
+- `node tests/c-engine-browser-runtime.cjs build/html-rt/test.html`: exercise a
   generated offline C-engine dashboard through its worker harness.
-- `node tests/c-engine-bash-browser-runtime.cjs build/engine/bash.html`: verify
+- `node tests/c-engine-bash-browser-runtime.cjs build/html-rt/bash.html`: verify
   delayed input, command execution, a second prompt, and exit in C-engine Bash.
 - `node tests/diy-posix-test/posix-{kernel,control}-runtime.cjs [threaded]`:
   run legacy OCaml-runtime DIY POSIX probes.
@@ -104,7 +105,7 @@ conformance work should trace tests to The Open Group suites. Revisit LTP's
 `testcases/open_posix_testsuite` after a guest C compiler works; then record
 upstream revisions and keep licensing and Wasm-adaptation patches separate.
 Keep libc test clients in `tests/libc-test/*.wast.inc`; generated fixtures
-belong under `build/waste-libc/tests/`.
+belong under `build/html-rt/waste-libc/tests/`.
 Compare new C behavior with the OCaml oracle for every supported official test.
 Run C decoder/executor tests natively with warnings-as-errors, AddressSanitizer,
 and UndefinedBehaviorSanitizer, then exercise the same artifact through the

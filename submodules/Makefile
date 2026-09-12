@@ -7,16 +7,18 @@ SPEC_DIR := $(REPO_ROOT)/submodules/wasm-spec
 INTERPRETER_DIR := $(SPEC_DIR)/interpreter
 PATCH_FILE := $(REPO_ROOT)/submodules/wasm-spec-i31-int32.patch
 
-BUILD_ROOT := $(REPO_ROOT)/build/ocaml-wasm
+BUILD_ROOT := $(REPO_ROOT)/build/ocaml
 STAGING_DIR := $(BUILD_ROOT)/staging/interpreter
 DIST_DIR := $(BUILD_ROOT)/dist
 THREADED_DIST_DIR := $(BUILD_ROOT)/dist-threaded
+CLI_BUILD_DIR := $(REPO_ROOT)/build/cli-rt
 
 SWITCH_NAME ?= waste-wasm
 OPAM ?= opam
 
 # Outputs
 NATIVE_INTERPRETER := $(INTERPRETER_DIR)/_build/default/wasm.exe
+NATIVE_OUTPUT := $(CLI_BUILD_DIR)/waste-wast-ocaml
 SEQ_LOADER := $(DIST_DIR)/wasm_cli.bc.wasm.js
 SEQ_ASSETS := $(DIST_DIR)/wasm_cli.bc.wasm.assets
 CPS_LOADER := $(THREADED_DIST_DIR)/wasm_cli.bc.wasm.js
@@ -76,6 +78,10 @@ native:
 	cd "$(INTERPRETER_DIR)"
 	$(OPAM) exec --switch="$(SWITCH_NAME)" -- dune build ./wasm.exe
 	test -x "$(NATIVE_INTERPRETER)"
+	mkdir -p "$(CLI_BUILD_DIR)"
+	rm -f "$(NATIVE_OUTPUT).tmp"
+	install -m 0555 "$(NATIVE_INTERPRETER)" "$(NATIVE_OUTPUT).tmp"
+	mv -f "$(NATIVE_OUTPUT).tmp" "$(NATIVE_OUTPUT)"
 
 # Build sequential and CPS wasm_of_ocaml artifacts from a staging overlay. The
 # patch is applied before the overlay is copied, and only the overlay is edited.
@@ -127,3 +133,4 @@ wasm:
 
 clean:
 	rm -rf "$(STAGING_DIR)" "$(DIST_DIR)" "$(THREADED_DIST_DIR)"
+	rm -f "$(NATIVE_OUTPUT)" "$(NATIVE_OUTPUT).tmp"

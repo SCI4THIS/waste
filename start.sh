@@ -13,34 +13,37 @@ else
 fi
 SPEC_DIR="$REPO_ROOT/submodules/wasm-spec"
 INTERPRETER_DIR="$SPEC_DIR/interpreter"
-NATIVE_INTERPRETER="$INTERPRETER_DIR/_build/default/wasm.exe"
 I31_PATCH_FILE="$REPO_ROOT/submodules/wasm-spec-i31-int32.patch"
 OCAML_BUILD_DIR="$REPO_ROOT/submodules"
-BUILD_ROOT="$REPO_ROOT/build/ocaml-wasm"
+ENGINE_BUILD="$REPO_ROOT/build/engine"
+OCAML_BUILD="$REPO_ROOT/build/ocaml"
+CLI_BUILD="$REPO_ROOT/build/cli-rt"
+HTML_BUILD="$REPO_ROOT/build/html-rt"
+NATIVE_INTERPRETER="$CLI_BUILD/waste-wast-ocaml"
+BUILD_ROOT="$OCAML_BUILD"
 DIST_DIR="$BUILD_ROOT/dist"
 THREADED_DIST_DIR="$BUILD_ROOT/dist-threaded"
-LOG_DIR="$REPO_ROOT/build/logs"
+LOG_DIR="$ENGINE_BUILD/logs"
 LOG_FILE="$LOG_DIR/build.log"
 UPDATE_LOG="$LOG_DIR/update.log"
 BROWSER_TEST_GENERATOR="$REPO_ROOT/src/html-rt/tools/generate-browser-tests.py"
-BROWSER_TEST_HTML="$BUILD_ROOT/browser-tests.html"
+BROWSER_TEST_HTML="$HTML_BUILD/test.html"
 HTML_LOG="$LOG_DIR/html.log"
 BASH_RUNTIME_BUILDER="$REPO_ROOT/src/html-rt/tools/build-bash-runtime.py"
 BASH_HTML_GENERATOR="$REPO_ROOT/src/html-rt/tools/generate-bash-html.py"
-BASH_RUNTIME_WAST="$REPO_ROOT/build/bash/bash-runtime.wast"
-BASH_HTML="$BUILD_ROOT/bash.html"
+BASH_RUNTIME_WAST="$OCAML_BUILD/bash-runtime.wast"
+BASH_HTML="$HTML_BUILD/bash-ocaml.html"
 BASH_HTML_LOG="$LOG_DIR/bash-html.log"
 LIBC_BUILDER="$REPO_ROOT/src/html-rt/tools/build-waste-libc.py"
-LIBC_OUTPUT="$REPO_ROOT/build/waste-libc/waste-libc.wasm"
+LIBC_OUTPUT="$HTML_BUILD/waste-libc/waste-libc.wasm"
 LIBC_LOG="$LOG_DIR/libc-build.log"
 TEST_LOG="$LOG_DIR/test.log"
-C_ENGINE_BUILD="$REPO_ROOT/build/engine"
-C_ENGINE_RUNNER="$C_ENGINE_BUILD/waste-wast"
-C_ENGINE_WASM="$C_ENGINE_BUILD/waste-wast.wasm"
+C_ENGINE_RUNNER="$CLI_BUILD/waste-wast"
+C_ENGINE_WASM="$HTML_BUILD/waste-wast.wasm"
 C_ENGINE_GENERATOR="$REPO_ROOT/src/html-rt/tools/generate-c-engine-tests.py"
-C_ENGINE_HTML="$C_ENGINE_BUILD/browser-tests-c-engine.html"
-C_ENGINE_CORE_HTML="$C_ENGINE_BUILD/browser-tests-c-engine-core.html"
-C_ENGINE_OCAML_LAYOUT_HTML="$C_ENGINE_BUILD/browser-tests-c-engine-ocaml-layout.html"
+C_ENGINE_HTML="$HTML_BUILD/test.html"
+C_ENGINE_CORE_HTML="$HTML_BUILD/test.html"
+C_ENGINE_OCAML_LAYOUT_HTML="$HTML_BUILD/test.html"
 C_ENGINE_HTML_LOG="$LOG_DIR/c-engine-html.log"
 C_ENGINE_CORE_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core"
 C_ENGINE_RELAXED_SIMD_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/relaxed-simd"
@@ -50,8 +53,8 @@ C_ENGINE_DIY_POSIX_TESTS="$REPO_ROOT/tests/diy-posix-test"
 C_ENGINE_BROWSER_TEST="$REPO_ROOT/tests/c-engine-browser-runtime.cjs"
 C_ENGINE_BASH_GENERATOR="$REPO_ROOT/src/html-rt/tools/generate-c-engine-bash-html.py"
 C_ENGINE_BASH_BROWSER_TEST="$REPO_ROOT/tests/c-engine-bash-browser-runtime.cjs"
-C_ENGINE_BASH_RUNTIME_WAST="$REPO_ROOT/build/engine-bash/bash-runtime.wast"
-C_ENGINE_BASH_HTML="$C_ENGINE_BUILD/bash.html"
+C_ENGINE_BASH_RUNTIME_WAST="$HTML_BUILD/bash-runtime.wast"
+C_ENGINE_BASH_HTML="$HTML_BUILD/bash.html"
 C_ENGINE_BASH_LOG="$LOG_DIR/c-engine-bash.log"
 
 mkdir -p "$LOG_DIR"
@@ -128,7 +131,8 @@ binaryen_is_usable() {
 }
 
 wasm_ld_is_usable() {
-  have_command wasm-ld || [[ -x "$REPO_ROOT/build/toolchain/usr/bin/wasm-ld" ]]
+  have_command wasm-ld ||
+    [[ -x "$ENGINE_BUILD/toolchain/usr/bin/wasm-ld" ]]
 }
 
 switch_exists() {
@@ -247,6 +251,29 @@ show_message() {
   else
     printf '\n%s\n%s\n\n' "$title" "$message"
   fi
+}
+
+progress_note() {
+  printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$1"
+}
+
+run_logged_step() {
+  local label="$1"
+  local log_file="$2"
+  shift 2
+  local started=$SECONDS
+  local status
+
+  progress_note "$label..."
+  printf '\n== %s ==\n' "$label" >>"$log_file"
+  if "$@" >>"$log_file" 2>&1; then
+    status=0
+    progress_note "$label: done ($((SECONDS - started))s)"
+  else
+    status=$?
+    progress_note "$label: FAILED after $((SECONDS - started))s (see $log_file)"
+  fi
+  return "$status"
 }
 
 install_system_dependencies() {
@@ -554,7 +581,8 @@ compile_interpreter() {
     printf 'Compiling the OCaml reference interpreter to Wasm...\n'
   fi
 
-  if ! build_ocaml_wasm >>"$LOG_FILE" 2>&1; then
+  if ! run_logged_step "Build sequential and CPS OCaml-to-Wasm interpreters" \
+      "$LOG_FILE" build_ocaml_wasm; then
     show_message "Build failed" \
       "The patched OCaml-to-Wasm build failed. The Makefile attempted to restore the spec submodule.\n\nPatch status: $(i31_patch_status)\nLog: $LOG_FILE"
     return 1
@@ -592,7 +620,8 @@ build_waste_libc() {
     fi
     return 1
   fi
-  if ! python3 "$LIBC_BUILDER" --repo-root "$REPO_ROOT" >>"$LIBC_LOG" 2>&1; then
+  if ! run_logged_step "Build guest libc and fixtures" "$LIBC_LOG" \
+      python3 "$LIBC_BUILDER" --repo-root "$REPO_ROOT"; then
     if [[ "$quiet" != true ]]; then
       show_message "Guest libc build failed" "Could not build waste-libc.wasm.\n\nLog: $LIBC_LOG"
     fi
@@ -640,7 +669,8 @@ generate_browser_test_html() {
     show_message "Browser test dashboard" "The HTML generator is missing.\n\nLog: $html_log"
     return 1
   fi
-  if ! build_ocaml_wasm >>"$html_log" 2>&1; then
+  if ! run_logged_step "Build OCaml-to-Wasm interpreter" "$html_log" \
+      build_ocaml_wasm; then
     show_message "Browser test dashboard" \
       "The OCaml-to-Wasm build failed. The Makefile attempted to restore the spec submodule.\n\nPatch status: $(i31_patch_status)\nLog: $html_log"
     return 1
@@ -664,8 +694,9 @@ generate_browser_test_html() {
     printf 'Generating embedded browser test dashboard...\n'
   fi
 
-  if ! python3 "$BROWSER_TEST_GENERATOR" --repo-root "$REPO_ROOT" \
-      --quantum "$quantum" --output "$output" >>"$html_log" 2>&1; then
+  if ! run_logged_step "Embed interpreter and test suites" "$html_log" \
+      python3 "$BROWSER_TEST_GENERATOR" --repo-root "$REPO_ROOT" \
+      --quantum "$quantum" --output "$output"; then
     show_message "Browser test dashboard failed" "HTML generation failed.\n\nLog: $html_log"
     return 1
   fi
@@ -717,14 +748,17 @@ generate_bash_html() {
   else
     printf 'Generating self-contained WASTE Bash page...\n'
   fi
-  if ! build_ocaml_wasm >>"$BASH_HTML_LOG" 2>&1 ||
-     ! build_ocaml_native >>"$BASH_HTML_LOG" 2>&1 ||
-     ! python3 "$BASH_RUNTIME_BUILDER" --repo-root "$REPO_ROOT" \
-      --interactive --output "$BASH_RUNTIME_WAST" >>"$BASH_HTML_LOG" 2>&1 ||
-     ! python3 "$BASH_HTML_GENERATOR" --repo-root "$REPO_ROOT" \
+  if ! run_logged_step "Build OCaml-to-Wasm interpreter" "$BASH_HTML_LOG" \
+      build_ocaml_wasm ||
+     ! run_logged_step "Build native OCaml validation oracle" "$BASH_HTML_LOG" \
+      build_ocaml_native ||
+     ! run_logged_step "Relink the interactive Bash runtime" "$BASH_HTML_LOG" \
+      python3 "$BASH_RUNTIME_BUILDER" --repo-root "$REPO_ROOT" \
+      --interactive --output "$BASH_RUNTIME_WAST" ||
+     ! run_logged_step "Generate the self-contained Bash page" "$BASH_HTML_LOG" \
+      python3 "$BASH_HTML_GENERATOR" --repo-root "$REPO_ROOT" \
       --launch "$BASH_RUNTIME_WAST" --output "$BASH_HTML" --quantum "$quantum" \
-      --validator "$NATIVE_INTERPRETER" \
-      >>"$BASH_HTML_LOG" 2>&1; then
+      --validator "$NATIVE_INTERPRETER"; then
     show_message "WASTE Bash generation failed" "Could not generate the static page.\n\nLog: $BASH_HTML_LOG"
     return 1
   fi
@@ -736,15 +770,13 @@ generate_bash_html() {
 run_logged_test() {
   local label="$1"
   shift
-  printf '\n== %s ==\n' "$label" >>"$TEST_LOG"
-  "$@" >>"$TEST_LOG" 2>&1
+  run_logged_step "$label" "$TEST_LOG" "$@"
 }
 
 run_official_core_tests() {
-  printf '\n== Official WebAssembly core suite ==\n' >>"$TEST_LOG"
-  python3 "$SPEC_DIR/test/core/run.py" \
-    --wasm "$INTERPRETER_DIR/_build/default/wasm.exe" \
-    >>"$TEST_LOG" 2>&1
+  run_logged_step "Official WebAssembly core suite" "$TEST_LOG" \
+    python3 "$SPEC_DIR/test/core/run.py" \
+    --wasm "$INTERPRETER_DIR/_build/default/wasm.exe"
 }
 
 run_official_tail_call_tests() {
@@ -759,10 +791,10 @@ run_official_tail_call_tests() {
   local file status=0 started
   for file in "${files[@]}"; do
     started=$SECONDS
-    printf '\n-- %s --\n' "${file##*/}" >>"$TEST_LOG"
-    if ! python3 "$SPEC_DIR/test/core/run.py" \
+    if ! run_logged_step "Tail-call test: ${file##*/}" "$TEST_LOG" \
+        python3 "$SPEC_DIR/test/core/run.py" \
         --wasm "$INTERPRETER_DIR/_build/default/wasm.exe" \
-        "$file" >>"$TEST_LOG" 2>&1; then
+        "$file"; then
       status=1
     fi
     printf 'Duration: %ds\n' "$((SECONDS - started))" >>"$TEST_LOG"
@@ -774,8 +806,8 @@ run_tail_call_smoke() {
   local started
   printf '\n== Short tail-call smoke benchmark ==\n' >>"$TEST_LOG"
   started=$SECONDS
-  "$NATIVE_INTERPRETER" "$REPO_ROOT/tests/tail-call-smoke.wast" \
-    >>"$TEST_LOG" 2>&1
+  run_logged_step "Short tail-call smoke benchmark" "$TEST_LOG" \
+    "$NATIVE_INTERPRETER" "$REPO_ROOT/tests/tail-call-smoke.wast"
   local status=$?
   printf 'Execution duration: %ds\n' "$((SECONDS - started))" >>"$TEST_LOG"
   return "$status"
@@ -799,11 +831,12 @@ run_sandbox_isolation_tests() {
   for file in "${contamination_files[@]}"; do
     contamination_args+=(-i "$file")
   done
-  printf '\n== Scheduled test-sandbox isolation ==\n' >>"$TEST_LOG"
-  "$NATIVE_INTERPRETER" -ca --schedule --threads 2 -q 1 \
-    "${isolation_args[@]}" >>"$TEST_LOG" 2>&1 || return 1
-  "$NATIVE_INTERPRETER" -ca --schedule --threads 2 -q 10000 \
-    "${contamination_args[@]}" >>"$TEST_LOG" 2>&1
+  run_logged_step "Scheduled sandbox isolation probes" "$TEST_LOG" \
+    "$NATIVE_INTERPRETER" -ca --schedule --threads 2 -q 1 \
+    "${isolation_args[@]}" || return 1
+  run_logged_step "Scheduled cross-test contamination probes" "$TEST_LOG" \
+    "$NATIVE_INTERPRETER" -ca --schedule --threads 2 -q 10000 \
+    "${contamination_args[@]}"
 }
 
 compile_cli_engine() {
@@ -812,7 +845,7 @@ compile_cli_engine() {
       "cc, make, flex, and bison are required."
     return 1
   fi
-  mkdir -p "$C_ENGINE_BUILD"
+  mkdir -p "$ENGINE_BUILD" "$CLI_BUILD"
   : >"$C_ENGINE_HTML_LOG"
   {
     printf 'CLI engine compile\n'
@@ -826,8 +859,10 @@ compile_cli_engine() {
     printf 'Building the C engine with the CLI runtime...\n'
   fi
 
-  if ! make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$C_ENGINE_BUILD" \
-      wast-native >>"$C_ENGINE_HTML_LOG" 2>&1; then
+  if ! run_logged_step "Build native C engine" "$C_ENGINE_HTML_LOG" \
+      make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$CLI_BUILD" \
+      ENGINE_BUILD_DIR="$ENGINE_BUILD" \
+      wast-native; then
     show_message "CLI engine compile failed" \
       "The build failed.\n\nLog: $C_ENGINE_HTML_LOG"
     return 1
@@ -862,29 +897,40 @@ run_cli_tests() {
     printf 'Running CLI test suite; log: %s\n' "$TEST_LOG"
   fi
 
-  if ! make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$C_ENGINE_BUILD" \
-      wast-native >>"$TEST_LOG" 2>&1; then
+  if ! run_logged_step "Build native C engine" "$TEST_LOG" \
+      make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$CLI_BUILD" \
+      ENGINE_BUILD_DIR="$ENGINE_BUILD" \
+      wast-native; then
     show_message "CLI test suite failed" \
       "The engine build failed.\n\nLog: $TEST_LOG"
     return 1
   fi
 
-  local total=0 passed=0 failed=0 status=0
+  local total=0 passed=0 failed=0 status=0 total_files=0
   local file
+  for file in "$C_ENGINE_CORE_TESTS"/*.wast; do
+    [[ -f "$file" ]] && ((total_files++))
+  done
+  progress_note "Run $total_files core WAST files..."
   for file in "$C_ENGINE_CORE_TESTS"/*.wast; do
     [[ -f "$file" ]] || continue
     local name="${file##*/}"
+    local file_started=$SECONDS
+    printf '[%3d/%3d] %-32s ' "$((total + 1))" "$total_files" "$name"
     printf '  %s ... ' "$name" >>"$TEST_LOG"
     if "$C_ENGINE_RUNNER" "$file" >>"$TEST_LOG" 2>&1; then
       printf 'ok\n' >>"$TEST_LOG"
       ((passed++))
+      printf 'ok (%ds)\n' "$((SECONDS - file_started))"
     else
       printf 'FAIL\n' >>"$TEST_LOG"
       ((failed++))
       status=1
+      printf 'FAIL (%ds; see %s)\n' "$((SECONDS - file_started))" "$TEST_LOG"
     fi
     ((total++))
   done
+  progress_note "Core WAST files complete: $passed passed, $failed failed"
 
   printf '\nFinished: %s\n' "$(date --iso-8601=seconds)" >>"$TEST_LOG"
   printf 'Results: %d/%d passed, %d failed\n' "$passed" "$total" "$failed" >>"$TEST_LOG"
@@ -911,21 +957,25 @@ generate_c_engine_tests() {
     return 1
   fi
   printf '\n== C engine browser tests (relaxed-SIMD and DIY POSIX) ==\n' >>"$TEST_LOG"
-  make -C "$REPO_ROOT/src/cli-rt" \
-    BUILD_DIR="$C_ENGINE_BUILD" \
-    wast-native >>"$TEST_LOG" 2>&1 || return 1
-  make -C "$REPO_ROOT/src/html-rt" \
-    BUILD_DIR="$C_ENGINE_BUILD" \
-    wast-browser >>"$TEST_LOG" 2>&1 || return 1
-  python3 "$C_ENGINE_GENERATOR" \
+  run_logged_step "Build native C engine" "$TEST_LOG" \
+    make -C "$REPO_ROOT/src/cli-rt" \
+    BUILD_DIR="$CLI_BUILD" ENGINE_BUILD_DIR="$ENGINE_BUILD" \
+    wast-native || return 1
+  run_logged_step "Build browser C engine" "$TEST_LOG" \
+    make -C "$REPO_ROOT/src/html-rt" \
+    BUILD_DIR="$HTML_BUILD" ENGINE_BUILD_DIR="$ENGINE_BUILD" \
+    wast-browser || return 1
+  run_logged_step "Generate relaxed-SIMD/POSIX browser dashboard" "$TEST_LOG" \
+    python3 "$C_ENGINE_GENERATOR" \
     --runner "$C_ENGINE_RUNNER" \
     --wasm "$C_ENGINE_WASM" \
     --tests "$C_ENGINE_RELAXED_SIMD_TESTS" \
     --tests "$C_ENGINE_MEMORY64_TESTS" \
     --tests "$C_ENGINE_BULK_MEMORY_TESTS" \
     --tests "$C_ENGINE_DIY_POSIX_TESTS" \
-    --output "$C_ENGINE_HTML" >>"$TEST_LOG" 2>&1 || return 1
-  node "$C_ENGINE_BROWSER_TEST" "$C_ENGINE_HTML" >>"$TEST_LOG" 2>&1
+    --output "$C_ENGINE_HTML" || return 1
+  run_logged_step "Exercise generated browser dashboard" "$TEST_LOG" \
+    node "$C_ENGINE_BROWSER_TEST" "$C_ENGINE_HTML"
 }
 
 generate_c_engine_dashboard_html() {
@@ -948,7 +998,7 @@ generate_c_engine_dashboard_html() {
     return 1
   fi
 
-  mkdir -p "$C_ENGINE_BUILD"
+  mkdir -p "$ENGINE_BUILD" "$CLI_BUILD" "$HTML_BUILD"
   : >"$C_ENGINE_HTML_LOG"
   {
     printf 'WASTE C-engine OCaml-layout dashboard generation\n'
@@ -963,22 +1013,26 @@ generate_c_engine_dashboard_html() {
     printf 'Generating C-engine browser dashboard in OCaml-Wasm layout...\n'
   fi
 
-  if ! { make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$C_ENGINE_BUILD" \
-      wast-native >>"$C_ENGINE_HTML_LOG" 2>&1 && \
-    make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$C_ENGINE_BUILD" \
-      wast-browser >>"$C_ENGINE_HTML_LOG" 2>&1; }; then
+  if ! run_logged_step "Build native C engine" "$C_ENGINE_HTML_LOG" \
+      make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$CLI_BUILD" \
+      ENGINE_BUILD_DIR="$ENGINE_BUILD" \
+      wast-native ||
+     ! run_logged_step "Build browser C engine" "$C_ENGINE_HTML_LOG" \
+      make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$HTML_BUILD" \
+      ENGINE_BUILD_DIR="$ENGINE_BUILD" \
+      wast-browser; then
     show_message "C-engine browser dashboard failed" \
       "The C engine build failed.\n\nLog: $C_ENGINE_HTML_LOG"
     return 1
   fi
-  if ! python3 "$C_ENGINE_GENERATOR" \
+  if ! run_logged_step "Embed specification and POSIX test suites" \
+      "$C_ENGINE_HTML_LOG" python3 "$C_ENGINE_GENERATOR" \
       --repo-root "$REPO_ROOT" \
       --ocaml-layout \
       --runner "$C_ENGINE_RUNNER" \
       --wasm "$C_ENGINE_WASM" \
       --count \
-      --output "$C_ENGINE_OCAML_LAYOUT_HTML" \
-      >>"$C_ENGINE_HTML_LOG" 2>&1; then
+      --output "$C_ENGINE_OCAML_LAYOUT_HTML"; then
     show_message "C-engine browser dashboard failed" \
       "HTML generation failed.\n\nLog: $C_ENGINE_HTML_LOG"
     return 1
@@ -1007,7 +1061,7 @@ generate_c_engine_bash_html() {
     return 1
   fi
 
-  mkdir -p "$C_ENGINE_BUILD"
+  mkdir -p "$ENGINE_BUILD" "$HTML_BUILD"
   : >"$C_ENGINE_BASH_LOG"
   {
     printf 'WASTE C-engine Bash static HTML generation\n'
@@ -1023,37 +1077,40 @@ generate_c_engine_bash_html() {
   fi
 
   # Build the C engine Wasm (native yield/resume, no asyncify)
-  if ! make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$C_ENGINE_BUILD" \
-      wast-browser \
-      >>"$C_ENGINE_BASH_LOG" 2>&1; then
+  if ! run_logged_step "Build browser C engine" "$C_ENGINE_BASH_LOG" \
+      make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$HTML_BUILD" \
+      ENGINE_BUILD_DIR="$ENGINE_BUILD" \
+      wast-browser; then
     show_message "C-engine Bash failed" \
       "The C engine build failed.\n\nLog: $C_ENGINE_BASH_LOG"
     return 1
   fi
 
   # Build the bash-runtime.wast (interactive mode for terminal I/O)
-  if ! python3 "$BASH_RUNTIME_BUILDER" --repo-root "$REPO_ROOT" \
-      --interactive --output "$C_ENGINE_BASH_RUNTIME_WAST" \
-      >>"$C_ENGINE_BASH_LOG" 2>&1; then
+  if ! run_logged_step "Relink the interactive Bash runtime" \
+      "$C_ENGINE_BASH_LOG" python3 "$BASH_RUNTIME_BUILDER" \
+      --repo-root "$REPO_ROOT" \
+      --interactive --output "$C_ENGINE_BASH_RUNTIME_WAST"; then
     show_message "C-engine Bash failed" \
       "Could not build the bash runtime.\n\nLog: $C_ENGINE_BASH_LOG"
     return 1
   fi
 
   # Generate the HTML page
-  if ! python3 "$C_ENGINE_BASH_GENERATOR" \
+  if ! run_logged_step "Generate the self-contained C-engine Bash page" \
+      "$C_ENGINE_BASH_LOG" python3 "$C_ENGINE_BASH_GENERATOR" \
       --repo-root "$REPO_ROOT" \
-      --wasm "$C_ENGINE_BUILD/waste-wast.wasm" \
+      --wasm "$C_ENGINE_WASM" \
       --launch "$C_ENGINE_BASH_RUNTIME_WAST" \
-      --output "$C_ENGINE_BASH_HTML" \
-      >>"$C_ENGINE_BASH_LOG" 2>&1; then
+      --output "$C_ENGINE_BASH_HTML"; then
     show_message "C-engine Bash generation failed" \
       "Could not generate the static page.\n\nLog: $C_ENGINE_BASH_LOG"
     return 1
   fi
 
-  if ! node "$C_ENGINE_BASH_BROWSER_TEST" "$C_ENGINE_BASH_HTML" \
-      >>"$C_ENGINE_BASH_LOG" 2>&1; then
+  if ! run_logged_step "Run the C-engine Bash browser smoke test" \
+      "$C_ENGINE_BASH_LOG" node "$C_ENGINE_BASH_BROWSER_TEST" \
+      "$C_ENGINE_BASH_HTML"; then
     show_message "C-engine Bash browser test failed" \
       "The generated worker did not survive prompt, delayed input, command execution, and exit.\n\nLog: $C_ENGINE_BASH_LOG"
     return 1
@@ -1076,13 +1133,20 @@ generate_c_engine_core_tests() {
     return 1
   fi
   printf '\n== C engine browser tests (official core WAST) ==\n' >>"$TEST_LOG"
-  make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$C_ENGINE_BUILD" \
-    wast-native >>"$TEST_LOG" 2>&1 || return 1
-  make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$C_ENGINE_BUILD" \
-    wast-browser >>"$TEST_LOG" 2>&1 || return 1
-  python3 "$C_ENGINE_GENERATOR" --runner "$C_ENGINE_RUNNER" --wasm "$C_ENGINE_WASM" \
-    --tests "$C_ENGINE_CORE_TESTS" --output "$C_ENGINE_CORE_HTML" >>"$TEST_LOG" 2>&1 || return 1
-  node "$C_ENGINE_BROWSER_TEST" "$C_ENGINE_CORE_HTML" >>"$TEST_LOG" 2>&1
+  run_logged_step "Build native C engine" "$TEST_LOG" \
+    make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$CLI_BUILD" \
+    ENGINE_BUILD_DIR="$ENGINE_BUILD" \
+    wast-native || return 1
+  run_logged_step "Build browser C engine" "$TEST_LOG" \
+    make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$HTML_BUILD" \
+    ENGINE_BUILD_DIR="$ENGINE_BUILD" \
+    wast-browser || return 1
+  run_logged_step "Generate core WAST browser dashboard" "$TEST_LOG" \
+    python3 "$C_ENGINE_GENERATOR" --runner "$C_ENGINE_RUNNER" \
+    --wasm "$C_ENGINE_WASM" --tests "$C_ENGINE_CORE_TESTS" \
+    --output "$C_ENGINE_CORE_HTML" || return 1
+  run_logged_step "Exercise core WAST browser dashboard" "$TEST_LOG" \
+    node "$C_ENGINE_BROWSER_TEST" "$C_ENGINE_CORE_HTML"
 }
 
 run_test_group() {
@@ -1118,17 +1182,18 @@ run_test_group() {
   local status=0
   case "$group" in
     spec|tail|tail-smoke|isolation)
-      printf '\n== Patched native OCaml interpreter build ==\n' >>"$TEST_LOG"
-      build_ocaml_native >>"$TEST_LOG" 2>&1 || status=1
+      run_logged_step "Build patched native OCaml interpreter" "$TEST_LOG" \
+        build_ocaml_native || status=1
       ;;
     posix|libc|bash)
-      printf '\n== Patched OCaml-to-Wasm interpreter build ==\n' >>"$TEST_LOG"
-      build_ocaml_wasm >>"$TEST_LOG" 2>&1 || status=1
+      run_logged_step "Build patched OCaml-to-Wasm interpreter" "$TEST_LOG" \
+        build_ocaml_wasm || status=1
       ;;
     all)
-      printf '\n== Patched OCaml interpreter builds ==\n' >>"$TEST_LOG"
-      build_ocaml_wasm >>"$TEST_LOG" 2>&1 || status=1
-      build_ocaml_native >>"$TEST_LOG" 2>&1 || status=1
+      run_logged_step "Build patched OCaml-to-Wasm interpreter" "$TEST_LOG" \
+        build_ocaml_wasm || status=1
+      run_logged_step "Build patched native OCaml interpreter" "$TEST_LOG" \
+        build_ocaml_native || status=1
       ;;
   esac
   if ((status != 0)); then

@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const {TextDecoder, TextEncoder} = require("node:util");
 
-const htmlPath = process.argv[2] || "build/engine/bash.html";
+const htmlPath = process.argv[2] || "build/html-rt/bash.html";
 const html = fs.readFileSync(htmlPath, "utf8");
 const payloadMatch = html.match(/^    const PAYLOAD = (.*);$/m);
 const workerMatch = html.match(

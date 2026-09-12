@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "../..");
-const wasmPath = path.join(root, "build/waste-libc/waste-libc.wasm");
+const wasmPath = path.join(root, "build/html-rt/waste-libc/waste-libc.wasm");
 
 WebAssembly.instantiate(fs.readFileSync(wasmPath)).then(({instance}) => {
   const api = instance.exports;

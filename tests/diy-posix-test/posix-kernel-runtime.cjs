@@ -7,7 +7,7 @@ const root = path.resolve(__dirname, "../..");
 const mode = process.argv[2] === "threaded" ? "threaded" : "sequential";
 const loaderPath = path.join(
   root,
-  mode === "threaded" ? "build/ocaml-wasm/dist-threaded" : "build/ocaml-wasm/dist",
+  mode === "threaded" ? "build/ocaml/dist-threaded" : "build/ocaml/dist",
   "wasm_cli.bc.wasm.js"
 );
 const source = fs.readFileSync(path.join(__dirname, "posix-kernel.wast"), "utf8");

@@ -7,7 +7,8 @@ library (`freestanding_lib.c`) is shared by both targets; platform-specific code
 lives in `freestanding_native.c` (native) and `browser_wast.c` (Wasm).
 
 ```sh
-make -C src/c-engine wast-native wast-browser wast-mmap-test
+make -C src/cli-rt wast-native wast-mmap-test
+make -C src/html-rt wast-browser
 ```
 
 ## Fast WAST parser checks
@@ -17,9 +18,9 @@ same `wast_parse_bytes` entry point used by the runner. This keeps grammar
 iteration out of Node and the browser while preserving parser diagnostics:
 
 ```sh
-make -C src/c-engine BUILD_DIR=../../build/c-engine \
-  WAST_BUILD_DIR=../../build/c-engine wast-mmap-test
-build/c-engine/wast-mmap-test tests/example.wast \
+make -C src/cli-rt BUILD_DIR=../../build/cli-rt \
+  ENGINE_BUILD_DIR=../../build/engine wast-mmap-test
+build/cli-rt/wast-mmap-test tests/example.wast \
   submodules/wasm-spec/test/core/forward.wast
 ```
 

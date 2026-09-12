@@ -1,9 +1,10 @@
-WASM_LD ?= $(shell command -v wasm-ld 2>/dev/null || printf '%s' ../../build/toolchain/usr/bin/wasm-ld)
-WASM_LD_LIB ?= $(if $(filter ../../build/toolchain/%,$(WASM_LD)),../../build/toolchain/usr/lib,)
+WASM_LD ?= $(shell command -v wasm-ld 2>/dev/null || printf '%s' ../../build/engine/toolchain/usr/bin/wasm-ld)
+WASM_LD_LIB ?= $(if $(filter ../../build/engine/toolchain/%,$(WASM_LD)),../../build/engine/toolchain/usr/lib,)
 
 ENGINE_DIR := ../engine
-BUILD_DIR ?= ../../build/engine
-WAST_GEN_DIR := $(BUILD_DIR)/gen
+BUILD_DIR ?= ../../build/html-rt
+ENGINE_BUILD_DIR ?= ../../build/engine
+WAST_GEN_DIR := $(ENGINE_BUILD_DIR)/gen
 
 WASM_CC_FLAGS := --target=wasm32 -O2 -std=c11 -Wall -Wextra \
 	-fno-builtin -DYYDEBUG=0 -nostdlib \
@@ -49,7 +50,7 @@ WAST_WASM_TARGET := $(BUILD_DIR)/waste-wast.wasm
 # ---- Parser generation (delegate to engine) ----
 
 gen:
-	$(MAKE) -C $(ENGINE_DIR) BUILD_DIR=$(abspath $(BUILD_DIR)) gen
+	$(MAKE) -C $(ENGINE_DIR) BUILD_DIR=$(abspath $(ENGINE_BUILD_DIR)) gen
 
 # ---- Compile engine sources to Wasm objects ----
 

@@ -2,7 +2,7 @@
 
 These are WASTE's guest-libc regression tests. The checked-in `*.wast.inc`
 clients are combined with the actual merged guest-libc module under
-`build/waste-libc/tests/`. The browser therefore exercises the same binary ABI
+`build/html-rt/waste-libc/tests/`. The browser therefore exercises the same binary ABI
 as the standalone build without checking in copies of generated WAT.
 
 Build the module and regenerate the test fixture with:

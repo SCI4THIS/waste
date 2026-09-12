@@ -8,10 +8,10 @@ const mode = process.argv[2] === "threaded" ? "threaded" : "sequential";
 const fixtureFilter = process.argv[3];
 const loaderPath = path.join(
   root,
-  mode === "threaded" ? "build/ocaml-wasm/dist-threaded" : "build/ocaml-wasm/dist",
+  mode === "threaded" ? "build/ocaml/dist-threaded" : "build/ocaml/dist",
   "wasm_cli.bc.wasm.js"
 );
-const fixtureRoot = path.join(root, "build/waste-libc/tests");
+const fixtureRoot = path.join(root, "build/html-rt/waste-libc/tests");
 const fixtures = fs.readdirSync(fixtureRoot)
   .filter(name => name.endsWith(".wast"))
   .filter(name => !fixtureFilter || name === fixtureFilter)

@@ -25,11 +25,11 @@ def main() -> None:
     root = args.repo_root.resolve()
     source_path = root / "src" / "html-rt" / "lib-impl" / "waste-libc.wat"
     client_root = root / "tests" / "libc-test"
-    output_path = root / "build" / "waste-libc" / "waste-libc.wasm"
-    fixture_root = root / "build" / "waste-libc" / "tests"
+    output_path = root / "build" / "html-rt" / "waste-libc" / "waste-libc.wasm"
+    fixture_root = root / "build" / "html-rt" / "waste-libc" / "tests"
     environment = os.environ.copy()
-    local_tool_bin = root / "build" / "toolchain" / "usr" / "bin"
-    local_tool_lib = root / "build" / "toolchain" / "usr" / "lib"
+    local_tool_bin = root / "build" / "engine" / "toolchain" / "usr" / "bin"
+    local_tool_lib = root / "build" / "engine" / "toolchain" / "usr" / "lib"
     if not shutil.which("wasm-ld") and (local_tool_bin / "wasm-ld").is_file():
         environment["PATH"] = str(local_tool_bin) + os.pathsep + environment.get("PATH", "")
         environment["LD_LIBRARY_PATH"] = str(local_tool_lib) + os.pathsep + environment.get("LD_LIBRARY_PATH", "")

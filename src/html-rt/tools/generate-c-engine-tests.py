@@ -1212,7 +1212,7 @@ def main() -> int:
              "wasm-spec", ""),
             (root / "tests" / "diy-posix-test",
              "diy-posix-test", "diy-posix-test"),
-            (root / "build" / "waste-libc" / "tests",
+            (root / "build" / "html-rt" / "waste-libc" / "tests",
              "libc-test", "libc-test"),
         ]
         missing = [path for path, _, _ in layout_roots if not path.is_dir()]

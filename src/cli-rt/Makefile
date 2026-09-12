@@ -3,8 +3,9 @@ CPPFLAGS ?=
 CFLAGS ?= -O3 -std=c11 -Wall -Wextra -Wpedantic -Werror
 
 ENGINE_DIR := ../engine
-BUILD_DIR ?= ../../build/engine
-WAST_GEN_DIR := $(BUILD_DIR)/gen
+BUILD_DIR ?= ../../build/cli-rt
+ENGINE_BUILD_DIR ?= ../../build/engine
+WAST_GEN_DIR := $(ENGINE_BUILD_DIR)/gen
 FREESTANDING_FLAGS := -I$(ENGINE_DIR)/lib/include -fno-builtin -fno-stack-protector
 
 # Engine core sources (platform-independent)
@@ -49,16 +50,18 @@ EXTERN_CONSUMER_WASM := $(BUILD_DIR)/extern-consumer.wasm
 # ---- Parser generation (delegate to engine) ----
 
 gen:
-	$(MAKE) -C $(ENGINE_DIR) BUILD_DIR=$(abspath $(BUILD_DIR)) gen
+	$(MAKE) -C $(ENGINE_DIR) BUILD_DIR=$(abspath $(ENGINE_BUILD_DIR)) gen
 
 # ---- Compile generated parser objects ----
 
 $(WAST_TAB_O): $(WAST_TAB_C) $(WAST_TAB_H) $(ENGINE_HEADERS)
+	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(WAST_GENERATED_CFLAGS) \
 		$(FREESTANDING_FLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
 		-c $(WAST_TAB_C) -o $@
 
 $(WAST_LEX_O): $(WAST_LEX_C) $(WAST_TAB_H) $(ENGINE_HEADERS)
+	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(WAST_LEX_CFLAGS) \
 		$(FREESTANDING_FLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
 		-c $(WAST_LEX_C) -o $@

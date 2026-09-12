@@ -59,26 +59,26 @@ node tests/libc-test/allocator-native.cjs
 ### Build Output Locations
 
 ```
-build/ocaml-wasm/dist/                          # Sequential OCaml-Wasm interpreter + assets
-build/ocaml-wasm/dist-threaded/                 # CPS OCaml-Wasm interpreter + assets
-build/ocaml-wasm/browser-tests.html             # Offline test dashboard (embeds spec tests)
-build/ocaml-wasm/bash.html                      # Self-contained Bash interpreter
-build/waste-libc/waste-libc.wasm                # Guest libc binary
+build/ocaml/dist/                               # Sequential OCaml-Wasm interpreter + assets
+build/ocaml/dist-threaded/                      # CPS OCaml-Wasm interpreter + assets
+build/html-rt/test.html                         # Offline test dashboard (embeds spec tests)
+build/html-rt/bash-ocaml.html                   # Self-contained OCaml Bash interpreter
+build/html-rt/waste-libc/waste-libc.wasm        # Guest libc binary
 ```
 
 ### Build Logs
 
-All logs are written to `build/logs/`:
+All logs are written to `build/engine/logs/`:
 
 ```
-build/logs/build.log            # Latest OCaml-to-Wasm compilation
-build/logs/html.log             # Dashboard generation transcript
-build/logs/bash-html.log        # WASTE Bash page generation transcript
-build/logs/libc-build.log       # libc build log
-build/logs/test.log             # Test suite results
-build/logs/update.log           # Safe pull/submodule update transcript
-build/logs/c-engine-html.log    # C engine dashboard generation
-build/logs/c-engine-bash.log    # C engine Bash page generation
+build/engine/logs/build.log            # Latest OCaml-to-Wasm compilation
+build/engine/logs/html.log             # Dashboard generation transcript
+build/engine/logs/bash-html.log        # WASTE Bash page generation transcript
+build/engine/logs/libc-build.log       # libc build log
+build/engine/logs/test.log             # Test suite results
+build/engine/logs/update.log           # Safe pull/submodule update transcript
+build/engine/logs/c-engine-html.log    # C engine dashboard generation
+build/engine/logs/c-engine-bash.log    # C engine Bash page generation
 ```
 
 ### Dependencies
@@ -174,7 +174,7 @@ Located in `src/html-rt/lib-impl/waste-libc.wat` and `src/html-rt/lib-impl/waste
 Test fixture:
 ```sh
 ./start.sh --build-libc
-# Outputs: build/waste-libc/waste-libc.wasm, build/bash/bash-runtime.wast
+# Outputs: build/html-rt/waste-libc/waste-libc.wasm, build/ocaml/bash-runtime.wast
 ```
 
 ### Shared-Library Libc Roadmap

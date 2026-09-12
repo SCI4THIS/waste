@@ -2,14 +2,14 @@
 
 **Current:** 79/127 green files (19,464/20,074 assertions)  
 **Target:** 96/97 green files  
-**Binary:** `build/c-engine/waste-wast`  
+**Binary:** `build/cli-rt/waste-wast`
 **Build:** `cd src/c-engine && make wast-native`
 
 ## Test Runner
 
 ```bash
 # Single file (use ABSOLUTE paths):
-build/c-engine/waste-wast /home/a/Work/waste/submodules/wasm-spec/test/core/call.wast
+build/cli-rt/waste-wast /home/a/Work/waste/submodules/wasm-spec/test/core/call.wast
 
 # Full suite (Python):
 python3 -c "
@@ -18,7 +18,7 @@ green = 0; total = 0
 for path in sorted(glob.glob('/home/a/Work/waste/submodules/wasm-spec/test/core/*.wast') + 
                    glob.glob('/home/a/Work/waste/tests/c-engine-*.wast')):
     try:
-        r = subprocess.run(['/home/a/Work/waste/build/c-engine/waste-wast', path],
+        r = subprocess.run(['/home/a/Work/waste/build/cli-rt/waste-wast', path],
                           capture_output=True, text=True, timeout=30)
         d = json.loads(r.stdout)
         total += 1

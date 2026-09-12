@@ -80,9 +80,9 @@ Clang, Wasm linker, and Binaryen checks. Replace the ad hoc C build scripts with
 one reproducible build description that provides at least:
 
 ```text
-build/c-engine/native/waste
-build/c-engine/native/waste-sanitize
-build/c-engine/wasm/waste-engine.wasm
+build/cli-rt/waste-wast
+build/cli-rt/i32-smoke-sanitize
+build/html-rt/waste-wast.wasm
 ```
 
 Native and browser builds must compile the same engine sources; only host

@@ -44,8 +44,8 @@ def module_name(source: str, name: str) -> str:
 
 def tool_environment(root: Path) -> dict[str, str]:
     environment = os.environ.copy()
-    local_bin = root / "build" / "toolchain" / "usr" / "bin"
-    local_lib = root / "build" / "toolchain" / "usr" / "lib"
+    local_bin = root / "build" / "engine" / "toolchain" / "usr" / "bin"
+    local_lib = root / "build" / "engine" / "toolchain" / "usr" / "lib"
     if not shutil.which("wasm-ld") and (local_bin / "wasm-ld").is_file():
         environment["PATH"] = str(local_bin) + os.pathsep + environment.get("PATH", "")
         environment["LD_LIBRARY_PATH"] = str(local_lib) + os.pathsep + environment.get("LD_LIBRARY_PATH", "")
@@ -197,7 +197,7 @@ def main() -> None:
     args = parser.parse_args()
 
     root = args.repo_root.resolve()
-    output = args.output or root / "build" / "bash" / "bash-runtime.wast"
+    output = args.output or root / "build" / "ocaml" / "bash-runtime.wast"
     environment = tool_environment(root)
     output.parent.mkdir(parents=True, exist_ok=True)
 

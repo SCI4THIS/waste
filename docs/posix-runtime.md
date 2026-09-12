@@ -240,7 +240,7 @@ currently fail explicitly (`ENOSYS`, or the matching address-info error). This
 is intentional: they must be connected to the OCaml VFS/process kernel and the
 optional WebSocket broker instead of maintaining a second namespace in libc.
 
-The generated fixtures under `build/waste-libc/tests/` instantiate client modules
+The generated fixtures under `build/html-rt/waste-libc/tests/` instantiate client modules
 against libc's exported memory, so their assertions exercise real cross-module
 pointer sharing and indirect callback table. They cover allocator growth,
 stdio, locale/wide characters, identity databases, memory/conversion/compiler

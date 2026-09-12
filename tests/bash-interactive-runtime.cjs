@@ -23,8 +23,8 @@ if (process.env.WASTE_BASH_INTERACTIVE_CHILD !== "1") {
   process.exit(0);
 }
 
-const loaderPath = path.join(root, "build/ocaml-wasm/dist-threaded/wasm_cli.bc.wasm.js");
-const source = fs.readFileSync(path.join(root, "build/bash/bash-runtime.wast"), "utf8");
+const loaderPath = path.join(root, "build/ocaml/dist-threaded/wasm_cli.bc.wasm.js");
+const source = fs.readFileSync(path.join(root, "build/ocaml/bash-runtime.wast"), "utf8");
 globalThis.waste_control_page = new Int32Array(4 + 256);
 let sequence = 0;
 for (const byte of new TextEncoder().encode("\nexit\n")) {
