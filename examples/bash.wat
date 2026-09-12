@@ -271,6 +271,8 @@
   (import "env" "getrlimit" (func (;228;) (type 0)))
   (import "env" "setrlimit" (func (;229;) (type 0)))
   (import "env" "umask" (func (;230;) (type 4)))
+  (import "waste-runtime" "table" (table (;0;) 488 488 funcref))
+  (import "waste-runtime" "memory" (memory (;0;) 4))
   (func (;231;) (type 2))
   (func (;232;) (type 2)
     block  ;; label = @1
@@ -339431,8 +339433,6 @@
     i32.const 256
     i32.add
     global.set 0)
-  (table (;0;) 488 488 funcref)
-  (memory (;0;) 4)
   (global (;0;) (mut i32) (i32.const 235120))
   (global (;1;) i32 (i32.const 128564))
   (global (;2;) i32 (i32.const 114392))

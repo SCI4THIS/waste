@@ -84,19 +84,16 @@ def rewrite_libc(source: str) -> str:
 
 
 def rewrite_bash(source: str) -> str:
-    imports = list(re.finditer(r"^  \(import [^\n]+\)$", source, re.MULTILINE))
-    if not imports:
-        raise RuntimeError("bash.wat has no imports")
-    insertion = imports[-1].end()
-    shared = (
-        f'\n  (import "{RUNTIME_MODULE}" "table" (table {SHARED_TABLE_SIZE} {SHARED_TABLE_SIZE} funcref))'
-        f'\n  (import "{RUNTIME_MODULE}" "memory" (memory 5))'
+    # Bash already imports memory and table from waste-runtime (compiled with
+    # --import-memory --import-table or equivalent WAT edits).  Expand the
+    # imported table to accommodate the ABI adapter entries added below.
+    source, tables = re.subn(
+        rf'^  \(import "{RUNTIME_MODULE}" "table" \(table \(;0;\) 488 488 funcref\)\)$',
+        f'  (import "{RUNTIME_MODULE}" "table" (table (;0;) {SHARED_TABLE_SIZE} {SHARED_TABLE_SIZE} funcref))',
+        source, count=1, flags=re.MULTILINE,
     )
-    source = source[:insertion] + shared + source[insertion:]
-    source, tables = re.subn(r"^  \(table \(;0;\) 488 488 funcref\)\n", "", source, count=1, flags=re.MULTILINE)
-    source, memories = re.subn(r"^  \(memory \(;0;\) 4\)\n", "", source, count=1, flags=re.MULTILINE)
-    if tables != 1 or memories != 1:
-        raise RuntimeError("bash.wat table or memory layout changed")
+    if tables != 1:
+        raise RuntimeError("bash.wat waste-runtime table import not found")
     replacements = {
         "1634953250": PACKAGE_ADDRESS,          # malformed multi-character "bash" macro
         "1634493730": LOCALE_DIRECTORY_ADDRESS, # malformed LOCALEDIR macro
@@ -246,7 +243,7 @@ def main() -> None:
         run(["wasm-opt", str(linked_libc_wasm), "-O2", "--strip-debug",
              "--enable-bulk-memory", "-o", str(optimized_libc_wasm)])
 
-        bash_source = rewrite_bash((root / "src" / "bash.wat").read_text(encoding="utf-8"))
+        bash_source = rewrite_bash((root / "examples" / "bash.wat").read_text(encoding="utf-8"))
         linked_bash_wat.write_text(bash_source, encoding="utf-8")
         run(["wasm-as", str(linked_bash_wat), "-o", str(linked_bash_wasm)])
         run(["wasm-opt", str(linked_bash_wasm), "-O2", "--strip-debug",
