@@ -1,7 +1,9 @@
 WASM_LD ?= $(shell command -v wasm-ld 2>/dev/null || printf '%s' ../../build/engine/toolchain/usr/bin/wasm-ld)
 WASM_LD_LIB ?= $(if $(filter ../../build/engine/toolchain/%,$(WASM_LD)),../../build/engine/toolchain/usr/lib,)
+PYTHON ?= python3
 
 ENGINE_DIR := ../engine
+REPO_ROOT := ../..
 BUILD_DIR ?= ../../build/html-rt
 ENGINE_BUILD_DIR ?= ../../build/engine
 WAST_GEN_DIR := $(ENGINE_BUILD_DIR)/gen
@@ -45,7 +47,16 @@ WAST_LEX_WASM_O := $(BUILD_DIR)/wast.lex.wasm.o
 
 WAST_WASM_TARGET := $(BUILD_DIR)/waste-wast.wasm
 
-.PHONY: wast-browser gen clean
+LIBC_BUILDER := tools/build-waste-libc.py
+LIBC_CLIENTS := $(wildcard $(REPO_ROOT)/tests/libc-test/*-client.wast.inc)
+LIBC_SOURCES := lib-impl/waste-libc.wat lib-impl/waste-libc-helpers.c \
+	lib-impl/waste-libc-extra.c $(LIBC_CLIENTS) $(LIBC_BUILDER)
+LIBC_OUTPUT := $(BUILD_DIR)/waste-libc/waste-libc.wasm
+LIBC_FIXTURES := $(patsubst $(REPO_ROOT)/tests/libc-test/%-client.wast.inc,\
+	$(BUILD_DIR)/waste-libc/tests/%.wast,$(LIBC_CLIENTS))
+LIBC_OUTPUTS := $(LIBC_OUTPUT) $(LIBC_FIXTURES)
+
+.PHONY: wast-browser waste-libc gen clean
 
 # ---- Parser generation (delegate to engine) ----
 
@@ -115,6 +126,14 @@ $(WAST_WASM_TARGET): $(ENGINE_OBJS) $(RT_OBJS) $(WASM_LIB_SHARED_O) $(WASM_LIB_W
 		$(ENGINE_OBJS) $(RT_OBJS) \
 		$(WAST_TAB_WASM_O) $(WAST_LEX_WASM_O) \
 		-o $(WAST_WASM_TARGET)
+
+# The builder emits the standalone module and every generated test fixture in
+# one transaction. Grouped targets ensure it runs only once when any output is
+# missing or older than its WAT, C helper, client, or builder source.
+waste-libc: $(LIBC_OUTPUTS)
+
+$(LIBC_OUTPUTS) &: $(LIBC_SOURCES)
+	$(PYTHON) $(LIBC_BUILDER) --repo-root $(abspath $(REPO_ROOT))
 
 clean:
 	rm -f $(WAST_WASM_TARGET) $(ENGINE_OBJS) $(RT_OBJS) \

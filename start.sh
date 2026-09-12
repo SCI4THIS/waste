@@ -34,7 +34,6 @@ BASH_HTML_GENERATOR="$REPO_ROOT/src/html-rt/tools/generate-bash-html.py"
 BASH_RUNTIME_WAST="$OCAML_BUILD/bash-runtime.wast"
 BASH_HTML="$HTML_BUILD/bash-ocaml.html"
 BASH_HTML_LOG="$LOG_DIR/bash-html.log"
-LIBC_BUILDER="$REPO_ROOT/src/html-rt/tools/build-waste-libc.py"
 LIBC_OUTPUT="$HTML_BUILD/waste-libc/waste-libc.wasm"
 LIBC_LOG="$LOG_DIR/libc-build.log"
 TEST_LOG="$LOG_DIR/test.log"
@@ -621,7 +620,8 @@ build_waste_libc() {
     return 1
   fi
   if ! run_logged_step "Build guest libc and fixtures" "$LIBC_LOG" \
-      python3 "$LIBC_BUILDER" --repo-root "$REPO_ROOT"; then
+      make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$HTML_BUILD" \
+      ENGINE_BUILD_DIR="$ENGINE_BUILD" waste-libc; then
     if [[ "$quiet" != true ]]; then
       show_message "Guest libc build failed" "Could not build waste-libc.wasm.\n\nLog: $LIBC_LOG"
     fi
@@ -1196,11 +1196,15 @@ run_test_group() {
         build_ocaml_native || status=1
       ;;
   esac
+  if [[ "$group" == libc || "$group" == all ]]; then
+    run_logged_step "Build guest libc and fixtures" "$TEST_LOG" \
+      build_waste_libc true || status=1
+  fi
   if ((status != 0)); then
     printf '\nBuild failed; final patch state: %s\n' \
       "$(i31_patch_status)" >>"$TEST_LOG"
     show_message "Runtime tests failed" \
-      "The OCaml interpreter build failed. The Makefile attempted to restore the spec submodule.\n\nPatch status: $(i31_patch_status)\nLog: $TEST_LOG"
+      "An interpreter or generated test prerequisite failed. The Makefile attempted to restore the spec submodule.\n\nPatch status: $(i31_patch_status)\nLog: $TEST_LOG"
     return 1
   fi
 
@@ -1343,7 +1347,6 @@ main_menu() {
       ocaml-html    "Generate embedded browser test dashboard" \
       ocaml-bash    "Generate self-contained WASTE Bash page" \
       -----   "────────────────────────────────────────────" \
-      libc    "Build waste-libc.wasm and tests" \
       log     "Show the last build log" \
       quit    "Exit" 3>&1 1>&2 2>&3)" || return 0
 
@@ -1357,7 +1360,6 @@ main_menu() {
       ocaml-test) test_suite_menu ;;
       ocaml-html) generate_browser_test_html || true ;;
       ocaml-bash) generate_bash_html || true ;;
-      libc) build_waste_libc || true ;;
       log)
         if [[ -s "$LOG_FILE" ]]; then
           whiptail --title "Last build log" --textbox "$LOG_FILE" 28 100
