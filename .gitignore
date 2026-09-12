@@ -1,11 +1,4 @@
 /build/
-/build.log
-/update.log
-/html.log
-/bash-html.log
-/threaded-html.log
-/test.log
 /.claude
 /.claire
-/src/c-engine/build
 __pycache__/

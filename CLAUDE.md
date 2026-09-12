@@ -68,13 +68,17 @@ build/waste-libc/waste-libc.wasm                # Guest libc binary
 
 ### Build Logs
 
+All logs are written to `build/logs/`:
+
 ```
-build.log                       # Latest OCaml-to-Wasm compilation
-html.log                        # Dashboard generation transcript
-bash-html.log                   # WASTE Bash page generation transcript
-build/waste-libc/build.log      # libc build log
-test.log                        # Test suite results
-update.log                       # Safe pull/submodule update transcript
+build/logs/build.log            # Latest OCaml-to-Wasm compilation
+build/logs/html.log             # Dashboard generation transcript
+build/logs/bash-html.log        # WASTE Bash page generation transcript
+build/logs/libc-build.log       # libc build log
+build/logs/test.log             # Test suite results
+build/logs/update.log           # Safe pull/submodule update transcript
+build/logs/c-engine-html.log    # C engine dashboard generation
+build/logs/c-engine-bash.log    # C engine Bash page generation
 ```
 
 ### Dependencies
@@ -122,9 +126,12 @@ The C engine (`src/c-engine/`) provides:
 - **Parser:** Flex/Bison grammar (`wast.l` / `wast.y`) for the full Wasm text format including GC, exceptions, tail calls, relaxed SIMD, multi-memory, and WAST script commands
 - **Encoder:** Converts parsed text format to binary Wasm opcodes (`wast_encode.c`)
 - **Executor:** Custom frame-based interpreter with fuel metering (`waste_exec.c`)
+- **Linker:** Shared module registry, cross-module import resolution, binary import scanning, pluggable host resolver (`wast_linker.c/h`)
 - **WAST runner:** Spec test harness with JSON output (`wast_runner.c`)
+- **POSIX stubs:** Browser-side POSIX host function dispatch via `browser_host_resolver` callback (`posix_stubs.c/h`)
+- **Browser API:** Exported WAST API functions, legacy per-module linking, browser streaming, yield/resume (`browser_api.c`)
 - **Freestanding library:** Portable C implementations of string, math, and formatting functions shared by both native and Wasm builds (`freestanding_lib.c`)
-- **Platform backends:** Native Linux x86_64 via raw syscalls (`freestanding_native.c`) and Wasm browser adapter (`browser_wast.c`)
+- **Platform backends:** Native Linux x86_64 via raw syscalls (`freestanding_native.c`) and Wasm browser platform (allocator, I/O stubs, strtod/strtof via JS host imports) (`browser_wast.c`)
 
 ### Browser Dashboard Architecture
 
@@ -170,6 +177,23 @@ Test fixture:
 # Outputs: build/waste-libc/waste-libc.wasm, build/bash/bash-runtime.wast
 ```
 
+### Shared-Library Libc Roadmap
+
+The goal is a shared-library model where multiple executables (bash, coreutils, etc.) share a single libc instance in the browser, rather than embedding a copy in each binary. Progress and next steps:
+
+1. **Executables compile with `--import-memory --import-table`** — DONE. Bash and future executables import memory and table from a `waste-runtime` module rather than declaring their own.
+
+2. **Binary-level import resolution in the engine** — DONE. `native_load_module` in `wast_linker.c` resolves imports from binary `.wasm` modules against registered modules in the `native_store`. The `native_host_resolver` callback decouples POSIX stub resolution from the shared linker.
+
+3. **VFS binary file support** — TODO. The engine needs a virtual filesystem layer so that binary `.wasm` files (executables) can be stored and loaded by path. This enables `execve` to locate and load programs. Likely requires:
+   - A VFS data structure in the engine (in-memory file table mapping paths to byte buffers)
+   - API for the browser host to populate the VFS with pre-loaded binaries
+   - Integration with `native_load_module` to load from VFS paths
+
+4. **Implement `execve` in the POSIX dispatch** — TODO. Add an `execve` stub in `posix_stubs.c` that looks up the target path in the VFS, loads the binary module via `native_load_module`, and transfers control. Requires the VFS from step 3.
+
+5. **Add more executables** — TODO. Compile coreutils and other programs with `--import-memory --import-table` targeting the `waste-runtime` module, package them into the VFS.
+
 ## Key Files & Their Roles
 
 ### Documentation
@@ -191,7 +215,10 @@ Test fixture:
 - `src/c-engine/freestanding_lib.c` — Portable freestanding library (string, math, snprintf, conversions) shared by native and Wasm
 - `src/c-engine/freestanding_native.c` — Native Linux x86_64 platform backend (raw syscalls, mmap allocator, FILE I/O)
 - `src/c-engine/freestanding/` — Freestanding headers (stdio.h, stdlib.h, string.h, math.h, etc.) used via `-Ifreestanding`
-- `src/c-engine/browser_wast.c` — Wasm browser backend (JS host imports, allocator, I/O stubs, WAST API exports)
+- `src/c-engine/wast_linker.c/h` — Shared module linker: native_store registry, cross-module call trampoline, binary import scanner, pluggable host resolver
+- `src/c-engine/browser_wast.c` — Wasm browser platform backend (strtod/strtof via JS, heap allocator, FILE I/O no-ops, getenv/isatty/exit stubs)
+- `src/c-engine/posix_stubs.c/h` — POSIX host function dispatch tables and `browser_host_resolver` for the browser build
+- `src/c-engine/browser_api.c` — Exported WAST API, legacy per-module linking, browser streaming, flat value helpers, yield/resume
 - `src/c-engine/main_wast.c` — Native command-line WAST spec test runner
 - `src/c-engine/wast_mmap_test.c` — Native WAST parse-only benchmark (mmap-based)
 - `src/c-engine/Makefile` — Build rules for native and Wasm targets
@@ -327,10 +354,13 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 │   │   ├── wast_simd.c/h             # SIMD instruction lookup
 │   │   ├── wast_types.h              # Shared type definitions
 │   │   ├── waste_exec.c/h            # Frame-based interpreter
+│   │   ├── wast_linker.c/h           # Shared module linker + native_store
 │   │   ├── freestanding_lib.c        # Portable freestanding library
 │   │   ├── freestanding_native.c     # Native Linux x86_64 syscall backend
 │   │   ├── freestanding/             # Freestanding C headers
-│   │   ├── browser_wast.c            # Wasm browser backend
+│   │   ├── browser_wast.c            # Wasm browser platform backend
+│   │   ├── posix_stubs.c/h           # POSIX host function dispatch
+│   │   ├── browser_api.c             # Exported WAST API + browser streaming
 │   │   ├── main_wast.c              # Native WAST spec test runner
 │   │   ├── wast_mmap_test.c          # Parse-only benchmark
 │   │   └── Makefile                  # Build rules
@@ -382,11 +412,11 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 │   │   ├── browser-tests.html         # Dashboard
 │   │   ├── bash.html                  # Bash interpreter page
 │   │   └── staging/                   # Build overlay
+│   ├── logs/                          # All build/test log files
 │   ├── waste-libc/                    # libc artifacts
 │   ├── c-engine/                      # C engine build artifacts
 │   └── toolchain/                     # Wasm toolchain (if built locally)
 │
-├── build.log, test.log, *.log        # Build transcripts
 └── .agents/, .codex/                 # Internal directories
 ```
 
