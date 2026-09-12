@@ -1,7 +1,6 @@
+/* Wasm stdlib implementation (category 2: emulated in-browser) */
 #include <stddef.h>
 #include <stdint.h>
-#include <string.h>
-#include <stdio.h>
 
 /* Declarations from freestanding_lib.c used by strtod/strtof */
 const char *scan_float_end(const char *s);
@@ -70,34 +69,8 @@ float strtof(const char *s, char **endptr) {
 }
 
 char *getenv(const char *name) { (void)name; return (void *)0; }
-int isatty(int fd) { (void)fd; return 0; }
 
 _Noreturn void exit(int status) { (void)status; __builtin_trap(); }
-
-/* File I/O: globals for stdin/stdout/stderr, all operations are no-ops */
-FILE __stdin_file  = { .fd = 0, .error = 0, .eof = 0 };
-FILE __stdout_file = { .fd = 1, .error = 0, .eof = 0 };
-FILE __stderr_file = { .fd = 2, .error = 0, .eof = 0 };
-int fprintf(FILE *f, const char *fmt, ...) { (void)f; (void)fmt; return 0; }
-size_t fwrite(const void *p, size_t sz, size_t n, FILE *f) { (void)p; (void)sz; (void)n; (void)f; return 0; }
-size_t fread(void *p, size_t sz, size_t n, FILE *f) { (void)p; (void)sz; (void)n; (void)f; return 0; }
-int fputc(int c, FILE *f) { (void)c; (void)f; return 0; }
-int fputs(const char *s, FILE *f) { (void)s; (void)f; return 0; }
-int ferror(FILE *f) { (void)f; return 0; }
-FILE *fopen(const char *path, const char *mode) { (void)path; (void)mode; return (void *)0; }
-int fseek(FILE *f, long off, int whence) { (void)f; (void)off; (void)whence; return 0; }
-long ftell(FILE *f) { (void)f; return 0; }
-int fclose(FILE *f) { (void)f; return 0; }
-int putchar(int c) { (void)c; return 0; }
-int printf(const char *fmt, ...) { (void)fmt; return 0; }
-int getc(FILE *f) { (void)f; return -1; }
-void clearerr(FILE *f) { (void)f; }
-int fileno(FILE *f) { (void)f; return -1; }
-void perror(const char *s) { (void)s; }
-char *strerror(int n) { (void)n; return "error"; }
-
-int errno = 0;
-int yydebug = 0;
 
 /* ---- Freestanding heap allocator ---- */
 extern unsigned char __heap_base;
@@ -201,6 +174,9 @@ void free(void *ptr) {
         previous->next = block->next;
     }
 }
+
+/* Forward declaration for use by realloc */
+void *memcpy(void *dst, const void *src, size_t n);
 
 void *realloc(void *ptr, size_t size) {
     if (!ptr) return malloc(size);

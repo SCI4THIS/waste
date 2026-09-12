@@ -120,9 +120,9 @@ The interpreter yields to the browser event loop after each configured instructi
 
 Dashboard concurrency controls limit concurrently runnable test *sandboxes*, not guest threads (guest threading is future work).
 
-### C Engine Architecture
+### Engine Architecture
 
-The C engine (`src/c-engine/`) provides:
+The engine (`src/engine/`) provides:
 - **Parser:** Flex/Bison grammar (`wast.l` / `wast.y`) for the full Wasm text format including GC, exceptions, tail calls, relaxed SIMD, multi-memory, and WAST script commands
 - **Encoder:** Converts parsed text format to binary Wasm opcodes (`wast_encode.c`)
 - **Executor:** Custom frame-based interpreter with fuel metering (`waste_exec.c`)
@@ -130,8 +130,8 @@ The C engine (`src/c-engine/`) provides:
 - **WAST runner:** Spec test harness with JSON output (`wast_runner.c`)
 - **POSIX stubs:** Browser-side POSIX host function dispatch via `browser_host_resolver` callback (`posix_stubs.c/h`)
 - **Browser API:** Exported WAST API functions, legacy per-module linking, browser streaming, yield/resume (`browser_api.c`)
-- **Freestanding library:** Portable C implementations of string, math, and formatting functions shared by both native and Wasm builds (`freestanding_lib.c`)
-- **Platform backends:** Native Linux x86_64 via raw syscalls (`freestanding_native.c`) and Wasm browser platform (allocator, I/O stubs, strtod/strtof via JS host imports) (`browser_wast.c`)
+- **Freestanding library:** Portable C implementations of string, math, and formatting functions shared by both native and Wasm builds (`lib/freestanding_lib.c`)
+- **Platform backends:** Native Linux x86_64 via raw syscalls (`lib/freestanding_native.c`) and Wasm browser platform (allocator, I/O stubs, strtod/strtof via JS host imports) (`browser_wast.c`)
 
 ### Browser Dashboard Architecture
 
@@ -161,7 +161,7 @@ See `docs/posix-runtime.md` for control-page ABI, signal delivery, non-local-jum
 
 ### Guest libc: waste-libc
 
-Located in `libc/waste-libc.wat` and `libc/waste-libc-helpers.c`, this owns guest linear memory and provides:
+Located in `src/browser/lib-impl/waste-libc.wat` and `src/browser/lib-impl/waste-libc-helpers.c`, this owns guest linear memory and provides:
 
 - Boundary-tag allocator exporting `malloc`, `calloc`, `realloc`, `free`, `sbrk`, `__errno_location`
 - `memory.grow`-backed MORECORE for heap expansion
@@ -169,7 +169,7 @@ Located in `libc/waste-libc.wat` and `libc/waste-libc-helpers.c`, this owns gues
 - C.UTF-8 locale, identity/passwd/group/service records
 - String, conversion, regex, resource-limit, time-formatting, terminal, and diagnostic helpers
 
-`tools/build-bash-runtime.py` relinks Bash and libc to a neutral `waste-runtime` owner, then registers libc as an overlay on the OCaml host's `env` namespace. Operations requiring evaluator state (directory traversal, execve, descriptor readiness, dynamic loading, raw socket creation) deliberately return `ENOSYS` and must cross the OCaml process/VFS layer or the optional WebSocket broker.
+`src/browser/tools/build-bash-runtime.py` relinks Bash and libc to a neutral `waste-runtime` owner, then registers libc as an overlay on the OCaml host's `env` namespace. Operations requiring evaluator state (directory traversal, execve, descriptor readiness, dynamic loading, raw socket creation) deliberately return `ENOSYS` and must cross the OCaml process/VFS layer or the optional WebSocket broker.
 
 Test fixture:
 ```sh
@@ -203,39 +203,37 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 - `docs/posix-runtime.md` — Browser POSIX runtime tiers, control-page ABI, signal delivery, broker protocol
 - `AGENTS.md` — Repository guidelines, coding style, testing conventions, commit practices
 
-### Source: C Engine
-- `src/c-engine/wast.y` — Bison parser for Wasm text format (MVP + GC + exceptions + tail calls + SIMD + WAST script)
-- `src/c-engine/wast.l` — Flex lexer with dedicated tokens for structural keywords and generic OP for dotted instructions
-- `src/c-engine/wast_runner.c/h` — WAST script runner: module instantiation, assertion dispatch, JSON output
-- `src/c-engine/wast_encode.c/h` — Text-to-binary encoder: converts parsed AST to Wasm binary opcodes
-- `src/c-engine/wast_stream.c/h` — Byte stream utilities for binary encoding
-- `src/c-engine/wast_simd.c/h` — SIMD instruction lookup tables (0xFD prefix)
-- `src/c-engine/wast_types.h` — Shared type definitions for the parser/encoder pipeline
-- `src/c-engine/waste_exec.c/h` — Frame-based Wasm interpreter with fuel metering
-- `src/c-engine/freestanding_lib.c` — Portable freestanding library (string, math, snprintf, conversions) shared by native and Wasm
-- `src/c-engine/freestanding_native.c` — Native Linux x86_64 platform backend (raw syscalls, mmap allocator, FILE I/O)
-- `src/c-engine/freestanding/` — Freestanding headers (stdio.h, stdlib.h, string.h, math.h, etc.) used via `-Ifreestanding`
-- `src/c-engine/wast_linker.c/h` — Shared module linker: native_store registry, cross-module call trampoline, binary import scanner, pluggable host resolver
-- `src/c-engine/browser_wast.c` — Wasm browser platform backend (strtod/strtof via JS, heap allocator, FILE I/O no-ops, getenv/isatty/exit stubs)
-- `src/c-engine/posix_stubs.c/h` — POSIX host function dispatch tables and `browser_host_resolver` for the browser build
-- `src/c-engine/browser_api.c` — Exported WAST API, legacy per-module linking, browser streaming, flat value helpers, yield/resume
-- `src/c-engine/main_wast.c` — Native command-line WAST spec test runner
-- `src/c-engine/wast_mmap_test.c` — Native WAST parse-only benchmark (mmap-based)
-- `src/c-engine/Makefile` — Build rules for native and Wasm targets
+### Source: Engine (`src/engine/`)
+- `wast.y` — Bison parser for Wasm text format (MVP + GC + exceptions + tail calls + SIMD + WAST script)
+- `wast.l` — Flex lexer with dedicated tokens for structural keywords and generic OP for dotted instructions
+- `wast_runner.c/h` — WAST script runner: module instantiation, assertion dispatch, JSON output
+- `wast_encode.c/h` — Text-to-binary encoder: converts parsed AST to Wasm binary opcodes
+- `wast_stream.c/h` — Byte stream utilities for binary encoding
+- `wast_simd.c/h` — SIMD instruction lookup tables (0xFD prefix)
+- `wast_types.h` — Shared type definitions for the parser/encoder pipeline
+- `waste_exec.c/h` — Frame-based Wasm interpreter with fuel metering
+- `wast_linker.c/h` — Shared module linker: native_store registry, cross-module call trampoline, binary import scanner, pluggable host resolver
+- `browser_wast.c` — Wasm browser platform backend (strtod/strtof via JS, heap allocator, FILE I/O no-ops, getenv/isatty/exit stubs)
+- `posix_stubs.c/h` — POSIX host function dispatch tables and `browser_host_resolver` for the browser build
+- `browser_api.c` — Exported WAST API, legacy per-module linking, browser streaming, flat value helpers, yield/resume
+- `main_wast.c` — Native command-line WAST spec test runner
+- `wast_mmap_test.c` — Native WAST parse-only benchmark (mmap-based)
+- `lib/freestanding_lib.c` — Portable freestanding library (string, math, snprintf, conversions) shared by native and Wasm
+- `lib/freestanding_native.c` — Native Linux x86_64 platform backend (raw syscalls, mmap allocator, FILE I/O)
+- `lib/include/` — Freestanding headers (stdio.h, stdlib.h, string.h, math.h, etc.) used via `-Ilib/include`
+- `Makefile` — Build rules for native and Wasm targets
 
-### Examples
-- `examples/bash.wat`, `bash-i.wat` — Compiled Bash binaries (for browser testing)
-
-### Source: Guest libc
-- `libc/waste-libc.wat` — WebAssembly libc core (memory, allocator, exports)
-- `libc/waste-libc-helpers.c` — C helpers (FILE, formatting, locale, accounts, time, regex)
-- `libc/waste-libc-extra.c` — Additional utilities
-
-### Tools & Generators
+### Source: Browser (`src/browser/`)
+- `lib-impl/waste-libc.wat` — WebAssembly guest libc core (memory, allocator, exports)
+- `lib-impl/waste-libc-helpers.c` — C helpers (FILE, formatting, locale, accounts, time, regex)
+- `lib-impl/waste-libc-extra.c` — Additional utilities
 - `tools/generate-browser-tests.py` — Collects `.wast` files, embeds interpreter, produces offline dashboard HTML
 - `tools/generate-bash-html.py` — Generates self-contained Bash interpreter page with CPS loader and libc
 - `tools/build-bash-runtime.py` — Relinks Bash and libc binaries to shared `waste-runtime` module
 - `tools/build-waste-libc.py` — Builds libc Wasm binary and test fixtures
+
+### Examples
+- `examples/bash.wat`, `bash-i.wat` — Compiled Bash binaries (for browser testing)
 
 ### Tests
 - `tests/diy-posix-test/*.wast` — POSIX regression probes (process control, signals, VFS, clock)
@@ -292,7 +290,7 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 ### Before Committing
 
 - Run `bash -n start.sh` to check shell syntax
-- Run Python bytecode checks for changed `tools/*.py` files
+- Run Python bytecode checks for changed `src/browser/tools/*.py` files
 - Run `git diff --check` to catch trailing whitespace
 - Verify shell and Python conform to surrounding indentation style
 
@@ -345,8 +343,8 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 ├── start.sh                           # Main build wizard
 ├── LICENSE, .gitignore, .gitmodules
 │
-├── src/                               # C engine
-│   └── c-engine/                      # Parser, encoder, executor, test runner
+├── src/
+│   ├── engine/                        # Wasm engine: parser, executor, linker
 │   │   ├── wast.y, wast.l            # Bison/Flex parser for Wasm text format
 │   │   ├── wast_runner.c/h           # WAST script runner
 │   │   ├── wast_encode.c/h           # Text-to-binary encoder
@@ -355,66 +353,51 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 │   │   ├── wast_types.h              # Shared type definitions
 │   │   ├── waste_exec.c/h            # Frame-based interpreter
 │   │   ├── wast_linker.c/h           # Shared module linker + native_store
-│   │   ├── freestanding_lib.c        # Portable freestanding library
-│   │   ├── freestanding_native.c     # Native Linux x86_64 syscall backend
-│   │   ├── freestanding/             # Freestanding C headers
 │   │   ├── browser_wast.c            # Wasm browser platform backend
 │   │   ├── posix_stubs.c/h           # POSIX host function dispatch
 │   │   ├── browser_api.c             # Exported WAST API + browser streaming
 │   │   ├── main_wast.c              # Native WAST spec test runner
 │   │   ├── wast_mmap_test.c          # Parse-only benchmark
-│   │   └── Makefile                  # Build rules
+│   │   ├── Makefile                  # Build rules
+│   │   └── lib/                      # Freestanding support library
+│   │       ├── freestanding_lib.c    # Portable freestanding library
+│   │       ├── freestanding_native.c # Native Linux x86_64 syscall backend
+│   │       └── include/              # Freestanding C headers
+│   │
+│   └── browser/                       # Browser packaging layer
+│       ├── lib-impl/                  # Guest libc (category 2 POSIX)
+│       │   ├── waste-libc.wat         # Wasm core (memory, allocator)
+│       │   ├── waste-libc-helpers.c   # C helpers (FILE, locale, time)
+│       │   └── waste-libc-extra.c     # Additional utilities
+│       └── tools/                     # HTML generators & builders
+│           ├── generate-browser-tests.py
+│           ├── generate-bash-html.py
+│           ├── build-bash-runtime.py
+│           └── build-waste-libc.py
 │
 ├── examples/                          # Example Wasm binaries
 │   ├── bash.wat                       # Compiled Bash (interactive)
 │   └── bash-i.wat                     # Compiled Bash (non-interactive)
 │
-├── libc/                              # Guest libc for Bash & applications
-│   ├── waste-libc.wat                 # Wasm core (memory, allocator)
-│   ├── waste-libc-helpers.c           # C helpers (FILE, locale, accounts, time)
-│   └── waste-libc-extra.c             # Additional utilities
-│
-├── tools/                             # Generators & builders
-│   ├── generate-browser-tests.py      # Dashboard generation
-│   ├── generate-bash-html.py          # Bash page generation
-│   ├── build-bash-runtime.py          # Bash + libc relinking
-│   └── build-waste-libc.py            # libc compilation
-│
 ├── tests/                             # Test suites
-│   ├── c-engine-*.wast                # C engine regression fixtures
-│   ├── c-engine-*.wat                 # C engine test modules
+│   ├── c-engine-*.wast                # Engine regression fixtures
+│   ├── c-engine-*.wat                 # Engine test modules
 │   ├── c-engine-i32-smoke.c           # Sanitizer smoke test source
 │   ├── diy-posix-test/                # POSIX regression probes
-│   │   ├── *.wast                     # Fixtures
-│   │   └── *-runtime.cjs             # Node harnesses
 │   ├── libc-test/                     # libc regression probes
-│   │   ├── *.wast.inc                 # Test clients
-│   │   ├── *-runtime.cjs             # Node harnesses
-│   │   └── allocator-native.cjs       # Native allocator stress test
 │   └── tail-call-smoke.wast           # Bash CPS smoke test
 │
 ├── docs/                              # Architecture & planning
-│   ├── c-engine-port-plan.md          # Detailed C port roadmap
-│   ├── c-engine-handoff.md            # C engine conformance & implementation history
-│   ├── posix-runtime.md               # POSIX tiers, control-page ABI
-│   └── return-call-two-iteration-trace.md
 │
 ├── submodules/                        # External dependencies
 │   ├── wasm-spec/                     # Official OCaml interpreter & tests
-│   │   ├── interpreter/               # Reference implementation
-│   │   └── test/                      # Core test suite
 │   └── wasm-spec-i31-int32.patch      # Wasm32 compatibility patch
 │
 ├── build/                             # Generated output (git-ignored)
-│   ├── ocaml-wasm/
-│   │   ├── dist/                      # Sequential interpreter + assets
-│   │   ├── dist-threaded/             # CPS interpreter + assets
-│   │   ├── browser-tests.html         # Dashboard
-│   │   ├── bash.html                  # Bash interpreter page
-│   │   └── staging/                   # Build overlay
+│   ├── ocaml-wasm/                    # OCaml interpreter artifacts
+│   ├── engine/                        # Engine build artifacts
 │   ├── logs/                          # All build/test log files
 │   ├── waste-libc/                    # libc artifacts
-│   ├── c-engine/                      # C engine build artifacts
 │   └── toolchain/                     # Wasm toolchain (if built locally)
 │
 └── .agents/, .codex/                 # Internal directories
