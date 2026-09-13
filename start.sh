@@ -1347,7 +1347,6 @@ main_menu() {
       ocaml-html    "Generate embedded browser test dashboard" \
       ocaml-bash    "Generate self-contained WASTE Bash page" \
       -----   "────────────────────────────────────────────" \
-      log     "Show the last build log" \
       quit    "Exit" 3>&1 1>&2 2>&3)" || return 0
 
     case "$choice" in
@@ -1360,12 +1359,6 @@ main_menu() {
       ocaml-test) test_suite_menu ;;
       ocaml-html) generate_browser_test_html || true ;;
       ocaml-bash) generate_bash_html || true ;;
-      log)
-        if [[ -s "$LOG_FILE" ]]; then
-          whiptail --title "Last build log" --textbox "$LOG_FILE" 28 100
-        else
-          show_message "Last build log" "No build log exists yet."
-        fi ;;
       quit) return 0 ;;
     esac
   done
