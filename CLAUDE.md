@@ -157,13 +157,14 @@ Three capability tiers:
 
 The dashboard remains self-contained; WebSocket broker is optional for delegated capabilities. Without a broker, unsupported operations return `ENOSYS`.
 
-See `docs/posix-runtime.md` for control-page ABI, signal delivery, non-local-jump verification, and browser/emulation/broker policy details.
+See `docs/architecture.md` for runtime ownership and browser/emulation/broker
+policy, and `docs/techniques.md` for continuation and non-local-jump techniques.
 
 ### Guest libc: waste-libc
 
 Split across `src/html-rt/lib/` in focused modules, this owns guest linear memory and provides:
 
-- Boundary-tag allocator exporting `malloc`, `calloc`, `realloc`, `free`, `sbrk`, `__errno_location` (`lib/stdlib.wat`)
+- Boundary-tag allocator exporting `malloc`, `calloc`, `realloc`, `free`, `sbrk`, `__errno_location` (`src/html-rt/lib/stdlib.wat`)
 - `memory.grow`-backed MORECORE for heap expansion
 - Memory-backed `FILE` streams and wasm32 variadic formatting (`lib/stdio.c`)
 - UTF-8 multibyte/wide-char conversion (`lib/wchar.c`)
@@ -201,9 +202,10 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 
 ### Documentation
 - `README.md` — High-level project overview, build directions, dashboard usage
-- `docs/c-engine-port-plan.md` — Detailed C port strategy, phased gates, execution architecture, build integration
-- `docs/c-engine-handoff.md` — C engine conformance status, browser baseline, implementation history
-- `docs/posix-runtime.md` — Browser POSIX runtime tiers, control-page ABI, signal delivery, broker protocol
+- `docs/architecture.md` — Runtime roles, ownership, phase boundaries, POSIX model, and browser deployment
+- `docs/techniques.md` — Parser, validator, linker, execution, continuation, and testing practices
+- `docs/active-c-engine-refactor-plan.md` — Remaining C-engine structural refactor stages
+- `docs/active-c-engine-select-pselect-plan.md` — Full engine-owned descriptor readiness implementation plan
 - `AGENTS.md` — Repository guidelines, coding style, testing conventions, commit practices
 
 ### Source: Engine (`src/engine/`)
@@ -215,6 +217,7 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 - `wast_simd.c/h` — SIMD instruction lookup tables (0xFD prefix)
 - `wast_types.h` — Shared type definitions for the parser/encoder pipeline
 - `waste_exec.c/h` — Frame-based Wasm interpreter with fuel metering
+- `op.c` — Opcode implementations (numeric, SIMD, GC, conversions); `#include`d by `waste_exec.c`
 - `wast_linker.c/h` — Shared module linker: native_store registry, cross-module call trampoline, binary import scanner, pluggable host resolver
 - `browser_wast.c` — Wasm browser platform backend (strtod/strtof via JS, heap allocator, FILE I/O no-ops, getenv/isatty/exit stubs)
 - `posix_stubs.c/h` — POSIX host function dispatch tables and `browser_host_resolver` for the browser build
@@ -229,7 +232,7 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 - `browser_api.c` — Exported WAST API, legacy per-module linking, browser streaming, yield/resume
 - `posix_stubs.c/h` — POSIX host function dispatch tables and `browser_host_resolver`
 - `lib/stdlib.c`, `lib/stdio.c`, `lib/unistd.c` — Wasm platform backend and guest libc (guarded by `WASTE_ENGINE`)
-- `lib/stdlib.wat` — WebAssembly guest libc core (memory, allocator, exports)
+- `src/html-rt/lib/stdlib.wat` — WebAssembly guest libc core (memory, allocator, exports)
 - `lib/wchar.c` — UTF-8 multibyte/wide-char conversion
 - `lib/locale.c` — C.UTF-8 locale support
 - `lib/identity.c` — passwd/group/service records
@@ -267,7 +270,7 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 
 1. **Spec oracle:** The OCaml reference interpreter in `submodules/wasm-spec` is the behavioral standard. Both implementations must agree on all spec tests.
 
-2. **Differential testing:** Each C feature expansion must include a fixture and compare results with OCaml before marking as complete. See `docs/c-engine-port-plan.md` for staged gates.
+2. **Differential testing:** Each C feature expansion must include a fixture and compare results with OCaml before marking as complete. See `docs/architecture.md` and `docs/techniques.md` for the shared gates.
 
 ### Ownership & Memory Safety
 
@@ -362,6 +365,7 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 │   │   ├── wast_simd.c/h             # SIMD instruction lookup
 │   │   ├── wast_types.h              # Shared type definitions
 │   │   ├── waste_exec.c/h            # Frame-based interpreter
+│   │   ├── op.c                      # Opcode implementations (#include'd by waste_exec.c)
 │   │   ├── wast_linker.c/h           # Shared module linker + native_store
 │   │   ├── browser_wast.c            # Wasm browser platform backend
 │   │   ├── posix_stubs.c/h           # POSIX host function dispatch

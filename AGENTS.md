@@ -11,12 +11,12 @@ build rules live in `src/html-rt/`. Keep shared semantics in `src/engine/`; add
 platform behavior only to the matching runtime directory. Compiled Bash input
 is in `examples/bash.wat`.
 
-Follow `docs/c-engine-port-plan.md`: C is the browser runtime, while the
-official OCaml interpreter in `submodules/wasm-spec` remains the differential
-oracle. Read `docs/c-engine-handoff.md` before extending the engine; it records
-the supported suites, browser baseline, reproduction gates, and implementation
-history. Some historical command examples in that document predate the runtime
-directory split, so use the commands below for current builds.
+Follow `docs/architecture.md`: C is the browser runtime, while the official
+OCaml interpreter in `submodules/wasm-spec` remains the differential oracle.
+Read `docs/techniques.md` before extending the engine; it records the parser,
+validation, execution, linking, browser, and verification practices established
+during the port. Current staged work is tracked in the `docs/active-*.md`
+plans.
 Represent repository-owned OCaml changes in
 `submodules/wasm-spec-i31-int32.patch`, never in submodule history. Dashboard
 and packaging tools are in `src/html-rt/tools/`; guest libc sources are in
