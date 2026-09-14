@@ -1,7 +1,8 @@
-#ifndef WASTE_EXEC_H
-#define WASTE_EXEC_H
+#ifndef WASTE_RUNTIME_ENGINE_INTERNAL_H
+#define WASTE_RUNTIME_ENGINE_INTERNAL_H
 
-#include "wast_types.h"
+#include "text/wat_types.h"
+#include "wasm/wasm_module.h"
 #include <stddef.h>
 
 typedef struct waste_exec_engine waste_exec_engine;
@@ -153,6 +154,13 @@ exec_status exec_load_with_imports(const uint8_t *bytes, size_t size,
                                    waste_exec_engine **engine_out,
                                    exec_error *error);
 
+/* Load using import declarations already decoded from the same byte buffer.
+ * This is the linker path; it prevents section 2 from being decoded twice. */
+exec_status exec_load_decoded_with_imports(
+    const uint8_t *bytes, size_t size, const wasm_module *module,
+    const exec_imports *imports, waste_exec_engine **engine_out,
+    exec_error *error);
+
 /*
  * Exported extern pointers are stable for the lifetime of their owning engine.
  * They may be passed directly in exec_imports to another engine. Consumers must
@@ -193,4 +201,4 @@ exec_status exec_invoke(waste_exec_engine *engine,
                         wasm_value *results, int *result_count,
                         exec_error *error);
 
-#endif /* WASTE_EXEC_H */
+#endif /* WASTE_RUNTIME_ENGINE_INTERNAL_H */

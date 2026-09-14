@@ -11,7 +11,6 @@ not part of the C engine's instruction-execution path.
 This document records durable system boundaries and ownership rules.  Concrete
 unfinished work belongs in the active plans:
 
-- [active-c-engine-refactor-plan.md](active-c-engine-refactor-plan.md)
 - [active-c-engine-select-pselect-plan.md](active-c-engine-select-pselect-plan.md)
 
 [techniques.md](techniques.md) records reusable implementation and testing
@@ -29,6 +28,20 @@ src/cli-rt/    native CLI, mmap harness, native platform library, and Makefile
 src/html-rt/   browser API, browser POSIX adapter, guest libc, HTML tools,
                and Wasm Makefile
 ```
+
+The engine itself has one-way ownership directories:
+
+```text
+src/engine/include/  stable embedding values, errors, and opaque handles
+src/engine/text/     reentrant Flex/Bison WAT front end and text AST builder
+src/engine/script/   WAST command framing, parsing policy, and assertions
+src/engine/wasm/     binary reader/writer, encoder, decoder, and validation
+src/engine/runtime/  store, instances, instantiation, and execution
+src/engine/lib/      shared freestanding C support
+```
+
+Only `Makefile`, `README.md`, and the support directories live at the engine
+root. Generated Flex/Bison files remain under `build/engine/gen/`.
 
 Generated files stay under `build/`:
 
@@ -79,22 +92,19 @@ Wasm bytes ---------------------> bounded decoder --+--> immutable wasm_module
                                                            |
                                                         execute
 
-WAST --> command boundary --> parse one command --> execute/classify --> next
+WAST --> Flex boundary mode --> parse one command --> execute/classify --> next
 ```
 
-The binary decoder produces an owned, immutable module.  The current refactor
-has moved source ownership, the section directory, and imports into that
-representation; declaration and function-body decoding is moving there in
-later stages.  Validation establishes semantic correctness and should
-eventually attach resolved branch, call, type, and immediate metadata.
-Instantiation creates mutable memories, tables, globals, segments, objects,
-tags, and evaluator state from a validated module.  Decoding the same module
-once and instantiating it twice must create isolated mutable state.
+The binary decoder produces an owned module with a private source copy,
+section directory, and decoded imports. The binary load layer decodes the
+remaining executable declarations and validation metadata through bounded
+section readers. Instantiation creates mutable memories, tables, globals,
+segments, objects, tags, and evaluator state. Decoding the same module once
+and instantiating it twice must create isolated mutable state.
 
-Text modules currently pass through the encoder before the common binary
-module path.  The active refactor plan defines the longer-term common
-representation and remaining phase extraction.  Neither the linker nor the
-runtime may independently rescan Wasm sections already owned by the decoder.
+Text modules pass through the encoder before the common binary module path.
+Neither the linker nor the runtime may independently rescan Wasm sections
+already owned by the decoder.
 
 ## WAT and WAST Boundaries
 
@@ -103,17 +113,22 @@ have different failure policy:
 
 - WAT compilation accepts exactly one module, is transactional, and fails
   without returning partial output.
-- WAST is a command stream.  It frames one balanced top-level command, parses
-  and executes or classifies that command, records its result, and continues.
+- WAST is a command stream.  A dedicated mode of the same reentrant Flex
+  scanner frames one balanced top-level command.  The driver parses that exact
+  range in a fresh context, executes or classifies it, records its result, and
+  continues.
 
 Malformed text, invalid modules, failed instantiation, failed linking, traps,
 exceptions, exhaustion, and successful values are different observable WAST
 outcomes.  Parser recovery must not collapse them into a generic failure or
 skip later commands.
 
-Flex/Bison owns textual syntax.  Binary decoding, command framing, module
-validation, assertion policy, linking, instantiation, and execution remain C
-phases outside grammar actions.
+Flex/Bison owns textual syntax and source-boundary recognition.  Binary
+decoding, module validation, assertion policy, linking, instantiation, and
+execution remain C phases outside grammar actions.  Assertion value matching
+and action execution are isolated in `script/wast_assert.c`; command policy
+lives in `script/`, while registry and lifetime transitions live in
+`runtime/store.c`.
 
 ## Language and Harness Coverage
 

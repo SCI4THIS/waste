@@ -1,17 +1,10 @@
 #ifndef WASTE_STREAM_H
 #define WASTE_STREAM_H
 
-#include "wast_types.h"
+#include "text/wat_types.h"
+#include "script/wast_command.h"
 
 #include <stddef.h>
-
-typedef enum {
-    WAST_STREAM_MODULE,
-    WAST_STREAM_ASSERTION,
-    WAST_STREAM_REGISTER,
-    WAST_STREAM_INVOKE,
-    WAST_STREAM_UNKNOWN
-} wast_stream_command_kind;
 
 typedef struct {
     const char *source;
@@ -19,6 +12,11 @@ typedef struct {
     size_t offset;
     unsigned line;
     unsigned column;
+    void *context;
+    void *scanner;
+    void *buffer;
+    int initialized;
+    int finished;
     char error[256];
 } wast_stream;
 
@@ -28,6 +26,7 @@ typedef int (*wast_stream_callback)(wast_stream_command_kind kind,
                                     wast_script *parsed, void *opaque);
 
 void wast_stream_init(wast_stream *stream, const char *source, size_t length);
+void wast_stream_destroy(wast_stream *stream);
 
 /* Consume one balanced top-level WAST command. Returns 1 when a command was
  * delivered, 0 at end of input, and -1 for an unterminated command. */

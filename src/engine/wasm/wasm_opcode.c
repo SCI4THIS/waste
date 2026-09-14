@@ -1,4 +1,4 @@
-#include "wast_simd.h"
+#include "wasm/wasm_opcode.h"
 
 #include <stddef.h>
 #include <string.h>

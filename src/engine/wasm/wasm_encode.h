@@ -1,7 +1,7 @@
-#ifndef WAST_ENCODE_H
-#define WAST_ENCODE_H
+#ifndef WASTE_WASM_ENCODE_H
+#define WASTE_WASM_ENCODE_H
 
-#include "wast_types.h"
+#include "text/wat_types.h"
 #include <stddef.h>
 
 /*
@@ -11,4 +11,4 @@
  */
 uint8_t *wast_encode_module(const wast_module *module, size_t *size, char *error);
 
-#endif /* WAST_ENCODE_H */
+#endif /* WASTE_WASM_ENCODE_H */

@@ -14,10 +14,11 @@ active plans rather than this document.
 ## Deterministic WAST Command Framing
 
 A WAST file is a sequence of independently observable commands.  Before
-invoking the module grammar, `wast_stream` scans one balanced top-level form
-while tracking strings, escapes, line comments, nested block comments, and
-parenthesis depth.  It classifies the command and passes exactly that byte
-range to the parser.
+invoking the module grammar, `wast_stream` asks the reentrant Flex scanner's
+boundary mode for one balanced top-level form.  That mode uses the same
+location, string, escape, annotation, line-comment, and nested-block-comment
+state as ordinary parsing.  The driver classifies the returned byte range and
+parses it with a fresh `wat_context`.
 
 This boundary provides deterministic recovery:
 
@@ -26,8 +27,10 @@ This boundary provides deterministic recovery:
 - registered modules and the current store survive successful commands; and
 - partially built objects from a failed command are released once.
 
-Do not use `setjmp`, `longjmp`, GLR ambiguity, or lexer error recovery to find
-the next WAST command.  Recovery policy belongs to the command driver.
+Do not add a second handwritten comment/string scanner, or use `setjmp`,
+`longjmp`, GLR ambiguity, or grammar error recovery to find the next WAST
+command.  Boundary recognition belongs to the shared scanner; recovery policy
+belongs to the command driver.
 
 ## WAT and WAST Parser Policy
 
@@ -121,12 +124,12 @@ validate custom sections, names, and branch hints, including folded and plain
 control instructions.  Unknown annotations remain ignorable according to the
 text-format rules.
 
-Preserve newlines and source offsets when removing an annotation envelope from
-the module grammar's input.  An annotation error inside an assertion must be
-reported through that assertion's malformed or invalid classification rather
-than terminating the WAST stream.  The active parser refactor may move this
-work into scanner tokens; it must preserve the same bounded validation and
-locations rather than adding another independent raw-text scanner.
+The scanner consumes annotation envelopes directly without rewriting the
+source and preserves their original line, column, and byte offsets.  An
+annotation error inside an assertion must be reported through that assertion's
+malformed or invalid classification rather than terminating the WAST stream.
+Keep bounded registered-annotation validation in C and do not add another
+independent raw-text boundary scanner.
 
 ## Binary Readers, Writers, and LEB Values
 

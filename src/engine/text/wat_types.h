@@ -1,71 +1,15 @@
-#ifndef WAST_TYPES_H
-#define WAST_TYPES_H
+#ifndef WASTE_TEXT_WAT_TYPES_H
+#define WASTE_TEXT_WAT_TYPES_H
 
-#include <stdint.h>
+#include "include/waste_value.h"
+
 #include <stddef.h>
-
-/* 16-byte v128 value */
-typedef struct { uint8_t bytes[16]; } wasm_v128;
-
-/* Value type enum */
-typedef enum {
-    WASM_VALTYPE_I32 = 0,
-    WASM_VALTYPE_I64,
-    WASM_VALTYPE_F32,
-    WASM_VALTYPE_F64,
-    WASM_VALTYPE_V128,
-    WASM_VALTYPE_FUNCREF,
-    WASM_VALTYPE_EXTERNREF,
-    WASM_VALTYPE_FUNCREF_NONNULL,
-    WASM_VALTYPE_EXTERNREF_NONNULL,
-    WASM_VALTYPE_ANYREF,
-    WASM_VALTYPE_EQREF,
-    WASM_VALTYPE_I31REF,
-    WASM_VALTYPE_STRUCTREF,
-    WASM_VALTYPE_ARRAYREF,
-    WASM_VALTYPE_ANYREF_NONNULL,
-    WASM_VALTYPE_EQREF_NONNULL,
-    WASM_VALTYPE_I31REF_NONNULL,
-    WASM_VALTYPE_STRUCTREF_NONNULL,
-    WASM_VALTYPE_ARRAYREF_NONNULL,
-    WASM_VALTYPE_EXNREF,
-    WASM_VALTYPE_EXNREF_NONNULL,
-    WASM_VALTYPE_NULLREF,
-    WASM_VALTYPE_NULLFUNCREF,
-    WASM_VALTYPE_NULLEXNREF,
-    WASM_VALTYPE_NULLEXTERNREF
-} wasm_valtype;
-
-/* Indexed heap references retain both nullability and their type index. */
-#define WASM_VALTYPE_TYPE_REF_NULL_BASE 0x100
-#define WASM_VALTYPE_TYPE_REF_BASE      0x200
-#define WASM_VALTYPE_TYPE_REF_LIMIT     0x300
-#define WASM_VALTYPE_IS_TYPE_REF(t) \
-    ((unsigned)(t) >= WASM_VALTYPE_TYPE_REF_NULL_BASE && \
-     (unsigned)(t) < WASM_VALTYPE_TYPE_REF_LIMIT)
-#define WASM_VALTYPE_TYPE_REF_INDEX(t) ((unsigned)(t) & 0xffu)
-
-/* NaN match mode stored in nan_mode[] */
-#define NAN_MATCH_EXACT      0
-#define NAN_MATCH_F32_CANON  1
-#define NAN_MATCH_F32_ARITH  2
-#define NAN_MATCH_F64_CANON  3
-#define NAN_MATCH_F64_ARITH  4
-#define REF_MATCH_NULL       255
 
 /* Test argument / expected result value */
 typedef struct {
-    wasm_valtype type;
-    union {
-        int32_t  i32;
-        int64_t  i64;
-        float    f32;
-        double   f64;
-        wasm_v128 v128;
-        uint32_t ref;
-    };
-    uint8_t nan_mode[16]; /* per-lane NaN matching (scalar: nan_mode[0] only) */
-} wasm_value;
+    char *data;
+    size_t length;
+} wast_owned_string;
 
 /* Assertion kinds */
 typedef enum {
@@ -351,9 +295,10 @@ typedef struct {
 typedef struct {
     int line;
     int column;
+    size_t byte_offset;
     int fold_depth;
     int offset_overflow; /* set when offset=/align= exceeds its encoded range */
-    char **strings;      /* parse-lifetime storage for unbounded STRING tokens */
+    wast_owned_string *strings; /* owned STRING tokens with explicit lengths */
     size_t string_count;
     size_t string_capacity;
 } wast_lex_state;
@@ -371,6 +316,8 @@ typedef struct {
     char        validation_error[WAST_MAX_EXPORT_NAME];
 } wast_group;
 
+struct wat_context;
+
 /* Complete parsed WAST script */
 typedef struct {
     wast_group   *groups;
@@ -380,13 +327,11 @@ typedef struct {
     int            assertion_count;
     int            assertion_capacity;
     int            command_count;
-    wast_raw_module *raw_modules;
-    int            raw_module_count;
-    int            raw_module_cursor;
     uint8_t       *custom_assertion_errors;
     int            custom_assertion_count;
     int            custom_assertion_cursor;
     int            strict_wat_mode;
+    struct wat_context *parse_context; /* non-owning, valid only during parse */
     char           error[256];
 } wast_script;
 
@@ -401,4 +346,4 @@ typedef struct {
 
 #define WAST_MAX_INSTRS 128
 
-#endif /* WAST_TYPES_H */
+#endif /* WASTE_TEXT_WAT_TYPES_H */

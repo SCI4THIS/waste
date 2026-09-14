@@ -1,8 +1,8 @@
 /* main.c -- WASTE CLI entry point: WAST spec runner, browser-spec JSON
  * emitter, assertion counter, and parse-only benchmark. */
 
-#include "wast_linker.h"
-#include "wast_runner.h"
+#include "runtime/store.h"
+#include "script/wast_runner.h"
 
 #include <fcntl.h>
 #include <stdio.h>

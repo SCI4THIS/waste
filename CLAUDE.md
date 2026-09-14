@@ -123,15 +123,15 @@ Dashboard concurrency controls limit concurrently runnable test *sandboxes*, not
 ### Engine Architecture
 
 The engine (`src/engine/`) provides:
-- **Parser:** Flex/Bison grammar (`wast.l` / `wast.y`) for the full Wasm text format including GC, exceptions, tail calls, relaxed SIMD, multi-memory, and WAST script commands
-- **Encoder:** Converts parsed text format to binary Wasm opcodes (`wast_encode.c`)
-- **Executor:** Custom frame-based interpreter with fuel metering (`waste_exec.c`)
-- **Linker:** Shared module registry, cross-module import resolution, binary import scanning, pluggable host resolver (`wast_linker.c/h`)
-- **WAST runner:** Spec test harness with JSON output (`wast_runner.c`)
+- **Public API:** Stable values and errors plus opaque decoded-module and instance handles (`include/`)
+- **Parser:** Reentrant Flex/Bison WAT grammar, context, builder, and literals (`text/`)
+- **Binary pipeline:** Bounded readers/writers, encoding, decoding, opcode metadata, loading, and validation (`wasm/`)
+- **Runtime:** Store, instance lifecycle, instantiation, frame-based execution, and fuel metering (`runtime/`)
+- **WAST runner:** Command streaming, assertions, and WAT/WAST policy (`script/`)
 - **POSIX stubs:** Browser-side POSIX host function dispatch via `browser_host_resolver` callback (`posix_stubs.c/h`)
 - **Browser API:** Exported WAST API functions, legacy per-module linking, browser streaming, yield/resume (`browser_api.c`)
-- **Freestanding library:** Portable C implementations of string, math, and formatting functions shared by both native and Wasm builds (`lib/freestanding_lib.c`)
-- **Platform backends:** Native Linux x86_64 via raw syscalls (`lib/freestanding_native.c`) and Wasm browser platform (allocator, I/O stubs, strtod/strtof via JS host imports) (`browser_wast.c`)
+- **Freestanding library:** Portable string, math, allocation, formatting, and errno support shared by native and Wasm builds (`src/engine/lib/`)
+- **Platform backends:** Native Linux x86_64 support in `src/cli-rt/lib/` and Wasm/browser support in `src/html-rt/lib/`
 
 ### Browser Dashboard Architecture
 
@@ -187,7 +187,7 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 
 1. **Executables compile with `--import-memory --import-table`** — DONE. Bash and future executables import memory and table from a `waste-runtime` module rather than declaring their own.
 
-2. **Binary-level import resolution in the engine** — DONE. `native_load_module` in `wast_linker.c` resolves imports from binary `.wasm` modules against registered modules in the `native_store`. The `native_host_resolver` callback decouples POSIX stub resolution from the shared linker.
+2. **Binary-level import resolution in the engine** — DONE. `native_load_module` in `runtime/store.c` resolves decoded imports from binary `.wasm` modules against registered modules in the `native_store`. The `native_host_resolver` callback decouples POSIX stub resolution from the shared store.
 
 3. **VFS binary file support** — TODO. The engine needs a virtual filesystem layer so that binary `.wasm` files (executables) can be stored and loaded by path. This enables `execve` to locate and load programs. Likely requires:
    - A VFS data structure in the engine (in-memory file table mapping paths to byte buffers)
@@ -204,29 +204,18 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 - `README.md` — High-level project overview, build directions, dashboard usage
 - `docs/architecture.md` — Runtime roles, ownership, phase boundaries, POSIX model, and browser deployment
 - `docs/techniques.md` — Parser, validator, linker, execution, continuation, and testing practices
-- `docs/active-c-engine-refactor-plan.md` — Remaining C-engine structural refactor stages
 - `docs/active-c-engine-select-pselect-plan.md` — Full engine-owned descriptor readiness implementation plan
 - `AGENTS.md` — Repository guidelines, coding style, testing conventions, commit practices
 
 ### Source: Engine (`src/engine/`)
-- `wast.y` — Bison parser for Wasm text format (MVP + GC + exceptions + tail calls + SIMD + WAST script)
-- `wast.l` — Flex lexer with dedicated tokens for structural keywords and generic OP for dotted instructions
-- `wast_runner.c/h` — WAST script runner: module instantiation, assertion dispatch, JSON output
-- `wast_encode.c/h` — Text-to-binary encoder: converts parsed AST to Wasm binary opcodes
-- `wast_stream.c/h` — Byte stream utilities for binary encoding
-- `wast_simd.c/h` — SIMD instruction lookup tables (0xFD prefix)
-- `wast_types.h` — Shared type definitions for the parser/encoder pipeline
-- `waste_exec.c/h` — Frame-based Wasm interpreter with fuel metering
-- `op.c` — Opcode implementations (numeric, SIMD, GC, conversions); `#include`d by `waste_exec.c`
-- `wast_linker.c/h` — Shared module linker: native_store registry, cross-module call trampoline, binary import scanner, pluggable host resolver
-- `browser_wast.c` — Wasm browser platform backend (strtod/strtof via JS, heap allocator, FILE I/O no-ops, getenv/isatty/exit stubs)
-- `posix_stubs.c/h` — POSIX host function dispatch tables and `browser_host_resolver` for the browser build
-- `browser_api.c` — Exported WAST API, legacy per-module linking, browser streaming, flat value helpers, yield/resume
-- `main.c` — CLI entry point: WAST spec runner, browser-spec JSON, assertion count, parse-only benchmark
-- `lib/freestanding_lib.c` — Portable freestanding library (string, math, snprintf, conversions) shared by native and Wasm
-- `lib/freestanding_native.c` — Native Linux x86_64 platform backend (raw syscalls, mmap allocator, FILE I/O)
+- `include/` — Public values, structured errors, and opaque module/instance API
+- `text/` — WAT lexer, parser, context, builder, literal conversion, and text AST
+- `script/` — WAST command classification/streaming, runner, and assertions
+- `wasm/` — Binary reader/writer, LEB, encoder, decoder, loader, opcode metadata, module, and validator
+- `runtime/` — Store, internal engine interface, instance lifetime, instantiation, dispatch, and independently compiled opcode-family units
+- `lib/*.c` — Portable freestanding string, math, allocation, formatting, and errno support shared by native and Wasm
 - `lib/include/` — Freestanding headers (stdio.h, stdlib.h, string.h, math.h, etc.) used via `-Ilib/include`
-- `Makefile` — Build rules for native and Wasm targets
+- `Makefile` — Shared Flex/Bison generation rules
 
 ### Source: Browser/Wasm Runtime (`src/html-rt/`)
 - `browser_api.c` — Exported WAST API, legacy per-module linking, browser streaming, yield/resume
@@ -359,13 +348,15 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 ├── src/
 │   ├── engine/                        # Wasm engine: parser, executor, linker
 │   │   ├── wast.y, wast.l            # Bison/Flex parser for Wasm text format
-│   │   ├── wast_runner.c/h           # WAST script runner
+│   │   ├── wast_runner.c/h           # WAT/WAST parsing and orchestration
+│   │   ├── wast_assert.c/h           # Result matching and assertions
 │   │   ├── wast_encode.c/h           # Text-to-binary encoder
-│   │   ├── wast_stream.c/h           # Byte stream utilities
+│   │   ├── wast_stream.c/h           # WAST command streaming
 │   │   ├── wast_simd.c/h             # SIMD instruction lookup
 │   │   ├── wast_types.h              # Shared type definitions
-│   │   ├── waste_exec.c/h            # Frame-based interpreter
-│   │   ├── op.c                      # Opcode implementations (#include'd by waste_exec.c)
+│   │   ├── waste_exec.c/h            # Frame-based interpreter API
+│   │   ├── runtime/                  # Instantiation and execution units
+│   │   ├── wasm/                     # Binary pipeline and validation
 │   │   ├── wast_linker.c/h           # Shared module linker + native_store
 │   │   ├── browser_wast.c            # Wasm browser platform backend
 │   │   ├── posix_stubs.c/h           # POSIX host function dispatch

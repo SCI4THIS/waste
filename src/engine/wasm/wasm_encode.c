@@ -1,33 +1,20 @@
-#include "wast_encode.h"
+#include "wasm/wasm_encode.h"
+#include "wasm/wasm_writer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct { uint8_t *data; size_t len, cap; int failed; } writer;
 typedef struct {
     wasm_valtype params[WAST_MAX_PARAMS], results[WAST_MAX_RESULTS];
     int param_count, result_count;
     int is_func;
 } func_sig;
 
-static void reserve(writer *w, size_t n) {
-    if (w->failed || n > (size_t)-1 - w->len) { w->failed=1; return; }
-    size_t need=w->len+n, cap=w->cap?w->cap:256;
-    if (need<=w->cap) return;
-    while(cap<need) { if(cap>(size_t)-1/2){cap=need;break;} cap*=2; }
-    uint8_t *p=(uint8_t*)realloc(w->data,cap);
-    if(!p){w->failed=1;return;} w->data=p; w->cap=cap;
-}
-static void byte(writer *w,uint8_t v){reserve(w,1);if(!w->failed)w->data[w->len++]=v;}
-static void bytes(writer *w,const void *p,size_t n){reserve(w,n);if(!w->failed&&n){memcpy(w->data+w->len,p,n);w->len+=n;}}
-static void u32(writer *w,uint32_t v){do{uint8_t b=(uint8_t)(v&0x7f);v>>=7;if(v)b|=0x80;byte(w,b);}while(v);}
-static void u64(writer *w,uint64_t v){do{uint8_t b=(uint8_t)(v&0x7f);v>>=7;if(v)b|=0x80;byte(w,b);}while(v);}
-static void s33(writer *w,int64_t v){int more=1;while(more){uint8_t b=(uint8_t)(v&0x7f);v>>=7;more=!((v==0&&!(b&0x40))||(v==-1&&(b&0x40)));if(more)b|=0x80;byte(w,b);}}
-static void name(writer *w,const char *s){size_t n=strlen(s);if(n>UINT32_MAX){w->failed=1;return;}u32(w,(uint32_t)n);bytes(w,s,n);}
-static void section(writer *out,uint8_t id,writer *s){
+static void name(wasm_writer *w,const char *s){size_t n=strlen(s);if(n>UINT32_MAX){w->failed=1;return;}wasm_writer_write_u32(w,(uint32_t)n);wasm_writer_write_bytes(w,s,n);}
+static void section(wasm_writer *out,uint8_t id,wasm_writer *s){
     if(s->failed||s->len>UINT32_MAX)out->failed=1;
-    else if(s->len){byte(out,id);u32(out,(uint32_t)s->len);bytes(out,s->data,s->len);}
-    free(s->data);memset(s,0,sizeof(*s));
+    else if(s->len){wasm_writer_write_u8(out,id);wasm_writer_write_u32(out,(uint32_t)s->len);wasm_writer_write_bytes(out,s->data,s->len);}
+    wasm_writer_dispose(s);
 }
 static uint8_t vt(wasm_valtype t){
     switch(t){case WASM_VALTYPE_I32:return 0x7f;case WASM_VALTYPE_I64:return 0x7e;
@@ -45,16 +32,16 @@ static uint8_t vt(wasm_valtype t){
     case WASM_VALTYPE_I31REF_NONNULL:case WASM_VALTYPE_STRUCTREF_NONNULL:
     case WASM_VALTYPE_ARRAYREF_NONNULL:case WASM_VALTYPE_EXNREF_NONNULL:return 0;}return 0;
 }
-static void put_vt(writer *w,wasm_valtype t){
-    if(t==WASM_VALTYPE_FUNCREF_NONNULL){byte(w,0x64);s33(w,-16);}
-    else if(t==WASM_VALTYPE_EXTERNREF_NONNULL){byte(w,0x64);s33(w,-17);}
+static void put_vt(wasm_writer *w,wasm_valtype t){
+    if(t==WASM_VALTYPE_FUNCREF_NONNULL){wasm_writer_write_u8(w,0x64);wasm_writer_write_s33(w,-16);}
+    else if(t==WASM_VALTYPE_EXTERNREF_NONNULL){wasm_writer_write_u8(w,0x64);wasm_writer_write_s33(w,-17);}
     else if(t>=WASM_VALTYPE_ANYREF_NONNULL&&t<=WASM_VALTYPE_ARRAYREF_NONNULL){
         static const int8_t heap[]={-18,-19,-20,-21,-22};
-        byte(w,0x64);s33(w,heap[(int)t-(int)WASM_VALTYPE_ANYREF_NONNULL]);
+        wasm_writer_write_u8(w,0x64);wasm_writer_write_s33(w,heap[(int)t-(int)WASM_VALTYPE_ANYREF_NONNULL]);
     }
-    else if(t==WASM_VALTYPE_EXNREF_NONNULL){byte(w,0x64);s33(w,-23);}
-    else if(WASM_VALTYPE_IS_TYPE_REF(t)){byte(w,(unsigned)t<WASM_VALTYPE_TYPE_REF_BASE?0x63:0x64);s33(w,(int64_t)WASM_VALTYPE_TYPE_REF_INDEX(t));}
-    else byte(w,vt(t));
+    else if(t==WASM_VALTYPE_EXNREF_NONNULL){wasm_writer_write_u8(w,0x64);wasm_writer_write_s33(w,-23);}
+    else if(WASM_VALTYPE_IS_TYPE_REF(t)){wasm_writer_write_u8(w,(unsigned)t<WASM_VALTYPE_TYPE_REF_BASE?0x63:0x64);wasm_writer_write_s33(w,(int64_t)WASM_VALTYPE_TYPE_REF_INDEX(t));}
+    else wasm_writer_write_u8(w,vt(t));
 }
 static int sig_eq(const func_sig*a,const func_sig*b){
     return a->is_func&&b->is_func&&a->param_count==b->param_count&&a->result_count==b->result_count&&
@@ -65,39 +52,39 @@ static func_sig type_sig(const wast_type*t){func_sig s={0};s.is_func=t->kind==WA
     memcpy(s.params,t->params,(size_t)s.param_count*sizeof(s.params[0]));memcpy(s.results,t->results,(size_t)s.result_count*sizeof(s.results[0]));return s;}
 static func_sig func_sig_of(const wast_func*f){func_sig s={0};s.is_func=1;s.param_count=f->param_count;s.result_count=f->result_count;
     memcpy(s.params,f->params,(size_t)s.param_count*sizeof(s.params[0]));memcpy(s.results,f->results,(size_t)s.result_count*sizeof(s.results[0]));return s;}
-static void put_sig(writer*w,const func_sig*s){byte(w,0x60);u32(w,(uint32_t)s->param_count);
+static void put_sig(wasm_writer*w,const func_sig*s){wasm_writer_write_u8(w,0x60);wasm_writer_write_u32(w,(uint32_t)s->param_count);
     for(int i=0;i<s->param_count;i++)put_vt(w,s->params[i]);
-    u32(w,(uint32_t)s->result_count);
+    wasm_writer_write_u32(w,(uint32_t)s->result_count);
     for(int i=0;i<s->result_count;i++)put_vt(w,s->results[i]);}
-static void put_field(writer*w,const wast_type*t,int i){
-    if(t->field_packed[i]==1)byte(w,0x78);
-    else if(t->field_packed[i]==2)byte(w,0x77);
+static void put_field(wasm_writer*w,const wast_type*t,int i){
+    if(t->field_packed[i]==1)wasm_writer_write_u8(w,0x78);
+    else if(t->field_packed[i]==2)wasm_writer_write_u8(w,0x77);
     else put_vt(w,t->fields[i]);
-    byte(w,t->field_mutable[i]?1:0);
+    wasm_writer_write_u8(w,t->field_mutable[i]?1:0);
 }
-static void put_composite_type(writer*w,const wast_type*t){
+static void put_composite_type(wasm_writer*w,const wast_type*t){
     if(t->kind==WAST_TYPE_FUNC){func_sig s=type_sig(t);put_sig(w,&s);return;}
     if(t->kind==WAST_TYPE_STRUCT){
-        byte(w,0x5f);u32(w,(uint32_t)t->field_count);
+        wasm_writer_write_u8(w,0x5f);wasm_writer_write_u32(w,(uint32_t)t->field_count);
         for(int i=0;i<t->field_count;i++)put_field(w,t,i);
         return;
     }
-    byte(w,0x5e);put_field(w,t,0);
+    wasm_writer_write_u8(w,0x5e);put_field(w,t,0);
 }
-static void put_type(writer*w,const wast_type*t){
+static void put_type(wasm_writer*w,const wast_type*t){
     if(t->is_final&&t->supertype<0){put_composite_type(w,t);return;}
-    byte(w,t->is_final?0x4f:0x50);
-    u32(w,t->supertype>=0?1u:0u);
-    if(t->supertype>=0)u32(w,(uint32_t)t->supertype);
+    wasm_writer_write_u8(w,t->is_final?0x4f:0x50);
+    wasm_writer_write_u32(w,t->supertype>=0?1u:0u);
+    if(t->supertype>=0)wasm_writer_write_u32(w,(uint32_t)t->supertype);
     put_composite_type(w,t);
 }
-static void limits(writer*w,const wast_limits*l){uint32_t f=(l->has_max?1u:0u)|(l->is_shared?2u:0u)|(l->is_64?4u:0u);u32(w,f);u64(w,l->min);if(l->has_max)u64(w,l->max);}
-static void table_type(writer*w,const wast_table*t){put_vt(w,t->reftype);limits(w,&t->limits);}
-static void global_type(writer*w,const wast_global*g){put_vt(w,g->valtype);byte(w,g->is_mutable?1:0);}
-static void export_(writer*w,const char*n,uint8_t k,uint32_t i){name(w,n);byte(w,k);u32(w,i);}
-static void put_heap_type(writer*w,wasm_valtype t){
+static void limits(wasm_writer*w,const wast_limits*l){uint32_t f=(l->has_max?1u:0u)|(l->is_shared?2u:0u)|(l->is_64?4u:0u);wasm_writer_write_u32(w,f);wasm_writer_write_u64(w,l->min);if(l->has_max)wasm_writer_write_u64(w,l->max);}
+static void table_type(wasm_writer*w,const wast_table*t){put_vt(w,t->reftype);limits(w,&t->limits);}
+static void global_type(wasm_writer*w,const wast_global*g){put_vt(w,g->valtype);wasm_writer_write_u8(w,g->is_mutable?1:0);}
+static void export_(wasm_writer*w,const char*n,uint8_t k,uint32_t i){name(w,n);wasm_writer_write_u8(w,k);wasm_writer_write_u32(w,i);}
+static void put_heap_type(wasm_writer*w,wasm_valtype t){
     int32_t heap;
-    if(WASM_VALTYPE_IS_TYPE_REF(t)){s33(w,(int32_t)WASM_VALTYPE_TYPE_REF_INDEX(t));return;}
+    if(WASM_VALTYPE_IS_TYPE_REF(t)){wasm_writer_write_s33(w,(int32_t)WASM_VALTYPE_TYPE_REF_INDEX(t));return;}
     switch(t){
     case WASM_VALTYPE_FUNCREF:case WASM_VALTYPE_FUNCREF_NONNULL:heap=-16;break;
     case WASM_VALTYPE_EXTERNREF:case WASM_VALTYPE_EXTERNREF_NONNULL:heap=-17;break;
@@ -113,17 +100,17 @@ static void put_heap_type(writer*w,wasm_valtype t){
     case WASM_VALTYPE_NULLEXNREF:heap=-12;break;
     default:heap=-16;break;
     }
-    s33(w,heap);
+    wasm_writer_write_s33(w,heap);
 }
-static void elem_expr(writer*w,wasm_valtype t,uint8_t opcode,uint32_t ref){
-    if(opcode==0x23){byte(w,0x23);u32(w,ref);}
-    else if(opcode==0xd0||ref==UINT32_MAX){byte(w,0xd0);put_heap_type(w,t);}
-    else{byte(w,0xd2);u32(w,ref);}
-    byte(w,0x0b);
+static void elem_expr(wasm_writer*w,wasm_valtype t,uint8_t opcode,uint32_t ref){
+    if(opcode==0x23){wasm_writer_write_u8(w,0x23);wasm_writer_write_u32(w,ref);}
+    else if(opcode==0xd0||ref==UINT32_MAX){wasm_writer_write_u8(w,0xd0);put_heap_type(w,t);}
+    else{wasm_writer_write_u8(w,0xd2);wasm_writer_write_u32(w,ref);}
+    wasm_writer_write_u8(w,0x0b);
 }
 
 uint8_t *wast_encode_module(const wast_module *m,size_t *size_out,char *error){
-    writer out={0},s={0};func_sig *sigs=NULL;uint32_t *ft=NULL,*tt=NULL;
+    wasm_writer out={0},s={0};func_sig *sigs=NULL;uint32_t *ft=NULL,*tt=NULL;
     if(!m||!size_out)return NULL;
     *size_out=0;
     int sig_cap=m->type_count+m->func_count+m->tag_count,sig_count=m->type_count;
@@ -164,7 +151,7 @@ uint8_t *wast_encode_module(const wast_module *m,size_t *size_out,char *error){
             if(found<0){found=sig_count;sigs[sig_count++]=ts;}tt[i]=(uint32_t)found;
         }
     }
-    bytes(&out,"\0asm\1\0\0\0",8);
+    wasm_writer_write_bytes(&out,"\0asm\1\0\0\0",8);
 
     if(sig_count){
         uint32_t entries=0;
@@ -174,12 +161,12 @@ uint8_t *wast_encode_module(const wast_module *m,size_t *size_out,char *error){
                            m->types[i].rec_group_size:1u;
             entries++;i+=(int)group;
         }
-        u32(&s,entries);
+        wasm_writer_write_u32(&s,entries);
         for(int i=0;i<sig_count;){
             uint32_t group=(i<m->type_count&&m->types[i].rec_group_size>1&&
                             m->types[i].rec_group_start==(uint32_t)i)?
                            m->types[i].rec_group_size:1u;
-            if(group>1){byte(&s,0x4e);u32(&s,group);for(uint32_t j=0;j<group;j++)put_type(&s,&m->types[i+(int)j]);}
+            if(group>1){wasm_writer_write_u8(&s,0x4e);wasm_writer_write_u32(&s,group);for(uint32_t j=0;j<group;j++)put_type(&s,&m->types[i+(int)j]);}
             else if(i<m->type_count)put_type(&s,&m->types[i]);
             else put_sig(&s,&sigs[i]);
             i+=(int)group;
@@ -192,55 +179,60 @@ uint8_t *wast_encode_module(const wast_module *m,size_t *size_out,char *error){
     for(int i=0;i<m->memory_count;i++)imports+=m->memories[i].is_import!=0;
     for(int i=0;i<m->global_count;i++)imports+=m->globals[i].is_import!=0;
     for(int i=0;i<m->tag_count;i++)imports+=m->tags[i].is_import!=0;
-    if(imports){u32(&s,imports);
-        for(int i=0;i<m->func_count;i++)if(m->funcs[i].is_import){const wast_func*f=&m->funcs[i];name(&s,f->import_module);name(&s,f->import_name);byte(&s,0);u32(&s,ft[i]);}
-        for(int i=0;i<m->table_count;i++)if(m->tables[i].is_import){const wast_table*t=&m->tables[i];name(&s,t->import_module);name(&s,t->import_name);byte(&s,1);table_type(&s,t);}
-        for(int i=0;i<m->memory_count;i++)if(m->memories[i].is_import){const wast_memory*x=&m->memories[i];name(&s,x->import_module);name(&s,x->import_name);byte(&s,2);limits(&s,&x->limits);}
-        for(int i=0;i<m->global_count;i++)if(m->globals[i].is_import){const wast_global*g=&m->globals[i];name(&s,g->import_module);name(&s,g->import_name);byte(&s,3);global_type(&s,g);}
-        for(int i=0;i<m->tag_count;i++)if(m->tags[i].is_import){const wast_tag*t=&m->tags[i];name(&s,t->import_module);name(&s,t->import_name);byte(&s,4);u32(&s,0);u32(&s,tt[i]);}
+    if(imports){wasm_writer_write_u32(&s,imports);
+        for(int i=0;i<m->func_count;i++)if(m->funcs[i].is_import){const wast_func*f=&m->funcs[i];name(&s,f->import_module);name(&s,f->import_name);wasm_writer_write_u8(&s,0);wasm_writer_write_u32(&s,ft[i]);}
+        for(int i=0;i<m->table_count;i++)if(m->tables[i].is_import){const wast_table*t=&m->tables[i];name(&s,t->import_module);name(&s,t->import_name);wasm_writer_write_u8(&s,1);table_type(&s,t);}
+        for(int i=0;i<m->memory_count;i++)if(m->memories[i].is_import){const wast_memory*x=&m->memories[i];name(&s,x->import_module);name(&s,x->import_name);wasm_writer_write_u8(&s,2);limits(&s,&x->limits);}
+        for(int i=0;i<m->global_count;i++)if(m->globals[i].is_import){const wast_global*g=&m->globals[i];name(&s,g->import_module);name(&s,g->import_name);wasm_writer_write_u8(&s,3);global_type(&s,g);}
+        for(int i=0;i<m->tag_count;i++)if(m->tags[i].is_import){const wast_tag*t=&m->tags[i];name(&s,t->import_module);name(&s,t->import_name);wasm_writer_write_u8(&s,4);wasm_writer_write_u32(&s,0);wasm_writer_write_u32(&s,tt[i]);}
         section(&out,2,&s);}
 
     uint32_t defs=0;for(int i=0;i<m->func_count;i++)defs+=!m->funcs[i].is_import;
-    if(defs){u32(&s,defs);for(int i=0;i<m->func_count;i++)if(!m->funcs[i].is_import)u32(&s,ft[i]);section(&out,3,&s);}
+    if(defs){wasm_writer_write_u32(&s,defs);for(int i=0;i<m->func_count;i++)if(!m->funcs[i].is_import)wasm_writer_write_u32(&s,ft[i]);section(&out,3,&s);}
     uint32_t n=0;for(int i=0;i<m->table_count;i++)n+=!m->tables[i].is_import;
-    if(n){u32(&s,n);for(int i=0;i<m->table_count;i++)if(!m->tables[i].is_import){const wast_table*t=&m->tables[i];
-            if(t->has_explicit_init){byte(&s,0x40);byte(&s,0x00);table_type(&s,t);bytes(&s,t->init_expr,(size_t)t->init_len);byte(&s,0x0b);}
+    if(n){
+        wasm_writer_write_u32(&s,n);
+        for(int i=0;i<m->table_count;i++)if(!m->tables[i].is_import){
+            const wast_table*t=&m->tables[i];
+            if(t->has_explicit_init){wasm_writer_write_u8(&s,0x40);wasm_writer_write_u8(&s,0x00);table_type(&s,t);wasm_writer_write_bytes(&s,t->init_expr,(size_t)t->init_len);wasm_writer_write_u8(&s,0x0b);}
             else table_type(&s,t);
-        }section(&out,4,&s);}
+        }
+        section(&out,4,&s);
+    }
     for(int i=0;i<m->memory_count;i++){const wast_limits*ml=&m->memories[i].limits;
         const uint64_t page_limit=ml->is_64?(UINT64_C(1)<<48):UINT64_C(65536);
         if(ml->min>page_limit||(ml->has_max&&ml->max>page_limit)){if(error)snprintf(error,256,"memory size exceeds address type");goto fail;}}
     n=0;for(int i=0;i<m->memory_count;i++)n+=!m->memories[i].is_import;
-    if(n){u32(&s,n);for(int i=0;i<m->memory_count;i++)if(!m->memories[i].is_import)limits(&s,&m->memories[i].limits);section(&out,5,&s);}
+    if(n){wasm_writer_write_u32(&s,n);for(int i=0;i<m->memory_count;i++)if(!m->memories[i].is_import)limits(&s,&m->memories[i].limits);section(&out,5,&s);}
     n=0;for(int i=0;i<m->tag_count;i++)n+=!m->tags[i].is_import;
-    if(n){u32(&s,n);for(int i=0;i<m->tag_count;i++)if(!m->tags[i].is_import){u32(&s,0);u32(&s,tt[i]);}section(&out,13,&s);}
+    if(n){wasm_writer_write_u32(&s,n);for(int i=0;i<m->tag_count;i++)if(!m->tags[i].is_import){wasm_writer_write_u32(&s,0);wasm_writer_write_u32(&s,tt[i]);}section(&out,13,&s);}
     n=0;for(int i=0;i<m->global_count;i++)n+=!m->globals[i].is_import;
-    if(n){u32(&s,n);for(int i=0;i<m->global_count;i++)if(!m->globals[i].is_import){const wast_global*g=&m->globals[i];global_type(&s,g);bytes(&s,g->init_expr,(size_t)g->init_len);byte(&s,0x0b);}section(&out,6,&s);}
+    if(n){wasm_writer_write_u32(&s,n);for(int i=0;i<m->global_count;i++)if(!m->globals[i].is_import){const wast_global*g=&m->globals[i];global_type(&s,g);wasm_writer_write_bytes(&s,g->init_expr,(size_t)g->init_len);wasm_writer_write_u8(&s,0x0b);}section(&out,6,&s);}
 
     uint32_t exports=0;for(int i=0;i<m->export_count;i++)exports+=m->exports[i].kind<=4;
     for(int i=0;i<m->func_count;i++)exports+=m->funcs[i].has_export_name!=0;
     for(int i=0;i<m->table_count;i++)exports+=m->tables[i].has_export_name!=0;
     for(int i=0;i<m->memory_count;i++)exports+=m->memories[i].has_export_name!=0;
     for(int i=0;i<m->global_count;i++)exports+=m->globals[i].has_export_name!=0;
-    if(exports){u32(&s,exports);
+    if(exports){wasm_writer_write_u32(&s,exports);
         for(int i=0;i<m->func_count;i++)if(m->funcs[i].has_export_name)export_(&s,m->funcs[i].export_name,0,(uint32_t)i);
         for(int i=0;i<m->table_count;i++)if(m->tables[i].has_export_name)export_(&s,m->tables[i].export_name,1,(uint32_t)i);
         for(int i=0;i<m->memory_count;i++)if(m->memories[i].has_export_name)export_(&s,m->memories[i].export_name,2,(uint32_t)i);
         for(int i=0;i<m->global_count;i++)if(m->globals[i].has_export_name)export_(&s,m->globals[i].export_name,3,(uint32_t)i);
         for(int i=0;i<m->export_count;i++)if(m->exports[i].kind<=4)export_(&s,m->exports[i].name,(uint8_t)m->exports[i].kind,m->exports[i].index);
         section(&out,7,&s);}
-    if(m->start_func>=0){u32(&s,(uint32_t)m->start_func);section(&out,8,&s);}
+    if(m->start_func>=0){wasm_writer_write_u32(&s,(uint32_t)m->start_func);section(&out,8,&s);}
 
-    if(m->elem_count){u32(&s,(uint32_t)m->elem_count);for(int i=0;i<m->elem_count;i++){const wast_elem_seg*e=&m->elem[i];
+    if(m->elem_count){wasm_writer_write_u32(&s,(uint32_t)m->elem_count);for(int i=0;i<m->elem_count;i++){const wast_elem_seg*e=&m->elem[i];
         uint32_t mode=e->is_declarative?7u:e->is_passive?5u:
             (e->table_index || e->reftype != WASM_VALTYPE_FUNCREF)?6u:4u;
-        u32(&s,mode);
-        if(mode==6)u32(&s,(uint32_t)e->table_index);
-        if(mode==4||mode==6)bytes(&s,e->offset_expr,(size_t)e->offset_len);
+        wasm_writer_write_u32(&s,mode);
+        if(mode==6)wasm_writer_write_u32(&s,(uint32_t)e->table_index);
+        if(mode==4||mode==6)wasm_writer_write_bytes(&s,e->offset_expr,(size_t)e->offset_len);
         if(mode!=4)put_vt(&s,e->reftype);
-        u32(&s,(uint32_t)e->ref_count);
+        wasm_writer_write_u32(&s,(uint32_t)e->ref_count);
         for(int j=0;j<e->ref_count;j++){
-            if(e->ref_expr_lens[j]>0)bytes(&s,e->ref_exprs[j],(size_t)e->ref_expr_lens[j]);
+            if(e->ref_expr_lens[j]>0)wasm_writer_write_bytes(&s,e->ref_exprs[j],(size_t)e->ref_expr_lens[j]);
             else elem_expr(&s,e->ref_opcodes[j]==0xd0?e->ref_types[j]:e->reftype,
                            e->ref_opcodes[j],e->refs[j]);
         }}section(&out,9,&s);}
@@ -249,19 +241,25 @@ uint8_t *wast_encode_module(const wast_module *m,size_t *size_out,char *error){
      * uses memory.init or data.drop.  The text representation deliberately
      * keeps function bodies as raw bytes, so emit the (always valid) section
      * for every encoded module instead of rescanning instruction streams. */
-    u32(&s,(uint32_t)m->data_count);
+    wasm_writer_write_u32(&s,(uint32_t)m->data_count);
     section(&out,12,&s);
 
-    if(defs){u32(&s,defs);for(int i=0;i<m->func_count;i++)if(!m->funcs[i].is_import){const wast_func*f=&m->funcs[i];writer body={0};
-        u32(&body,(uint32_t)f->local_count);for(int j=0;j<f->local_count;j++){u32(&body,1);put_vt(&body,f->locals[j]);}
-        bytes(&body,f->code,(size_t)f->code_len);if(body.failed||body.len>UINT32_MAX){s.failed=1;free(body.data);break;}
-        u32(&s,(uint32_t)body.len);bytes(&s,body.data,body.len);free(body.data);}section(&out,10,&s);}
-    if(m->data_count){u32(&s,(uint32_t)m->data_count);for(int i=0;i<m->data_count;i++){const wast_data_seg*d=&m->data[i];
-        uint32_t mode=d->is_passive?1u:d->memory_index?2u:0u;u32(&s,mode);if(mode==2)u32(&s,(uint32_t)d->memory_index);
-        if(mode!=1)bytes(&s,d->offset_expr,(size_t)d->offset_len);
-        u32(&s,(uint32_t)d->len);bytes(&s,d->bytes,(size_t)d->len);}section(&out,11,&s);}
-    free(sigs);free(ft);free(tt);if(out.failed)goto oom_out;*size_out=out.len;return out.data;
+    if(defs){
+        wasm_writer_write_u32(&s,defs);
+        for(int i=0;i<m->func_count;i++)if(!m->funcs[i].is_import){
+            const wast_func*f=&m->funcs[i];wasm_writer body={0};
+            wasm_writer_write_u32(&body,(uint32_t)f->local_count);for(int j=0;j<f->local_count;j++){wasm_writer_write_u32(&body,1);put_vt(&body,f->locals[j]);}
+            wasm_writer_write_bytes(&body,f->code,(size_t)f->code_len);if(body.failed||body.len>UINT32_MAX){s.failed=1;wasm_writer_dispose(&body);break;}
+            wasm_writer_write_u32(&s,(uint32_t)body.len);wasm_writer_write_bytes(&s,body.data,body.len);wasm_writer_dispose(&body);
+        }
+        section(&out,10,&s);
+    }
+    if(m->data_count){wasm_writer_write_u32(&s,(uint32_t)m->data_count);for(int i=0;i<m->data_count;i++){const wast_data_seg*d=&m->data[i];
+        uint32_t mode=d->is_passive?1u:d->memory_index?2u:0u;wasm_writer_write_u32(&s,mode);if(mode==2)wasm_writer_write_u32(&s,(uint32_t)d->memory_index);
+        if(mode!=1)wasm_writer_write_bytes(&s,d->offset_expr,(size_t)d->offset_len);
+        wasm_writer_write_u32(&s,(uint32_t)d->len);wasm_writer_write_bytes(&s,d->bytes,(size_t)d->len);}section(&out,11,&s);}
+    free(sigs);free(ft);free(tt);if(out.failed)goto oom_out;return wasm_writer_take(&out,size_out);
 oom:if(error)snprintf(error,256,"allocation failed while preparing module");
-fail:free(sigs);free(ft);free(tt);free(out.data);free(s.data);return NULL;
-oom_out:if(error)snprintf(error,256,"allocation failed while encoding module");free(out.data);return NULL;
+fail:free(sigs);free(ft);free(tt);wasm_writer_dispose(&out);wasm_writer_dispose(&s);return NULL;
+oom_out:if(error)snprintf(error,256,"allocation failed while encoding module");wasm_writer_dispose(&out);return NULL;
 }

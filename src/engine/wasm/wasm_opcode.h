@@ -1,5 +1,5 @@
-#ifndef WAST_SIMD_H
-#define WAST_SIMD_H
+#ifndef WASTE_WASM_OPCODE_H
+#define WASTE_WASM_OPCODE_H
 
 #include <stdint.h>
 
@@ -22,4 +22,4 @@ typedef struct {
 int wast_simd_lookup(const char *name, wast_simd_info *info);
 int wast_simd_get_info(uint32_t opcode, wast_simd_info *info);
 
-#endif
+#endif /* WASTE_WASM_OPCODE_H */

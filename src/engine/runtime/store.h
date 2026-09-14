@@ -1,8 +1,8 @@
-#ifndef WAST_LINKER_H
-#define WAST_LINKER_H
+#ifndef WASTE_RUNTIME_STORE_H
+#define WASTE_RUNTIME_STORE_H
 
-#include "waste_exec.h"
-#include "wast_types.h"
+#include "runtime/engine_internal.h"
+#include "text/wat_types.h"
 #include <stddef.h>
 
 typedef struct {
@@ -88,4 +88,4 @@ exec_status native_load_module(native_store *store,
 uint8_t *encode_group_module(const wast_group *group, size_t *size_out,
                               char *error);
 
-#endif /* WAST_LINKER_H */
+#endif /* WASTE_RUNTIME_STORE_H */

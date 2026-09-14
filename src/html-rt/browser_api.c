@@ -1,7 +1,7 @@
-#include "wast_linker.h"
-#include "wast_runner.h"
-#include "wast_encode.h"
-#include "wast_stream.h"
+#include "runtime/store.h"
+#include "script/wast_runner.h"
+#include "wasm/wasm_encode.h"
+#include "script/wast_stream.h"
 #include "posix_stubs.h"
 
 #include <stddef.h>
@@ -576,6 +576,7 @@ static wasm_value g_yield_args[WAST_MAX_ARGS];
 static int g_yield_arg_count;
 
 static void browser_yield_cleanup(void) {
+    wast_stream_destroy(&g_yield_stream);
     native_store_free(&g_yield_context.store);
     for (uint32_t i = 0; i < g_yield_context.retained_count; i++) {
         if (!g_yield_context.retained[i]) continue;

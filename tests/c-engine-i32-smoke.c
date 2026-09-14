@@ -1,4 +1,7 @@
-#include "waste_exec.h"
+#include "runtime/engine_internal.h"
+#include "runtime/instantiate.h"
+#include "wasm/wasm_decode.h"
+#include "include/waste_engine.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -119,6 +122,72 @@ static int test_extern_aliases(const char *provider_path, const char *consumer_p
     exec_free(provider); return ok;
 }
 
+static int test_decoded_module_instances(const uint8_t *bytes, size_t size) {
+    wasm_module module;
+    wasm_decode_error decode_error = {0};
+    exec_error error = {0};
+    waste_exec_engine *first = NULL;
+    waste_exec_engine *second = NULL;
+    int ok;
+
+    if (wasm_decode_module(bytes, size, &module, &decode_error) !=
+        WASM_DECODE_OK) {
+        fprintf(stderr, "decode once: %s at %zu\n", decode_error.message,
+                decode_error.offset);
+        return 0;
+    }
+    if (module.source == bytes || !module.owned_source ||
+        wasm_instantiate_module(&module, NULL, &first, &error) != EXEC_OK ||
+        wasm_instantiate_module(&module, NULL, &second, &error) != EXEC_OK) {
+        fprintf(stderr, "double instantiate: %s\n", error.message);
+        wasm_module_dispose(&module);
+        exec_free(first);
+        exec_free(second);
+        return 0;
+    }
+    /* Instances retain fully decoded state, not the module's owned bytes. */
+    wasm_module_dispose(&module);
+    ok = run(first, "store-load", 16, 0x12345678, 0x12345678, EXEC_OK) &&
+         run(second, "load-data", 16, 0, 0, EXEC_OK) &&
+         run(first, "global", 91, 0, 91, EXEC_OK) &&
+         run(second, "read-global", 0, 0, 5, EXEC_OK) &&
+         run(first, "grow", 1, 0, 1, EXEC_OK) &&
+         run(first, "size", 0, 0, 2, EXEC_OK) &&
+         run(second, "size", 0, 0, 1, EXEC_OK) &&
+         run(first, "load-data", 8, 0, 0x12345678, EXEC_OK) &&
+         run(second, "load-data", 8, 0, 0x12345678, EXEC_OK);
+    if (!ok) fprintf(stderr, "decoded module instance isolation failed\n");
+    exec_free(first);
+    exec_free(second);
+    return ok;
+}
+
+static int test_public_api(const uint8_t *bytes, size_t size) {
+    waste_module *module = NULL;
+    waste_instance *instance = NULL;
+    waste_error error = {0};
+    waste_value arguments[2] = {
+        {.type = WASM_VALTYPE_I32, .i32 = 20},
+        {.type = WASM_VALTYPE_I32, .i32 = 22}
+    };
+    waste_value result = {0};
+    uint32_t function = 0;
+    size_t result_count = 0;
+    int ok = waste_module_decode(bytes, size, &module, &error) == WASTE_OK &&
+             waste_instance_create(module, &instance, &error) == WASTE_OK &&
+             waste_instance_find_function(instance, "add", &function,
+                                          &error) == WASTE_OK &&
+             waste_instance_invoke(instance, function, arguments, 2,
+                                   &result, 1, &result_count,
+                                   &error) == WASTE_OK &&
+             result_count == 1 && result.type == WASM_VALTYPE_I32 &&
+             result.i32 == 42;
+    if (!ok) fprintf(stderr, "public API: %s\n", error.message);
+    waste_instance_delete(instance);
+    waste_module_delete(module);
+    return ok;
+}
+
 int main(int argc, char **argv) {
     if (argc != 5) return 2;
     FILE *file = fopen(argv[1], "rb");
@@ -127,6 +196,8 @@ int main(int argc, char **argv) {
     uint8_t *bytes = malloc((size_t)length);
     if (!bytes || fread(bytes, 1, (size_t)length, file) != (size_t)length) return 2;
     fclose(file);
+    int isolated = test_decoded_module_instances(bytes, (size_t)length);
+    int public_api = test_public_api(bytes, (size_t)length);
     waste_exec_engine *engine = NULL; exec_error error = {0};
     exec_status status = exec_load(bytes, (size_t)length, &engine, &error); free(bytes);
     if (status != EXEC_OK) { fprintf(stderr, "load: %s\n", error.message); return 1; }
@@ -161,5 +232,6 @@ int main(int argc, char **argv) {
              run(engine, "div_s", INT32_MIN, -1, 0, EXEC_ERROR_TRAP) &&
              run(engine, "div_u", 1, 0, 0, EXEC_ERROR_TRAP);
     exec_free(engine);
-    return ok && test_imports(argv[2]) && test_extern_aliases(argv[3],argv[4]) ? 0 : 1;
+    return isolated && public_api && ok && test_imports(argv[2]) &&
+           test_extern_aliases(argv[3],argv[4]) ? 0 : 1;
 }

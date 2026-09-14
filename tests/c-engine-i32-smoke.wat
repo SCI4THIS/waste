@@ -65,6 +65,8 @@
     local.get 0 i32.load)
   (func (export "global") (param i32 i32) (result i32)
     local.get 0 global.set $value global.get $value)
+  (func (export "read-global") (param i32 i32) (result i32)
+    global.get $value)
   (func (export "grow") (param i32 i32) (result i32)
     local.get 0 memory.grow)
   (func (export "size") (param i32 i32) (result i32)
