@@ -1,6 +1,6 @@
-#include "wasm/wasm_leb.h"
-#include "wasm/wasm_reader.h"
-#include "wasm/wasm_writer.h"
+#include "wasm/leb.h"
+#include "wasm/reader.h"
+#include "wasm/writer.h"
 
 #include <inttypes.h>
 #include <limits.h>

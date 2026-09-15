@@ -1,7 +1,7 @@
-#include "runtime/engine_internal.h"
-#include "runtime/instantiate.h"
-#include "wasm/wasm_decode.h"
-#include "include/waste_engine.h"
+#include "engine_internal.h"
+#include "instantiate.h"
+#include "wasm/decode.h"
+#include "include/waste.h"
 
 #include <stdint.h>
 #include <stdio.h>

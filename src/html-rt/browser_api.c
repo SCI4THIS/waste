@@ -1,7 +1,7 @@
-#include "runtime/store.h"
-#include "script/wast_runner.h"
-#include "wasm/wasm_encode.h"
-#include "script/wast_stream.h"
+#include "store.h"
+#include "wast/runner.h"
+#include "wasm/encode.h"
+#include "wast/stream.h"
 #include "posix_stubs.h"
 
 #include <stddef.h>

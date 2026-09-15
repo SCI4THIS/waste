@@ -3,29 +3,31 @@
 This directory contains the WASTE C engine: a Flex/Bison parser, binary encoder,
 frame-based interpreter, and WAST spec test runner. It compiles to both native
 Linux x86_64 (via raw syscalls, no libc) and browser WebAssembly. Shared binary
-reader, writer, LEB, module, decoder, and validator facilities live under
-`wasm/`; instance allocation and execution live under `runtime/`.
+reader, writer, LEB, module, decoder, and loader facilities live under
+`wasm/`; frame-based dispatch and opcode-family execution live under `op/`;
+instance allocation and store management live at the engine root.
 
 The handwritten engine sources are grouped by ownership:
 
 - `include/` exposes values, structured errors, and opaque decoded-module and
-  instance handles. Embedders should include `waste_engine.h` from this
-  directory and never depend on runtime layouts.
-- `text/` owns the reentrant WAT lexer/parser, parse context, builder, literals,
+  instance handles via the single `waste.h` header. Embedders should include
+  `waste.h` from this directory and never depend on internal layouts.
+- `wat/` owns the reentrant WAT lexer/parser, parse context, builder, literals,
   and text AST.
-- `script/` owns WAST command classification, scanner boundaries, assertion
+- `wast/` owns WAST command classification, scanner boundaries, assertion
   execution, and WAT-versus-WAST parsing policy.
 - `wasm/` owns bounded binary reading/writing, LEB values, encoding, decoding,
-  opcode metadata, validation, and binary loading.
-- `runtime/` owns the store, mutable instances, instantiation, dispatch, and
-  opcode-family execution modules. `engine_internal.h` is not a public API.
+  opcode metadata, and binary loading.
+- `op/` owns frame-based dispatch, opcode-family execution modules, and
+  validation. `runtime_internal.h` is not a public API.
+- The engine root owns the store, mutable instances, and instantiation.
+  `engine_internal.h` is not a public API.
 - `lib/` supplies the freestanding C subset shared by native and browser
   targets.
 
-Only this README and the parser-generation Makefile remain at the engine root.
 Generated scanner and parser sources stay under `build/engine/gen/`.
 
-`wasm/wasm_validate.c` is the single type-relation and function
+`op/validate.c` is the single type-relation and function
 operand/control-stack validation pass. It returns distinct invalid and
 unsupported outcomes and records resolved branch, call, type, and immediate
 metadata before a function body becomes read-only to execution. Run its focused
@@ -35,13 +37,14 @@ warnings-as-errors and sanitizer gate with:
 make -C src/cli-rt BUILD_DIR=../../build/cli-rt wasm-validation
 ```
 
-Runtime execution is split into independently compiled units under `runtime/`.
+Runtime execution is split into independently compiled units under `op/`.
 `execute.c` owns dispatch, calls, tail-frame replacement, yield/resume, and
 guest non-local-control snapshots. `execute_numeric.c`, `execute_memory.c`,
 `execute_table.c`, `execute_simd.c`, `execute_gc.c`, and
-`execute_exception.c` own their opcode-family helpers. These modules share the
-bounded private `waste_exec_context` declared by `runtime_internal.h`; no
-runtime implementation file is textually included by another C source file.
+`execute_exception.c` own their opcode-family helpers. `validate.c` owns the
+type-relation and operand/control-stack validation pass. These modules share
+the bounded private `waste_exec_context` declared by `runtime_internal.h`; no
+implementation file is textually included by another C source file.
 
 ```sh
 make -C src/cli-rt wast-native
@@ -86,13 +89,13 @@ WAST-only `nan:canonical` and `nan:arithmetic` expectation patterns.
 
 WAST streaming uses a dedicated mode of that same scanner. It returns one
 balanced command range while sharing comment, annotation, string, escape, and
-location handling with ordinary parsing. `script/wast_stream.c` parses each
+location handling with ordinary parsing. `wast/stream.c` parses each
 range in a new context, so a balanced malformed command is released and
 recorded without preventing the next command from running. Strict WAT
 compilation still parses the complete input transactionally. Command
-classification lives in `script/wast_command.c`, assertion value matching and
-action execution live in `script/wast_assert.c`, and store, registry, and
-module-lifetime transitions live in `runtime/store.c`.
+classification lives in `wast/command.c`, assertion value matching and
+action execution live in `wast/assert.c`, and store, registry, and
+module-lifetime transitions live in `store.c`.
 
 The focused concurrency and cleanup gate launches four parser threads and
 exercises valid and malformed multi-line inputs under AddressSanitizer and

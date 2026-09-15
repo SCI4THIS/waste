@@ -1,7 +1,7 @@
 #ifndef POSIX_STUBS_H
 #define POSIX_STUBS_H
 
-#include "runtime/store.h"
+#include "store.h"
 
 int browser_host_resolver(const char *module, const char *name,
                            void *context, native_host_binding *out);

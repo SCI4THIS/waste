@@ -123,11 +123,12 @@ Dashboard concurrency controls limit concurrently runnable test *sandboxes*, not
 ### Engine Architecture
 
 The engine (`src/engine/`) provides:
-- **Public API:** Stable values and errors plus opaque decoded-module and instance handles (`include/`)
-- **Parser:** Reentrant Flex/Bison WAT grammar, context, builder, and literals (`text/`)
-- **Binary pipeline:** Bounded readers/writers, encoding, decoding, opcode metadata, loading, and validation (`wasm/`)
-- **Runtime:** Store, instance lifecycle, instantiation, frame-based execution, and fuel metering (`runtime/`)
-- **WAST runner:** Command streaming, assertions, and WAT/WAST policy (`script/`)
+- **Public API:** Single `waste.h` header with values, errors, and opaque decoded-module and instance handles (`include/`)
+- **Parser:** Reentrant Flex/Bison WAT grammar, context, builder, and literals (`wat/`)
+- **Binary pipeline:** Bounded readers/writers, encoding, decoding, opcode metadata, and loading (`wasm/`)
+- **Execution:** Frame-based dispatch, opcode-family handlers, and validation (`op/`)
+- **Runtime:** Store, instance lifecycle, and instantiation (engine root)
+- **WAST runner:** Command streaming, assertions, and WAT/WAST policy (`wast/`)
 - **POSIX stubs:** Browser-side POSIX host function dispatch via `browser_host_resolver` callback (`posix_stubs.c/h`)
 - **Browser API:** Exported WAST API functions, legacy per-module linking, browser streaming, yield/resume (`browser_api.c`)
 - **Freestanding library:** Portable string, math, allocation, formatting, and errno support shared by native and Wasm builds (`src/engine/lib/`)
@@ -187,7 +188,7 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 
 1. **Executables compile with `--import-memory --import-table`** — DONE. Bash and future executables import memory and table from a `waste-runtime` module rather than declaring their own.
 
-2. **Binary-level import resolution in the engine** — DONE. `native_load_module` in `runtime/store.c` resolves decoded imports from binary `.wasm` modules against registered modules in the `native_store`. The `native_host_resolver` callback decouples POSIX stub resolution from the shared store.
+2. **Binary-level import resolution in the engine** — DONE. `native_load_module` in `store.c` resolves decoded imports from binary `.wasm` modules against registered modules in the `native_store`. The `native_host_resolver` callback decouples POSIX stub resolution from the shared store.
 
 3. **VFS binary file support** — TODO. The engine needs a virtual filesystem layer so that binary `.wasm` files (executables) can be stored and loaded by path. This enables `execve` to locate and load programs. Likely requires:
    - A VFS data structure in the engine (in-memory file table mapping paths to byte buffers)
@@ -208,11 +209,12 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 - `AGENTS.md` — Repository guidelines, coding style, testing conventions, commit practices
 
 ### Source: Engine (`src/engine/`)
-- `include/` — Public values, structured errors, and opaque module/instance API
-- `text/` — WAT lexer, parser, context, builder, literal conversion, and text AST
-- `script/` — WAST command classification/streaming, runner, and assertions
-- `wasm/` — Binary reader/writer, LEB, encoder, decoder, loader, opcode metadata, module, and validator
-- `runtime/` — Store, internal engine interface, instance lifetime, instantiation, dispatch, and independently compiled opcode-family units
+- `include/waste.h` — Single public header: values, errors, and opaque module/instance API
+- `wat/` — WAT lexer, parser, context, builder, literal conversion, and text AST
+- `wast/` — WAST command classification/streaming, runner, and assertions
+- `wasm/` — Binary reader/writer, LEB, encoder, decoder, loader, opcode metadata, and module
+- `op/` — Frame-based dispatch, opcode-family execution units, and validation
+- Engine root — Store, internal engine interface, instance lifetime, and instantiation
 - `lib/*.c` — Portable freestanding string, math, allocation, formatting, and errno support shared by native and Wasm
 - `lib/include/` — Freestanding headers (stdio.h, stdlib.h, string.h, math.h, etc.) used via `-Ilib/include`
 - `Makefile` — Shared Flex/Bison generation rules
@@ -347,28 +349,24 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 │
 ├── src/
 │   ├── engine/                        # Wasm engine: parser, executor, linker
-│   │   ├── wast.y, wast.l            # Bison/Flex parser for Wasm text format
-│   │   ├── wast_runner.c/h           # WAT/WAST parsing and orchestration
-│   │   ├── wast_assert.c/h           # Result matching and assertions
-│   │   ├── wast_encode.c/h           # Text-to-binary encoder
-│   │   ├── wast_stream.c/h           # WAST command streaming
-│   │   ├── wast_simd.c/h             # SIMD instruction lookup
-│   │   ├── wast_types.h              # Shared type definitions
-│   │   ├── waste_exec.c/h            # Frame-based interpreter API
-│   │   ├── runtime/                  # Instantiation and execution units
-│   │   ├── wasm/                     # Binary pipeline and validation
-│   │   ├── wast_linker.c/h           # Shared module linker + native_store
-│   │   ├── browser_wast.c            # Wasm browser platform backend
-│   │   ├── posix_stubs.c/h           # POSIX host function dispatch
-│   │   ├── browser_api.c             # Exported WAST API + browser streaming
-│   │   ├── main.c                    # CLI entry point (runner + parse benchmark)
-│   │   ├── Makefile                  # Build rules
+│   │   ├── include/waste.h           # Public API: values, errors, module/instance
+│   │   ├── wat/                      # WAT text format: lexer, parser, builder, literals
+│   │   ├── wast/                     # WAST script: runner, assertions, streaming, commands
+│   │   ├── wasm/                     # Binary pipeline: reader/writer, encoder, decoder
+│   │   ├── op/                       # Execution: dispatch, opcode families, validation
+│   │   ├── store.c/h                 # Module registry and store
+│   │   ├── instantiate.c/h          # Module instantiation
+│   │   ├── instance.c               # Instance lifecycle
+│   │   ├── api.c                     # Public API implementation
+│   │   ├── engine_internal.h         # Internal engine interface
+│   │   ├── runtime_internal.h        # Internal runtime interface
+│   │   ├── Makefile                  # Flex/Bison generation rules
 │   │   └── lib/                      # Freestanding support library
 │   │       ├── freestanding_lib.c    # Portable freestanding library
 │   │       ├── freestanding_native.c # Native Linux x86_64 syscall backend
 │   │       └── include/              # Freestanding C headers
 │   │
-│   └── browser/                       # Browser packaging layer
+│   └── html-rt/                       # Browser packaging layer
 │       ├── lib/                       # Platform backend + guest libc
 │       │   ├── stdlib.c, stdio.c, unistd.c  # Wasm platform backend
 │       │   ├── stdlib.wat             # Wasm core (memory, allocator)

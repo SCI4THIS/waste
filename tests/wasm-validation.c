@@ -1,5 +1,5 @@
-#include "runtime/runtime_internal.h"
-#include "wasm/wasm_validate.h"
+#include "runtime_internal.h"
+#include "op/validate.h"
 
 #include <stdio.h>
 #include <string.h>

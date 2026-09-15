@@ -1,7 +1,7 @@
-#include "script/wast_runner.h"
-#include "text/wat_context.h"
-#include "text/wat_builder.h"
-#include "script/wast_stream.h"
+#include "wast/runner.h"
+#include "wat/context.h"
+#include "wat/builder.h"
+#include "wast/stream.h"
 
 #include <pthread.h>
 #include <stdatomic.h>

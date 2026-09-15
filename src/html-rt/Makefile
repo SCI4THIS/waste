@@ -13,38 +13,37 @@ WASM_CC_FLAGS := --target=wasm32 -O2 -std=c11 -Wall -Wextra \
 	-I$(ENGINE_DIR) -I$(ENGINE_DIR)/lib/include
 
 # Engine core sources (platform-independent)
-ENGINE_SOURCES := $(ENGINE_DIR)/wasm/wasm_load.c \
-	$(ENGINE_DIR)/wasm/wasm_opcode.c $(ENGINE_DIR)/wasm/wasm_encode.c \
-	$(ENGINE_DIR)/script/wast_stream.c $(ENGINE_DIR)/script/wast_command.c \
-	$(ENGINE_DIR)/runtime/store.c \
-	$(ENGINE_DIR)/script/wast_runner.c $(ENGINE_DIR)/script/wast_assert.c \
-	$(ENGINE_DIR)/text/wat_builder.c $(ENGINE_DIR)/text/wat_literal.c \
-	$(ENGINE_DIR)/wasm/wasm_leb.c $(ENGINE_DIR)/wasm/wasm_reader.c \
-	$(ENGINE_DIR)/wasm/wasm_writer.c $(ENGINE_DIR)/wasm/wasm_module.c \
-	$(ENGINE_DIR)/wasm/wasm_decode.c $(ENGINE_DIR)/wasm/wasm_validate.c \
-	$(ENGINE_DIR)/runtime/instantiate.c $(ENGINE_DIR)/runtime/execute.c \
-	$(ENGINE_DIR)/runtime/execute_memory.c \
-	$(ENGINE_DIR)/runtime/execute_numeric.c \
-	$(ENGINE_DIR)/runtime/execute_simd.c $(ENGINE_DIR)/runtime/execute_gc.c \
-	$(ENGINE_DIR)/runtime/execute_exception.c \
-	$(ENGINE_DIR)/runtime/execute_table.c $(ENGINE_DIR)/runtime/instance.c \
-	$(ENGINE_DIR)/runtime/api.c
+ENGINE_SOURCES := $(ENGINE_DIR)/wasm/load.c \
+	$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/encode.c \
+	$(ENGINE_DIR)/wast/stream.c $(ENGINE_DIR)/wast/command.c \
+	$(ENGINE_DIR)/store.c \
+	$(ENGINE_DIR)/wast/runner.c $(ENGINE_DIR)/wast/assert.c \
+	$(ENGINE_DIR)/wat/builder.c $(ENGINE_DIR)/wat/literal.c \
+	$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
+	$(ENGINE_DIR)/wasm/writer.c $(ENGINE_DIR)/wasm/module.c \
+	$(ENGINE_DIR)/wasm/decode.c $(ENGINE_DIR)/op/validate.c \
+	$(ENGINE_DIR)/instantiate.c $(ENGINE_DIR)/op/execute.c \
+	$(ENGINE_DIR)/op/execute_memory.c \
+	$(ENGINE_DIR)/op/execute_numeric.c \
+	$(ENGINE_DIR)/op/execute_simd.c $(ENGINE_DIR)/op/execute_gc.c \
+	$(ENGINE_DIR)/op/execute_exception.c \
+	$(ENGINE_DIR)/op/execute_table.c $(ENGINE_DIR)/instance.c \
+	$(ENGINE_DIR)/api.c
 
-ENGINE_HEADERS := $(ENGINE_DIR)/text/wat_types.h $(ENGINE_DIR)/runtime/store.h \
-	$(ENGINE_DIR)/wasm/wasm_encode.h $(ENGINE_DIR)/runtime/engine_internal.h \
-	$(ENGINE_DIR)/script/wast_runner.h $(ENGINE_DIR)/script/wast_stream.h \
-	$(ENGINE_DIR)/script/wast_assert.h $(ENGINE_DIR)/script/wast_command.h \
-	$(ENGINE_DIR)/wasm/wasm_opcode.h \
-	$(ENGINE_DIR)/text/wat_context.h $(ENGINE_DIR)/text/wat_literal.h \
-	$(ENGINE_DIR)/text/wat_builder.h \
-	$(ENGINE_DIR)/wasm/wasm_leb.h \
-	$(ENGINE_DIR)/wasm/wasm_reader.h $(ENGINE_DIR)/wasm/wasm_writer.h \
-	$(ENGINE_DIR)/wasm/wasm_module.h $(ENGINE_DIR)/wasm/wasm_decode.h \
-	$(ENGINE_DIR)/wasm/wasm_validate.h \
-	$(ENGINE_DIR)/runtime/instantiate.h $(ENGINE_DIR)/runtime/runtime_internal.h
+ENGINE_HEADERS := $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
+	$(ENGINE_DIR)/wasm/encode.h $(ENGINE_DIR)/engine_internal.h \
+	$(ENGINE_DIR)/wast/runner.h $(ENGINE_DIR)/wast/stream.h \
+	$(ENGINE_DIR)/wast/assert.h $(ENGINE_DIR)/wast/command.h \
+	$(ENGINE_DIR)/wasm/opcode.h \
+	$(ENGINE_DIR)/wat/context.h $(ENGINE_DIR)/wat/literal.h \
+	$(ENGINE_DIR)/wat/builder.h \
+	$(ENGINE_DIR)/wasm/leb.h \
+	$(ENGINE_DIR)/wasm/reader.h $(ENGINE_DIR)/wasm/writer.h \
+	$(ENGINE_DIR)/wasm/module.h $(ENGINE_DIR)/wasm/decode.h \
+	$(ENGINE_DIR)/op/validate.h \
+	$(ENGINE_DIR)/instantiate.h $(ENGINE_DIR)/runtime_internal.h
 
-ENGINE_HEADERS += $(ENGINE_DIR)/include/waste_engine.h \
-	$(ENGINE_DIR)/include/waste_error.h $(ENGINE_DIR)/include/waste_value.h
+ENGINE_HEADERS += $(ENGINE_DIR)/include/waste.h
 
 # Freestanding library: shared (portable) sources from engine
 LIB_SHARED_SRC := $(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdio.c \
@@ -102,83 +101,83 @@ gen:
 
 # ---- Compile engine sources to Wasm objects ----
 
-$(BUILD_DIR)/store.o: $(ENGINE_DIR)/runtime/store.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/store.o: $(ENGINE_DIR)/store.c $(ENGINE_HEADERS)
 	mkdir -p $(BUILD_DIR)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/wasm_load.o: $(ENGINE_DIR)/wasm/wasm_load.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/wasm_load.o: $(ENGINE_DIR)/wasm/load.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/wast_runner.o: $(ENGINE_DIR)/script/wast_runner.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/wast_runner.o: $(ENGINE_DIR)/wast/runner.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/wasm_encode.o: $(ENGINE_DIR)/wasm/wasm_encode.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/wasm_encode.o: $(ENGINE_DIR)/wasm/encode.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/wast_stream.o: $(ENGINE_DIR)/script/wast_stream.c $(ENGINE_HEADERS) $(WAST_TAB_H)
+$(BUILD_DIR)/wast_stream.o: $(ENGINE_DIR)/wast/stream.c $(ENGINE_HEADERS) $(WAST_TAB_H)
 	clang $(WASM_CC_FLAGS) -I$(WAST_GEN_DIR) -c $< -o $@
 
-$(BUILD_DIR)/wast_command.o: $(ENGINE_DIR)/script/wast_command.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/wast_command.o: $(ENGINE_DIR)/wast/command.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/wast_assert.o: $(ENGINE_DIR)/script/wast_assert.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/wast_assert.o: $(ENGINE_DIR)/wast/assert.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/wasm_opcode.o: $(ENGINE_DIR)/wasm/wasm_opcode.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/wasm_opcode.o: $(ENGINE_DIR)/wasm/opcode.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/wat_builder.o: $(ENGINE_DIR)/text/wat_builder.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/wat_builder.o: $(ENGINE_DIR)/wat/builder.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/wat_literal.o: $(ENGINE_DIR)/text/wat_literal.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/wat_literal.o: $(ENGINE_DIR)/wat/literal.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/wasm_leb.o: $(ENGINE_DIR)/wasm/wasm_leb.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/wasm_leb.o: $(ENGINE_DIR)/wasm/leb.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/wasm_reader.o: $(ENGINE_DIR)/wasm/wasm_reader.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/wasm_reader.o: $(ENGINE_DIR)/wasm/reader.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/wasm_writer.o: $(ENGINE_DIR)/wasm/wasm_writer.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/wasm_writer.o: $(ENGINE_DIR)/wasm/writer.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/wasm_module.o: $(ENGINE_DIR)/wasm/wasm_module.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/wasm_module.o: $(ENGINE_DIR)/wasm/module.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/wasm_decode.o: $(ENGINE_DIR)/wasm/wasm_decode.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/wasm_decode.o: $(ENGINE_DIR)/wasm/decode.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/wasm_validate.o: $(ENGINE_DIR)/wasm/wasm_validate.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/wasm_validate.o: $(ENGINE_DIR)/op/validate.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/instantiate.o: $(ENGINE_DIR)/runtime/instantiate.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/instantiate.o: $(ENGINE_DIR)/instantiate.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/execute.o: $(ENGINE_DIR)/runtime/execute.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/execute.o: $(ENGINE_DIR)/op/execute.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/execute_memory.o: $(ENGINE_DIR)/runtime/execute_memory.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/execute_memory.o: $(ENGINE_DIR)/op/execute_memory.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/execute_numeric.o: $(ENGINE_DIR)/runtime/execute_numeric.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/execute_numeric.o: $(ENGINE_DIR)/op/execute_numeric.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/execute_simd.o: $(ENGINE_DIR)/runtime/execute_simd.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/execute_simd.o: $(ENGINE_DIR)/op/execute_simd.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/execute_gc.o: $(ENGINE_DIR)/runtime/execute_gc.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/execute_gc.o: $(ENGINE_DIR)/op/execute_gc.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/execute_exception.o: $(ENGINE_DIR)/runtime/execute_exception.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/execute_exception.o: $(ENGINE_DIR)/op/execute_exception.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/execute_table.o: $(ENGINE_DIR)/runtime/execute_table.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/execute_table.o: $(ENGINE_DIR)/op/execute_table.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/api.o: $(ENGINE_DIR)/runtime/api.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/api.o: $(ENGINE_DIR)/api.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/instance.o: $(ENGINE_DIR)/runtime/instance.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/instance.o: $(ENGINE_DIR)/instance.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
 # ---- Compile html-rt sources to Wasm objects ----

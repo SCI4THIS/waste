@@ -9,38 +9,37 @@ WAST_GEN_DIR := $(ENGINE_BUILD_DIR)/gen
 FREESTANDING_FLAGS := -I$(ENGINE_DIR)/lib/include -fno-builtin -fno-stack-protector
 
 # Engine core sources (platform-independent)
-ENGINE_SOURCES := $(ENGINE_DIR)/wasm/wasm_load.c \
-	$(ENGINE_DIR)/wasm/wasm_opcode.c $(ENGINE_DIR)/wasm/wasm_encode.c \
-	$(ENGINE_DIR)/script/wast_stream.c $(ENGINE_DIR)/script/wast_command.c \
-	$(ENGINE_DIR)/runtime/store.c \
-	$(ENGINE_DIR)/script/wast_runner.c $(ENGINE_DIR)/script/wast_assert.c \
-	$(ENGINE_DIR)/text/wat_builder.c $(ENGINE_DIR)/text/wat_literal.c \
-	$(ENGINE_DIR)/wasm/wasm_leb.c $(ENGINE_DIR)/wasm/wasm_reader.c \
-	$(ENGINE_DIR)/wasm/wasm_writer.c $(ENGINE_DIR)/wasm/wasm_module.c \
-	$(ENGINE_DIR)/wasm/wasm_decode.c $(ENGINE_DIR)/wasm/wasm_validate.c \
-	$(ENGINE_DIR)/runtime/instantiate.c $(ENGINE_DIR)/runtime/execute.c \
-	$(ENGINE_DIR)/runtime/execute_memory.c \
-	$(ENGINE_DIR)/runtime/execute_numeric.c \
-	$(ENGINE_DIR)/runtime/execute_simd.c $(ENGINE_DIR)/runtime/execute_gc.c \
-	$(ENGINE_DIR)/runtime/execute_exception.c \
-	$(ENGINE_DIR)/runtime/execute_table.c $(ENGINE_DIR)/runtime/instance.c \
-	$(ENGINE_DIR)/runtime/api.c
+ENGINE_SOURCES := $(ENGINE_DIR)/wasm/load.c \
+	$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/encode.c \
+	$(ENGINE_DIR)/wast/stream.c $(ENGINE_DIR)/wast/command.c \
+	$(ENGINE_DIR)/store.c \
+	$(ENGINE_DIR)/wast/runner.c $(ENGINE_DIR)/wast/assert.c \
+	$(ENGINE_DIR)/wat/builder.c $(ENGINE_DIR)/wat/literal.c \
+	$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
+	$(ENGINE_DIR)/wasm/writer.c $(ENGINE_DIR)/wasm/module.c \
+	$(ENGINE_DIR)/wasm/decode.c $(ENGINE_DIR)/op/validate.c \
+	$(ENGINE_DIR)/instantiate.c $(ENGINE_DIR)/op/execute.c \
+	$(ENGINE_DIR)/op/execute_memory.c \
+	$(ENGINE_DIR)/op/execute_numeric.c \
+	$(ENGINE_DIR)/op/execute_simd.c $(ENGINE_DIR)/op/execute_gc.c \
+	$(ENGINE_DIR)/op/execute_exception.c \
+	$(ENGINE_DIR)/op/execute_table.c $(ENGINE_DIR)/instance.c \
+	$(ENGINE_DIR)/api.c
 
-ENGINE_HEADERS := $(ENGINE_DIR)/text/wat_types.h $(ENGINE_DIR)/runtime/store.h \
-	$(ENGINE_DIR)/wasm/wasm_encode.h $(ENGINE_DIR)/runtime/engine_internal.h \
-	$(ENGINE_DIR)/script/wast_runner.h $(ENGINE_DIR)/script/wast_stream.h \
-	$(ENGINE_DIR)/script/wast_assert.h $(ENGINE_DIR)/script/wast_command.h \
-	$(ENGINE_DIR)/wasm/wasm_opcode.h \
-	$(ENGINE_DIR)/text/wat_context.h $(ENGINE_DIR)/text/wat_literal.h \
-	$(ENGINE_DIR)/text/wat_builder.h \
-	$(ENGINE_DIR)/wasm/wasm_leb.h \
-	$(ENGINE_DIR)/wasm/wasm_reader.h $(ENGINE_DIR)/wasm/wasm_writer.h \
-	$(ENGINE_DIR)/wasm/wasm_module.h $(ENGINE_DIR)/wasm/wasm_decode.h \
-	$(ENGINE_DIR)/wasm/wasm_validate.h \
-	$(ENGINE_DIR)/runtime/instantiate.h $(ENGINE_DIR)/runtime/runtime_internal.h
+ENGINE_HEADERS := $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
+	$(ENGINE_DIR)/wasm/encode.h $(ENGINE_DIR)/engine_internal.h \
+	$(ENGINE_DIR)/wast/runner.h $(ENGINE_DIR)/wast/stream.h \
+	$(ENGINE_DIR)/wast/assert.h $(ENGINE_DIR)/wast/command.h \
+	$(ENGINE_DIR)/wasm/opcode.h \
+	$(ENGINE_DIR)/wat/context.h $(ENGINE_DIR)/wat/literal.h \
+	$(ENGINE_DIR)/wat/builder.h \
+	$(ENGINE_DIR)/wasm/leb.h \
+	$(ENGINE_DIR)/wasm/reader.h $(ENGINE_DIR)/wasm/writer.h \
+	$(ENGINE_DIR)/wasm/module.h $(ENGINE_DIR)/wasm/decode.h \
+	$(ENGINE_DIR)/op/validate.h \
+	$(ENGINE_DIR)/instantiate.h $(ENGINE_DIR)/runtime_internal.h
 
-ENGINE_HEADERS += $(ENGINE_DIR)/include/waste_engine.h \
-	$(ENGINE_DIR)/include/waste_error.h $(ENGINE_DIR)/include/waste_value.h
+ENGINE_HEADERS += $(ENGINE_DIR)/include/waste.h
 
 # Freestanding library: shared (portable) sources from engine
 LIB_SHARED := $(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdio.c \
@@ -146,40 +145,39 @@ $(EXTERN_CONSUMER_WASM): ../../tests/c-engine-extern-consumer.wat
 	mkdir -p $(BUILD_DIR)
 	wasm-as --enable-reference-types $< -o $@
 
-$(I32_SMOKE_TARGET): ../../tests/c-engine-i32-smoke.c $(ENGINE_DIR)/wasm/wasm_load.c $(ENGINE_DIR)/wasm/wasm_opcode.c \
-		$(ENGINE_DIR)/wasm/wasm_leb.c $(ENGINE_DIR)/wasm/wasm_reader.c \
-		$(ENGINE_DIR)/wasm/wasm_module.c $(ENGINE_DIR)/wasm/wasm_decode.c \
-		$(ENGINE_DIR)/wasm/wasm_validate.c \
-		$(ENGINE_DIR)/runtime/instantiate.c $(ENGINE_DIR)/runtime/execute.c \
-		$(ENGINE_DIR)/runtime/execute_memory.c \
-		$(ENGINE_DIR)/runtime/execute_numeric.c \
-		$(ENGINE_DIR)/runtime/execute_simd.c \
-		$(ENGINE_DIR)/runtime/execute_gc.c \
-		$(ENGINE_DIR)/runtime/execute_exception.c \
-		$(ENGINE_DIR)/runtime/execute_table.c $(ENGINE_DIR)/runtime/instance.c \
-		$(ENGINE_DIR)/runtime/api.c \
-		$(ENGINE_DIR)/runtime/engine_internal.h $(ENGINE_DIR)/wasm/wasm_opcode.h $(ENGINE_DIR)/text/wat_types.h \
-		$(ENGINE_DIR)/wasm/wasm_leb.h $(ENGINE_DIR)/wasm/wasm_reader.h \
-		$(ENGINE_DIR)/wasm/wasm_module.h $(ENGINE_DIR)/wasm/wasm_decode.h \
-		$(ENGINE_DIR)/wasm/wasm_validate.h \
-		$(ENGINE_DIR)/runtime/instantiate.h $(ENGINE_DIR)/runtime/runtime_internal.h \
-		$(ENGINE_DIR)/include/waste_engine.h $(ENGINE_DIR)/include/waste_error.h \
-		$(ENGINE_DIR)/include/waste_value.h
+$(I32_SMOKE_TARGET): ../../tests/c-engine-i32-smoke.c $(ENGINE_DIR)/wasm/load.c $(ENGINE_DIR)/wasm/opcode.c \
+		$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
+		$(ENGINE_DIR)/wasm/module.c $(ENGINE_DIR)/wasm/decode.c \
+		$(ENGINE_DIR)/op/validate.c \
+		$(ENGINE_DIR)/instantiate.c $(ENGINE_DIR)/op/execute.c \
+		$(ENGINE_DIR)/op/execute_memory.c \
+		$(ENGINE_DIR)/op/execute_numeric.c \
+		$(ENGINE_DIR)/op/execute_simd.c \
+		$(ENGINE_DIR)/op/execute_gc.c \
+		$(ENGINE_DIR)/op/execute_exception.c \
+		$(ENGINE_DIR)/op/execute_table.c $(ENGINE_DIR)/instance.c \
+		$(ENGINE_DIR)/api.c \
+		$(ENGINE_DIR)/engine_internal.h $(ENGINE_DIR)/wasm/opcode.h $(ENGINE_DIR)/wat/types.h \
+		$(ENGINE_DIR)/wasm/leb.h $(ENGINE_DIR)/wasm/reader.h \
+		$(ENGINE_DIR)/wasm/module.h $(ENGINE_DIR)/wasm/decode.h \
+		$(ENGINE_DIR)/op/validate.h \
+		$(ENGINE_DIR)/instantiate.h $(ENGINE_DIR)/runtime_internal.h \
+		$(ENGINE_DIR)/include/waste.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
-		../../tests/c-engine-i32-smoke.c $(ENGINE_DIR)/wasm/wasm_load.c \
-		$(ENGINE_DIR)/wasm/wasm_opcode.c $(ENGINE_DIR)/wasm/wasm_leb.c \
-		$(ENGINE_DIR)/wasm/wasm_reader.c $(ENGINE_DIR)/wasm/wasm_module.c \
-		$(ENGINE_DIR)/wasm/wasm_decode.c $(ENGINE_DIR)/wasm/wasm_validate.c \
-		$(ENGINE_DIR)/runtime/instantiate.c $(ENGINE_DIR)/runtime/execute.c \
-		$(ENGINE_DIR)/runtime/execute_memory.c \
-		$(ENGINE_DIR)/runtime/execute_numeric.c \
-		$(ENGINE_DIR)/runtime/execute_simd.c \
-		$(ENGINE_DIR)/runtime/execute_gc.c \
-		$(ENGINE_DIR)/runtime/execute_exception.c \
-		$(ENGINE_DIR)/runtime/execute_table.c $(ENGINE_DIR)/runtime/instance.c \
-		$(ENGINE_DIR)/runtime/api.c \
+		../../tests/c-engine-i32-smoke.c $(ENGINE_DIR)/wasm/load.c \
+		$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/leb.c \
+		$(ENGINE_DIR)/wasm/reader.c $(ENGINE_DIR)/wasm/module.c \
+		$(ENGINE_DIR)/wasm/decode.c $(ENGINE_DIR)/op/validate.c \
+		$(ENGINE_DIR)/instantiate.c $(ENGINE_DIR)/op/execute.c \
+		$(ENGINE_DIR)/op/execute_memory.c \
+		$(ENGINE_DIR)/op/execute_numeric.c \
+		$(ENGINE_DIR)/op/execute_simd.c \
+		$(ENGINE_DIR)/op/execute_gc.c \
+		$(ENGINE_DIR)/op/execute_exception.c \
+		$(ENGINE_DIR)/op/execute_table.c $(ENGINE_DIR)/instance.c \
+		$(ENGINE_DIR)/api.c \
 		-lm -o $@
 
 # ---- Shared binary reader/writer tests (ASan/UBSan, uses system libc) ----
@@ -188,15 +186,15 @@ wasm-binary-primitives: $(WASM_BINARY_TEST_TARGET)
 	ASAN_OPTIONS=detect_leaks=0 $(WASM_BINARY_TEST_TARGET)
 
 $(WASM_BINARY_TEST_TARGET): ../../tests/wasm-binary-primitives.c \
-		$(ENGINE_DIR)/wasm/wasm_leb.c $(ENGINE_DIR)/wasm/wasm_reader.c \
-		$(ENGINE_DIR)/wasm/wasm_writer.c $(ENGINE_DIR)/wasm/wasm_leb.h \
-		$(ENGINE_DIR)/wasm/wasm_reader.h $(ENGINE_DIR)/wasm/wasm_writer.h
+		$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
+		$(ENGINE_DIR)/wasm/writer.c $(ENGINE_DIR)/wasm/leb.h \
+		$(ENGINE_DIR)/wasm/reader.h $(ENGINE_DIR)/wasm/writer.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
 		../../tests/wasm-binary-primitives.c \
-		$(ENGINE_DIR)/wasm/wasm_leb.c $(ENGINE_DIR)/wasm/wasm_reader.c \
-		$(ENGINE_DIR)/wasm/wasm_writer.c -o $@
+		$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
+		$(ENGINE_DIR)/wasm/writer.c -o $@
 
 # ---- Decoded import declaration tests (ASan/UBSan, uses system libc) ----
 
@@ -204,18 +202,18 @@ wasm-import-decode: $(WASM_IMPORT_TEST_TARGET)
 	ASAN_OPTIONS=detect_leaks=0 $(WASM_IMPORT_TEST_TARGET)
 
 $(WASM_IMPORT_TEST_TARGET): ../../tests/wasm-import-decode.c \
-		$(ENGINE_DIR)/wasm/wasm_leb.c $(ENGINE_DIR)/wasm/wasm_reader.c \
-		$(ENGINE_DIR)/wasm/wasm_writer.c $(ENGINE_DIR)/wasm/wasm_module.c \
-		$(ENGINE_DIR)/wasm/wasm_decode.c $(ENGINE_DIR)/wasm/wasm_leb.h \
-		$(ENGINE_DIR)/wasm/wasm_reader.h $(ENGINE_DIR)/wasm/wasm_writer.h \
-		$(ENGINE_DIR)/wasm/wasm_module.h $(ENGINE_DIR)/wasm/wasm_decode.h
+		$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
+		$(ENGINE_DIR)/wasm/writer.c $(ENGINE_DIR)/wasm/module.c \
+		$(ENGINE_DIR)/wasm/decode.c $(ENGINE_DIR)/wasm/leb.h \
+		$(ENGINE_DIR)/wasm/reader.h $(ENGINE_DIR)/wasm/writer.h \
+		$(ENGINE_DIR)/wasm/module.h $(ENGINE_DIR)/wasm/decode.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
 		../../tests/wasm-import-decode.c \
-		$(ENGINE_DIR)/wasm/wasm_leb.c $(ENGINE_DIR)/wasm/wasm_reader.c \
-		$(ENGINE_DIR)/wasm/wasm_writer.c $(ENGINE_DIR)/wasm/wasm_module.c \
-		$(ENGINE_DIR)/wasm/wasm_decode.c -o $@
+		$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
+		$(ENGINE_DIR)/wasm/writer.c $(ENGINE_DIR)/wasm/module.c \
+		$(ENGINE_DIR)/wasm/decode.c -o $@
 
 # ---- Type/control validation tests (ASan/UBSan, uses system libc) ----
 
@@ -238,14 +236,14 @@ $(PARSER_REENTRANT_TEST_TARGET): ../../tests/wast-parser-reentrant.c \
 		$(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O) -pthread -lm -o $@
 
 $(WASM_VALIDATION_TEST_TARGET): ../../tests/wasm-validation.c \
-		$(ENGINE_DIR)/wasm/wasm_validate.c $(ENGINE_DIR)/wasm/wasm_opcode.c \
-		$(ENGINE_DIR)/wasm/wasm_validate.h \
-		$(ENGINE_DIR)/runtime/runtime_internal.h
+		$(ENGINE_DIR)/op/validate.c $(ENGINE_DIR)/wasm/opcode.c \
+		$(ENGINE_DIR)/op/validate.h \
+		$(ENGINE_DIR)/runtime_internal.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
 		../../tests/wasm-validation.c \
-		$(ENGINE_DIR)/wasm/wasm_validate.c $(ENGINE_DIR)/wasm/wasm_opcode.c \
+		$(ENGINE_DIR)/op/validate.c $(ENGINE_DIR)/wasm/opcode.c \
 		-o $@
 
 clean:

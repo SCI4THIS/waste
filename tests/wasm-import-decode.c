@@ -1,5 +1,5 @@
-#include "wasm/wasm_decode.h"
-#include "wasm/wasm_writer.h"
+#include "wasm/decode.h"
+#include "wasm/writer.h"
 
 #include <stdint.h>
 #include <stdio.h>

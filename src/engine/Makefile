@@ -11,14 +11,14 @@ WAST_LEX_C := $(WAST_GEN_DIR)/wast.lex.c
 gen: $(WAST_TAB_C) $(WAST_TAB_H) $(WAST_LEX_C)
 
 # Generate Bison parser (tab.c and tab.h)
-$(WAST_TAB_C) $(WAST_TAB_H): text/wat_parser.y
+$(WAST_TAB_C) $(WAST_TAB_H): wat/parser.y
 	mkdir -p $(WAST_GEN_DIR)
-	$(BISON) --defines=$(WAST_TAB_H) -o $(WAST_TAB_C) text/wat_parser.y
+	$(BISON) --defines=$(WAST_TAB_H) -o $(WAST_TAB_C) wat/parser.y
 
 # Generate Flex scanner
-$(WAST_LEX_C): text/wat_lexer.l $(WAST_TAB_H)
+$(WAST_LEX_C): wat/lexer.l $(WAST_TAB_H)
 	mkdir -p $(WAST_GEN_DIR)
-	$(FLEX) -o $(WAST_LEX_C) text/wat_lexer.l
+	$(FLEX) -o $(WAST_LEX_C) wat/lexer.l
 
 clean:
 	rm -rf $(WAST_GEN_DIR)

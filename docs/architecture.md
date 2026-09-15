@@ -32,11 +32,12 @@ src/html-rt/   browser API, browser POSIX adapter, guest libc, HTML tools,
 The engine itself has one-way ownership directories:
 
 ```text
-src/engine/include/  stable embedding values, errors, and opaque handles
-src/engine/text/     reentrant Flex/Bison WAT front end and text AST builder
-src/engine/script/   WAST command framing, parsing policy, and assertions
-src/engine/wasm/     binary reader/writer, encoder, decoder, and validation
-src/engine/runtime/  store, instances, instantiation, and execution
+src/engine/include/  single waste.h header: values, errors, and opaque handles
+src/engine/wat/      reentrant Flex/Bison WAT front end and text AST builder
+src/engine/wast/     WAST command framing, parsing policy, and assertions
+src/engine/wasm/     binary reader/writer, encoder, decoder, and loading
+src/engine/op/       frame-based dispatch, opcode-family execution, and validation
+src/engine/          store, instances, and instantiation (engine root)
 src/engine/lib/      shared freestanding C support
 ```
 
@@ -126,9 +127,9 @@ skip later commands.
 Flex/Bison owns textual syntax and source-boundary recognition.  Binary
 decoding, module validation, assertion policy, linking, instantiation, and
 execution remain C phases outside grammar actions.  Assertion value matching
-and action execution are isolated in `script/wast_assert.c`; command policy
-lives in `script/`, while registry and lifetime transitions live in
-`runtime/store.c`.
+and action execution are isolated in `wast/assert.c`; command policy
+lives in `wast/`, while registry and lifetime transitions live in
+`store.c`.
 
 ## Language and Harness Coverage
 
