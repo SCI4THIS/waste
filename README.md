@@ -1,10 +1,15 @@
+Please note that only the main README is written by a human and intended for humans.
+I've been reading the README.md's that the AI agents write and they claim that some
+of the stuff is handwritten, which is not true.
+
 # WASTE
 
 Webassembly Threading Environment is webassembly implementation targeting web browsers
 that provides threading functionality.  It compiles to webassembly that can be 
 ran in a browser's webassembly module.  The nested approach allows for the waste
-implementation to provide features that aren't available in the browser.  
-It allows for threading and for process yielding and restarting without use of asyncify.
+implementation to provide features that aren't available in the browser.  It allows 
+for threading and for process yielding and restarting without use of asyncify.
+
 
 ## Webassembly terms
 
