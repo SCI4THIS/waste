@@ -1994,14 +1994,6 @@ static void append_gc_field(wast_script *script, uint64_t encoded) {
     WAT_STATE(cur_type).field_packed[field] = (uint8_t)((encoded >> 17) & 3u);
 }
 
-static void append_gc_field_named(wast_script *script, uint64_t encoded, const char *name) {
-    if (WAT_STATE(cur_type).field_count >= WAST_MAX_TYPE_FIELDS) return;
-    int field = WAT_STATE(cur_type).field_count;
-    if (name && name[0])
-        snprintf(WAT_STATE(cur_type).field_names[field], 64, "%s", name);
-    append_gc_field(script, encoded);
-}
-
 /* Resolve a field name to its index within a type */
 static uint32_t resolve_field(wast_script *script, uint32_t type_idx,
                               const char *name) {
@@ -2080,7 +2072,7 @@ static int emit_gc_two_index(wast_script *script, const char *name,
 /* Emit a GC struct.get/set with a resolved field index */
 static void emit_gc_struct_access(wast_script *script, const char *name,
                                   const char *type_name, int tl, int tc,
-                                  const char *field_name, int fl, int fc) {
+                                  const char *field_name) {
     uint32_t subopcode;
     if (strcmp(name, "struct.get") == 0) subopcode = 0x02;
     else if (strcmp(name, "struct.get_s") == 0) subopcode = 0x03;
@@ -2260,7 +2252,7 @@ static void emit_blocktype(wast_script *script, int bt) {
  * Type declarations for non-terminal symbols
  * --------------------------------------------------------------------- */
 
-%type <valtype_val>   valtype reftype_as_valtype table_reftype
+%type <valtype_val>   valtype table_reftype
 %type <value_val>     const_val result_const f32_val f64_val
 %type <lane_list_val> lane_vals lane_val
 %type <int_val>       lane_type blocktype block_param_type block_result_type
@@ -2594,24 +2586,6 @@ param_items:
     }
     ;
 
-valtype_list:
-    valtype {
-        if (WAT_STATE(in_func) && WAT_STATE(cur_func).param_count < WAST_MAX_PARAMS) {
-            WAT_STATE(cur_func).params[WAT_STATE(cur_func).param_count++] = $1;
-            if (WAT_STATE(local_name_count) < WAST_MAX_PARAMS + WAST_MAX_LOCALS)
-                WAT_STATE(local_names)[WAT_STATE(local_name_count)++][0] = '\0';
-        }
-    }
-  | valtype_list valtype {
-        if (WAT_STATE(in_func) && WAT_STATE(cur_func).param_count < WAST_MAX_PARAMS) {
-            WAT_STATE(cur_func).params[WAT_STATE(cur_func).param_count++] = $2;
-            /* unnamed param — push empty name to keep indices aligned */
-            if (WAT_STATE(local_name_count) < WAST_MAX_PARAMS + WAST_MAX_LOCALS)
-                WAT_STATE(local_names)[WAT_STATE(local_name_count)++][0] = '\0';
-        }
-    }
-    ;
-
 result_list:
     /* empty */
   | result_list LPAREN KW_RESULT result_valtype_list RPAREN
@@ -2626,11 +2600,6 @@ result_valtype_list:
             WAT_STATE(cur_func).results[WAT_STATE(cur_func).result_count++] = $2;
         }
     }
-    ;
-
-local_list:
-    /* empty */
-  | local_list LPAREN KW_LOCAL local_items RPAREN
     ;
 
 local_items:
@@ -2652,23 +2621,6 @@ local_items:
         }
     }
   | local_items valtype {
-        if (WAT_STATE(in_func) && WAT_STATE(cur_func).local_count < WAST_MAX_LOCALS) {
-            WAT_STATE(cur_func).locals[WAT_STATE(cur_func).local_count++] = $2;
-            if (WAT_STATE(local_name_count) < WAST_MAX_PARAMS + WAST_MAX_LOCALS)
-                WAT_STATE(local_names)[WAT_STATE(local_name_count)++][0] = '\0';
-        }
-    }
-    ;
-
-local_valtype_list:
-    valtype {
-        if (WAT_STATE(in_func) && WAT_STATE(cur_func).local_count < WAST_MAX_LOCALS) {
-            WAT_STATE(cur_func).locals[WAT_STATE(cur_func).local_count++] = $1;
-            if (WAT_STATE(local_name_count) < WAST_MAX_PARAMS + WAST_MAX_LOCALS)
-                WAT_STATE(local_names)[WAT_STATE(local_name_count)++][0] = '\0';
-        }
-    }
-  | local_valtype_list valtype {
         if (WAT_STATE(in_func) && WAT_STATE(cur_func).local_count < WAST_MAX_LOCALS) {
             WAT_STATE(cur_func).locals[WAT_STATE(cur_func).local_count++] = $2;
             if (WAT_STATE(local_name_count) < WAST_MAX_PARAMS + WAST_MAX_LOCALS)
@@ -2830,20 +2782,16 @@ plain_instr:
     }
   /* struct.get/set/get_s/get_u plain form — dedicated keyword tokens */
   | KW_STRUCT_GET any_idx any_idx {
-        emit_gc_struct_access(script, "struct.get", $2, @2.first_line, @2.first_column,
-                              $3, @3.first_line, @3.first_column);
+        emit_gc_struct_access(script, "struct.get", $2, @2.first_line, @2.first_column, $3);
     }
   | KW_STRUCT_GET_S any_idx any_idx {
-        emit_gc_struct_access(script, "struct.get_s", $2, @2.first_line, @2.first_column,
-                              $3, @3.first_line, @3.first_column);
+        emit_gc_struct_access(script, "struct.get_s", $2, @2.first_line, @2.first_column, $3);
     }
   | KW_STRUCT_GET_U any_idx any_idx {
-        emit_gc_struct_access(script, "struct.get_u", $2, @2.first_line, @2.first_column,
-                              $3, @3.first_line, @3.first_column);
+        emit_gc_struct_access(script, "struct.get_u", $2, @2.first_line, @2.first_column, $3);
     }
   | KW_STRUCT_SET any_idx any_idx {
-        emit_gc_struct_access(script, "struct.set", $2, @2.first_line, @2.first_column,
-                              $3, @3.first_line, @3.first_column);
+        emit_gc_struct_access(script, "struct.set", $2, @2.first_line, @2.first_column, $3);
     }
   | block_plain
   | loop_plain
@@ -3106,11 +3054,6 @@ typeuse_item:
         WAT_STATE(typeuse_field_stage) = 2;
         $$ = -1;
     }
-    ;
-
-inline_typeuse:
-    LPAREN KW_PARAM inline_param_list RPAREN
-  | LPAREN KW_RESULT inline_result_list RPAREN
     ;
 
 inline_param_list:
@@ -3399,8 +3342,7 @@ fold_instr:
             emit_index_ref(script, IDX_MEMORY, $2, @2.first_line, @2.first_column);
         } else if (strcmp($1, "struct.get") == 0 || strcmp($1, "struct.get_s") == 0 ||
                    strcmp($1, "struct.get_u") == 0 || strcmp($1, "struct.set") == 0) {
-            emit_gc_struct_access(script, $1, $2, @2.first_line, @2.first_column,
-                                  $3, @3.first_line, @3.first_column);
+            emit_gc_struct_access(script, $1, $2, @2.first_line, @2.first_column, $3);
         } else if (!emit_gc_two_index(script, $1,
                                       $2, @2.first_line, @2.first_column,
                                       $3, @3.first_line, @3.first_column)) {
@@ -3476,8 +3418,7 @@ fold_instr:
             snprintf(field_name, sizeof(field_name), "%lld",
                      (long long)$3);
             emit_gc_struct_access(script, $1, $2,
-                                  @2.first_line, @2.first_column,
-                                  field_name, @3.first_line, @3.first_column);
+                                  @2.first_line, @2.first_column, field_name);
         } else if (emit_gc_constructor(script, $1, $2,
                                        @2.first_line, @2.first_column)) {
             emit_leb_u32(script, (uint32_t)$3);
@@ -3510,8 +3451,7 @@ fold_instr:
             snprintf(field_name, sizeof(field_name), "%lld",
                      (long long)$3);
             emit_gc_struct_access(script, $1, type_name,
-                                  @2.first_line, @2.first_column,
-                                  field_name, @3.first_line, @3.first_column);
+                                  @2.first_line, @2.first_column, field_name);
         } else if (emit_gc_constructor(script, $1, type_name,
                                 @2.first_line, @2.first_column))
             emit_leb_u32(script, (uint32_t)$3);
@@ -3574,8 +3514,7 @@ fold_instr:
         snprintf(type_name, sizeof(type_name), "%lld", (long long)$2);
         if (strcmp($1, "struct.get") == 0 || strcmp($1, "struct.get_s") == 0 ||
             strcmp($1, "struct.get_u") == 0 || strcmp($1, "struct.set") == 0) {
-            emit_gc_struct_access(script, $1, type_name, @2.first_line, @2.first_column,
-                                  $3, @3.first_line, @3.first_column);
+            emit_gc_struct_access(script, $1, type_name, @2.first_line, @2.first_column, $3);
         }
     }
   | FOLD_ATOM_START RPAREN {
@@ -3661,49 +3600,6 @@ try_catch_list:
             catch_->depth = resolve_label(script, $3,
                                           @3.first_line, @3.first_column);
         }
-    }
-    ;
-
-/* f32/f64 immediates in folded const form */
-f32_imm:
-    FLOAT   { emit_byte(script,0x43); emit_f32(script,(float)$1); }
-  | any_int { emit_byte(script,0x43); uint32_t b=(uint32_t)(uint64_t)$1; float f; memcpy(&f,&b,4); emit_f32(script,f); }
-  | KW_NAN_CANONICAL { emit_byte(script,0x43); uint32_t b=0x7FC00000u; float f; memcpy(&f,&b,4); emit_f32(script,f); }
-  | KW_NAN_ARITHMETIC{ emit_byte(script,0x43); uint32_t b=0x7FC00000u; float f; memcpy(&f,&b,4); emit_f32(script,f); }
-  | KW_NEG_NAN       { emit_byte(script,0x43); uint32_t b=0xFFC00000u; float f; memcpy(&f,&b,4); emit_f32(script,f); }
-  | KW_POS_NAN       { emit_byte(script,0x43); uint32_t b=0x7FC00000u; float f; memcpy(&f,&b,4); emit_f32(script,f); }
-  | KW_NAN           { emit_byte(script,0x43); uint32_t b=0x7FC00000u; float f; memcpy(&f,&b,4); emit_f32(script,f); }
-  | KW_INF           { emit_byte(script,0x43); float f=1.0f/0.0f;  emit_f32(script,f); }
-  | KW_POS_INF       { emit_byte(script,0x43); float f=1.0f/0.0f;  emit_f32(script,f); }
-  | KW_NEG_INF       { emit_byte(script,0x43); float f=-1.0f/0.0f; emit_f32(script,f); }
-  | ATOM { /* nan:0xHEX payload — preserve exact payload bits, no quiet-bit injection */
-        emit_byte(script,0x43);
-        const char *s = $1; int neg = (*s == '-'); if (neg || *s == '+') s++;
-        uint32_t b = 0x7FC00000u;
-        if (strncmp(s,"nan:0x",6)==0) b = (neg?0xFF800000u:0x7F800000u)|(uint32_t)(strtoul(s+6,NULL,16)&0x7FFFFFu);
-        else if (neg) b = 0xFFC00000u;
-        float f; memcpy(&f,&b,4); emit_f32(script,f);
-    }
-    ;
-
-f64_imm:
-    FLOAT   { emit_byte(script,0x44); emit_f64(script,$1); }
-  | any_int { emit_byte(script,0x44); double d; uint64_t b=(uint64_t)$1; memcpy(&d,&b,8); emit_f64(script,d); }
-  | KW_NAN_CANONICAL { emit_byte(script,0x44); uint64_t b=0x7FF8000000000000ULL; double d; memcpy(&d,&b,8); emit_f64(script,d); }
-  | KW_NAN_ARITHMETIC{ emit_byte(script,0x44); uint64_t b=0x7FF8000000000000ULL; double d; memcpy(&d,&b,8); emit_f64(script,d); }
-  | KW_NEG_NAN       { emit_byte(script,0x44); uint64_t b=0xFFF8000000000000ULL; double d; memcpy(&d,&b,8); emit_f64(script,d); }
-  | KW_POS_NAN       { emit_byte(script,0x44); uint64_t b=0x7FF8000000000000ULL; double d; memcpy(&d,&b,8); emit_f64(script,d); }
-  | KW_NAN           { emit_byte(script,0x44); uint64_t b=0x7FF8000000000000ULL; double d; memcpy(&d,&b,8); emit_f64(script,d); }
-  | KW_INF           { emit_byte(script,0x44); double d=1.0/0.0;  emit_f64(script,d); }
-  | KW_POS_INF       { emit_byte(script,0x44); double d=1.0/0.0;  emit_f64(script,d); }
-  | KW_NEG_INF       { emit_byte(script,0x44); double d=-1.0/0.0; emit_f64(script,d); }
-  | ATOM { /* nan:0xHEX payload — preserve exact payload bits, no quiet-bit injection */
-        emit_byte(script,0x44);
-        const char *s = $1; int neg = (*s == '-'); if (neg || *s == '+') s++;
-        uint64_t b = 0x7FF8000000000000ULL;
-        if (strncmp(s,"nan:0x",6)==0) b = (neg?0xFFF0000000000000ULL:0x7FF0000000000000ULL)|(strtoull(s+6,NULL,16)&0x000FFFFFFFFFFFFFULL);
-        else if (neg) b = 0xFFF8000000000000ULL;
-        double d; memcpy(&d,&b,8); emit_f64(script,d);
     }
     ;
 
@@ -3908,17 +3804,6 @@ reftype:
   | LPAREN KW_REF_TYPE any_idx RPAREN {
         $$ = indexed_ref_type(script, $3, 0);
     }
-    ;
-
-reftype_as_valtype:
-    KW_FUNCREF   { $$ = WASM_VALTYPE_FUNCREF; }
-  | KW_EXTERNREF { $$ = WASM_VALTYPE_EXTERNREF; }
-  | KW_ANYREF    { $$ = WASM_VALTYPE_ANYREF; }
-  | KW_EQREF     { $$ = WASM_VALTYPE_EQREF; }
-  | KW_I31REF    { $$ = WASM_VALTYPE_I31REF; }
-  | KW_STRUCTREF { $$ = WASM_VALTYPE_STRUCTREF; }
-  | KW_ARRAYREF  { $$ = WASM_VALTYPE_ARRAYREF; }
-  | KW_EXNREF    { $$ = WASM_VALTYPE_EXNREF; }
     ;
 
 /* gc_casttype: returns int64_t encoding nullability + heap type for ref.test/ref.cast/br_on_cast */
@@ -4896,16 +4781,6 @@ data_offset:
         (void)emit_atom_op(script, $1);
         emit_byte(script, 0x0b);
         end_constexpr(script);
-    }
-    ;
-
-/* One or more integer immediates (lane indices for SIMD ops) */
-lane_imm_list:
-    any_int {
-        if (WAT_STATE(lane_imm_count) < 32) WAT_STATE(lane_imms)[WAT_STATE(lane_imm_count)++] = (uint32_t)$1;
-    }
-  | lane_imm_list any_int {
-        if (WAT_STATE(lane_imm_count) < 32) WAT_STATE(lane_imms)[WAT_STATE(lane_imm_count)++] = (uint32_t)$2;
     }
     ;
 
