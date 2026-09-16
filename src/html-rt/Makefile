@@ -10,7 +10,7 @@ WAST_GEN_DIR := $(ENGINE_BUILD_DIR)/gen
 
 WASM_CC_FLAGS := --target=wasm32 -O2 -std=c11 -Wall -Wextra \
 	-fno-builtin -DYYDEBUG=0 -DWASTE_ENGINE -nostdlib \
-	-I$(ENGINE_DIR) -I$(ENGINE_DIR)/lib/include
+	-I$(ENGINE_DIR) -I$(ENGINE_DIR)/lib/include -I$(WAST_GEN_DIR)
 
 # Engine core sources (platform-independent)
 ENGINE_SOURCES := $(ENGINE_DIR)/wasm/load.c \
@@ -27,7 +27,8 @@ ENGINE_SOURCES := $(ENGINE_DIR)/wasm/load.c \
 	$(ENGINE_DIR)/op/execute_numeric.c \
 	$(ENGINE_DIR)/op/execute_simd.c $(ENGINE_DIR)/op/execute_gc.c \
 	$(ENGINE_DIR)/op/execute_exception.c \
-	$(ENGINE_DIR)/op/execute_table.c $(ENGINE_DIR)/instance.c \
+	$(ENGINE_DIR)/op/execute_table.c \
+	$(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_DIR)/instance.c \
 	$(ENGINE_DIR)/api.c
 
 ENGINE_HEADERS := $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
@@ -40,7 +41,7 @@ ENGINE_HEADERS := $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
 	$(ENGINE_DIR)/wasm/leb.h \
 	$(ENGINE_DIR)/wasm/reader.h $(ENGINE_DIR)/wasm/writer.h \
 	$(ENGINE_DIR)/wasm/module.h $(ENGINE_DIR)/wasm/decode.h \
-	$(ENGINE_DIR)/op/validate.h \
+	$(ENGINE_DIR)/op/validate.h $(WAST_GEN_DIR)/dispatch_gen.h \
 	$(ENGINE_DIR)/instantiate.h $(ENGINE_DIR)/runtime_internal.h
 
 ENGINE_HEADERS += $(ENGINE_DIR)/include/waste.h
@@ -66,6 +67,7 @@ ENGINE_OBJS := $(BUILD_DIR)/store.o $(BUILD_DIR)/wasm_load.o \
 	$(BUILD_DIR)/execute_memory.o $(BUILD_DIR)/execute_numeric.o \
 	$(BUILD_DIR)/execute_simd.o $(BUILD_DIR)/execute_gc.o \
 	$(BUILD_DIR)/execute_exception.o $(BUILD_DIR)/execute_table.o \
+	$(BUILD_DIR)/dispatch_gen.o \
 	$(BUILD_DIR)/instance.o $(BUILD_DIR)/api.o
 
 RT_OBJS := $(BUILD_DIR)/browser_api.o $(BUILD_DIR)/posix_stubs.o
@@ -172,6 +174,9 @@ $(BUILD_DIR)/execute_exception.o: $(ENGINE_DIR)/op/execute_exception.c $(ENGINE_
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
 $(BUILD_DIR)/execute_table.o: $(ENGINE_DIR)/op/execute_table.c $(ENGINE_HEADERS)
+	clang $(WASM_CC_FLAGS) -c $< -o $@
+
+$(BUILD_DIR)/dispatch_gen.o: $(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
 $(BUILD_DIR)/api.o: $(ENGINE_DIR)/api.c $(ENGINE_HEADERS)

@@ -1,4 +1,4 @@
-#include "validate.h"
+#include "dispatch_gen.h"
 #include "wasm/opcode.h"
 
 #include <stdint.h>
@@ -444,22 +444,8 @@ int nullable_reference_for_heap(const waste_exec_engine *eng,
     }
 }
 
-#define WASM_VALIDATION_STACK 256
-#define WASM_BOTTOM_TYPE ((wasm_valtype)0x7fff)
-
-typedef struct {
-    const waste_exec_engine *engine;
-    int height;
-    int unreachable;
-    int tail_call_seen;
-    uint8_t kind;
-    uint8_t has_else;
-    int param_count;
-    int result_count;
-    wasm_valtype params[WAST_MAX_PARAMS];
-    wasm_valtype results[WAST_MAX_RESULTS];
-    uint8_t entry_initialized[(EXEC_MAX_LOCALS + 7) / 8];
-} wasm_validation_control;
+/* wasm_validation_control, WASM_VALIDATION_STACK, and WASM_BOTTOM_TYPE
+ * are defined in validate.h so dispatch handlers can use them. */
 
 static int validation_local_initialized(const uint8_t *bits, uint32_t index) {
     return (bits[index / 8] & (uint8_t)(1u << (index % 8))) != 0;
@@ -544,6 +530,1343 @@ static int validation_local_type(const exec_func_type *signature,
     return 1;
 }
 
+/* ---- Extracted per-opcode validation handlers ---- */
+
+wasm_validation_status validate_op_unreachable(wasm_validate_context *ctx,
+                                               const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    (void)instr;
+    *ctx->top = control->height;
+    control->unreachable = 1;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_nop(wasm_validate_context *ctx,
+                                       const exec_instr *instr) {
+    (void)ctx;
+    (void)instr;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_block(wasm_validate_context *ctx,
+                                         const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    const exec_func_type *signature = ctx->signature;
+    const wasm_valtype *params = NULL;
+    const wasm_valtype *results = NULL;
+    int param_count = 0;
+    int result_count = 0;
+    wasm_valtype direct_result;
+    if (instr->block_type_index >= 0) {
+        if ((uint32_t)instr->block_type_index >= eng->type_count)
+            return WASM_VALIDATION_INVALID;
+        const exec_func_type *block_type =
+            &eng->types[instr->block_type_index];
+        params = block_type->params;
+        param_count = block_type->param_count;
+        results = block_type->results;
+        result_count = block_type->result_count;
+    } else if (instr->has_block_result_type) {
+        direct_result = instr->block_result_type;
+        results = &direct_result;
+        result_count = 1;
+    }
+    if (instr->opcode == 0x04 &&
+        !validation_pop_type(ctx->stack, ctx->top, control,
+                                    WASM_VALTYPE_I32))
+        return WASM_VALIDATION_INVALID;
+    if (instr->opcode == 0x1f) {
+        for (uint32_t i = 0; i < instr->catch_count; i++) {
+            const exec_catch *catch_ = &instr->catches[i];
+            if (catch_->depth > (uint32_t)*ctx->control_top)
+                return WASM_VALIDATION_INVALID;
+
+            const wasm_valtype *label_types;
+            int label_count;
+            if (catch_->depth == (uint32_t)*ctx->control_top) {
+                label_types = signature->results;
+                label_count = signature->result_count;
+            } else {
+                const wasm_validation_control *target =
+                    &ctx->controls[*ctx->control_top -
+                                  (int)catch_->depth];
+                label_types = target->kind == 0x03 ?
+                    target->params : target->results;
+                label_count = target->kind == 0x03 ?
+                    target->param_count : target->result_count;
+            }
+
+            const exec_func_type *tag_type = NULL;
+            int catch_value_count = (catch_->kind & 1u) ? 1 : 0;
+            if (catch_->kind < 2) {
+                if (catch_->tag_index >= eng->tag_count)
+                    return WASM_VALIDATION_INVALID;
+                uint32_t tag_type_index =
+                    eng->tag_types[catch_->tag_index];
+                if (tag_type_index >= eng->type_count)
+                    return WASM_VALIDATION_INVALID;
+                tag_type = &eng->types[tag_type_index];
+                catch_value_count += tag_type->param_count;
+            }
+            if (catch_value_count != label_count)
+            {
+
+                if (getenv("WAST_DEBUG_VALIDATION"))
+                    fprintf(stderr, "try catch arity op=%x kind=%u depth=%u values=%d labels=%d\n",
+                            instr->opcode, catch_->kind, catch_->depth,
+                            catch_value_count, label_count);
+                return WASM_VALIDATION_INVALID;
+            }
+            for (int value = 0;
+                 tag_type && value < tag_type->param_count;
+                 value++)
+                if (!global_type_is_compat(
+                        eng, tag_type->params[value], eng,
+                        label_types[value], 0))
+                {
+
+                    if (getenv("WAST_DEBUG_VALIDATION"))
+                        fprintf(stderr, "try catch payload op=%x kind=%u value=%d actual=%u expected=%u\n",
+                                instr->opcode, catch_->kind, value,
+                                (unsigned)tag_type->params[value],
+                                (unsigned)label_types[value]);
+                    return WASM_VALIDATION_INVALID;
+                }
+            if ((catch_->kind & 1u) &&
+                !global_type_is_compat(
+                    eng, WASM_VALTYPE_EXNREF_NONNULL, eng,
+                    label_types[label_count - 1], 0))
+            {
+
+                if (getenv("WAST_DEBUG_VALIDATION"))
+                    fprintf(stderr, "try catch ref op=%x kind=%u actual=%u expected=%u\n",
+                            instr->opcode, catch_->kind,
+                            (unsigned)WASM_VALTYPE_EXNREF_NONNULL,
+                            (unsigned)label_types[label_count - 1]);
+                return WASM_VALIDATION_INVALID;
+            }
+        }
+    }
+    for (int i = param_count; i > 0; i--)
+        if (!validation_pop_type(
+                ctx->stack, ctx->top, control, params[i - 1]))
+            return WASM_VALIDATION_INVALID;
+    if (param_count > WAST_MAX_PARAMS)
+        return WASM_VALIDATION_UNSUPPORTED;
+    if (*ctx->control_top >= EXEC_MAX_CONTROL)
+        return WASM_VALIDATION_UNSUPPORTED;
+    wasm_validation_control *next = &ctx->controls[++*ctx->control_top];
+    memset(next, 0, sizeof(*next));
+    next->engine = eng;
+    next->height = *ctx->top;
+    next->kind = (uint8_t)instr->opcode;
+    next->param_count = param_count;
+    next->result_count = result_count;
+    memcpy(next->entry_initialized, ctx->initialized,
+           sizeof(next->entry_initialized));
+    if (param_count)
+        memcpy(next->params, params,
+               (size_t)param_count * sizeof(params[0]));
+    if (result_count)
+        memcpy(next->results, results,
+               (size_t)result_count * sizeof(results[0]));
+    for (int i = 0; i < param_count; i++)
+        if (!validation_push(ctx->stack, ctx->top, params[i]))
+            return WASM_VALIDATION_UNSUPPORTED;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_else(wasm_validate_context *ctx,
+                                        const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    (void)instr;
+    if (*ctx->control_top == 0 || control->kind != 0x04 ||
+        control->has_else)
+        return WASM_VALIDATION_INVALID;
+    control = &ctx->controls[*ctx->control_top];
+    for (int i = control->result_count; i > 0; i--)
+        if (!validation_pop_type(
+                ctx->stack, ctx->top, control,
+                control->results[i - 1]))
+            return WASM_VALIDATION_INVALID;
+    if (*ctx->top != control->height)
+        return WASM_VALIDATION_INVALID;
+    *ctx->top = control->height;
+    control->unreachable = 0;
+    control->has_else = 1;
+    memcpy(ctx->initialized, control->entry_initialized,
+           sizeof(control->entry_initialized));
+    for (int i = 0; i < control->param_count; i++)
+        if (!validation_push(ctx->stack, ctx->top,
+                                    control->params[i]))
+            return WASM_VALIDATION_UNSUPPORTED;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_end(wasm_validate_context *ctx,
+                                       const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const exec_func_type *signature = ctx->signature;
+    (void)instr;
+    if (*ctx->control_top > 0) {
+        if (control->kind == 0x04 && !control->has_else) {
+            if (control->param_count != control->result_count)
+                return WASM_VALIDATION_INVALID;
+            for (int i = 0; i < control->param_count; i++)
+                if (control->params[i] != control->results[i])
+                    return WASM_VALIDATION_INVALID;
+        }
+        for (int i = control->result_count; i > 0; i--)
+            if (!validation_pop_type(
+                    ctx->stack, ctx->top, control,
+                    control->results[i - 1]))
+                return WASM_VALIDATION_INVALID;
+        if (*ctx->top != control->height)
+            return WASM_VALIDATION_INVALID;
+        wasm_valtype end_types[WAST_MAX_RESULTS];
+        int end_count = control->result_count;
+        if (end_count)
+            memcpy(end_types, control->results,
+                   (size_t)end_count * sizeof(end_types[0]));
+        *ctx->top = control->height;
+        memcpy(ctx->initialized, control->entry_initialized,
+               sizeof(control->entry_initialized));
+        (*ctx->control_top)--;
+        for (int i = 0; i < end_count; i++)
+            if (!validation_push(ctx->stack, ctx->top,
+                                        end_types[i]))
+                return WASM_VALIDATION_UNSUPPORTED;
+        return WASM_VALIDATION_CONTINUE;
+    }
+    for (int i = signature->result_count; i > 0; i--)
+        if (!validation_pop_type(
+                ctx->stack, ctx->top, control,
+                signature->results[i - 1]))
+            return WASM_VALIDATION_INVALID;
+    /* Stack polymorphism supplies missing operands at the frame
+     * height; it does not discard concrete operands pushed after
+     * the path became unreachable.  After consuming the declared
+     * results the function stack must therefore always be empty. */
+    if (*ctx->top != 0)
+        return WASM_VALIDATION_INVALID;
+    return WASM_VALIDATION_VALID;
+}
+
+wasm_validation_status validate_op_throw(wasm_validate_context *ctx,
+                                         const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    if (instr->u32_imm >= eng->tag_count)
+        return WASM_VALIDATION_INVALID;
+    uint32_t type_index = eng->tag_types[instr->u32_imm];
+    if (type_index >= eng->type_count)
+        return WASM_VALIDATION_INVALID;
+    exec_func_type *tag_type = &eng->types[type_index];
+    for (int i = tag_type->param_count; i > 0; i--)
+        if (!validation_pop_type(
+                ctx->stack, ctx->top, control, tag_type->params[i - 1]))
+            return WASM_VALIDATION_INVALID;
+    *ctx->top = control->height;
+    control->unreachable = 1;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_throw_ref(wasm_validate_context *ctx,
+                                             const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    (void)instr;
+    if (!validation_pop_type(ctx->stack, ctx->top, control,
+                                    WASM_VALTYPE_EXNREF))
+        return WASM_VALIDATION_INVALID;
+    *ctx->top = control->height;
+    control->unreachable = 1;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_return(wasm_validate_context *ctx,
+                                          const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const exec_func_type *signature = ctx->signature;
+    (void)instr;
+    for (int i = signature->result_count; i > 0; i--)
+        if (!validation_pop_type(
+                ctx->stack, ctx->top, control,
+                signature->results[i - 1]))
+            return WASM_VALIDATION_INVALID;
+    *ctx->top = control->height;
+    control->unreachable = 1;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_br(wasm_validate_context *ctx,
+                                      const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const exec_func_type *signature = ctx->signature;
+    uint32_t depth = instr->u32_imm;
+    if (instr->opcode == 0x0d &&
+        !validation_pop_type(ctx->stack, ctx->top, control,
+                                    WASM_VALTYPE_I32))
+        return WASM_VALIDATION_INVALID;
+    if (depth > (uint32_t)*ctx->control_top)
+        return WASM_VALIDATION_INVALID;
+    const wasm_valtype *label_types;
+    int label_count;
+    if (depth == (uint32_t)*ctx->control_top) {
+        label_types = signature->results;
+        label_count = signature->result_count;
+    } else {
+        const wasm_validation_control *target =
+            &ctx->controls[*ctx->control_top - (int)depth];
+        if (target->kind == 0x03) {
+            label_types = target->params;
+            label_count = target->param_count;
+        } else {
+            label_types = target->results;
+            label_count = target->result_count;
+        }
+    }
+    for (int i = label_count; i > 0; i--)
+        if (!validation_pop_type(
+                ctx->stack, ctx->top, control, label_types[i - 1]))
+            return WASM_VALIDATION_INVALID;
+    if (instr->opcode == 0x0d) {
+        for (int i = 0; i < label_count; i++)
+            if (!validation_push(ctx->stack, ctx->top,
+                                        label_types[i]))
+                return WASM_VALIDATION_UNSUPPORTED;
+    } else {
+        *ctx->top = control->height;
+        control->unreachable = 1;
+    }
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_br_table(wasm_validate_context *ctx,
+                                            const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    const exec_func_type *signature = ctx->signature;
+    if (!validation_pop_type(ctx->stack, ctx->top, control,
+                                    WASM_VALTYPE_I32))
+        return WASM_VALIDATION_INVALID;
+    uint32_t *depths;
+    memcpy(&depths, instr->v128_imm.bytes, sizeof(depths));
+    int common_count = -1;
+    for (uint32_t i = 0; i <= instr->u32_imm; i++) {
+        uint32_t depth = depths[i];
+        int label_count;
+        if (depth > (uint32_t)*ctx->control_top)
+            return WASM_VALIDATION_INVALID;
+        if (depth == (uint32_t)*ctx->control_top) {
+            label_count = signature->result_count;
+        } else {
+            const wasm_validation_control *target =
+                &ctx->controls[*ctx->control_top - (int)depth];
+            if (target->kind == 0x03) {
+                label_count = target->param_count;
+            } else {
+                label_count = target->result_count;
+            }
+        }
+        if (common_count < 0) {
+            common_count = label_count;
+        } else if (common_count != label_count)
+            return WASM_VALIDATION_INVALID;
+    }
+    wasm_valtype operands[WAST_MAX_RESULTS];
+    for (int i = common_count; i > 0; i--)
+        if (!validation_pop(
+                ctx->stack, ctx->top, control, &operands[i - 1]))
+            return WASM_VALIDATION_INVALID;
+    for (uint32_t i = 0; i <= instr->u32_imm; i++) {
+        uint32_t depth = depths[i];
+        const wasm_valtype *label_types;
+        if (depth == (uint32_t)*ctx->control_top) {
+            label_types = signature->results;
+        } else {
+            const wasm_validation_control *target =
+                &ctx->controls[*ctx->control_top - (int)depth];
+            label_types = target->kind == 0x03 ?
+                          target->params : target->results;
+        }
+        for (int j = 0; j < common_count; j++)
+            if (operands[j] != WASM_BOTTOM_TYPE &&
+                !global_type_is_compat(
+                    eng, operands[j], eng, label_types[j], 0))
+                return WASM_VALIDATION_INVALID;
+    }
+    *ctx->top = control->height;
+    control->unreachable = 1;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_ref_as_non_null(wasm_validate_context *ctx,
+                                                   const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    wasm_valtype reference = WASM_BOTTOM_TYPE;
+    if (!validation_pop(ctx->stack, ctx->top, control, &reference) ||
+        (reference != WASM_BOTTOM_TYPE &&
+         !is_reference_type(reference))) {
+
+        if (getenv("WAST_DEBUG_VALIDATION"))
+            fprintf(stderr, "ref-branch pop/type op=%x ref=%u top=%d height=%d unreachable=%d\n",
+                    instr->opcode, (unsigned)reference, *ctx->top,
+                    control->height, control->unreachable);
+        return WASM_VALIDATION_INVALID;
+    }
+    if (!validation_push(
+            ctx->stack, ctx->top,
+            reference == WASM_BOTTOM_TYPE ? reference :
+            nonnullable_reference_type(reference)))
+        return WASM_VALIDATION_UNSUPPORTED;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_br_on_null(wasm_validate_context *ctx,
+                                              const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    const exec_func_type *signature = ctx->signature;
+    wasm_valtype reference = WASM_BOTTOM_TYPE;
+    if (!validation_pop(ctx->stack, ctx->top, control, &reference) ||
+        (reference != WASM_BOTTOM_TYPE &&
+         !is_reference_type(reference))) {
+
+        if (getenv("WAST_DEBUG_VALIDATION"))
+            fprintf(stderr, "ref-branch pop/type op=%x ref=%u top=%d height=%d unreachable=%d\n",
+                    instr->opcode, (unsigned)reference, *ctx->top,
+                    control->height, control->unreachable);
+        return WASM_VALIDATION_INVALID;
+    }
+    wasm_valtype refined = reference == WASM_BOTTOM_TYPE ?
+        reference : nonnullable_reference_type(reference);
+    uint32_t depth = instr->u32_imm;
+    if (depth > (uint32_t)*ctx->control_top) {
+
+        if (getenv("WAST_DEBUG_VALIDATION"))
+            fprintf(stderr, "ref-branch depth op=%x depth=%u control=%d\n",
+                    instr->opcode, depth, *ctx->control_top);
+        return WASM_VALIDATION_INVALID;
+    }
+    const wasm_valtype *label_types;
+    int label_count;
+    if (depth == (uint32_t)*ctx->control_top) {
+        label_types = signature->results;
+        label_count = signature->result_count;
+    } else {
+        const wasm_validation_control *target =
+            &ctx->controls[*ctx->control_top - (int)depth];
+        label_types = target->kind == 0x03 ? target->params :
+                                            target->results;
+        label_count = target->kind == 0x03 ? target->param_count :
+                                            target->result_count;
+    }
+    int carried_count = label_count;
+    if (instr->opcode == 0xd6) {
+        if (label_count < 1 ||
+            (refined != WASM_BOTTOM_TYPE &&
+             !global_type_is_compat(eng, refined, eng,
+                                    label_types[label_count - 1],
+                                    0))) {
+
+            if (getenv("WAST_DEBUG_VALIDATION"))
+                fprintf(stderr, "ref-branch result op=%x ref=%u refined=%u labels=%d last=%u\n",
+                        instr->opcode, (unsigned)reference, (unsigned)refined,
+                        label_count, label_count ?
+                        (unsigned)label_types[label_count - 1] : 0u);
+            return WASM_VALIDATION_INVALID;
+        }
+        carried_count--;
+    }
+    wasm_valtype carried[WAST_MAX_RESULTS];
+    for (int i = carried_count; i > 0; i--)
+        if (!validation_pop(ctx->stack, ctx->top, control,
+                                   &carried[i - 1]) ||
+            (carried[i - 1] != WASM_BOTTOM_TYPE &&
+             !global_type_is_compat(eng, carried[i - 1], eng,
+                                    label_types[i - 1], 0))) {
+
+            if (getenv("WAST_DEBUG_VALIDATION"))
+                fprintf(stderr, "ref-branch carried op=%x i=%d actual=%u expected=%u top=%d height=%d\n",
+                        instr->opcode, i, (unsigned)carried[i - 1],
+                        (unsigned)label_types[i - 1], *ctx->top,
+                        control->height);
+            return WASM_VALIDATION_INVALID;
+        }
+    for (int i = 0; i < carried_count; i++)
+        /* Pop then re-push at the label type.  Preserving a
+         * narrower operand type here is unsound: subsequent
+         * fall-through instructions only know the branch label's
+         * declared type (GC issue 516). */
+        if (!validation_push(ctx->stack, ctx->top, label_types[i]))
+            return WASM_VALIDATION_UNSUPPORTED;
+    if (instr->opcode == 0xd5 &&
+        !validation_push(ctx->stack, ctx->top, refined))
+        return WASM_VALIDATION_UNSUPPORTED;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_drop(wasm_validate_context *ctx,
+                                        const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    (void)instr;
+    wasm_valtype ignored;
+    if (!validation_pop(ctx->stack, ctx->top, control, &ignored))
+        return WASM_VALIDATION_INVALID;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_select(wasm_validate_context *ctx,
+                                          const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    wasm_valtype condition, second, first;
+    if (!validation_pop(ctx->stack, ctx->top, control, &condition) ||
+        !validation_pop(ctx->stack, ctx->top, control, &second) ||
+        !validation_pop(ctx->stack, ctx->top, control, &first) ||
+        (condition != WASM_BOTTOM_TYPE &&
+         condition != WASM_VALTYPE_I32))
+        return WASM_VALIDATION_INVALID;
+    wasm_valtype result = first == WASM_BOTTOM_TYPE ? second : first;
+    if (!instr->simd_op && second != WASM_BOTTOM_TYPE &&
+        first != WASM_BOTTOM_TYPE &&
+        first != second)
+        return WASM_VALIDATION_INVALID;
+    if (!instr->simd_op) {
+        if (result != WASM_BOTTOM_TYPE &&
+            is_reference_type(result))
+            return WASM_VALIDATION_INVALID;
+    } else {
+        wasm_valtype selected_type;
+        memcpy(&selected_type, instr->v128_imm.bytes,
+               sizeof(selected_type));
+        if ((first != WASM_BOTTOM_TYPE &&
+             !global_type_is_compat(eng, first, eng,
+                                    selected_type, 0)) ||
+            (second != WASM_BOTTOM_TYPE &&
+             !global_type_is_compat(eng, second, eng,
+                                    selected_type, 0)))
+            return WASM_VALIDATION_INVALID;
+        result = selected_type;
+    }
+    if (!validation_push(ctx->stack, ctx->top, result))
+        return WASM_VALIDATION_UNSUPPORTED;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_local_get(wasm_validate_context *ctx,
+                                             const exec_instr *instr) {
+    uint32_t index = instr->u32_imm;
+    wasm_valtype type;
+    if (!validation_local_type(ctx->signature, ctx->function, index, &type) ||
+        !validation_local_initialized(ctx->initialized, index))
+        return WASM_VALIDATION_INVALID;
+    if (!validation_push(ctx->stack, ctx->top, type))
+        return WASM_VALIDATION_UNSUPPORTED;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_local_set(wasm_validate_context *ctx,
+                                             const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    wasm_valtype type;
+    if (!validation_local_type(ctx->signature, ctx->function,
+                                      instr->u32_imm, &type) ||
+        !validation_pop_type(ctx->stack, ctx->top, control, type))
+        return WASM_VALIDATION_INVALID;
+    validation_initialize_local(ctx->initialized, instr->u32_imm);
+    if (instr->opcode == 0x22 &&
+        !validation_push(ctx->stack, ctx->top, type))
+        return WASM_VALIDATION_UNSUPPORTED;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_global_get(wasm_validate_context *ctx,
+                                              const exec_instr *instr) {
+    const waste_exec_engine *eng = ctx->engine;
+    if (instr->u32_imm >= eng->global_count)
+        return WASM_VALIDATION_INVALID;
+    if (!validation_push(
+            ctx->stack, ctx->top,
+            eng->globals[instr->u32_imm]->value.type))
+        return WASM_VALIDATION_UNSUPPORTED;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_global_set(wasm_validate_context *ctx,
+                                              const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    if (instr->u32_imm >= eng->global_count ||
+        !eng->globals[instr->u32_imm]->mutable_ ||
+        !validation_pop_type(
+            ctx->stack, ctx->top, control,
+            eng->globals[instr->u32_imm]->value.type))
+        return WASM_VALIDATION_INVALID;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_table_get(wasm_validate_context *ctx,
+                                             const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    if (instr->u32_imm >= eng->table_count ||
+        !validation_pop_type(ctx->stack, ctx->top, control,
+            eng->tables[instr->u32_imm]->is_64 ?
+                WASM_VALTYPE_I64 : WASM_VALTYPE_I32) ||
+        !validation_push(
+            ctx->stack, ctx->top,
+            eng->tables[instr->u32_imm]->element_type))
+        return WASM_VALIDATION_INVALID;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_table_set(wasm_validate_context *ctx,
+                                             const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    if (instr->u32_imm >= eng->table_count ||
+        !validation_pop_type(
+            ctx->stack, ctx->top, control,
+            eng->tables[instr->u32_imm]->element_type) ||
+        !validation_pop_type(ctx->stack, ctx->top, control,
+            eng->tables[instr->u32_imm]->is_64 ?
+                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+        return WASM_VALIDATION_INVALID;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_call(wasm_validate_context *ctx,
+                                        const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    const exec_func_type *signature = ctx->signature;
+    const exec_func_type *callee;
+    if (instr->u32_imm < eng->import_func_count)
+        callee = &eng->types[
+            eng->import_func_types[instr->u32_imm]];
+    else {
+        uint32_t index = instr->u32_imm - eng->import_func_count;
+        if (index >= eng->func_count)
+            return WASM_VALIDATION_INVALID;
+        callee = &eng->types[eng->funcs[index].type_index];
+    }
+    for (int i = callee->param_count; i > 0; i--)
+        if (!validation_pop_type(
+                ctx->stack, ctx->top, control, callee->params[i - 1]))
+            return WASM_VALIDATION_INVALID;
+    if (instr->opcode == 0x12) {
+        if (callee->result_count != signature->result_count)
+            return WASM_VALIDATION_INVALID;
+        for (int i = 0; i < callee->result_count; i++)
+            if (!global_type_is_compat(
+                    eng, callee->results[i], eng,
+                    signature->results[i], 0))
+                return WASM_VALIDATION_INVALID;
+        *ctx->top = control->height;
+        control->unreachable = 1;
+        control->tail_call_seen = 1;
+    } else {
+        for (int i = 0; i < callee->result_count; i++)
+            if (!validation_push(ctx->stack, ctx->top,
+                                        callee->results[i]))
+                return WASM_VALIDATION_UNSUPPORTED;
+    }
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_call_indirect(wasm_validate_context *ctx,
+                                                 const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    const exec_func_type *signature = ctx->signature;
+    if (instr->u32_imm >= eng->type_count ||
+        instr->simd_op >= eng->table_count ||
+        !is_function_reference_type(
+            eng->tables[instr->simd_op]->element_type) ||
+        !validation_pop_type(ctx->stack, ctx->top, control,
+            eng->tables[instr->simd_op]->is_64 ?
+                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+        return WASM_VALIDATION_INVALID;
+    const exec_func_type *callee = &eng->types[instr->u32_imm];
+    for (int i = callee->param_count; i > 0; i--)
+        if (!validation_pop_type(
+                ctx->stack, ctx->top, control, callee->params[i - 1]))
+            return WASM_VALIDATION_INVALID;
+    if (instr->opcode == 0x13) {
+        if (callee->result_count != signature->result_count)
+            return WASM_VALIDATION_INVALID;
+        for (int i = 0; i < callee->result_count; i++)
+            if (!global_type_is_compat(
+                    eng, callee->results[i], eng,
+                    signature->results[i], 0))
+                return WASM_VALIDATION_INVALID;
+        *ctx->top = control->height;
+        control->unreachable = 1;
+        control->tail_call_seen = 1;
+    } else {
+        for (int i = 0; i < callee->result_count; i++)
+            if (!validation_push(ctx->stack, ctx->top,
+                                        callee->results[i]))
+                return WASM_VALIDATION_UNSUPPORTED;
+    }
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_call_ref(wasm_validate_context *ctx,
+                                            const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    const exec_func_type *signature = ctx->signature;
+    if (instr->u32_imm >= eng->type_count)
+        return WASM_VALIDATION_INVALID;
+    const exec_func_type *callee = &eng->types[instr->u32_imm];
+    wasm_valtype reference;
+    if (!validation_pop(ctx->stack, ctx->top, control, &reference) ||
+        (reference != WASM_BOTTOM_TYPE &&
+         (!WASM_VALTYPE_IS_TYPE_REF(reference) ||
+          !func_type_is_subtype(
+              eng, WASM_VALTYPE_TYPE_REF_INDEX(reference),
+              eng, instr->u32_imm))))
+        return WASM_VALIDATION_INVALID;
+    for (int i = callee->param_count; i > 0; i--)
+        if (!validation_pop_type(
+                ctx->stack, ctx->top, control, callee->params[i - 1]))
+            return WASM_VALIDATION_INVALID;
+    if (instr->opcode == 0x15) {
+        if (callee->result_count != signature->result_count)
+            return WASM_VALIDATION_INVALID;
+        for (int i = 0; i < callee->result_count; i++)
+            if (!global_type_is_compat(
+                    eng, callee->results[i], eng,
+                    signature->results[i], 0))
+                return WASM_VALIDATION_INVALID;
+        *ctx->top = control->height;
+        control->unreachable = 1;
+        control->tail_call_seen = 1;
+    } else {
+        for (int i = 0; i < callee->result_count; i++)
+            if (!validation_push(ctx->stack, ctx->top,
+                                        callee->results[i]))
+                return WASM_VALIDATION_UNSUPPORTED;
+    }
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_ref_null(wasm_validate_context *ctx,
+                                            const exec_instr *instr) {
+    const waste_exec_engine *eng = ctx->engine;
+    int32_t heap_type = (int32_t)instr->u32_imm;
+    wasm_valtype type;
+    if (!nullable_reference_for_heap(eng, heap_type, &type))
+        return WASM_VALIDATION_INVALID;
+    if (!validation_push(ctx->stack, ctx->top, type))
+        return WASM_VALIDATION_UNSUPPORTED;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_ref_is_null(wasm_validate_context *ctx,
+                                               const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    (void)instr;
+    wasm_valtype value;
+    if (!validation_pop(ctx->stack, ctx->top, control, &value) ||
+        (value != WASM_BOTTOM_TYPE &&
+         !is_reference_type(value)) ||
+        !validation_push(ctx->stack, ctx->top,
+                                WASM_VALTYPE_I32))
+        return WASM_VALIDATION_INVALID;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_ref_func(wasm_validate_context *ctx,
+                                            const exec_instr *instr) {
+    const waste_exec_engine *eng = ctx->engine;
+    if (instr->u32_imm >=
+        eng->import_func_count + eng->func_count ||
+        !eng->declared_funcs[instr->u32_imm])
+        return WASM_VALIDATION_INVALID;
+    {
+        uint32_t function_type =
+            instr->u32_imm < eng->import_func_count ?
+            eng->import_func_types[instr->u32_imm] :
+            eng->funcs[instr->u32_imm -
+                       eng->import_func_count].type_index;
+        if (function_type >= 0x100u ||
+            !validation_push(
+                ctx->stack, ctx->top,
+                (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE +
+                               function_type)))
+            return WASM_VALIDATION_UNSUPPORTED;
+    }
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_ref_eq(wasm_validate_context *ctx,
+                                          const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    (void)instr;
+    wasm_valtype right, left;
+    if (!validation_pop(ctx->stack, ctx->top, control, &right) ||
+        !validation_pop(ctx->stack, ctx->top, control, &left) ||
+        (right != WASM_BOTTOM_TYPE && !is_eq_reference_type(eng,right)) ||
+        (left != WASM_BOTTOM_TYPE && !is_eq_reference_type(eng,left)) ||
+        !validation_push(ctx->stack, ctx->top, WASM_VALTYPE_I32))
+        return WASM_VALIDATION_INVALID;
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_simd(wasm_validate_context *ctx,
+                                        const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    uint32_t op = instr->simd_op;
+    wast_simd_info info;
+    if (!wast_simd_get_info(op, &info))
+        return WASM_VALIDATION_INVALID;
+    if ((info.immediate == WAST_SIMD_IMM_MEMARG ||
+         info.immediate == WAST_SIMD_IMM_MEMARG_LANE) &&
+        (instr->memory_index >= eng->memory_count ||
+         (!eng->memories[instr->memory_index]->is_64 &&
+          instr->u64_imm > UINT32_MAX) ||
+         instr->alignment > info.natural_alignment))
+        return WASM_VALIDATION_INVALID;
+    if (op == 0x0c) {
+        if (!validation_push(ctx->stack,ctx->top,WASM_VALTYPE_V128))
+            return WASM_VALIDATION_UNSUPPORTED;
+    } else if (op <= 0x0a || op == 0x5c || op == 0x5d) {
+        if (!validation_unary(ctx->stack,ctx->top,control,
+                eng->memories[instr->memory_index]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32,
+                WASM_VALTYPE_V128))
+            return WASM_VALIDATION_INVALID;
+    } else if (op == 0x0b) {
+        if (!validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_V128) ||
+            !validation_pop_type(ctx->stack,ctx->top,control,
+                eng->memories[instr->memory_index]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+            return WASM_VALIDATION_INVALID;
+    } else if (op >= 0x54 && op <= 0x57) {
+        if (!validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_V128) ||
+            !validation_pop_type(ctx->stack,ctx->top,control,
+                eng->memories[instr->memory_index]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32) ||
+            !validation_push(ctx->stack,ctx->top,WASM_VALTYPE_V128))
+            return WASM_VALIDATION_INVALID;
+    } else if (op >= 0x58 && op <= 0x5b) {
+        if (!validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_V128) ||
+            !validation_pop_type(ctx->stack,ctx->top,control,
+                eng->memories[instr->memory_index]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+            return WASM_VALIDATION_INVALID;
+    } else if (op >= 0x0f && op <= 0x14) {
+        wasm_valtype input = op <= 0x11 ? WASM_VALTYPE_I32 :
+            op == 0x12 ? WASM_VALTYPE_I64 :
+            op == 0x13 ? WASM_VALTYPE_F32 : WASM_VALTYPE_F64;
+        if (!validation_unary(ctx->stack,ctx->top,control,input,WASM_VALTYPE_V128))
+            return WASM_VALIDATION_INVALID;
+    } else if (op >= 0x15 && op <= 0x22) {
+        int replace = op==0x17||op==0x1a||op==0x1c||op==0x1e||op==0x20||op==0x22;
+        wasm_valtype scalar = op <= 0x1c ? WASM_VALTYPE_I32 :
+            op <= 0x1e ? WASM_VALTYPE_I64 :
+            op <= 0x20 ? WASM_VALTYPE_F32 : WASM_VALTYPE_F64;
+        if (replace) {
+            if (!validation_pop_type(ctx->stack,ctx->top,control,scalar) ||
+                !validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_V128) ||
+                !validation_push(ctx->stack,ctx->top,WASM_VALTYPE_V128))
+                return WASM_VALIDATION_INVALID;
+        } else if (!validation_unary(ctx->stack,ctx->top,control,
+                       WASM_VALTYPE_V128,scalar))
+            return WASM_VALIDATION_INVALID;
+    } else if (op==0x53||op==0x63||op==0x64||op==0x83||op==0x84||
+               op==0xa3||op==0xa4||op==0xc3||op==0xc4) {
+        if (!validation_unary(ctx->stack,ctx->top,control,
+                WASM_VALTYPE_V128,WASM_VALTYPE_I32))
+            return WASM_VALIDATION_INVALID;
+    } else if (op==0x6b||op==0x6c||op==0x6d||op==0x8b||op==0x8c||
+               op==0x8d||op==0xab||op==0xac||op==0xad||op==0xcb||
+               op==0xcc||op==0xcd) {
+        if (!validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_I32) ||
+            !validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_V128) ||
+            !validation_push(ctx->stack,ctx->top,WASM_VALTYPE_V128))
+            return WASM_VALIDATION_INVALID;
+    } else if (op==0x52||(op>=0x105&&op<=0x10c)||op==0x113) {
+        for (int operand=0;operand<3;operand++)
+            if (!validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_V128))
+                return WASM_VALIDATION_INVALID;
+        if (!validation_push(ctx->stack,ctx->top,WASM_VALTYPE_V128))
+            return WASM_VALIDATION_UNSUPPORTED;
+    } else {
+        int unary = op==0x4d||op==0x5e||op==0x5f||
+            (op>=0x60&&op<=0x62)||(op>=0x67&&op<=0x6a)||
+            op==0x74||op==0x75||op==0x7a||(op>=0x7c&&op<=0x81)||
+            (op>=0x87&&op<=0x8a)||op==0x94||op==0xa0||op==0xa1||
+            (op>=0xa7&&op<=0xaa)||op==0xc0||op==0xc1||
+            (op>=0xc7&&op<=0xca)||op==0xe0||op==0xe1||op==0xe3||
+            op==0xec||op==0xed||op==0xef||(op>=0xf8&&op<=0xff)||
+            (op>=0x101&&op<=0x104);
+        int valid = unary ?
+            validation_unary(ctx->stack,ctx->top,control,
+                WASM_VALTYPE_V128,WASM_VALTYPE_V128) :
+            validation_binary(ctx->stack,ctx->top,control,
+                WASM_VALTYPE_V128,WASM_VALTYPE_V128);
+        if (!valid) return WASM_VALIDATION_INVALID;
+    }
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_gc(wasm_validate_context *ctx,
+                                      const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    const exec_func_type *signature = ctx->signature;
+    uint32_t op = instr->simd_op;
+    uint32_t ti = instr->u32_imm;
+    const exec_func_type *gc_type = NULL;
+    if ((op <= 0x0e || (op >= 0x10 && op <= 0x13)) &&
+        (ti >= eng->type_count ||
+         ((gc_type = &eng->types[ti])->kind != WAST_TYPE_STRUCT &&
+          gc_type->kind != WAST_TYPE_ARRAY)))
+        return WASM_VALIDATION_INVALID;
+    if (op == 0x00 || op == 0x01) {
+        if (gc_type->kind != WAST_TYPE_STRUCT)
+            return WASM_VALIDATION_INVALID;
+        if (op == 0x00) {
+            for (int i=gc_type->field_count;i-- > 0;)
+                if (!validation_pop_type(ctx->stack,ctx->top,control,
+                        gc_type->field_packed[i] ? WASM_VALTYPE_I32 :
+                                                   gc_type->fields[i]))
+                    return WASM_VALIDATION_INVALID;
+        } else {
+            for (int i=0;i<gc_type->field_count;i++)
+                if (is_reference_type(gc_type->fields[i]) &&
+                    !is_nullable_reference_type(gc_type->fields[i]))
+                    return WASM_VALIDATION_INVALID;
+        }
+        if (!validation_push(ctx->stack,ctx->top,
+                (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE+ti)))
+            return WASM_VALIDATION_UNSUPPORTED;
+    } else if (op >= 0x02 && op <= 0x05) {
+        uint32_t field=instr->memory_index;
+        if (gc_type->kind!=WAST_TYPE_STRUCT ||
+            field >= (uint32_t)gc_type->field_count)
+            return WASM_VALIDATION_INVALID;
+        if ((op==0x03 || op==0x04) && !gc_type->field_packed[field])
+            return WASM_VALIDATION_INVALID;
+        if (op==0x02 && gc_type->field_packed[field])
+            return WASM_VALIDATION_INVALID;
+        if (op==0x05 &&
+            (!gc_type->field_mutable[field] ||
+             !validation_pop_type(ctx->stack,ctx->top,control,
+                gc_type->field_packed[field] ? WASM_VALTYPE_I32 :
+                                              gc_type->fields[field])))
+            return WASM_VALIDATION_INVALID;
+        if (!validation_pop_type(ctx->stack,ctx->top,control,
+                (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+ti)))
+            return WASM_VALIDATION_INVALID;
+        if (op!=0x05 && !validation_push(ctx->stack,ctx->top,
+                gc_type->field_packed[field] ? WASM_VALTYPE_I32 :
+                                              gc_type->fields[field]))
+            return WASM_VALIDATION_UNSUPPORTED;
+    } else if (op == 0x06 || op == 0x07 || op == 0x08) {
+        if (gc_type->kind!=WAST_TYPE_ARRAY)
+            return WASM_VALIDATION_INVALID;
+        if (op==0x08) {
+            for(uint32_t i=0;i<instr->lane_index;i++)
+                if(!validation_pop_type(ctx->stack,ctx->top,control,
+                    gc_type->field_packed[0]?WASM_VALTYPE_I32:
+                                             gc_type->fields[0]))
+                    return WASM_VALIDATION_INVALID;
+        } else {
+            if(!validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_I32))
+                return WASM_VALIDATION_INVALID;
+            if(op==0x06 && !validation_pop_type(ctx->stack,ctx->top,control,
+                gc_type->field_packed[0]?WASM_VALTYPE_I32:gc_type->fields[0]))
+                return WASM_VALIDATION_INVALID;
+            if(op==0x07 && is_reference_type(gc_type->fields[0]) &&
+               !is_nullable_reference_type(gc_type->fields[0]))
+                return WASM_VALIDATION_INVALID;
+        }
+        if(!validation_push(ctx->stack,ctx->top,
+            (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE+ti)))
+            return WASM_VALIDATION_UNSUPPORTED;
+    } else if (op == 0x09 || op == 0x0a) {
+        if(gc_type->kind!=WAST_TYPE_ARRAY ||
+           !validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_I32) ||
+           !validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_I32))
+            return WASM_VALIDATION_INVALID;
+        if(op==0x09) {
+            if(is_reference_type(gc_type->fields[0]) ||
+               instr->memory_index>=eng->declared_data_count)
+                return WASM_VALIDATION_INVALID;
+        } else if(instr->memory_index>=eng->elem_count ||
+            !global_type_is_compat(eng,eng->elem_types[instr->memory_index],
+                                  eng,gc_type->fields[0],0))
+            return WASM_VALIDATION_INVALID;
+        if(!validation_push(ctx->stack,ctx->top,
+            (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE+ti)))
+            return WASM_VALIDATION_UNSUPPORTED;
+    } else if (op>=0x0b && op<=0x0e) {
+        if(gc_type->kind!=WAST_TYPE_ARRAY ||
+           (op==0x0b && gc_type->field_packed[0]) ||
+           ((op==0x0c || op==0x0d) && !gc_type->field_packed[0]))
+            return WASM_VALIDATION_INVALID;
+        if(op==0x0e && (!gc_type->field_mutable[0] ||
+           !validation_pop_type(ctx->stack,ctx->top,control,
+              gc_type->field_packed[0]?WASM_VALTYPE_I32:gc_type->fields[0])))
+            return WASM_VALIDATION_INVALID;
+        if(!validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_I32) ||
+           !validation_pop_type(ctx->stack,ctx->top,control,
+              (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+ti)))
+            return WASM_VALIDATION_INVALID;
+        if(op!=0x0e && !validation_push(ctx->stack,ctx->top,
+            gc_type->field_packed[0]?WASM_VALTYPE_I32:gc_type->fields[0]))
+            return WASM_VALIDATION_UNSUPPORTED;
+    } else if(op==0x0f) {
+        wasm_valtype ref;
+        if(!validation_pop(ctx->stack,ctx->top,control,&ref) ||
+           (ref!=WASM_BOTTOM_TYPE &&
+            !global_type_is_compat(eng,ref,eng,WASM_VALTYPE_ARRAYREF,0)) ||
+           !validation_push(ctx->stack,ctx->top,WASM_VALTYPE_I32))
+            return WASM_VALIDATION_INVALID;
+    } else if(op==0x10) {
+        if(gc_type->kind!=WAST_TYPE_ARRAY || !gc_type->field_mutable[0] ||
+           !validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_I32) ||
+           !validation_pop_type(ctx->stack,ctx->top,control,
+              gc_type->field_packed[0]?WASM_VALTYPE_I32:gc_type->fields[0]) ||
+           !validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_I32) ||
+           !validation_pop_type(ctx->stack,ctx->top,control,
+              (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+ti)))
+            return WASM_VALIDATION_INVALID;
+    } else if(op==0x11 || op==0x12) {
+        if(gc_type->kind!=WAST_TYPE_ARRAY || !gc_type->field_mutable[0] ||
+           !validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_I32) ||
+           !validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_I32) ||
+           !validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_I32) ||
+           !validation_pop_type(ctx->stack,ctx->top,control,
+              (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+ti)))
+            return WASM_VALIDATION_INVALID;
+        if(op==0x11 && (is_reference_type(gc_type->fields[0]) ||
+           instr->memory_index>=eng->declared_data_count))
+            return WASM_VALIDATION_INVALID;
+        if(op==0x12 && (instr->memory_index>=eng->elem_count ||
+           !global_type_is_compat(eng,eng->elem_types[instr->memory_index],
+                                 eng,gc_type->fields[0],0)))
+            return WASM_VALIDATION_INVALID;
+    } else if(op==0x13) {
+        uint32_t sti=instr->memory_index;
+        if(gc_type->kind!=WAST_TYPE_ARRAY || !gc_type->field_mutable[0] ||
+           sti>=eng->type_count || eng->types[sti].kind!=WAST_TYPE_ARRAY ||
+           gc_type->field_packed[0] != eng->types[sti].field_packed[0] ||
+           !global_type_is_compat(eng,eng->types[sti].fields[0],eng,
+                                 gc_type->fields[0],0) ||
+           !validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_I32) ||
+           !validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_I32) ||
+           !validation_pop_type(ctx->stack,ctx->top,control,
+               (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+sti)) ||
+           !validation_pop_type(ctx->stack,ctx->top,control,WASM_VALTYPE_I32) ||
+           !validation_pop_type(ctx->stack,ctx->top,control,
+               (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+ti)))
+            return WASM_VALIDATION_INVALID;
+    } else if(op>=0x14 && op<=0x17) {
+        wasm_valtype ref,target;
+        if(!validation_pop(ctx->stack,ctx->top,control,&ref) ||
+           (ref!=WASM_BOTTOM_TYPE && !is_reference_type(ref)) ||
+           !nullable_reference_for_heap(eng,instr->block_type_index,&target))
+            return WASM_VALIDATION_INVALID;
+        if(op>=0x16) {
+            if(op==0x16) target=nonnullable_reference_type(target);
+            if(!validation_push(ctx->stack,ctx->top,target))
+                return WASM_VALIDATION_UNSUPPORTED;
+        } else if(!validation_push(ctx->stack,ctx->top,WASM_VALTYPE_I32))
+            return WASM_VALIDATION_UNSUPPORTED;
+    } else if(op==0x18 || op==0x19) {
+        wasm_valtype source,target,operand;
+        if(!nullable_reference_for_heap(eng,instr->block_type_index,&source) ||
+           !nullable_reference_for_heap(eng,(int32_t)instr->lane_index,&target))
+            return WASM_VALIDATION_INVALID;
+        if(!(instr->alignment&1u)) source=nonnullable_reference_type(source);
+        if(!(instr->alignment&2u)) target=nonnullable_reference_type(target);
+        if(!global_type_is_compat(eng,target,eng,source,0) ||
+           !validation_pop(ctx->stack,ctx->top,control,&operand) ||
+           (operand!=WASM_BOTTOM_TYPE &&
+            !global_type_is_compat(eng,operand,eng,source,0)))
+            return WASM_VALIDATION_INVALID;
+        uint32_t depth=instr->u32_imm;
+        if(depth>(uint32_t)*ctx->control_top) return WASM_VALIDATION_INVALID;
+        const wasm_valtype *label_types;
+        int label_count;
+        if(depth==(uint32_t)*ctx->control_top){label_types=signature->results;label_count=signature->result_count;}
+        else {
+            const wasm_validation_control *target_control=&ctx->controls[*ctx->control_top-(int)depth];
+            label_types=target_control->kind==0x03?target_control->params:target_control->results;
+            label_count=target_control->kind==0x03?target_control->param_count:target_control->result_count;
+        }
+        wasm_valtype diff_type=source;
+        if((instr->alignment&3u)==3u)
+            diff_type=nonnullable_reference_type(source);
+        wasm_valtype carried=op==0x18?target:diff_type;
+        if(label_count<1 || !global_type_is_compat(eng,carried,eng,
+                                                   label_types[label_count-1],0))
+            return WASM_VALIDATION_INVALID;
+        /* The fall-through stack prefix is typed through the
+         * branch label.  Replace the original (possibly more
+         * precise) operands with the label's declared types,
+         * matching the reference validator's pop/push rule. */
+        for(int i=label_count-1;i>0;i--)
+            if(!validation_pop_type(ctx->stack,ctx->top,control,
+                                           label_types[i-1]))
+                return WASM_VALIDATION_INVALID;
+        for(int i=0;i<label_count-1;i++)
+            if(!validation_push(ctx->stack,ctx->top,label_types[i]))
+                return WASM_VALIDATION_UNSUPPORTED;
+        wasm_valtype fallthrough=op==0x18?diff_type:target;
+        if(!validation_push(ctx->stack,ctx->top,fallthrough))
+            return WASM_VALIDATION_UNSUPPORTED;
+    } else if(op==0x1a) {
+        if(!validation_unary(ctx->stack,ctx->top,control,WASM_VALTYPE_EXTERNREF,
+                                    WASM_VALTYPE_ANYREF))
+            return WASM_VALIDATION_INVALID;
+    } else if(op==0x1b) {
+        if(!validation_unary(ctx->stack,ctx->top,control,WASM_VALTYPE_ANYREF,
+                                    WASM_VALTYPE_EXTERNREF))
+            return WASM_VALIDATION_INVALID;
+    } else if(op==0x1c) {
+        if(!validation_unary(ctx->stack,ctx->top,control,WASM_VALTYPE_I32,
+                                    WASM_VALTYPE_I31REF_NONNULL))
+            return WASM_VALIDATION_INVALID;
+    } else if(op==0x1d || op==0x1e) {
+        if(!validation_unary(ctx->stack,ctx->top,control,WASM_VALTYPE_I31REF,
+                                    WASM_VALTYPE_I32))
+            return WASM_VALIDATION_INVALID;
+    } else {
+        return WASM_VALIDATION_UNSUPPORTED;
+    }
+    return WASM_VALIDATION_CONTINUE;
+}
+
+wasm_validation_status validate_op_fc(wasm_validate_context *ctx,
+                                      const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    uint32_t sub = instr->simd_op;
+    if (sub <= 7) {
+        const wasm_opcode_info *fc_info =
+            wasm_opcode_fc_get_info(sub);
+        if (!validation_unary(
+                ctx->stack, ctx->top, control,
+                (wasm_valtype)fc_info->operand_type,
+                (wasm_valtype)fc_info->result_type))
+            return WASM_VALIDATION_INVALID;
+    } else if (sub == 10) { /* memory.copy: [i32 i32 i32] -> [] */
+        uint32_t src_mem = instr->source_memory_index;
+        if (instr->memory_index >= eng->memory_count ||
+            src_mem >= eng->memory_count)
+            return WASM_VALIDATION_INVALID;
+        wasm_valtype dst_type = eng->memories[instr->memory_index]->is_64 ?
+            WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
+        wasm_valtype src_type = eng->memories[src_mem]->is_64 ?
+            WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
+        wasm_valtype len_type = dst_type == WASM_VALTYPE_I64 &&
+            src_type == WASM_VALTYPE_I64 ? WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
+        if (!validation_pop_type(ctx->stack, ctx->top, control, len_type) ||
+            !validation_pop_type(ctx->stack, ctx->top, control, src_type) ||
+            !validation_pop_type(ctx->stack, ctx->top, control, dst_type))
+            return WASM_VALIDATION_INVALID;
+    } else if (sub == 11) { /* memory.fill: [i32 i32 i32] -> [] */
+        if (instr->memory_index >= eng->memory_count ||
+            !validation_pop_type(ctx->stack, ctx->top, control,
+                eng->memories[instr->memory_index]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32) ||
+            !validation_pop_type(ctx->stack, ctx->top, control, WASM_VALTYPE_I32) ||
+            !validation_pop_type(ctx->stack, ctx->top, control,
+                eng->memories[instr->memory_index]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+            return WASM_VALIDATION_INVALID;
+    } else if (sub == 8) { /* memory.init: [i32 i32 i32] -> [] */
+        if (instr->memory_index >= eng->memory_count ||
+            !eng->has_data_count ||
+            instr->u32_imm >= eng->declared_data_count ||
+            !validation_pop_type(ctx->stack, ctx->top, control, WASM_VALTYPE_I32) ||
+            !validation_pop_type(ctx->stack, ctx->top, control, WASM_VALTYPE_I32) ||
+            !validation_pop_type(ctx->stack, ctx->top, control,
+                eng->memories[instr->memory_index]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+            return WASM_VALIDATION_INVALID;
+    } else if (sub == 9) { /* data.drop: [] -> [] */
+        if (!eng->has_data_count ||
+            instr->u32_imm >= eng->declared_data_count)
+            return WASM_VALIDATION_INVALID;
+    } else if (sub == 12) { /* table.init: [i32 i32 i32] -> [] */
+        uint32_t table_index = instr->v128_imm.bytes[0];
+        if (instr->u32_imm >= eng->elem_count ||
+            table_index >= eng->table_count ||
+            !global_type_is_compat(
+                eng, eng->elem_types[instr->u32_imm],
+                eng->tables[table_index]->type_owner,
+                eng->tables[table_index]->element_type, 0) ||
+            !validation_pop_type(ctx->stack, ctx->top, control, WASM_VALTYPE_I32) ||
+            !validation_pop_type(ctx->stack, ctx->top, control, WASM_VALTYPE_I32) ||
+            !validation_pop_type(ctx->stack, ctx->top, control,
+                eng->tables[table_index]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+            return WASM_VALIDATION_INVALID;
+    } else if (sub == 13) { /* elem.drop: [] -> [] */
+        if (instr->u32_imm >= eng->elem_count)
+            return WASM_VALIDATION_INVALID;
+    } else if (sub == 14) { /* table.copy: [i32 i32 i32] -> [] */
+        uint32_t dst_table = instr->u32_imm;
+        uint32_t src_table = instr->v128_imm.bytes[0];
+        if (dst_table >= eng->table_count || src_table >= eng->table_count ||
+            !global_type_is_compat(
+                eng->tables[src_table]->type_owner,
+                eng->tables[src_table]->element_type,
+                eng->tables[dst_table]->type_owner,
+                eng->tables[dst_table]->element_type, 0))
+            return WASM_VALIDATION_INVALID;
+        wasm_valtype dst_type = eng->tables[dst_table]->is_64 ?
+            WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
+        wasm_valtype src_type = eng->tables[src_table]->is_64 ?
+            WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
+        wasm_valtype len_type = dst_type == WASM_VALTYPE_I64 &&
+            src_type == WASM_VALTYPE_I64 ? WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
+        if (!validation_pop_type(ctx->stack, ctx->top, control, len_type) ||
+            !validation_pop_type(ctx->stack, ctx->top, control, src_type) ||
+            !validation_pop_type(ctx->stack, ctx->top, control, dst_type))
+            return WASM_VALIDATION_INVALID;
+    } else if (sub == 15) { /* table.grow: [ref i32] -> [i32] */
+        if (instr->u32_imm >= eng->table_count ||
+            !validation_pop_type(ctx->stack, ctx->top, control,
+                eng->tables[instr->u32_imm]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32) ||
+            !validation_pop_type(
+                ctx->stack, ctx->top, control,
+                eng->tables[instr->u32_imm]->element_type) ||
+            !validation_push(ctx->stack, ctx->top,
+                eng->tables[instr->u32_imm]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+            return WASM_VALIDATION_INVALID;
+    } else if (sub == 16) { /* table.size: [] -> [i32] */
+        if (instr->u32_imm >= eng->table_count ||
+            !validation_push(ctx->stack, ctx->top,
+                eng->tables[instr->u32_imm]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+            return WASM_VALIDATION_UNSUPPORTED;
+    } else if (sub == 17) { /* table.fill: [i32 ref i32] -> [] */
+        wasm_valtype ref;
+        if (instr->u32_imm >= eng->table_count ||
+            !validation_pop_type(ctx->stack, ctx->top, control,
+                eng->tables[instr->u32_imm]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32) ||
+            !validation_pop(ctx->stack, ctx->top, control, &ref) ||
+            !validation_pop_type(ctx->stack, ctx->top, control,
+                eng->tables[instr->u32_imm]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+            return WASM_VALIDATION_INVALID;
+        if (ref != WASM_BOTTOM_TYPE &&
+            !global_type_is_compat(
+                eng, ref,
+                eng->tables[instr->u32_imm]->type_owner,
+                eng->tables[instr->u32_imm]->element_type, 0))
+            return WASM_VALIDATION_INVALID;
+    } else {
+        return WASM_VALIDATION_UNSUPPORTED;
+    }
+    return WASM_VALIDATION_CONTINUE;
+}
+
+/* Table-driven validation for const, numeric, memory, and
+ * conversion opcodes.  The wasm_opcode_table maps each opcode
+ * to its class and type signature so that new instructions
+ * only need a table entry rather than a new case arm. */
+wasm_validation_status validate_op_table_driven(wasm_validate_context *ctx,
+                                                const exec_instr *instr) {
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    const waste_exec_engine *eng = ctx->engine;
+    const wasm_opcode_info *op_info =
+        wasm_opcode_get_info(instr->opcode);
+    if (op_info &&
+        op_info->op_class == WASM_OP_CLASS_CONST) {
+        if (!validation_push(ctx->stack, ctx->top,
+                             (wasm_valtype)op_info->result_type))
+            return WASM_VALIDATION_UNSUPPORTED;
+        return WASM_VALIDATION_CONTINUE;
+    }
+    if (op_info &&
+        op_info->op_class == WASM_OP_CLASS_UNARY) {
+        if (!validation_unary(
+                ctx->stack, ctx->top, control,
+                (wasm_valtype)op_info->operand_type,
+                (wasm_valtype)op_info->result_type))
+            return WASM_VALIDATION_INVALID;
+        return WASM_VALIDATION_CONTINUE;
+    }
+    if (op_info &&
+        op_info->op_class == WASM_OP_CLASS_BINARY) {
+        if (!validation_binary(
+                ctx->stack, ctx->top, control,
+                (wasm_valtype)op_info->operand_type,
+                (wasm_valtype)op_info->result_type))
+            return WASM_VALIDATION_INVALID;
+        return WASM_VALIDATION_CONTINUE;
+    }
+    if (op_info &&
+        op_info->op_class == WASM_OP_CLASS_LOAD) {
+        if (instr->memory_index >= eng->memory_count ||
+            (!eng->memories[instr->memory_index]->is_64 &&
+             instr->u64_imm > UINT32_MAX) ||
+            instr->simd_op > op_info->natural_align ||
+            !validation_unary(
+                ctx->stack, ctx->top, control,
+                eng->memories[instr->memory_index]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32,
+                (wasm_valtype)op_info->result_type))
+            return WASM_VALIDATION_INVALID;
+        return WASM_VALIDATION_CONTINUE;
+    }
+    if (op_info &&
+        op_info->op_class == WASM_OP_CLASS_STORE) {
+        if (instr->memory_index >= eng->memory_count ||
+            (!eng->memories[instr->memory_index]->is_64 &&
+             instr->u64_imm > UINT32_MAX) ||
+            instr->simd_op > op_info->natural_align ||
+            !validation_pop_type(
+                ctx->stack, ctx->top, control,
+                (wasm_valtype)op_info->operand_type) ||
+            !validation_pop_type(
+                ctx->stack, ctx->top, control,
+                eng->memories[instr->memory_index]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+            return WASM_VALIDATION_INVALID;
+        return WASM_VALIDATION_CONTINUE;
+    }
+    if (op_info &&
+        op_info->op_class == WASM_OP_CLASS_MEMORY_SIZE) {
+        if (instr->memory_index >= eng->memory_count ||
+            !validation_push(
+                ctx->stack, ctx->top,
+                eng->memories[instr->memory_index]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+            return WASM_VALIDATION_INVALID;
+        return WASM_VALIDATION_CONTINUE;
+    }
+    if (op_info &&
+        op_info->op_class == WASM_OP_CLASS_MEMORY_GROW) {
+        if (instr->memory_index >= eng->memory_count ||
+            !validation_unary(
+                ctx->stack, ctx->top, control,
+                eng->memories[instr->memory_index]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32,
+                eng->memories[instr->memory_index]->is_64 ?
+                    WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
+            return WASM_VALIDATION_INVALID;
+        return WASM_VALIDATION_CONTINUE;
+    }
+    return WASM_VALIDATION_UNSUPPORTED;
+}
+
 /* Incremental core validator.  It is deliberately conservative: a function
  * containing an instruction or control signature outside the covered slice
  * is INCONCLUSIVE, while any error in a modeled instruction is INVALID.  This
@@ -572,1442 +1895,33 @@ static wasm_validation_status validate_function_body(
     }
     controls[0].engine = eng;
 
+    wasm_validate_context vctx;
+    vctx.engine = eng;
+    vctx.signature = signature;
+    vctx.function = func;
+    vctx.stack = stack;
+    vctx.top = &top;
+    vctx.controls = controls;
+    vctx.control_top = &control_top;
+    vctx.initialized = initialized;
+
     for (uint32_t pc = 0; pc < code_size; pc++) {
         const exec_instr *instr = &code[pc];
         *failure_instruction = pc;
-        wasm_validation_control *control = &controls[control_top];
 
         if (getenv("WAST_DEBUG_VALIDATE_TRACE"))
             fprintf(stderr, "validate pc=%u op=%02x top=%d control=%d height=%d unreachable=%d\n",
-                    pc, instr->opcode, top, control_top, control->height,
-                    control->unreachable);
-        switch (instr->opcode) {
-            case 0x00:
-                top = control->height;
-                control->unreachable = 1;
-                break;
-            case 0x01:
-                break;
-            case 0x02:
-            case 0x03:
-            case 0x04:
-            case 0x1f: {
-                const wasm_valtype *params = NULL;
-                const wasm_valtype *results = NULL;
-                int param_count = 0;
-                int result_count = 0;
-                wasm_valtype direct_result;
-                if (instr->block_type_index >= 0) {
-                    if ((uint32_t)instr->block_type_index >= eng->type_count)
-                        return WASM_VALIDATION_INVALID;
-                    const exec_func_type *block_type =
-                        &eng->types[instr->block_type_index];
-                    params = block_type->params;
-                    param_count = block_type->param_count;
-                    results = block_type->results;
-                    result_count = block_type->result_count;
-                } else if (instr->has_block_result_type) {
-                    direct_result = instr->block_result_type;
-                    results = &direct_result;
-                    result_count = 1;
-                }
-                if (instr->opcode == 0x04 &&
-                    !validation_pop_type(stack, &top, control,
-                                                WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                if (instr->opcode == 0x1f) {
-                    for (uint32_t i = 0; i < instr->catch_count; i++) {
-                        const exec_catch *catch_ = &instr->catches[i];
-                        if (catch_->depth > (uint32_t)control_top)
-                            return WASM_VALIDATION_INVALID;
+                    pc, instr->opcode, top, control_top,
+                    controls[control_top].height,
+                    controls[control_top].unreachable);
 
-                        const wasm_valtype *label_types;
-                        int label_count;
-                        if (catch_->depth == (uint32_t)control_top) {
-                            label_types = signature->results;
-                            label_count = signature->result_count;
-                        } else {
-                            const wasm_validation_control *target =
-                                &controls[control_top -
-                                          (int)catch_->depth];
-                            label_types = target->kind == 0x03 ?
-                                target->params : target->results;
-                            label_count = target->kind == 0x03 ?
-                                target->param_count : target->result_count;
-                        }
+        const wasm_opcode_dispatch *dispatch = wasm_opcode_get_dispatch(instr);
+        if (!dispatch || !dispatch->validate)
+            return WASM_VALIDATION_UNSUPPORTED;
 
-                        const exec_func_type *tag_type = NULL;
-                        int catch_value_count = (catch_->kind & 1u) ? 1 : 0;
-                        if (catch_->kind < 2) {
-                            if (catch_->tag_index >= eng->tag_count)
-                                return WASM_VALIDATION_INVALID;
-                            uint32_t tag_type_index =
-                                eng->tag_types[catch_->tag_index];
-                            if (tag_type_index >= eng->type_count)
-                                return WASM_VALIDATION_INVALID;
-                            tag_type = &eng->types[tag_type_index];
-                            catch_value_count += tag_type->param_count;
-                        }
-                        if (catch_value_count != label_count)
-                        {
-
-                            if (getenv("WAST_DEBUG_VALIDATION"))
-                                fprintf(stderr, "try catch arity pc=%u kind=%u depth=%u values=%d labels=%d\n",
-                                        pc, catch_->kind, catch_->depth,
-                                        catch_value_count, label_count);
-                            return WASM_VALIDATION_INVALID;
-                        }
-                        for (int value = 0;
-                             tag_type && value < tag_type->param_count;
-                             value++)
-                            if (!global_type_is_compat(
-                                    eng, tag_type->params[value], eng,
-                                    label_types[value], 0))
-                            {
-
-                                if (getenv("WAST_DEBUG_VALIDATION"))
-                                    fprintf(stderr, "try catch payload pc=%u kind=%u value=%d actual=%u expected=%u\n",
-                                            pc, catch_->kind, value,
-                                            (unsigned)tag_type->params[value],
-                                            (unsigned)label_types[value]);
-                                return WASM_VALIDATION_INVALID;
-                            }
-                        if ((catch_->kind & 1u) &&
-                            !global_type_is_compat(
-                                eng, WASM_VALTYPE_EXNREF_NONNULL, eng,
-                                label_types[label_count - 1], 0))
-                        {
-
-                            if (getenv("WAST_DEBUG_VALIDATION"))
-                                fprintf(stderr, "try catch ref pc=%u kind=%u actual=%u expected=%u\n",
-                                        pc, catch_->kind,
-                                        (unsigned)WASM_VALTYPE_EXNREF_NONNULL,
-                                        (unsigned)label_types[label_count - 1]);
-                            return WASM_VALIDATION_INVALID;
-                        }
-                    }
-                }
-                for (int i = param_count; i > 0; i--)
-                    if (!validation_pop_type(
-                            stack, &top, control, params[i - 1]))
-                        return WASM_VALIDATION_INVALID;
-                if (param_count > WAST_MAX_PARAMS)
-                    return WASM_VALIDATION_UNSUPPORTED;
-                if (control_top >= EXEC_MAX_CONTROL)
-                    return WASM_VALIDATION_UNSUPPORTED;
-                wasm_validation_control *next = &controls[++control_top];
-                memset(next, 0, sizeof(*next));
-                next->engine = eng;
-                next->height = top;
-                next->kind = (uint8_t)instr->opcode;
-                next->param_count = param_count;
-                next->result_count = result_count;
-                memcpy(next->entry_initialized, initialized,
-                       sizeof(next->entry_initialized));
-                if (param_count)
-                    memcpy(next->params, params,
-                           (size_t)param_count * sizeof(params[0]));
-                if (result_count)
-                    memcpy(next->results, results,
-                           (size_t)result_count * sizeof(results[0]));
-                for (int i = 0; i < param_count; i++)
-                    if (!validation_push(stack, &top, params[i]))
-                        return WASM_VALIDATION_UNSUPPORTED;
-                break;
-            }
-            case 0x08: {
-                if (instr->u32_imm >= eng->tag_count)
-                    return WASM_VALIDATION_INVALID;
-                uint32_t type_index = eng->tag_types[instr->u32_imm];
-                if (type_index >= eng->type_count)
-                    return WASM_VALIDATION_INVALID;
-                exec_func_type *tag_type = &eng->types[type_index];
-                for (int i = tag_type->param_count; i > 0; i--)
-                    if (!validation_pop_type(
-                            stack, &top, control, tag_type->params[i - 1]))
-                        return WASM_VALIDATION_INVALID;
-                top = control->height;
-                control->unreachable = 1;
-                break;
-            }
-            case 0x0a:
-                if (!validation_pop_type(stack, &top, control,
-                                                WASM_VALTYPE_EXNREF))
-                    return WASM_VALIDATION_INVALID;
-                top = control->height;
-                control->unreachable = 1;
-                break;
-            case 0x05:
-                if (control_top == 0 || control->kind != 0x04 ||
-                    control->has_else)
-                    return WASM_VALIDATION_INVALID;
-                control = &controls[control_top];
-                for (int i = control->result_count; i > 0; i--)
-                    if (!validation_pop_type(
-                            stack, &top, control,
-                            control->results[i - 1]))
-                        return WASM_VALIDATION_INVALID;
-                if (top != control->height)
-                    return WASM_VALIDATION_INVALID;
-                top = control->height;
-                control->unreachable = 0;
-                control->has_else = 1;
-                memcpy(initialized, control->entry_initialized,
-                       sizeof(initialized));
-                for (int i = 0; i < control->param_count; i++)
-                    if (!validation_push(stack, &top,
-                                                control->params[i]))
-                        return WASM_VALIDATION_UNSUPPORTED;
-                break;
-            case 0x0b:
-                if (control_top > 0) {
-                    if (control->kind == 0x04 && !control->has_else) {
-                        if (control->param_count != control->result_count)
-                            return WASM_VALIDATION_INVALID;
-                        for (int i = 0; i < control->param_count; i++)
-                            if (control->params[i] != control->results[i])
-                                return WASM_VALIDATION_INVALID;
-                    }
-                    for (int i = control->result_count; i > 0; i--)
-                        if (!validation_pop_type(
-                                stack, &top, control,
-                                control->results[i - 1]))
-                            return WASM_VALIDATION_INVALID;
-                    if (top != control->height)
-                        return WASM_VALIDATION_INVALID;
-                    wasm_valtype end_types[WAST_MAX_RESULTS];
-                    int end_count = control->result_count;
-                    if (end_count)
-                        memcpy(end_types, control->results,
-                               (size_t)end_count * sizeof(end_types[0]));
-                    top = control->height;
-                    memcpy(initialized, control->entry_initialized,
-                           sizeof(initialized));
-                    control_top--;
-                    for (int i = 0; i < end_count; i++)
-                        if (!validation_push(stack, &top,
-                                                    end_types[i]))
-                            return WASM_VALIDATION_UNSUPPORTED;
-                    break;
-                }
-                for (int i = signature->result_count; i > 0; i--)
-                    if (!validation_pop_type(
-                            stack, &top, control,
-                            signature->results[i - 1]))
-                        return WASM_VALIDATION_INVALID;
-                /* Stack polymorphism supplies missing operands at the frame
-                 * height; it does not discard concrete operands pushed after
-                 * the path became unreachable.  After consuming the declared
-                 * results the function stack must therefore always be empty. */
-                if (top != 0)
-                    return WASM_VALIDATION_INVALID;
-                return WASM_VALIDATION_VALID;
-            case 0x0f:
-                for (int i = signature->result_count; i > 0; i--)
-                    if (!validation_pop_type(
-                            stack, &top, control,
-                            signature->results[i - 1]))
-                        return WASM_VALIDATION_INVALID;
-                top = control->height;
-                control->unreachable = 1;
-                break;
-            case 0x0c:
-            case 0x0d: {
-                uint32_t depth = instr->u32_imm;
-                if (instr->opcode == 0x0d &&
-                    !validation_pop_type(stack, &top, control,
-                                                WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                if (depth > (uint32_t)control_top)
-                    return WASM_VALIDATION_INVALID;
-                const wasm_valtype *label_types;
-                int label_count;
-                if (depth == (uint32_t)control_top) {
-                    label_types = signature->results;
-                    label_count = signature->result_count;
-                } else {
-                    const wasm_validation_control *target =
-                        &controls[control_top - (int)depth];
-                    if (target->kind == 0x03) {
-                        label_types = target->params;
-                        label_count = target->param_count;
-                    } else {
-                        label_types = target->results;
-                        label_count = target->result_count;
-                    }
-                }
-                for (int i = label_count; i > 0; i--)
-                    if (!validation_pop_type(
-                            stack, &top, control, label_types[i - 1]))
-                        return WASM_VALIDATION_INVALID;
-                if (instr->opcode == 0x0d) {
-                    for (int i = 0; i < label_count; i++)
-                        if (!validation_push(stack, &top,
-                                                    label_types[i]))
-                            return WASM_VALIDATION_UNSUPPORTED;
-                } else {
-                    top = control->height;
-                    control->unreachable = 1;
-                }
-                break;
-            }
-            case 0xd4: {
-                wasm_valtype reference = WASM_BOTTOM_TYPE;
-                if (!validation_pop(stack, &top, control, &reference) ||
-                    (reference != WASM_BOTTOM_TYPE &&
-                     !is_reference_type(reference))) {
-
-                    if (getenv("WAST_DEBUG_VALIDATION"))
-                        fprintf(stderr, "ref-branch pop/type pc=%u op=%x ref=%u top=%d height=%d unreachable=%d\n",
-                                pc, instr->opcode, (unsigned)reference, top,
-                                control->height, control->unreachable);
-                    return WASM_VALIDATION_INVALID;
-                }
-                if (!validation_push(
-                        stack, &top,
-                        reference == WASM_BOTTOM_TYPE ? reference :
-                        nonnullable_reference_type(reference)))
-                    return WASM_VALIDATION_UNSUPPORTED;
-                break;
-            }
-            case 0xd5:
-            case 0xd6: {
-                wasm_valtype reference = WASM_BOTTOM_TYPE;
-                if (!validation_pop(stack, &top, control, &reference) ||
-                    (reference != WASM_BOTTOM_TYPE &&
-                     !is_reference_type(reference))) {
-
-                    if (getenv("WAST_DEBUG_VALIDATION"))
-                        fprintf(stderr, "ref-branch pop/type pc=%u op=%x ref=%u top=%d height=%d unreachable=%d\n",
-                                pc, instr->opcode, (unsigned)reference, top,
-                                control->height, control->unreachable);
-                    return WASM_VALIDATION_INVALID;
-                }
-                wasm_valtype refined = reference == WASM_BOTTOM_TYPE ?
-                    reference : nonnullable_reference_type(reference);
-                uint32_t depth = instr->u32_imm;
-                if (depth > (uint32_t)control_top) {
-
-                    if (getenv("WAST_DEBUG_VALIDATION"))
-                        fprintf(stderr, "ref-branch depth pc=%u depth=%u control=%d\n",
-                                pc, depth, control_top);
-                    return WASM_VALIDATION_INVALID;
-                }
-                const wasm_valtype *label_types;
-                int label_count;
-                if (depth == (uint32_t)control_top) {
-                    label_types = signature->results;
-                    label_count = signature->result_count;
-                } else {
-                    const wasm_validation_control *target =
-                        &controls[control_top - (int)depth];
-                    label_types = target->kind == 0x03 ? target->params :
-                                                        target->results;
-                    label_count = target->kind == 0x03 ? target->param_count :
-                                                        target->result_count;
-                }
-                int carried_count = label_count;
-                if (instr->opcode == 0xd6) {
-                    if (label_count < 1 ||
-                        (refined != WASM_BOTTOM_TYPE &&
-                         !global_type_is_compat(eng, refined, eng,
-                                                label_types[label_count - 1],
-                                                0))) {
-
-                        if (getenv("WAST_DEBUG_VALIDATION"))
-                            fprintf(stderr, "ref-branch result pc=%u ref=%u refined=%u labels=%d last=%u\n",
-                                    pc, (unsigned)reference, (unsigned)refined,
-                                    label_count, label_count ?
-                                    (unsigned)label_types[label_count - 1] : 0u);
-                        return WASM_VALIDATION_INVALID;
-                    }
-                    carried_count--;
-                }
-                wasm_valtype carried[WAST_MAX_RESULTS];
-                for (int i = carried_count; i > 0; i--)
-                    if (!validation_pop(stack, &top, control,
-                                               &carried[i - 1]) ||
-                        (carried[i - 1] != WASM_BOTTOM_TYPE &&
-                         !global_type_is_compat(eng, carried[i - 1], eng,
-                                                label_types[i - 1], 0))) {
-
-                        if (getenv("WAST_DEBUG_VALIDATION"))
-                            fprintf(stderr, "ref-branch carried pc=%u i=%d actual=%u expected=%u top=%d height=%d\n",
-                                    pc, i, (unsigned)carried[i - 1],
-                                    (unsigned)label_types[i - 1], top,
-                                    control->height);
-                        return WASM_VALIDATION_INVALID;
-                    }
-                for (int i = 0; i < carried_count; i++)
-                    /* Pop then re-push at the label type.  Preserving a
-                     * narrower operand type here is unsound: subsequent
-                     * fall-through instructions only know the branch label's
-                     * declared type (GC issue 516). */
-                    if (!validation_push(stack, &top, label_types[i]))
-                        return WASM_VALIDATION_UNSUPPORTED;
-                if (instr->opcode == 0xd5 &&
-                    !validation_push(stack, &top, refined))
-                    return WASM_VALIDATION_UNSUPPORTED;
-                break;
-            }
-            case 0x0e: {
-                if (!validation_pop_type(stack, &top, control,
-                                                WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                uint32_t *depths;
-                memcpy(&depths, instr->v128_imm.bytes, sizeof(depths));
-                int common_count = -1;
-                for (uint32_t i = 0; i <= instr->u32_imm; i++) {
-                    uint32_t depth = depths[i];
-                    int label_count;
-                    if (depth > (uint32_t)control_top)
-                        return WASM_VALIDATION_INVALID;
-                    if (depth == (uint32_t)control_top) {
-                        label_count = signature->result_count;
-                    } else {
-                        const wasm_validation_control *target =
-                            &controls[control_top - (int)depth];
-                        if (target->kind == 0x03) {
-                            label_count = target->param_count;
-                        } else {
-                            label_count = target->result_count;
-                        }
-                    }
-                    if (common_count < 0) {
-                        common_count = label_count;
-                    } else if (common_count != label_count)
-                        return WASM_VALIDATION_INVALID;
-                }
-                wasm_valtype operands[WAST_MAX_RESULTS];
-                for (int i = common_count; i > 0; i--)
-                    if (!validation_pop(
-                            stack, &top, control, &operands[i - 1]))
-                        return WASM_VALIDATION_INVALID;
-                for (uint32_t i = 0; i <= instr->u32_imm; i++) {
-                    uint32_t depth = depths[i];
-                    const wasm_valtype *label_types;
-                    if (depth == (uint32_t)control_top) {
-                        label_types = signature->results;
-                    } else {
-                        const wasm_validation_control *target =
-                            &controls[control_top - (int)depth];
-                        label_types = target->kind == 0x03 ?
-                                      target->params : target->results;
-                    }
-                    for (int j = 0; j < common_count; j++)
-                        if (operands[j] != WASM_BOTTOM_TYPE &&
-                            !global_type_is_compat(
-                                eng, operands[j], eng, label_types[j], 0))
-                            return WASM_VALIDATION_INVALID;
-                }
-                top = control->height;
-                control->unreachable = 1;
-                break;
-            }
-            case 0x1a: {
-                wasm_valtype ignored;
-                if (!validation_pop(stack, &top, control, &ignored))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            }
-            case 0x1b: {
-                wasm_valtype condition, second, first;
-                if (!validation_pop(stack, &top, control, &condition) ||
-                    !validation_pop(stack, &top, control, &second) ||
-                    !validation_pop(stack, &top, control, &first) ||
-                    (condition != WASM_BOTTOM_TYPE &&
-                     condition != WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                wasm_valtype result = first == WASM_BOTTOM_TYPE ? second : first;
-                if (!instr->simd_op && second != WASM_BOTTOM_TYPE &&
-                    first != WASM_BOTTOM_TYPE &&
-                    first != second)
-                    return WASM_VALIDATION_INVALID;
-                if (!instr->simd_op) {
-                    if (result != WASM_BOTTOM_TYPE &&
-                        is_reference_type(result))
-                        return WASM_VALIDATION_INVALID;
-                } else {
-                    wasm_valtype selected_type;
-                    memcpy(&selected_type, instr->v128_imm.bytes,
-                           sizeof(selected_type));
-                    if ((first != WASM_BOTTOM_TYPE &&
-                         !global_type_is_compat(eng, first, eng,
-                                                selected_type, 0)) ||
-                        (second != WASM_BOTTOM_TYPE &&
-                         !global_type_is_compat(eng, second, eng,
-                                                selected_type, 0)))
-                        return WASM_VALIDATION_INVALID;
-                    result = selected_type;
-                }
-                if (!validation_push(stack, &top, result))
-                    return WASM_VALIDATION_UNSUPPORTED;
-                break;
-            }
-            case 0x20: {
-                uint32_t index = instr->u32_imm;
-                wasm_valtype type;
-                if (!validation_local_type(signature, func, index, &type) ||
-                    !validation_local_initialized(initialized, index))
-                    return WASM_VALIDATION_INVALID;
-                if (!validation_push(stack, &top, type))
-                    return WASM_VALIDATION_UNSUPPORTED;
-                break;
-            }
-            case 0x21:
-            case 0x22: {
-                wasm_valtype type;
-                if (!validation_local_type(signature, func,
-                                                  instr->u32_imm, &type) ||
-                    !validation_pop_type(stack, &top, control, type))
-                    return WASM_VALIDATION_INVALID;
-                validation_initialize_local(initialized, instr->u32_imm);
-                if (instr->opcode == 0x22 &&
-                    !validation_push(stack, &top, type))
-                    return WASM_VALIDATION_UNSUPPORTED;
-                break;
-            }
-            case 0x23:
-                if (instr->u32_imm >= eng->global_count)
-                    return WASM_VALIDATION_INVALID;
-                if (!validation_push(
-                        stack, &top,
-                        eng->globals[instr->u32_imm]->value.type))
-                    return WASM_VALIDATION_UNSUPPORTED;
-                break;
-            case 0x24:
-                if (instr->u32_imm >= eng->global_count ||
-                    !eng->globals[instr->u32_imm]->mutable_ ||
-                    !validation_pop_type(
-                        stack, &top, control,
-                        eng->globals[instr->u32_imm]->value.type))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x25:
-                if (instr->u32_imm >= eng->table_count ||
-                    !validation_pop_type(stack, &top, control,
-                        eng->tables[instr->u32_imm]->is_64 ?
-                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32) ||
-                    !validation_push(
-                        stack, &top,
-                        eng->tables[instr->u32_imm]->element_type))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x26:
-                if (instr->u32_imm >= eng->table_count ||
-                    !validation_pop_type(
-                        stack, &top, control,
-                        eng->tables[instr->u32_imm]->element_type) ||
-                    !validation_pop_type(stack, &top, control,
-                        eng->tables[instr->u32_imm]->is_64 ?
-                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x10:
-            case 0x12: {
-                const exec_func_type *callee;
-                if (instr->u32_imm < eng->import_func_count)
-                    callee = &eng->types[
-                        eng->import_func_types[instr->u32_imm]];
-                else {
-                    uint32_t index = instr->u32_imm - eng->import_func_count;
-                    if (index >= eng->func_count)
-                        return WASM_VALIDATION_INVALID;
-                    callee = &eng->types[eng->funcs[index].type_index];
-                }
-                for (int i = callee->param_count; i > 0; i--)
-                    if (!validation_pop_type(
-                            stack, &top, control, callee->params[i - 1]))
-                        return WASM_VALIDATION_INVALID;
-                if (instr->opcode == 0x12) {
-                    if (callee->result_count != signature->result_count)
-                        return WASM_VALIDATION_INVALID;
-                    for (int i = 0; i < callee->result_count; i++)
-                        if (!global_type_is_compat(
-                                eng, callee->results[i], eng,
-                                signature->results[i], 0))
-                            return WASM_VALIDATION_INVALID;
-                    top = control->height;
-                    control->unreachable = 1;
-                    control->tail_call_seen = 1;
-                } else {
-                    for (int i = 0; i < callee->result_count; i++)
-                        if (!validation_push(stack, &top,
-                                                    callee->results[i]))
-                            return WASM_VALIDATION_UNSUPPORTED;
-                }
-                break;
-            }
-            case 0x11:
-            case 0x13: {
-                if (instr->u32_imm >= eng->type_count ||
-                    instr->simd_op >= eng->table_count ||
-                    !is_function_reference_type(
-                        eng->tables[instr->simd_op]->element_type) ||
-                    !validation_pop_type(stack, &top, control,
-                        eng->tables[instr->simd_op]->is_64 ?
-                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                const exec_func_type *callee = &eng->types[instr->u32_imm];
-                for (int i = callee->param_count; i > 0; i--)
-                    if (!validation_pop_type(
-                            stack, &top, control, callee->params[i - 1]))
-                        return WASM_VALIDATION_INVALID;
-                if (instr->opcode == 0x13) {
-                    if (callee->result_count != signature->result_count)
-                        return WASM_VALIDATION_INVALID;
-                    for (int i = 0; i < callee->result_count; i++)
-                        if (!global_type_is_compat(
-                                eng, callee->results[i], eng,
-                                signature->results[i], 0))
-                            return WASM_VALIDATION_INVALID;
-                    top = control->height;
-                    control->unreachable = 1;
-                    control->tail_call_seen = 1;
-                } else {
-                    for (int i = 0; i < callee->result_count; i++)
-                        if (!validation_push(stack, &top,
-                                                    callee->results[i]))
-                            return WASM_VALIDATION_UNSUPPORTED;
-                }
-                break;
-            }
-            case 0x14:
-            case 0x15: {
-                if (instr->u32_imm >= eng->type_count)
-                    return WASM_VALIDATION_INVALID;
-                const exec_func_type *callee = &eng->types[instr->u32_imm];
-                wasm_valtype reference;
-                if (!validation_pop(stack, &top, control, &reference) ||
-                    (reference != WASM_BOTTOM_TYPE &&
-                     (!WASM_VALTYPE_IS_TYPE_REF(reference) ||
-                      !func_type_is_subtype(
-                          eng, WASM_VALTYPE_TYPE_REF_INDEX(reference),
-                          eng, instr->u32_imm))))
-                    return WASM_VALIDATION_INVALID;
-                for (int i = callee->param_count; i > 0; i--)
-                    if (!validation_pop_type(
-                            stack, &top, control, callee->params[i - 1]))
-                        return WASM_VALIDATION_INVALID;
-                if (instr->opcode == 0x15) {
-                    if (callee->result_count != signature->result_count)
-                        return WASM_VALIDATION_INVALID;
-                    for (int i = 0; i < callee->result_count; i++)
-                        if (!global_type_is_compat(
-                                eng, callee->results[i], eng,
-                                signature->results[i], 0))
-                            return WASM_VALIDATION_INVALID;
-                    top = control->height;
-                    control->unreachable = 1;
-                    control->tail_call_seen = 1;
-                } else {
-                    for (int i = 0; i < callee->result_count; i++)
-                        if (!validation_push(stack, &top,
-                                                    callee->results[i]))
-                            return WASM_VALIDATION_UNSUPPORTED;
-                }
-                break;
-            }
-            case 0x41:
-                if (!validation_push(stack, &top, WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_UNSUPPORTED;
-                break;
-            case 0x42:
-                if (!validation_push(stack, &top, WASM_VALTYPE_I64))
-                    return WASM_VALIDATION_UNSUPPORTED;
-                break;
-            case 0x43:
-                if (!validation_push(stack, &top, WASM_VALTYPE_F32))
-                    return WASM_VALIDATION_UNSUPPORTED;
-                break;
-            case 0x44:
-                if (!validation_push(stack, &top, WASM_VALTYPE_F64))
-                    return WASM_VALIDATION_UNSUPPORTED;
-                break;
-            case 0x28: case 0x2c: case 0x2d: case 0x2e: case 0x2f:
-            case 0x29: case 0x30: case 0x31: case 0x32: case 0x33:
-            case 0x34: case 0x35:
-            case 0x2a: case 0x2b: {
-                uint32_t natural = instr->opcode == 0x29 ||
-                                   instr->opcode == 0x2b ? 3u :
-                                   instr->opcode == 0x28 ||
-                                   instr->opcode == 0x2a ||
-                                   instr->opcode == 0x2e ||
-                                   instr->opcode == 0x2f ||
-                                   instr->opcode == 0x32 ||
-                                   instr->opcode == 0x33 ||
-                                   instr->opcode == 0x34 ||
-                                   instr->opcode == 0x35 ? 2u :
-                                   instr->opcode == 0x30 ||
-                                   instr->opcode == 0x31 ? 0u : 0u;
-                if (instr->opcode == 0x2e || instr->opcode == 0x2f ||
-                    instr->opcode == 0x32 || instr->opcode == 0x33)
-                    natural = 1;
-                wasm_valtype result = instr->opcode == 0x29 ||
-                                      (instr->opcode >= 0x30 &&
-                                       instr->opcode <= 0x35) ?
-                                      WASM_VALTYPE_I64 :
-                                      instr->opcode == 0x2a ?
-                                      WASM_VALTYPE_F32 :
-                                      instr->opcode == 0x2b ?
-                                      WASM_VALTYPE_F64 : WASM_VALTYPE_I32;
-                if (instr->memory_index >= eng->memory_count ||
-                    (!eng->memories[instr->memory_index]->is_64 &&
-                     instr->u64_imm > UINT32_MAX) ||
-                    instr->simd_op > natural ||
-                    !validation_unary(stack, &top, control,
-                        eng->memories[instr->memory_index]->is_64 ?
-                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32, result))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            }
-            case 0x36: case 0x3a: case 0x3b:
-            case 0x37: case 0x3c: case 0x3d: case 0x3e:
-            case 0x38: case 0x39: {
-                uint32_t natural = instr->opcode == 0x37 ||
-                                   instr->opcode == 0x39 ? 3u :
-                                   instr->opcode == 0x36 ||
-                                   instr->opcode == 0x38 ||
-                                   instr->opcode == 0x3e ? 2u :
-                                   instr->opcode == 0x3b ||
-                                   instr->opcode == 0x3d ? 1u : 0u;
-                wasm_valtype value_type = instr->opcode == 0x37 ||
-                                          (instr->opcode >= 0x3c &&
-                                           instr->opcode <= 0x3e) ?
-                                          WASM_VALTYPE_I64 :
-                                          instr->opcode == 0x38 ?
-                                          WASM_VALTYPE_F32 :
-                                          instr->opcode == 0x39 ?
-                                          WASM_VALTYPE_F64 : WASM_VALTYPE_I32;
-                if (instr->memory_index >= eng->memory_count ||
-                    (!eng->memories[instr->memory_index]->is_64 &&
-                     instr->u64_imm > UINT32_MAX) ||
-                    instr->simd_op > natural ||
-                    !validation_pop_type(stack, &top, control,
-                                                value_type) ||
-                    !validation_pop_type(stack, &top, control,
-                        eng->memories[instr->memory_index]->is_64 ?
-                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            }
-            case 0x3f:
-                if (instr->memory_index >= eng->memory_count ||
-                    !validation_push(stack, &top,
-                        eng->memories[instr->memory_index]->is_64 ?
-                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x40:
-                if (instr->memory_index >= eng->memory_count ||
-                    !validation_unary(stack, &top, control,
-                        eng->memories[instr->memory_index]->is_64 ?
-                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32,
-                        eng->memories[instr->memory_index]->is_64 ?
-                            WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x45:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I32,
-                                             WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x46: case 0x47: case 0x48: case 0x49: case 0x4a:
-            case 0x4b: case 0x4c: case 0x4d: case 0x4e: case 0x4f:
-                if (!validation_binary(stack, &top, control,
-                                              WASM_VALTYPE_I32,
-                                              WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x50:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I64,
-                                             WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x51: case 0x52: case 0x53: case 0x54: case 0x55:
-            case 0x56: case 0x57: case 0x58: case 0x59: case 0x5a:
-                if (!validation_binary(stack, &top, control,
-                                              WASM_VALTYPE_I64,
-                                              WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x5b: case 0x5c: case 0x5d:
-            case 0x5e: case 0x5f: case 0x60:
-                if (!validation_binary(stack, &top, control,
-                                              WASM_VALTYPE_F32,
-                                              WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x61: case 0x62: case 0x63:
-            case 0x64: case 0x65: case 0x66:
-                if (!validation_binary(stack, &top, control,
-                                              WASM_VALTYPE_F64,
-                                              WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x67: case 0x68: case 0x69:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I32,
-                                             WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x6a: case 0x6b: case 0x6c: case 0x6d: case 0x6e:
-            case 0x6f: case 0x70: case 0x71: case 0x72: case 0x73:
-            case 0x74: case 0x75: case 0x76: case 0x77: case 0x78:
-                if (!validation_binary(stack, &top, control,
-                                              WASM_VALTYPE_I32,
-                                              WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x79: case 0x7a: case 0x7b:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I64,
-                                             WASM_VALTYPE_I64))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x7c: case 0x7d: case 0x7e: case 0x7f: case 0x80:
-            case 0x81: case 0x82: case 0x83: case 0x84: case 0x85:
-            case 0x86: case 0x87: case 0x88: case 0x89: case 0x8a:
-                if (!validation_binary(stack, &top, control,
-                                              WASM_VALTYPE_I64,
-                                              WASM_VALTYPE_I64))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x8b: case 0x8c: case 0x8d: case 0x8e:
-            case 0x8f: case 0x90: case 0x91:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_F32,
-                                             WASM_VALTYPE_F32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x92: case 0x93: case 0x94: case 0x95:
-            case 0x96: case 0x97: case 0x98:
-                if (!validation_binary(stack, &top, control,
-                                              WASM_VALTYPE_F32,
-                                              WASM_VALTYPE_F32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0x99: case 0x9a: case 0x9b: case 0x9c:
-            case 0x9d: case 0x9e: case 0x9f:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_F64,
-                                             WASM_VALTYPE_F64))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xa0: case 0xa1: case 0xa2: case 0xa3:
-            case 0xa4: case 0xa5: case 0xa6:
-                if (!validation_binary(stack, &top, control,
-                                              WASM_VALTYPE_F64,
-                                              WASM_VALTYPE_F64))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xa7:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I64,
-                                             WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xa8: case 0xa9:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_F32,
-                                             WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xaa: case 0xab:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_F64,
-                                             WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xac: case 0xad:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I32,
-                                             WASM_VALTYPE_I64))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xae: case 0xaf:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_F32,
-                                             WASM_VALTYPE_I64))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xb0: case 0xb1:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_F64,
-                                             WASM_VALTYPE_I64))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xb2: case 0xb3:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I32,
-                                             WASM_VALTYPE_F32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xb4: case 0xb5:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I64,
-                                             WASM_VALTYPE_F32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xb6:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_F64,
-                                             WASM_VALTYPE_F32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xb7: case 0xb8:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I32,
-                                             WASM_VALTYPE_F64))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xb9: case 0xba:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I64,
-                                             WASM_VALTYPE_F64))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xbb:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_F32,
-                                             WASM_VALTYPE_F64))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xbc:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_F32,
-                                             WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xbd:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_F64,
-                                             WASM_VALTYPE_I64))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xbe:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I32,
-                                             WASM_VALTYPE_F32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xbf:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I64,
-                                             WASM_VALTYPE_F64))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xc0: case 0xc1:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I32,
-                                             WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xc2: case 0xc3: case 0xc4:
-                if (!validation_unary(stack, &top, control,
-                                             WASM_VALTYPE_I64,
-                                             WASM_VALTYPE_I64))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            case 0xd0: {
-                int32_t heap_type = (int32_t)instr->u32_imm;
-                wasm_valtype type;
-                if (!nullable_reference_for_heap(eng, heap_type, &type))
-                    return WASM_VALIDATION_INVALID;
-                if (!validation_push(stack, &top, type))
-                    return WASM_VALIDATION_UNSUPPORTED;
-                break;
-            }
-            case 0xd1: {
-                wasm_valtype value;
-                if (!validation_pop(stack, &top, control, &value) ||
-                    (value != WASM_BOTTOM_TYPE &&
-                     !is_reference_type(value)) ||
-                    !validation_push(stack, &top,
-                                            WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            }
-            case 0xd2:
-                if (instr->u32_imm >=
-                    eng->import_func_count + eng->func_count ||
-                    !eng->declared_funcs[instr->u32_imm])
-                    return WASM_VALIDATION_INVALID;
-                {
-                    uint32_t function_type =
-                        instr->u32_imm < eng->import_func_count ?
-                        eng->import_func_types[instr->u32_imm] :
-                        eng->funcs[instr->u32_imm -
-                                   eng->import_func_count].type_index;
-                    if (function_type >= 0x100u ||
-                        !validation_push(
-                            stack, &top,
-                            (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE +
-                                           function_type)))
-                        return WASM_VALIDATION_UNSUPPORTED;
-                }
-                break;
-            case 0xd3: {
-                wasm_valtype right, left;
-                if (!validation_pop(stack, &top, control, &right) ||
-                    !validation_pop(stack, &top, control, &left) ||
-                    (right != WASM_BOTTOM_TYPE && !is_eq_reference_type(eng,right)) ||
-                    (left != WASM_BOTTOM_TYPE && !is_eq_reference_type(eng,left)) ||
-                    !validation_push(stack, &top, WASM_VALTYPE_I32))
-                    return WASM_VALIDATION_INVALID;
-                break;
-            }
-            case 0xFD: {
-                uint32_t op = instr->simd_op;
-                wast_simd_info info;
-                if (!wast_simd_get_info(op, &info))
-                    return WASM_VALIDATION_INVALID;
-                if ((info.immediate == WAST_SIMD_IMM_MEMARG ||
-                     info.immediate == WAST_SIMD_IMM_MEMARG_LANE) &&
-                    (instr->memory_index >= eng->memory_count ||
-                     (!eng->memories[instr->memory_index]->is_64 &&
-                      instr->u64_imm > UINT32_MAX) ||
-                     instr->alignment > info.natural_alignment))
-                    return WASM_VALIDATION_INVALID;
-                if (op == 0x0c) {
-                    if (!validation_push(stack,&top,WASM_VALTYPE_V128))
-                        return WASM_VALIDATION_UNSUPPORTED;
-                } else if (op <= 0x0a || op == 0x5c || op == 0x5d) {
-                    if (!validation_unary(stack,&top,control,
-                            eng->memories[instr->memory_index]->is_64 ?
-                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32,
-                            WASM_VALTYPE_V128))
-                        return WASM_VALIDATION_INVALID;
-                } else if (op == 0x0b) {
-                    if (!validation_pop_type(stack,&top,control,WASM_VALTYPE_V128) ||
-                        !validation_pop_type(stack,&top,control,
-                            eng->memories[instr->memory_index]->is_64 ?
-                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
-                        return WASM_VALIDATION_INVALID;
-                } else if (op >= 0x54 && op <= 0x57) {
-                    if (!validation_pop_type(stack,&top,control,WASM_VALTYPE_V128) ||
-                        !validation_pop_type(stack,&top,control,
-                            eng->memories[instr->memory_index]->is_64 ?
-                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32) ||
-                        !validation_push(stack,&top,WASM_VALTYPE_V128))
-                        return WASM_VALIDATION_INVALID;
-                } else if (op >= 0x58 && op <= 0x5b) {
-                    if (!validation_pop_type(stack,&top,control,WASM_VALTYPE_V128) ||
-                        !validation_pop_type(stack,&top,control,
-                            eng->memories[instr->memory_index]->is_64 ?
-                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
-                        return WASM_VALIDATION_INVALID;
-                } else if (op >= 0x0f && op <= 0x14) {
-                    wasm_valtype input = op <= 0x11 ? WASM_VALTYPE_I32 :
-                        op == 0x12 ? WASM_VALTYPE_I64 :
-                        op == 0x13 ? WASM_VALTYPE_F32 : WASM_VALTYPE_F64;
-                    if (!validation_unary(stack,&top,control,input,WASM_VALTYPE_V128))
-                        return WASM_VALIDATION_INVALID;
-                } else if (op >= 0x15 && op <= 0x22) {
-                    int replace = op==0x17||op==0x1a||op==0x1c||op==0x1e||op==0x20||op==0x22;
-                    wasm_valtype scalar = op <= 0x1c ? WASM_VALTYPE_I32 :
-                        op <= 0x1e ? WASM_VALTYPE_I64 :
-                        op <= 0x20 ? WASM_VALTYPE_F32 : WASM_VALTYPE_F64;
-                    if (replace) {
-                        if (!validation_pop_type(stack,&top,control,scalar) ||
-                            !validation_pop_type(stack,&top,control,WASM_VALTYPE_V128) ||
-                            !validation_push(stack,&top,WASM_VALTYPE_V128))
-                            return WASM_VALIDATION_INVALID;
-                    } else if (!validation_unary(stack,&top,control,
-                                   WASM_VALTYPE_V128,scalar))
-                        return WASM_VALIDATION_INVALID;
-                } else if (op==0x53||op==0x63||op==0x64||op==0x83||op==0x84||
-                           op==0xa3||op==0xa4||op==0xc3||op==0xc4) {
-                    if (!validation_unary(stack,&top,control,
-                            WASM_VALTYPE_V128,WASM_VALTYPE_I32))
-                        return WASM_VALIDATION_INVALID;
-                } else if (op==0x6b||op==0x6c||op==0x6d||op==0x8b||op==0x8c||
-                           op==0x8d||op==0xab||op==0xac||op==0xad||op==0xcb||
-                           op==0xcc||op==0xcd) {
-                    if (!validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
-                        !validation_pop_type(stack,&top,control,WASM_VALTYPE_V128) ||
-                        !validation_push(stack,&top,WASM_VALTYPE_V128))
-                        return WASM_VALIDATION_INVALID;
-                } else if (op==0x52||(op>=0x105&&op<=0x10c)||op==0x113) {
-                    for (int operand=0;operand<3;operand++)
-                        if (!validation_pop_type(stack,&top,control,WASM_VALTYPE_V128))
-                            return WASM_VALIDATION_INVALID;
-                    if (!validation_push(stack,&top,WASM_VALTYPE_V128))
-                        return WASM_VALIDATION_UNSUPPORTED;
-                } else {
-                    int unary = op==0x4d||op==0x5e||op==0x5f||
-                        (op>=0x60&&op<=0x62)||(op>=0x67&&op<=0x6a)||
-                        op==0x74||op==0x75||op==0x7a||(op>=0x7c&&op<=0x81)||
-                        (op>=0x87&&op<=0x8a)||op==0x94||op==0xa0||op==0xa1||
-                        (op>=0xa7&&op<=0xaa)||op==0xc0||op==0xc1||
-                        (op>=0xc7&&op<=0xca)||op==0xe0||op==0xe1||op==0xe3||
-                        op==0xec||op==0xed||op==0xef||(op>=0xf8&&op<=0xff)||
-                        (op>=0x101&&op<=0x104);
-                    int valid = unary ?
-                        validation_unary(stack,&top,control,
-                            WASM_VALTYPE_V128,WASM_VALTYPE_V128) :
-                        validation_binary(stack,&top,control,
-                            WASM_VALTYPE_V128,WASM_VALTYPE_V128);
-                    if (!valid) return WASM_VALIDATION_INVALID;
-                }
-                break;
-            }
-            case 0xFB: {
-                uint32_t op = instr->simd_op;
-                uint32_t ti = instr->u32_imm;
-                const exec_func_type *gc_type = NULL;
-                if ((op <= 0x0e || (op >= 0x10 && op <= 0x13)) &&
-                    (ti >= eng->type_count ||
-                     ((gc_type = &eng->types[ti])->kind != WAST_TYPE_STRUCT &&
-                      gc_type->kind != WAST_TYPE_ARRAY)))
-                    return WASM_VALIDATION_INVALID;
-                if (op == 0x00 || op == 0x01) {
-                    if (gc_type->kind != WAST_TYPE_STRUCT)
-                        return WASM_VALIDATION_INVALID;
-                    if (op == 0x00) {
-                        for (int i=gc_type->field_count;i-- > 0;)
-                            if (!validation_pop_type(stack,&top,control,
-                                    gc_type->field_packed[i] ? WASM_VALTYPE_I32 :
-                                                               gc_type->fields[i]))
-                                return WASM_VALIDATION_INVALID;
-                    } else {
-                        for (int i=0;i<gc_type->field_count;i++)
-                            if (is_reference_type(gc_type->fields[i]) &&
-                                !is_nullable_reference_type(gc_type->fields[i]))
-                                return WASM_VALIDATION_INVALID;
-                    }
-                    if (!validation_push(stack,&top,
-                            (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE+ti)))
-                        return WASM_VALIDATION_UNSUPPORTED;
-                } else if (op >= 0x02 && op <= 0x05) {
-                    uint32_t field=instr->memory_index;
-                    if (gc_type->kind!=WAST_TYPE_STRUCT ||
-                        field >= (uint32_t)gc_type->field_count)
-                        return WASM_VALIDATION_INVALID;
-                    if ((op==0x03 || op==0x04) && !gc_type->field_packed[field])
-                        return WASM_VALIDATION_INVALID;
-                    if (op==0x02 && gc_type->field_packed[field])
-                        return WASM_VALIDATION_INVALID;
-                    if (op==0x05 &&
-                        (!gc_type->field_mutable[field] ||
-                         !validation_pop_type(stack,&top,control,
-                            gc_type->field_packed[field] ? WASM_VALTYPE_I32 :
-                                                          gc_type->fields[field])))
-                        return WASM_VALIDATION_INVALID;
-                    if (!validation_pop_type(stack,&top,control,
-                            (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+ti)))
-                        return WASM_VALIDATION_INVALID;
-                    if (op!=0x05 && !validation_push(stack,&top,
-                            gc_type->field_packed[field] ? WASM_VALTYPE_I32 :
-                                                          gc_type->fields[field]))
-                        return WASM_VALIDATION_UNSUPPORTED;
-                } else if (op == 0x06 || op == 0x07 || op == 0x08) {
-                    if (gc_type->kind!=WAST_TYPE_ARRAY)
-                        return WASM_VALIDATION_INVALID;
-                    if (op==0x08) {
-                        for(uint32_t i=0;i<instr->lane_index;i++)
-                            if(!validation_pop_type(stack,&top,control,
-                                gc_type->field_packed[0]?WASM_VALTYPE_I32:
-                                                         gc_type->fields[0]))
-                                return WASM_VALIDATION_INVALID;
-                    } else {
-                        if(!validation_pop_type(stack,&top,control,WASM_VALTYPE_I32))
-                            return WASM_VALIDATION_INVALID;
-                        if(op==0x06 && !validation_pop_type(stack,&top,control,
-                            gc_type->field_packed[0]?WASM_VALTYPE_I32:gc_type->fields[0]))
-                            return WASM_VALIDATION_INVALID;
-                        if(op==0x07 && is_reference_type(gc_type->fields[0]) &&
-                           !is_nullable_reference_type(gc_type->fields[0]))
-                            return WASM_VALIDATION_INVALID;
-                    }
-                    if(!validation_push(stack,&top,
-                        (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE+ti)))
-                        return WASM_VALIDATION_UNSUPPORTED;
-                } else if (op == 0x09 || op == 0x0a) {
-                    if(gc_type->kind!=WAST_TYPE_ARRAY ||
-                       !validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
-                       !validation_pop_type(stack,&top,control,WASM_VALTYPE_I32))
-                        return WASM_VALIDATION_INVALID;
-                    if(op==0x09) {
-                        if(is_reference_type(gc_type->fields[0]) ||
-                           instr->memory_index>=eng->declared_data_count)
-                            return WASM_VALIDATION_INVALID;
-                    } else if(instr->memory_index>=eng->elem_count ||
-                        !global_type_is_compat(eng,eng->elem_types[instr->memory_index],
-                                              eng,gc_type->fields[0],0))
-                        return WASM_VALIDATION_INVALID;
-                    if(!validation_push(stack,&top,
-                        (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE+ti)))
-                        return WASM_VALIDATION_UNSUPPORTED;
-                } else if (op>=0x0b && op<=0x0e) {
-                    if(gc_type->kind!=WAST_TYPE_ARRAY ||
-                       (op==0x0b && gc_type->field_packed[0]) ||
-                       ((op==0x0c || op==0x0d) && !gc_type->field_packed[0]))
-                        return WASM_VALIDATION_INVALID;
-                    if(op==0x0e && (!gc_type->field_mutable[0] ||
-                       !validation_pop_type(stack,&top,control,
-                          gc_type->field_packed[0]?WASM_VALTYPE_I32:gc_type->fields[0])))
-                        return WASM_VALIDATION_INVALID;
-                    if(!validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
-                       !validation_pop_type(stack,&top,control,
-                          (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+ti)))
-                        return WASM_VALIDATION_INVALID;
-                    if(op!=0x0e && !validation_push(stack,&top,
-                        gc_type->field_packed[0]?WASM_VALTYPE_I32:gc_type->fields[0]))
-                        return WASM_VALIDATION_UNSUPPORTED;
-                } else if(op==0x0f) {
-                    wasm_valtype ref;
-                    if(!validation_pop(stack,&top,control,&ref) ||
-                       (ref!=WASM_BOTTOM_TYPE &&
-                        !global_type_is_compat(eng,ref,eng,WASM_VALTYPE_ARRAYREF,0)) ||
-                       !validation_push(stack,&top,WASM_VALTYPE_I32))
-                        return WASM_VALIDATION_INVALID;
-                } else if(op==0x10) {
-                    if(gc_type->kind!=WAST_TYPE_ARRAY || !gc_type->field_mutable[0] ||
-                       !validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
-                       !validation_pop_type(stack,&top,control,
-                          gc_type->field_packed[0]?WASM_VALTYPE_I32:gc_type->fields[0]) ||
-                       !validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
-                       !validation_pop_type(stack,&top,control,
-                          (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+ti)))
-                        return WASM_VALIDATION_INVALID;
-                } else if(op==0x11 || op==0x12) {
-                    if(gc_type->kind!=WAST_TYPE_ARRAY || !gc_type->field_mutable[0] ||
-                       !validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
-                       !validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
-                       !validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
-                       !validation_pop_type(stack,&top,control,
-                          (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+ti)))
-                        return WASM_VALIDATION_INVALID;
-                    if(op==0x11 && (is_reference_type(gc_type->fields[0]) ||
-                       instr->memory_index>=eng->declared_data_count))
-                        return WASM_VALIDATION_INVALID;
-                    if(op==0x12 && (instr->memory_index>=eng->elem_count ||
-                       !global_type_is_compat(eng,eng->elem_types[instr->memory_index],
-                                             eng,gc_type->fields[0],0)))
-                        return WASM_VALIDATION_INVALID;
-                } else if(op==0x13) {
-                    uint32_t sti=instr->memory_index;
-                    if(gc_type->kind!=WAST_TYPE_ARRAY || !gc_type->field_mutable[0] ||
-                       sti>=eng->type_count || eng->types[sti].kind!=WAST_TYPE_ARRAY ||
-                       gc_type->field_packed[0] != eng->types[sti].field_packed[0] ||
-                       !global_type_is_compat(eng,eng->types[sti].fields[0],eng,
-                                             gc_type->fields[0],0) ||
-                       !validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
-                       !validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
-                       !validation_pop_type(stack,&top,control,
-                           (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+sti)) ||
-                       !validation_pop_type(stack,&top,control,WASM_VALTYPE_I32) ||
-                       !validation_pop_type(stack,&top,control,
-                           (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE+ti)))
-                        return WASM_VALIDATION_INVALID;
-                } else if(op>=0x14 && op<=0x17) {
-                    wasm_valtype ref,target;
-                    if(!validation_pop(stack,&top,control,&ref) ||
-                       (ref!=WASM_BOTTOM_TYPE && !is_reference_type(ref)) ||
-                       !nullable_reference_for_heap(eng,instr->block_type_index,&target))
-                        return WASM_VALIDATION_INVALID;
-                    if(op>=0x16) {
-                        if(op==0x16) target=nonnullable_reference_type(target);
-                        if(!validation_push(stack,&top,target))
-                            return WASM_VALIDATION_UNSUPPORTED;
-                    } else if(!validation_push(stack,&top,WASM_VALTYPE_I32))
-                        return WASM_VALIDATION_UNSUPPORTED;
-                } else if(op==0x18 || op==0x19) {
-                    wasm_valtype source,target,operand;
-                    if(!nullable_reference_for_heap(eng,instr->block_type_index,&source) ||
-                       !nullable_reference_for_heap(eng,(int32_t)instr->lane_index,&target))
-                        return WASM_VALIDATION_INVALID;
-                    if(!(instr->alignment&1u)) source=nonnullable_reference_type(source);
-                    if(!(instr->alignment&2u)) target=nonnullable_reference_type(target);
-                    if(!global_type_is_compat(eng,target,eng,source,0) ||
-                       !validation_pop(stack,&top,control,&operand) ||
-                       (operand!=WASM_BOTTOM_TYPE &&
-                        !global_type_is_compat(eng,operand,eng,source,0)))
-                        return WASM_VALIDATION_INVALID;
-                    uint32_t depth=instr->u32_imm;
-                    if(depth>(uint32_t)control_top) return WASM_VALIDATION_INVALID;
-                    const wasm_valtype *label_types;
-                    int label_count;
-                    if(depth==(uint32_t)control_top){label_types=signature->results;label_count=signature->result_count;}
-                    else {
-                        const wasm_validation_control *target_control=&controls[control_top-(int)depth];
-                        label_types=target_control->kind==0x03?target_control->params:target_control->results;
-                        label_count=target_control->kind==0x03?target_control->param_count:target_control->result_count;
-                    }
-                    wasm_valtype diff_type=source;
-                    if((instr->alignment&3u)==3u)
-                        diff_type=nonnullable_reference_type(source);
-                    wasm_valtype carried=op==0x18?target:diff_type;
-                    if(label_count<1 || !global_type_is_compat(eng,carried,eng,
-                                                               label_types[label_count-1],0))
-                        return WASM_VALIDATION_INVALID;
-                    /* The fall-through stack prefix is typed through the
-                     * branch label.  Replace the original (possibly more
-                     * precise) operands with the label's declared types,
-                     * matching the reference validator's pop/push rule. */
-                    for(int i=label_count-1;i>0;i--)
-                        if(!validation_pop_type(stack,&top,control,
-                                                       label_types[i-1]))
-                            return WASM_VALIDATION_INVALID;
-                    for(int i=0;i<label_count-1;i++)
-                        if(!validation_push(stack,&top,label_types[i]))
-                            return WASM_VALIDATION_UNSUPPORTED;
-                    wasm_valtype fallthrough=op==0x18?diff_type:target;
-                    if(!validation_push(stack,&top,fallthrough))
-                        return WASM_VALIDATION_UNSUPPORTED;
-                } else if(op==0x1a) {
-                    if(!validation_unary(stack,&top,control,WASM_VALTYPE_EXTERNREF,
-                                                WASM_VALTYPE_ANYREF))
-                        return WASM_VALIDATION_INVALID;
-                } else if(op==0x1b) {
-                    if(!validation_unary(stack,&top,control,WASM_VALTYPE_ANYREF,
-                                                WASM_VALTYPE_EXTERNREF))
-                        return WASM_VALIDATION_INVALID;
-                } else if(op==0x1c) {
-                    if(!validation_unary(stack,&top,control,WASM_VALTYPE_I32,
-                                                WASM_VALTYPE_I31REF_NONNULL))
-                        return WASM_VALIDATION_INVALID;
-                } else if(op==0x1d || op==0x1e) {
-                    if(!validation_unary(stack,&top,control,WASM_VALTYPE_I31REF,
-                                                WASM_VALTYPE_I32))
-                        return WASM_VALIDATION_INVALID;
-                } else {
-                    return WASM_VALIDATION_UNSUPPORTED;
-                }
-                break;
-            }
-            case 0xFC: {
-                uint32_t sub = instr->simd_op;
-                if (sub <= 7) {
-                    /* i32/i64.trunc_sat_f32/f64_s/u */
-                    wasm_valtype from = (sub < 4) ?
-                        ((sub & 2) ? WASM_VALTYPE_F64 : WASM_VALTYPE_F32) :
-                        ((sub & 2) ? WASM_VALTYPE_F64 : WASM_VALTYPE_F32);
-                    wasm_valtype to = (sub < 4) ? WASM_VALTYPE_I32 : WASM_VALTYPE_I64;
-                    if (!validation_unary(stack, &top, control, from, to))
-                        return WASM_VALIDATION_INVALID;
-                } else if (sub == 10) { /* memory.copy: [i32 i32 i32] -> [] */
-                    uint32_t src_mem = instr->source_memory_index;
-                    if (instr->memory_index >= eng->memory_count ||
-                        src_mem >= eng->memory_count)
-                        return WASM_VALIDATION_INVALID;
-                    wasm_valtype dst_type = eng->memories[instr->memory_index]->is_64 ?
-                        WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
-                    wasm_valtype src_type = eng->memories[src_mem]->is_64 ?
-                        WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
-                    wasm_valtype len_type = dst_type == WASM_VALTYPE_I64 &&
-                        src_type == WASM_VALTYPE_I64 ? WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
-                    if (!validation_pop_type(stack, &top, control, len_type) ||
-                        !validation_pop_type(stack, &top, control, src_type) ||
-                        !validation_pop_type(stack, &top, control, dst_type))
-                        return WASM_VALIDATION_INVALID;
-                } else if (sub == 11) { /* memory.fill: [i32 i32 i32] -> [] */
-                    if (instr->memory_index >= eng->memory_count ||
-                        !validation_pop_type(stack, &top, control,
-                            eng->memories[instr->memory_index]->is_64 ?
-                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32) ||
-                        !validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
-                        !validation_pop_type(stack, &top, control,
-                            eng->memories[instr->memory_index]->is_64 ?
-                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
-                        return WASM_VALIDATION_INVALID;
-                } else if (sub == 8) { /* memory.init: [i32 i32 i32] -> [] */
-                    if (instr->memory_index >= eng->memory_count ||
-                        !eng->has_data_count ||
-                        instr->u32_imm >= eng->declared_data_count ||
-                        !validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
-                        !validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
-                        !validation_pop_type(stack, &top, control,
-                            eng->memories[instr->memory_index]->is_64 ?
-                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
-                        return WASM_VALIDATION_INVALID;
-                } else if (sub == 9) { /* data.drop: [] -> [] */
-                    if (!eng->has_data_count ||
-                        instr->u32_imm >= eng->declared_data_count)
-                        return WASM_VALIDATION_INVALID;
-                } else if (sub == 12) { /* table.init: [i32 i32 i32] -> [] */
-                    uint32_t table_index = instr->v128_imm.bytes[0];
-                    if (instr->u32_imm >= eng->elem_count ||
-                        table_index >= eng->table_count ||
-                        !global_type_is_compat(
-                            eng, eng->elem_types[instr->u32_imm],
-                            eng->tables[table_index]->type_owner,
-                            eng->tables[table_index]->element_type, 0) ||
-                        !validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
-                        !validation_pop_type(stack, &top, control, WASM_VALTYPE_I32) ||
-                        !validation_pop_type(stack, &top, control,
-                            eng->tables[table_index]->is_64 ?
-                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
-                        return WASM_VALIDATION_INVALID;
-                } else if (sub == 13) { /* elem.drop: [] -> [] */
-                    if (instr->u32_imm >= eng->elem_count)
-                        return WASM_VALIDATION_INVALID;
-                } else if (sub == 14) { /* table.copy: [i32 i32 i32] -> [] */
-                    uint32_t dst_table = instr->u32_imm;
-                    uint32_t src_table = instr->v128_imm.bytes[0];
-                    if (dst_table >= eng->table_count || src_table >= eng->table_count ||
-                        !global_type_is_compat(
-                            eng->tables[src_table]->type_owner,
-                            eng->tables[src_table]->element_type,
-                            eng->tables[dst_table]->type_owner,
-                            eng->tables[dst_table]->element_type, 0))
-                        return WASM_VALIDATION_INVALID;
-                    wasm_valtype dst_type = eng->tables[dst_table]->is_64 ?
-                        WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
-                    wasm_valtype src_type = eng->tables[src_table]->is_64 ?
-                        WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
-                    wasm_valtype len_type = dst_type == WASM_VALTYPE_I64 &&
-                        src_type == WASM_VALTYPE_I64 ? WASM_VALTYPE_I64 : WASM_VALTYPE_I32;
-                    if (!validation_pop_type(stack, &top, control, len_type) ||
-                        !validation_pop_type(stack, &top, control, src_type) ||
-                        !validation_pop_type(stack, &top, control, dst_type))
-                        return WASM_VALIDATION_INVALID;
-                } else if (sub == 15) { /* table.grow: [ref i32] -> [i32] */
-                    if (instr->u32_imm >= eng->table_count ||
-                        !validation_pop_type(stack, &top, control,
-                            eng->tables[instr->u32_imm]->is_64 ?
-                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32) ||
-                        !validation_pop_type(
-                            stack, &top, control,
-                            eng->tables[instr->u32_imm]->element_type) ||
-                        !validation_push(stack, &top,
-                            eng->tables[instr->u32_imm]->is_64 ?
-                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
-                        return WASM_VALIDATION_INVALID;
-                } else if (sub == 16) { /* table.size: [] -> [i32] */
-                    if (instr->u32_imm >= eng->table_count ||
-                        !validation_push(stack, &top,
-                            eng->tables[instr->u32_imm]->is_64 ?
-                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
-                        return WASM_VALIDATION_UNSUPPORTED;
-                } else if (sub == 17) { /* table.fill: [i32 ref i32] -> [] */
-                    wasm_valtype ref;
-                    if (instr->u32_imm >= eng->table_count ||
-                        !validation_pop_type(stack, &top, control,
-                            eng->tables[instr->u32_imm]->is_64 ?
-                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32) ||
-                        !validation_pop(stack, &top, control, &ref) ||
-                        !validation_pop_type(stack, &top, control,
-                            eng->tables[instr->u32_imm]->is_64 ?
-                                WASM_VALTYPE_I64 : WASM_VALTYPE_I32))
-                        return WASM_VALIDATION_INVALID;
-                    if (ref != WASM_BOTTOM_TYPE &&
-                        !global_type_is_compat(
-                            eng, ref,
-                            eng->tables[instr->u32_imm]->type_owner,
-                            eng->tables[instr->u32_imm]->element_type, 0))
-                        return WASM_VALIDATION_INVALID;
-                } else {
-                    return WASM_VALIDATION_UNSUPPORTED;
-                }
-                break;
-            }
-            default:
-                return WASM_VALIDATION_UNSUPPORTED;
-        }
+        wasm_validation_status status = dispatch->validate(&vctx, instr);
+        if (status != WASM_VALIDATION_CONTINUE)
+            return status;
     }
     return WASM_VALIDATION_INVALID;
 }

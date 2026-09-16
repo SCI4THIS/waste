@@ -15,6 +15,7 @@ enum {
     EXEC_MAX_LOCALS = WAST_MAX_LOCALS,
     EXEC_MAX_CONTROL = 256,
     EXEC_MAX_CALL_DEPTH = 256,
+    EXEC_MAX_CALL_ARGS = 256,
     EXEC_MAX_GLOBALS = 2048,
     EXEC_MAX_TABLES = 16,
     EXEC_PAGE_SIZE = 65536,
@@ -203,6 +204,14 @@ struct waste_exec_engine {
     exec_yield_frame yield_frames[EXEC_MAX_CALL_DEPTH];
 };
 
+/* Return values for opcode dispatch execute handlers.
+ * Non-negative values match exec_status and propagate to the caller.
+ * Negative values are internal actions consumed by the instruction loop. */
+enum {
+    WASM_DISPATCH_RETURN    = -1, /* function complete, results on stack */
+    WASM_DISPATCH_TAIL_CALL = -2, /* restart with updated context fields */
+};
+
 /* One active interpreter frame. Opcode helpers receive this bounded view
  * instead of depending on evaluator-local variables or parser state. */
 typedef struct {
@@ -216,6 +225,15 @@ typedef struct {
     uint32_t function_index;
     uint32_t depth;
     uint64_t frame_generation;
+    /* Extended fields for dispatch handlers — set by the instruction loop
+     * so that handlers can modify evaluator-local state. */
+    int *control_top;
+    uint32_t *pc;
+    exec_error *error;
+    wasm_value *results;
+    int *result_count;
+    wasm_value *tail_args;
+    int *tail_arg_count;
 } waste_exec_context;
 
 exec_status exec_fail(exec_error *error, exec_status status,
@@ -313,16 +331,6 @@ wasm_value exec_i32x4_relaxed_dot_i8x16_i7x16_add_s(
 int exec_gc_instruction(waste_exec_engine *engine,
                         const exec_instr *instruction,
                         exec_stack *stack, exec_error *error);
-exec_status exec_i32_numeric(uint32_t opcode, exec_stack *stack,
-                             exec_error *error);
-exec_status exec_i64_numeric(uint32_t opcode, exec_stack *stack,
-                             exec_error *error);
-exec_status exec_f32_numeric(uint32_t opcode, exec_stack *stack,
-                             exec_error *error);
-exec_status exec_f64_numeric(uint32_t opcode, exec_stack *stack,
-                             exec_error *error);
-exec_status exec_conversion(uint32_t opcode, exec_stack *stack,
-                            exec_error *error);
 exec_status exec_sat_trunc(uint32_t subopcode, exec_stack *stack,
                            exec_error *error);
 uint32_t trunc_sat_i32_s_f32(float value);

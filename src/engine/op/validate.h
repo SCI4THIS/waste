@@ -7,6 +7,9 @@ typedef enum {
     WASM_VALIDATION_INVALID = -1,
     WASM_VALIDATION_UNSUPPORTED = 0,
     WASM_VALIDATION_VALID = 1,
+    /* Internal: instruction validated, continue to next instruction.
+     * Only used by dispatch handlers; never escapes the validation loop. */
+    WASM_VALIDATION_CONTINUE = 2,
 } wasm_validation_status;
 
 typedef struct {
@@ -15,6 +18,39 @@ typedef struct {
     uint32_t opcode;
     uint32_t subopcode;
 } wasm_validation_result;
+
+/* ---- Validation stack and control types ---- */
+
+#define WASM_VALIDATION_STACK 256
+#define WASM_BOTTOM_TYPE ((wasm_valtype)0x7fff)
+
+typedef struct {
+    const waste_exec_engine *engine;
+    int height;
+    int unreachable;
+    int tail_call_seen;
+    uint8_t kind;
+    uint8_t has_else;
+    int param_count;
+    int result_count;
+    wasm_valtype params[WAST_MAX_PARAMS];
+    wasm_valtype results[WAST_MAX_RESULTS];
+    uint8_t entry_initialized[(EXEC_MAX_LOCALS + 7) / 8];
+} wasm_validation_control;
+
+/* Bounded view of the validation state, passed to per-opcode handlers. */
+typedef struct {
+    const waste_exec_engine *engine;
+    const exec_func_type *signature;
+    const exec_func *function;
+    wasm_valtype *stack;
+    int *top;
+    wasm_validation_control *controls;
+    int *control_top;
+    uint8_t *initialized;
+} wasm_validate_context;
+
+/* ---- Public interface ---- */
 
 int value_type_is_defined(const waste_exec_engine *engine,
                           wasm_valtype type);

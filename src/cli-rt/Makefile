@@ -23,7 +23,8 @@ ENGINE_SOURCES := $(ENGINE_DIR)/wasm/load.c \
 	$(ENGINE_DIR)/op/execute_numeric.c \
 	$(ENGINE_DIR)/op/execute_simd.c $(ENGINE_DIR)/op/execute_gc.c \
 	$(ENGINE_DIR)/op/execute_exception.c \
-	$(ENGINE_DIR)/op/execute_table.c $(ENGINE_DIR)/instance.c \
+	$(ENGINE_DIR)/op/execute_table.c \
+	$(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_DIR)/instance.c \
 	$(ENGINE_DIR)/api.c
 
 ENGINE_HEADERS := $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
@@ -36,7 +37,7 @@ ENGINE_HEADERS := $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
 	$(ENGINE_DIR)/wasm/leb.h \
 	$(ENGINE_DIR)/wasm/reader.h $(ENGINE_DIR)/wasm/writer.h \
 	$(ENGINE_DIR)/wasm/module.h $(ENGINE_DIR)/wasm/decode.h \
-	$(ENGINE_DIR)/op/validate.h \
+	$(ENGINE_DIR)/op/validate.h $(WAST_GEN_DIR)/dispatch_gen.h \
 	$(ENGINE_DIR)/instantiate.h $(ENGINE_DIR)/runtime_internal.h
 
 ENGINE_HEADERS += $(ENGINE_DIR)/include/waste.h
@@ -74,12 +75,40 @@ EXTERN_PROVIDER_WASM := $(BUILD_DIR)/extern-provider.wasm
 EXTERN_CONSUMER_WASM := $(BUILD_DIR)/extern-consumer.wasm
 
 .PHONY: wast-native i32-smoke wasm-binary-primitives wasm-import-decode \
-	wasm-validation parser-reentrant gen clean
+	wasm-validation parser-reentrant gen lint clean
 
 # ---- Parser generation (delegate to engine) ----
 
 gen:
 	$(MAKE) -C $(ENGINE_DIR) BUILD_DIR=$(abspath $(ENGINE_BUILD_DIR)) gen
+
+# ---- Dead-code lint (reports unused non-static functions) ----
+
+lint: gen $(WAST_TAB_O) $(WAST_LEX_O)
+	@echo "=== Dead-code report (unused non-static engine functions) ==="
+	@$(CC) $(CPPFLAGS) $(CFLAGS) \
+		-ffunction-sections -fdata-sections \
+		$(FREESTANDING_FLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
+		main.c $(ENGINE_SOURCES) \
+		$(LIB_SHARED) $(LIB_NATIVE) \
+		$(WAST_TAB_O) $(WAST_LEX_O) \
+		-nostdlib -static \
+		-Wl,--gc-sections -Wl,--print-gc-sections \
+		-o /dev/null 2>&1 \
+		| grep '\.text\.' \
+		| sed 's/.*\.text\.//; s/'"'"' in file.*//' \
+		| grep -v -e '^waste_' -e '^wasm_leb_encode' -e '^wasm_writer' \
+			-e '^wasm_reader_read_s33' -e '^wasm_reader_remaining' \
+			-e '^wasm_decode_module_imports' \
+			-e '^wast_stream' -e '^wast_command' -e '^wast_builder' \
+			-e '^wast_v128' \
+			-e '^native_registered' -e '^native_selected' \
+			-e '^abs$$' -e '^copysign$$' -e '^fmax$$' -e '^fmin$$' \
+			-e '^frexp' -e '^fwrite$$' -e '^ldexp' -e '^strcpy$$' \
+			-e '^strerror$$' \
+		| sort -u; \
+		echo "---"; \
+		echo "(Public API, freestanding lib, and parser functions are excluded)"
 
 # ---- Compile generated parser objects ----
 
@@ -155,7 +184,8 @@ $(I32_SMOKE_TARGET): ../../tests/c-engine-i32-smoke.c $(ENGINE_DIR)/wasm/load.c 
 		$(ENGINE_DIR)/op/execute_simd.c \
 		$(ENGINE_DIR)/op/execute_gc.c \
 		$(ENGINE_DIR)/op/execute_exception.c \
-		$(ENGINE_DIR)/op/execute_table.c $(ENGINE_DIR)/instance.c \
+		$(ENGINE_DIR)/op/execute_table.c \
+		$(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_DIR)/instance.c \
 		$(ENGINE_DIR)/api.c \
 		$(ENGINE_DIR)/engine_internal.h $(ENGINE_DIR)/wasm/opcode.h $(ENGINE_DIR)/wat/types.h \
 		$(ENGINE_DIR)/wasm/leb.h $(ENGINE_DIR)/wasm/reader.h \
@@ -165,7 +195,7 @@ $(I32_SMOKE_TARGET): ../../tests/c-engine-i32-smoke.c $(ENGINE_DIR)/wasm/load.c 
 		$(ENGINE_DIR)/include/waste.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
-		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
 		../../tests/c-engine-i32-smoke.c $(ENGINE_DIR)/wasm/load.c \
 		$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/leb.c \
 		$(ENGINE_DIR)/wasm/reader.c $(ENGINE_DIR)/wasm/module.c \
@@ -176,7 +206,8 @@ $(I32_SMOKE_TARGET): ../../tests/c-engine-i32-smoke.c $(ENGINE_DIR)/wasm/load.c 
 		$(ENGINE_DIR)/op/execute_simd.c \
 		$(ENGINE_DIR)/op/execute_gc.c \
 		$(ENGINE_DIR)/op/execute_exception.c \
-		$(ENGINE_DIR)/op/execute_table.c $(ENGINE_DIR)/instance.c \
+		$(ENGINE_DIR)/op/execute_table.c \
+		$(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_DIR)/instance.c \
 		$(ENGINE_DIR)/api.c \
 		-lm -o $@
 
@@ -237,14 +268,38 @@ $(PARSER_REENTRANT_TEST_TARGET): ../../tests/wast-parser-reentrant.c \
 
 $(WASM_VALIDATION_TEST_TARGET): ../../tests/wasm-validation.c \
 		$(ENGINE_DIR)/op/validate.c $(ENGINE_DIR)/wasm/opcode.c \
-		$(ENGINE_DIR)/op/validate.h \
+		$(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_DIR)/op/execute.c \
+		$(ENGINE_DIR)/op/execute_memory.c \
+		$(ENGINE_DIR)/op/execute_numeric.c \
+		$(ENGINE_DIR)/op/execute_simd.c \
+		$(ENGINE_DIR)/op/execute_gc.c \
+		$(ENGINE_DIR)/op/execute_exception.c \
+		$(ENGINE_DIR)/op/execute_table.c \
+		$(ENGINE_DIR)/instantiate.c $(ENGINE_DIR)/instance.c \
+		$(ENGINE_DIR)/api.c \
+		$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
+		$(ENGINE_DIR)/wasm/module.c $(ENGINE_DIR)/wasm/decode.c \
+		$(ENGINE_DIR)/wasm/load.c \
+		$(ENGINE_DIR)/op/validate.h $(WAST_GEN_DIR)/dispatch_gen.h \
 		$(ENGINE_DIR)/runtime_internal.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
-		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
 		../../tests/wasm-validation.c \
 		$(ENGINE_DIR)/op/validate.c $(ENGINE_DIR)/wasm/opcode.c \
-		-o $@
+		$(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_DIR)/op/execute.c \
+		$(ENGINE_DIR)/op/execute_memory.c \
+		$(ENGINE_DIR)/op/execute_numeric.c \
+		$(ENGINE_DIR)/op/execute_simd.c \
+		$(ENGINE_DIR)/op/execute_gc.c \
+		$(ENGINE_DIR)/op/execute_exception.c \
+		$(ENGINE_DIR)/op/execute_table.c \
+		$(ENGINE_DIR)/instantiate.c $(ENGINE_DIR)/instance.c \
+		$(ENGINE_DIR)/api.c \
+		$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
+		$(ENGINE_DIR)/wasm/module.c $(ENGINE_DIR)/wasm/decode.c \
+		$(ENGINE_DIR)/wasm/load.c \
+		-lm -o $@
 
 clean:
 	rm -f $(WAST_TARGET) $(I32_SMOKE_TARGET) $(WASM_BINARY_TEST_TARGET) \

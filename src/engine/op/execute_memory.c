@@ -1,4 +1,5 @@
 #include "../runtime_internal.h"
+#include "wasm/opcode.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -59,28 +60,15 @@ exec_status exec_memory_instruction(waste_exec_context *context,
 
     if (instr->opcode >= 0x28 && instr->opcode <= 0x35) {
         wasm_value base, value;
-        uint32_t width;
         size_t address = 0;
-        int sign = 0;
         exec_memory *memory = eng->memories[instr->memory_index];
         if (!stack_pop(stack, &base))
             return exec_fail(err, EXEC_ERROR_TRAP, "load address missing");
-        switch (instr->opcode) {
-            case 0x28: width = 4; value.type = WASM_VALTYPE_I32; break;
-            case 0x29: width = 8; value.type = WASM_VALTYPE_I64; break;
-            case 0x2a: width = 4; value.type = WASM_VALTYPE_F32; break;
-            case 0x2b: width = 8; value.type = WASM_VALTYPE_F64; break;
-            case 0x2c: width = 1; value.type = WASM_VALTYPE_I32; sign = 1; break;
-            case 0x2d: width = 1; value.type = WASM_VALTYPE_I32; break;
-            case 0x2e: width = 2; value.type = WASM_VALTYPE_I32; sign = 1; break;
-            case 0x2f: width = 2; value.type = WASM_VALTYPE_I32; break;
-            case 0x30: width = 1; value.type = WASM_VALTYPE_I64; sign = 1; break;
-            case 0x31: width = 1; value.type = WASM_VALTYPE_I64; break;
-            case 0x32: width = 2; value.type = WASM_VALTYPE_I64; sign = 1; break;
-            case 0x33: width = 2; value.type = WASM_VALTYPE_I64; break;
-            case 0x34: width = 4; value.type = WASM_VALTYPE_I64; sign = 1; break;
-            default: width = 4; value.type = WASM_VALTYPE_I64; break;
-        }
+        const wasm_opcode_info *op_info =
+            wasm_opcode_get_info(instr->opcode);
+        uint32_t width = op_info->load_width;
+        value.type = (wasm_valtype)op_info->result_type;
+        int sign = op_info->sign_extend;
         uint64_t base_address = memory->is_64 ? (uint64_t)base.i64 :
                                                (uint64_t)(uint32_t)base.i32;
         exec_status status = memory_address(memory, base_address,
@@ -109,32 +97,25 @@ exec_status exec_memory_instruction(waste_exec_context *context,
 
     if (instr->opcode >= 0x36 && instr->opcode <= 0x3e) {
         wasm_value value, base;
-        uint32_t width;
         size_t address = 0;
         uint64_t bits;
         exec_memory *memory = eng->memories[instr->memory_index];
         if (!stack_pop(stack, &value) || !stack_pop(stack, &base))
             return exec_fail(err, EXEC_ERROR_TRAP,
                              "store operands missing");
-        switch (instr->opcode) {
-            case 0x36: width = 4; bits = (uint32_t)value.i32; break;
-            case 0x37: width = 8; bits = (uint64_t)value.i64; break;
-            case 0x38: {
-                uint32_t word;
-                width = 4;
-                memcpy(&word, &value.f32, sizeof(word));
-                bits = word;
-                break;
-            }
-            case 0x39:
-                width = 8;
-                memcpy(&bits, &value.f64, sizeof(bits));
-                break;
-            case 0x3a: width = 1; bits = (uint32_t)value.i32; break;
-            case 0x3b: width = 2; bits = (uint32_t)value.i32; break;
-            case 0x3c: width = 1; bits = (uint64_t)value.i64; break;
-            case 0x3d: width = 2; bits = (uint64_t)value.i64; break;
-            default: width = 4; bits = (uint64_t)value.i64; break;
+        const wasm_opcode_info *st_info =
+            wasm_opcode_get_info(instr->opcode);
+        uint32_t width = st_info->load_width;
+        if (st_info->operand_type == WASM_VALTYPE_F32) {
+            uint32_t word;
+            memcpy(&word, &value.f32, sizeof(word));
+            bits = word;
+        } else if (st_info->operand_type == WASM_VALTYPE_F64) {
+            memcpy(&bits, &value.f64, sizeof(bits));
+        } else if (st_info->operand_type == WASM_VALTYPE_I64) {
+            bits = (uint64_t)value.i64;
+        } else {
+            bits = (uint32_t)value.i32;
         }
         uint64_t base_address = memory->is_64 ? (uint64_t)base.i64 :
                                                (uint64_t)(uint32_t)base.i32;
