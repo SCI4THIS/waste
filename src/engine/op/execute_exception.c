@@ -88,17 +88,18 @@ static int exception_reference(waste_exec_engine *eng, const exec_tag *tag,
  * Returns 0 when it must propagate, 1 after branching to a local handler,
  * 2 when the handler branches to the function label, and -1 on a runtime
  * failure while materializing an exception reference. */
-int handle_exception(waste_exec_engine *eng, exec_func *func,
-                            exec_stack *stack, exec_control *controls,
-                            int *control_top, uint32_t *pc,
-                            const exec_tag *tag, const wasm_value *payload,
-                            int payload_count, waste_exec_engine *source_owner,
-                            uint32_t source_reference, exec_error *err) {
+int handle_exception(waste_exec_context *ctx,
+                     const exec_tag *tag, const wasm_value *payload,
+                     int payload_count, waste_exec_engine *source_owner,
+                     uint32_t source_reference) {
+    waste_exec_engine *eng = ctx->engine;
+    exec_error *err = ctx->error;
     int try_index = -1;
     const exec_catch *selected = NULL;
-    for (int i = *control_top - 1; i >= 0 && !selected; i--) {
-        if (controls[i].kind != 0x1f) continue;
-        const exec_instr *try_instr = &func->code[controls[i].start_pc - 1];
+    for (int i = *ctx->control_top - 1; i >= 0 && !selected; i--) {
+        if (ctx->controls[i].kind != 0x1f) continue;
+        const exec_instr *try_instr =
+            &ctx->function->code[ctx->controls[i].start_pc - 1];
         for (uint32_t j = 0; j < try_instr->catch_count; j++) {
             const exec_catch *catch_ = &try_instr->catches[j];
             if (catch_->kind >= 2 ||
@@ -116,10 +117,10 @@ int handle_exception(waste_exec_engine *eng, exec_func *func,
         return -1;
     }
 
-    stack->top = controls[try_index].stack_height;
+    ctx->operand_stack->top = ctx->controls[try_index].stack_height;
     if (selected->kind < 2)
         for (int i = 0; i < payload_count; i++)
-            if (!stack_push(stack, payload[i])) {
+            if (!stack_push(ctx->operand_stack, payload[i])) {
                 exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
                 return -1;
             }
@@ -129,7 +130,7 @@ int handle_exception(waste_exec_engine *eng, exec_func *func,
                                  source_owner, source_reference, &reference,
                                  err))
             return -1;
-        if (!stack_push(stack, reference)) {
+        if (!stack_push(ctx->operand_stack, reference)) {
             exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
             return -1;
         }
@@ -146,26 +147,27 @@ int handle_exception(waste_exec_engine *eng, exec_func *func,
     if (selected->depth == (uint32_t)try_index) return 2;
 
     int target_index = try_index - 1 - (int)selected->depth;
-    exec_control target = controls[target_index];
+    exec_control target = ctx->controls[target_index];
     wasm_value carried[WAST_MAX_RESULTS];
-    if (target.branch_arity > stack->top - target.stack_height) {
+    if (target.branch_arity >
+        ctx->operand_stack->top - target.stack_height) {
         exec_fail(err, EXEC_ERROR_TRAP, "catch branch values missing");
         return -1;
     }
     for (int i = target.branch_arity; i-- > 0;)
-        stack_pop(stack, &carried[i]);
-    stack->top = target.stack_height;
+        stack_pop(ctx->operand_stack, &carried[i]);
+    ctx->operand_stack->top = target.stack_height;
     for (int i = 0; i < target.branch_arity; i++)
-        if (!stack_push(stack, carried[i])) {
+        if (!stack_push(ctx->operand_stack, carried[i])) {
             exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
             return -1;
         }
     if (target.kind == 0x03) {
-        *control_top = target_index + 1;
-        *pc = target.start_pc - 1;
+        *ctx->control_top = target_index + 1;
+        *ctx->pc = target.start_pc - 1;
     } else {
-        *control_top = target_index;
-        *pc = target.end_pc;
+        *ctx->control_top = target_index;
+        *ctx->pc = target.end_pc;
     }
     return 1;
 }

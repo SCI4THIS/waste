@@ -236,8 +236,6 @@ typedef struct {
     int *tail_arg_count;
 } waste_exec_context;
 
-exec_status exec_fail(exec_error *error, exec_status status,
-                      const char *message);
 exec_status exec_raise(exec_error *error, const exec_tag *tag,
                        const wasm_value *payload, int payload_count,
                        waste_exec_engine *owner, uint32_t reference);
@@ -282,12 +280,10 @@ wasm_value packed_field_value(wasm_value value, uint8_t packed);
 int gc_push(exec_stack *stack, wasm_value value, exec_error *error);
 exec_exception_object *exception_object(waste_exec_engine *engine,
                                         const wasm_value *value);
-int handle_exception(waste_exec_engine *engine, exec_func *function,
-                     exec_stack *stack, exec_control *controls,
-                     int *control_top, uint32_t *pc,
+int handle_exception(waste_exec_context *ctx,
                      const exec_tag *tag, const wasm_value *payload,
                      int payload_count, waste_exec_engine *source_owner,
-                     uint32_t source_reference, exec_error *error);
+                     uint32_t source_reference);
 
 int exec_standard_simd_integer(uint32_t operation, uint32_t lane_index,
                                const wasm_v128 *immediate,

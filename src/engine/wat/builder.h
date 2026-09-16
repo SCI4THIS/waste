@@ -7,6 +7,8 @@
 
 typedef struct wat_context wat_context;
 
+int hex_digit(unsigned char c);
+
 wat_context *wast_builder_context_create(void);
 void wast_builder_context_destroy(wat_context *context);
 char *wast_builder_retain_string(wat_context *context,

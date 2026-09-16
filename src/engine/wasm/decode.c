@@ -17,7 +17,7 @@ static wasm_decode_status decode_fail(wasm_decode_error *error,
     return status;
 }
 
-static int valid_utf8(const uint8_t *bytes, size_t length) {
+int valid_utf8(const uint8_t *bytes, size_t length) {
     size_t i = 0;
     while (i < length) {
         uint8_t first = bytes[i++];

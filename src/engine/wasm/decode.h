@@ -33,6 +33,9 @@ wasm_decode_status wasm_decode_module_imports(const uint8_t *bytes, size_t size,
                                                wasm_module *module,
                                                wasm_decode_error *error);
 
+/* UTF-8 validator shared across subsystems. */
+int valid_utf8(const uint8_t *bytes, size_t length);
+
 /* Shared binary value-type decoder used by imports and the current executor. */
 int wasm_decode_byte_valtype(uint8_t byte, wasm_valtype *out);
 int wasm_decode_valtype(wasm_reader *reader, wasm_valtype *out);

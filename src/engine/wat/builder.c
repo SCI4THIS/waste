@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static int hex_digit(unsigned char c) {
+int hex_digit(unsigned char c) {
     if (c >= '0' && c <= '9') return c - '0';
     c = (unsigned char)(c | 0x20u);
     return c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;

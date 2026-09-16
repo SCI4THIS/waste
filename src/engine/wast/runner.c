@@ -4,6 +4,7 @@
 #include "wat/types.h"
 #include "engine_internal.h"
 #include "wasm/encode.h"
+#include "wasm/decode.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -13,12 +14,6 @@
 
 static int wast_parse_bytes_mode(const char *bytes, size_t length,
                                  wast_script *script, int strict_wat_mode);
-
-static int raw_hex_digit(unsigned char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    c = (unsigned char)(c | 0x20u);
-    return c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
-}
 
 static int raw_append(uint8_t **bytes, size_t *length, size_t *capacity,
                       uint8_t value) {
@@ -60,37 +55,6 @@ static int raw_append_utf8(uint8_t **bytes, size_t *length, size_t *capacity,
                       (uint8_t)(0x80u | (codepoint & 0x3fu)));
 }
 
-static int raw_valid_utf8(const uint8_t *bytes, size_t length) {
-    size_t i = 0;
-    while (i < length) {
-        uint8_t first = bytes[i++];
-        if (first <= 0x7f) continue;
-        if (first >= 0xc2 && first <= 0xdf) {
-            if (i >= length || bytes[i] < 0x80 || bytes[i] > 0xbf) return 0;
-            i++;
-        } else if (first >= 0xe0 && first <= 0xef) {
-            if (i + 1 >= length) return 0;
-            uint8_t second = bytes[i], third = bytes[i + 1];
-            if (third < 0x80 || third > 0xbf ||
-                (first == 0xe0 && (second < 0xa0 || second > 0xbf)) ||
-                (first == 0xed && (second < 0x80 || second > 0x9f)) ||
-                (first != 0xe0 && first != 0xed &&
-                 (second < 0x80 || second > 0xbf))) return 0;
-            i += 2;
-        } else if (first >= 0xf0 && first <= 0xf4) {
-            if (i + 2 >= length) return 0;
-            uint8_t second = bytes[i], third = bytes[i + 1], fourth = bytes[i + 2];
-            if (third < 0x80 || third > 0xbf || fourth < 0x80 || fourth > 0xbf ||
-                (first == 0xf0 && (second < 0x90 || second > 0xbf)) ||
-                (first == 0xf4 && (second < 0x80 || second > 0x8f)) ||
-                (first != 0xf0 && first != 0xf4 &&
-                 (second < 0x80 || second > 0xbf))) return 0;
-            i += 3;
-        } else return 0;
-    }
-    return 1;
-}
-
 static int raw_decode_string(const char *source, size_t begin, size_t end,
                              uint8_t **bytes, size_t *length,
                              size_t *capacity) {
@@ -102,9 +66,9 @@ static int raw_decode_string(const char *source, size_t begin, size_t end,
         }
         if (++i >= end) return 1;
         c = (unsigned char)source[i];
-        int high = raw_hex_digit(c);
+        int high = hex_digit(c);
         int low = i + 1 < end ?
-                  raw_hex_digit((unsigned char)source[i + 1]) : -1;
+                  hex_digit((unsigned char)source[i + 1]) : -1;
         if (high >= 0 && low >= 0) {
             if (!raw_append(bytes, length, capacity,
                             (uint8_t)((high << 4) | low))) return 0;
@@ -113,7 +77,7 @@ static int raw_decode_string(const char *source, size_t begin, size_t end,
             uint32_t codepoint = 0;
             i += 2;
             while (i < end && source[i] != '}') {
-                int digit = raw_hex_digit((unsigned char)source[i++]);
+                int digit = hex_digit((unsigned char)source[i++]);
                 if (digit >= 0 && codepoint <= 0x10ffffu / 16u)
                     codepoint = codepoint * 16u + (uint32_t)digit;
             }
@@ -130,7 +94,7 @@ static int raw_decode_string(const char *source, size_t begin, size_t end,
 
 static int raw_quote_text_is_lexically_valid(const uint8_t *source,
                                              size_t length) {
-    if (!raw_valid_utf8(source, length)) return 0;
+    if (!valid_utf8(source, length)) return 0;
     int paren_depth = 0;
     int block_comment_depth = 0;
     int line_comment = 0;
@@ -239,7 +203,7 @@ static int raw_quote_text_is_lexically_valid(const uint8_t *source,
         size_t decoded_length = 0, capacity = 0;
         int ok = raw_decode_string((const char *)source, begin, i,
                                    &decoded, &decoded_length, &capacity) &&
-                 raw_valid_utf8(decoded, decoded_length);
+                 valid_utf8(decoded, decoded_length);
         free(decoded);
         if (!ok) return 0;
         if (i + 1 < length) {
@@ -297,7 +261,7 @@ static int annotation_string(const char *source, size_t length, size_t *at,
     size_t size = 0, capacity = 0;
     int ok = raw_decode_string(source, begin, cursor, &decoded, &size,
                                &capacity);
-    if (ok && require_utf8) ok = raw_valid_utf8(decoded, size);
+    if (ok && require_utf8) ok = valid_utf8(decoded, size);
     if (first) *first = size ? decoded[0] : 0;
     if (decoded_size) *decoded_size = size;
     free(decoded);

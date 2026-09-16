@@ -28,16 +28,9 @@ static void invalidate_jump_frame(waste_exec_engine *eng, uint32_t depth,
     }
 }
 
-static exec_status save_jump_frame(waste_exec_engine *eng,
-                                   uint32_t environment, uint32_t depth,
-                                   uint64_t frame_generation,
-                                   uint32_t func_idx, uint32_t pc,
-                                   const exec_stack *stack,
-                                   const exec_control *controls,
-                                   int control_top,
-                                   const wasm_value *locals,
-                                   uint32_t local_count,
-                                   exec_error *err) {
+static exec_status save_jump_frame(waste_exec_context *ctx,
+                                   uint32_t environment) {
+    waste_exec_engine *eng = ctx->engine;
     exec_jump_snapshot *snapshot = (void *)0;
     for (uint32_t i = 0; i < eng->jump_snapshot_count; i++)
         if (eng->jump_snapshots[i].environment == environment) {
@@ -51,7 +44,7 @@ static exec_status save_jump_frame(waste_exec_engine *eng,
             exec_jump_snapshot *next = (exec_jump_snapshot *)realloc(
                 eng->jump_snapshots, (size_t)capacity * sizeof(*next));
             if (!next)
-                return exec_fail(err, EXEC_ERROR_TRAP,
+                return exec_fail(ctx->error, EXEC_ERROR_TRAP,
                                  "setjmp snapshot allocation failed");
             memset(next + eng->jump_snapshot_capacity, 0,
                    (size_t)(capacity - eng->jump_snapshot_capacity) *
@@ -61,37 +54,34 @@ static exec_status save_jump_frame(waste_exec_engine *eng,
         }
         snapshot = &eng->jump_snapshots[eng->jump_snapshot_count++];
     }
-    if (local_count) {
+    if (ctx->local_count) {
         wasm_value *next = (wasm_value *)realloc(
-            snapshot->locals, (size_t)local_count * sizeof(*next));
+            snapshot->locals, (size_t)ctx->local_count * sizeof(*next));
         if (!next)
-            return exec_fail(err, EXEC_ERROR_TRAP,
+            return exec_fail(ctx->error, EXEC_ERROR_TRAP,
                              "setjmp locals allocation failed");
         snapshot->locals = next;
-        memcpy(snapshot->locals, locals,
-               (size_t)local_count * sizeof(*locals));
+        memcpy(snapshot->locals, ctx->locals,
+               (size_t)ctx->local_count * sizeof(*ctx->locals));
     }
     snapshot->valid = 1;
     snapshot->environment = environment;
-    snapshot->depth = depth;
-    snapshot->frame_generation = frame_generation;
-    snapshot->func_idx = func_idx;
-    snapshot->pc = pc;
-    snapshot->stack = *stack;
-    snapshot->control_top = control_top;
-    if (control_top)
-        memcpy(snapshot->controls, controls,
-               (size_t)control_top * sizeof(*controls));
-    snapshot->local_count = local_count;
+    snapshot->depth = ctx->depth;
+    snapshot->frame_generation = ctx->frame_generation;
+    snapshot->func_idx = ctx->function_index;
+    snapshot->pc = *ctx->pc;
+    snapshot->stack = *ctx->operand_stack;
+    snapshot->control_top = *ctx->control_top;
+    if (*ctx->control_top)
+        memcpy(snapshot->controls, ctx->controls,
+               (size_t)*ctx->control_top * sizeof(*ctx->controls));
+    snapshot->local_count = ctx->local_count;
     return EXEC_OK;
 }
 
-static int restore_jump_frame(waste_exec_engine *eng, exec_error *err,
-                              uint32_t depth, uint64_t frame_generation,
-                              uint32_t func_idx, uint32_t *pc,
-                              exec_stack *stack, exec_control *controls,
-                              int *control_top, wasm_value *locals,
-                              uint32_t local_count) {
+static int restore_jump_frame(waste_exec_context *ctx) {
+    waste_exec_engine *eng = ctx->engine;
+    exec_error *err = ctx->error;
     if (!err || err->status != EXEC_ERROR_LONGJMP ||
         err->jump_owner != eng)
         return 0;
@@ -99,32 +89,70 @@ static int restore_jump_frame(waste_exec_engine *eng, exec_error *err,
         exec_jump_snapshot *snapshot = &eng->jump_snapshots[i];
         if (!snapshot->valid ||
             snapshot->environment != err->jump_environment ||
-            snapshot->depth != depth ||
-            snapshot->frame_generation != frame_generation ||
-            snapshot->func_idx != func_idx)
+            snapshot->depth != ctx->depth ||
+            snapshot->frame_generation != ctx->frame_generation ||
+            snapshot->func_idx != ctx->function_index)
             continue;
-        if (snapshot->local_count != local_count) {
+        if (snapshot->local_count != ctx->local_count) {
             exec_fail(err, EXEC_ERROR_TRAP, "setjmp frame shape changed");
             return -1;
         }
-        *pc = snapshot->pc;
-        *stack = snapshot->stack;
-        *control_top = snapshot->control_top;
-        if (*control_top)
-            memcpy(controls, snapshot->controls,
-                   (size_t)*control_top * sizeof(*controls));
-        if (local_count)
-            memcpy(locals, snapshot->locals,
-                   (size_t)local_count * sizeof(*locals));
+        *ctx->pc = snapshot->pc;
+        *ctx->operand_stack = snapshot->stack;
+        *ctx->control_top = snapshot->control_top;
+        if (*ctx->control_top)
+            memcpy(ctx->controls, snapshot->controls,
+                   (size_t)*ctx->control_top * sizeof(*ctx->controls));
+        if (ctx->local_count)
+            memcpy(ctx->locals, snapshot->locals,
+                   (size_t)ctx->local_count * sizeof(*ctx->locals));
         int32_t value = err->jump_value ? err->jump_value : 1;
         memset(err, 0, sizeof(*err));
-        if (!stack_push(stack, i32_value((uint32_t)value))) {
+        if (!stack_push(ctx->operand_stack, i32_value((uint32_t)value))) {
             exec_fail(err, EXEC_ERROR_TRAP, "stack overflow after longjmp");
             return -1;
         }
         return 1;
     }
     return 0;
+}
+
+/* Handle post-call status: exceptions, longjmp, normal errors, and success.
+ * Callers must check EXEC_YIELD and restore arguments before calling this. */
+static int handle_call_result(waste_exec_context *ctx,
+                              exec_status status,
+                              const wasm_value *call_results,
+                              int call_result_count) {
+    if (status == EXEC_ERROR_EXCEPTION) {
+        int handled = handle_exception(
+            ctx, ctx->error->exception_tag, ctx->error->exception_payload,
+            ctx->error->exception_payload_count, ctx->error->exception_owner,
+            ctx->error->exception_ref);
+        if (handled < 0) return ctx->error->status;
+        if (handled == 0) return EXEC_ERROR_EXCEPTION;
+        if (handled == 2) return WASM_DISPATCH_RETURN;
+        return EXEC_OK;
+    }
+    if (status == EXEC_ERROR_LONGJMP) {
+        int restored = restore_jump_frame(ctx);
+        if (restored < 0) return ctx->error->status;
+        if (restored > 0) return EXEC_OK;
+        invalidate_jump_frame(ctx->engine, ctx->depth, ctx->frame_generation);
+        return EXEC_ERROR_LONGJMP;
+    }
+    if (status != EXEC_OK) return status;
+    for (int i = 0; i < call_result_count; i++)
+        if (!stack_push(ctx->operand_stack, call_results[i]))
+            return exec_fail(ctx->error, EXEC_ERROR_TRAP, "stack overflow");
+    return EXEC_OK;
+}
+
+static void save_yield_frame(waste_exec_context *ctx) {
+    waste_exec_engine *eng = ctx->engine;
+    eng->yield_frames[ctx->depth].valid = 1;
+    eng->yield_frames[ctx->depth].func_idx = ctx->function_index;
+    eng->yield_frames[ctx->depth].pc = *ctx->pc;
+    eng->yield_frames[ctx->depth].control_top = *ctx->control_top;
 }
 
 /* ---- Invoke ---- */
@@ -207,10 +235,8 @@ int execute_op_throw(waste_exec_context *ctx, const exec_instr *instr) {
     exec_raise(ctx->error, eng->tags[instr->u32_imm], payload,
                tag_type->param_count, NULL, UINT32_MAX);
     int handled = handle_exception(
-        eng, ctx->function, ctx->operand_stack, ctx->controls,
-        ctx->control_top, ctx->pc,
-        eng->tags[instr->u32_imm], payload, tag_type->param_count,
-        NULL, UINT32_MAX, ctx->error);
+        ctx, eng->tags[instr->u32_imm], payload, tag_type->param_count,
+        NULL, UINT32_MAX);
     if (handled < 0) return ctx->error ? ctx->error->status : EXEC_ERROR_TRAP;
     if (handled == 0) return EXEC_ERROR_EXCEPTION;
     if (handled == 2) return WASM_DISPATCH_RETURN;
@@ -236,10 +262,8 @@ int execute_op_throw_ref(waste_exec_context *ctx, const exec_instr *instr) {
     exec_raise(ctx->error, object->tag, object->payload,
                object->payload_count, eng, reference.ref);
     int handled = handle_exception(
-        eng, ctx->function, ctx->operand_stack, ctx->controls,
-        ctx->control_top, ctx->pc,
-        object->tag, object->payload, object->payload_count,
-        eng, reference.ref, ctx->error);
+        ctx, object->tag, object->payload, object->payload_count,
+        eng, reference.ref);
     if (handled < 0) return ctx->error ? ctx->error->status : EXEC_ERROR_TRAP;
     if (handled == 0) return EXEC_ERROR_EXCEPTION;
     if (handled == 2) return WASM_DISPATCH_RETURN;
@@ -552,10 +576,7 @@ int execute_op_call(waste_exec_context *ctx, const exec_instr *instr) {
             return exec_fail(ctx->error, EXEC_ERROR_TRAP,
                              "unsupported sigsetjmp signature");
         exec_status saved = save_jump_frame(
-            eng, (uint32_t)call_args[0].i32, ctx->depth,
-            ctx->frame_generation, ctx->function_index, *ctx->pc,
-            ctx->operand_stack, ctx->controls,
-            *ctx->control_top, ctx->locals, ctx->local_count, ctx->error);
+            ctx, (uint32_t)call_args[0].i32);
         if (saved != EXEC_OK) return saved;
         if (!stack_push(ctx->operand_stack, i32_value(0)))
             return exec_fail(ctx->error, EXEC_ERROR_TRAP,
@@ -565,43 +586,13 @@ int execute_op_call(waste_exec_context *ctx, const exec_instr *instr) {
     exec_status status = exec_invoke_managed(
         eng, instr->u32_imm, call_args, callee_type->param_count,
         call_results, &call_result_count, ctx->error);
-    if (status == EXEC_ERROR_EXCEPTION) {
-        int handled = handle_exception(
-            eng, ctx->function, ctx->operand_stack, ctx->controls,
-            ctx->control_top, ctx->pc,
-            ctx->error->exception_tag, ctx->error->exception_payload,
-            ctx->error->exception_payload_count, ctx->error->exception_owner,
-            ctx->error->exception_ref, ctx->error);
-        if (handled < 0) return ctx->error->status;
-        if (handled == 0) return status;
-        if (handled == 2) return WASM_DISPATCH_RETURN;
-        return EXEC_OK;
-    }
-    if (status == EXEC_ERROR_LONGJMP) {
-        int restored = restore_jump_frame(
-            eng, ctx->error, ctx->depth, ctx->frame_generation,
-            ctx->function_index, ctx->pc,
-            ctx->operand_stack, ctx->controls, ctx->control_top,
-            ctx->locals, ctx->local_count);
-        if (restored < 0) return ctx->error->status;
-        if (restored > 0) return EXEC_OK;
-        invalidate_jump_frame(eng, ctx->depth, ctx->frame_generation);
-        return status;
-    }
     if (status == EXEC_YIELD) {
         for (int i = 0; i < callee_type->param_count; i++)
             stack_push(ctx->operand_stack, call_args[i]);
-        eng->yield_frames[ctx->depth].valid = 1;
-        eng->yield_frames[ctx->depth].func_idx = ctx->function_index;
-        eng->yield_frames[ctx->depth].pc = *ctx->pc;
-        eng->yield_frames[ctx->depth].control_top = *ctx->control_top;
+        save_yield_frame(ctx);
         return EXEC_YIELD;
     }
-    if (status != EXEC_OK) return status;
-    for (int i = 0; i < call_result_count; i++)
-        if (!stack_push(ctx->operand_stack, call_results[i]))
-            return exec_fail(ctx->error, EXEC_ERROR_TRAP, "stack overflow");
-    return EXEC_OK;
+    return handle_call_result(ctx, status, call_results, call_result_count);
 }
 
 int execute_op_call_indirect(waste_exec_context *ctx, const exec_instr *instr) {
@@ -658,41 +649,14 @@ int execute_op_call_indirect(waste_exec_context *ctx, const exec_instr *instr) {
     exec_status status = exec_invoke_managed(
         teng, target, call_args, expected->param_count,
         call_results, &call_result_count, ctx->error);
-    if (status == EXEC_ERROR_EXCEPTION) {
-        int handled = handle_exception(eng, ctx->function, ctx->operand_stack,
-            ctx->controls, ctx->control_top, ctx->pc, ctx->error->exception_tag,
-            ctx->error->exception_payload, ctx->error->exception_payload_count,
-            ctx->error->exception_owner, ctx->error->exception_ref, ctx->error);
-        if (handled < 0) return ctx->error->status;
-        if (handled == 0) return status;
-        if (handled == 2) return WASM_DISPATCH_RETURN;
-        return EXEC_OK;
-    }
-    if (status == EXEC_ERROR_LONGJMP) {
-        int restored = restore_jump_frame(
-            eng, ctx->error, ctx->depth, ctx->frame_generation,
-            ctx->function_index, ctx->pc, ctx->operand_stack,
-            ctx->controls, ctx->control_top, ctx->locals, ctx->local_count);
-        if (restored < 0) return ctx->error->status;
-        if (restored > 0) return EXEC_OK;
-        invalidate_jump_frame(eng, ctx->depth, ctx->frame_generation);
-        return status;
-    }
     if (status == EXEC_YIELD) {
         for (int i = 0; i < expected->param_count; i++)
             stack_push(ctx->operand_stack, call_args[i]);
         stack_push(ctx->operand_stack, table_operand);
-        eng->yield_frames[ctx->depth].valid = 1;
-        eng->yield_frames[ctx->depth].func_idx = ctx->function_index;
-        eng->yield_frames[ctx->depth].pc = *ctx->pc;
-        eng->yield_frames[ctx->depth].control_top = *ctx->control_top;
+        save_yield_frame(ctx);
         return EXEC_YIELD;
     }
-    if (status != EXEC_OK) return status;
-    for (int i = 0; i < call_result_count; i++)
-        if (!stack_push(ctx->operand_stack, call_results[i]))
-            return exec_fail(ctx->error, EXEC_ERROR_TRAP, "stack overflow");
-    return EXEC_OK;
+    return handle_call_result(ctx, status, call_results, call_result_count);
 }
 
 int execute_op_call_ref(waste_exec_context *ctx, const exec_instr *instr) {
@@ -739,45 +703,14 @@ int execute_op_call_ref(waste_exec_context *ctx, const exec_instr *instr) {
     exec_status status = exec_invoke_managed(
         eng, target, call_args, callee_type->param_count,
         call_results, &call_result_count, ctx->error);
-    if (status == EXEC_ERROR_EXCEPTION) {
-        int handled = handle_exception(
-            eng, ctx->function, ctx->operand_stack, ctx->controls,
-            ctx->control_top, ctx->pc,
-            ctx->error->exception_tag, ctx->error->exception_payload,
-            ctx->error->exception_payload_count, ctx->error->exception_owner,
-            ctx->error->exception_ref, ctx->error);
-        if (handled < 0) return ctx->error->status;
-        if (handled == 0) return status;
-        if (handled == 2) return WASM_DISPATCH_RETURN;
-        return EXEC_OK;
-    }
-    if (status == EXEC_ERROR_LONGJMP) {
-        int restored = restore_jump_frame(
-            eng, ctx->error, ctx->depth, ctx->frame_generation,
-            ctx->function_index, ctx->pc,
-            ctx->operand_stack, ctx->controls, ctx->control_top,
-            ctx->locals, ctx->local_count);
-        if (restored < 0) return ctx->error->status;
-        if (restored > 0) return EXEC_OK;
-        invalidate_jump_frame(eng, ctx->depth, ctx->frame_generation);
-        return status;
-    }
     if (status == EXEC_YIELD) {
         for (int i = 0; i < callee_type->param_count; i++)
             stack_push(ctx->operand_stack, call_args[i]);
         stack_push(ctx->operand_stack, reference);
-        eng->yield_frames[ctx->depth].valid = 1;
-        eng->yield_frames[ctx->depth].func_idx = ctx->function_index;
-        eng->yield_frames[ctx->depth].pc = *ctx->pc;
-        eng->yield_frames[ctx->depth].control_top = *ctx->control_top;
+        save_yield_frame(ctx);
         return EXEC_YIELD;
     }
-    if (status != EXEC_OK) return status;
-    for (int i = 0; i < call_result_count; i++)
-        if (!stack_push(ctx->operand_stack, call_results[i]))
-            return exec_fail(ctx->error, EXEC_ERROR_TRAP,
-                             "stack overflow");
-    return EXEC_OK;
+    return handle_call_result(ctx, status, call_results, call_result_count);
 }
 
 int execute_op_return(waste_exec_context *ctx, const exec_instr *instr) {

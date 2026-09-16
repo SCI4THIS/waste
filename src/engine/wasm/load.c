@@ -13,39 +13,6 @@
 #include <stdint.h>
 
 
-static int valid_utf8(const uint8_t *bytes, size_t length) {
-    size_t i = 0;
-    while (i < length) {
-        uint8_t first = bytes[i++];
-        if (first <= 0x7f) continue;
-        if (first >= 0xc2 && first <= 0xdf) {
-            if (i >= length || bytes[i] < 0x80 || bytes[i] > 0xbf) return 0;
-            i++;
-        } else if (first >= 0xe0 && first <= 0xef) {
-            if (i + 1 >= length) return 0;
-            uint8_t second = bytes[i], third = bytes[i + 1];
-            if (third < 0x80 || third > 0xbf ||
-                (first == 0xe0 && (second < 0xa0 || second > 0xbf)) ||
-                (first == 0xed && (second < 0x80 || second > 0x9f)) ||
-                (first != 0xe0 && first != 0xed &&
-                 (second < 0x80 || second > 0xbf))) return 0;
-            i += 2;
-        } else if (first >= 0xf0 && first <= 0xf4) {
-            if (i + 2 >= length) return 0;
-            uint8_t second = bytes[i], third = bytes[i + 1], fourth = bytes[i + 2];
-            if (third < 0x80 || third > 0xbf || fourth < 0x80 || fourth > 0xbf ||
-                (first == 0xf0 && (second < 0x90 || second > 0xbf)) ||
-                (first == 0xf4 && (second < 0x80 || second > 0x8f)) ||
-                (first != 0xf0 && first != 0xf4 &&
-                 (second < 0x80 || second > 0xbf))) return 0;
-            i += 3;
-        } else return 0;
-    }
-    return 1;
-}
-
-
-
 static const exec_host_import *find_host_import(const exec_imports *imports,
                                                  const char *module, const char *name) {
     if (!imports) return NULL;
@@ -83,16 +50,6 @@ static exec_tag *find_tag_import(const exec_imports *imports, const char *module
         if(strcmp(imports->tags[i].module,module)==0&&
            strcmp(imports->tags[i].name,name)==0)return imports->tags[i].tag;
     return NULL;
-}
-
-/* ---- Error helper ---- */
-
-exec_status exec_fail(exec_error *error, exec_status status, const char *msg) {
-    if (error) {
-        error->status = status;
-        snprintf(error->message, sizeof(error->message), "%s", msg);
-    }
-    return status;
 }
 
 /* ---- Type section ---- */

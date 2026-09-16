@@ -1,8 +1,17 @@
 #include "engine_internal.h"
 #include "runtime_internal.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+exec_status exec_fail(exec_error *error, exec_status status, const char *msg) {
+    if (error) {
+        error->status = status;
+        snprintf(error->message, sizeof(error->message), "%s", msg);
+    }
+    return status;
+}
 
 void exec_free(waste_exec_engine *engine) {
     if (!engine) return;

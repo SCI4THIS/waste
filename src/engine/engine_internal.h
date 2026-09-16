@@ -167,6 +167,8 @@ exec_status exec_load_decoded_with_imports(
  * be destroyed before the engine that owns a shared extern.
  */
 
+exec_status exec_fail(exec_error *error, exec_status status,
+                      const char *message);
 void exec_free(waste_exec_engine *engine);
 
 /* Find an exported function by name -> function index */
