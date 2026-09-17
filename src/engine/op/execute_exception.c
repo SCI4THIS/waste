@@ -148,20 +148,11 @@ int handle_exception(waste_exec_context *ctx,
 
     int target_index = try_index - 1 - (int)selected->depth;
     exec_control target = ctx->controls[target_index];
-    wasm_value carried[WAST_MAX_RESULTS];
-    if (target.branch_arity >
-        ctx->operand_stack->top - target.stack_height) {
+    if (!stack_carry(ctx->operand_stack, target.branch_arity,
+                      target.stack_height)) {
         exec_fail(err, EXEC_ERROR_TRAP, "catch branch values missing");
         return -1;
     }
-    for (int i = target.branch_arity; i-- > 0;)
-        stack_pop(ctx->operand_stack, &carried[i]);
-    ctx->operand_stack->top = target.stack_height;
-    for (int i = 0; i < target.branch_arity; i++)
-        if (!stack_push(ctx->operand_stack, carried[i])) {
-            exec_fail(err, EXEC_ERROR_TRAP, "stack overflow");
-            return -1;
-        }
     if (target.kind == 0x03) {
         *ctx->control_top = target_index + 1;
         *ctx->pc = target.start_pc - 1;

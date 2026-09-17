@@ -44,13 +44,6 @@ typedef enum {
      (unsigned)(t) < WASM_VALTYPE_TYPE_REF_LIMIT)
 #define WASM_VALTYPE_TYPE_REF_INDEX(t) ((unsigned)(t) & 0xffu)
 
-#define NAN_MATCH_EXACT      0
-#define NAN_MATCH_F32_CANON  1
-#define NAN_MATCH_F32_ARITH  2
-#define NAN_MATCH_F64_CANON  3
-#define NAN_MATCH_F64_ARITH  4
-#define REF_MATCH_NULL       255
-
 typedef struct {
     wasm_valtype type;
     union {

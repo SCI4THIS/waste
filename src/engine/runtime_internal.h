@@ -10,7 +10,6 @@ enum {
     EXEC_MAX_FUNCS = 8192,
     EXEC_MAX_EXPORTS = 65536,
     EXEC_MAX_NAME = WAST_MAX_EXPORT_NAME,
-    EXEC_MAX_INSTRS = 4096,
     EXEC_MAX_STACK = 256,
     EXEC_MAX_LOCALS = WAST_MAX_LOCALS,
     EXEC_MAX_CONTROL = 256,
@@ -21,6 +20,10 @@ enum {
     EXEC_PAGE_SIZE = 65536,
     EXEC_MAX_GC_OBJECT_BYTES = 64 * 1024 * 1024,
 };
+
+/* Maximum page counts for memory32 and memory64 */
+#define EXEC_MEM32_MAX_PAGES UINT64_C(65536)
+#define EXEC_MEM64_MAX_PAGES UINT64_C(0x1000000000000)
 
 typedef struct {
     uint8_t kind;
@@ -242,6 +245,20 @@ exec_status exec_raise(exec_error *error, const exec_tag *tag,
 
 int stack_push(exec_stack *stack, wasm_value value);
 int stack_pop(exec_stack *stack, wasm_value *value);
+
+/* Pop arity values, reset stack to target height, re-push.
+ * Returns 1 on success, 0 if the stack lacks sufficient values or
+ * overflows during re-push. */
+static inline int stack_carry(exec_stack *stack, int arity, int height) {
+    wasm_value carried[WAST_MAX_RESULTS];
+    if (arity > stack->top - height) return 0;
+    for (int i = arity; i-- > 0;) stack_pop(stack, &carried[i]);
+    stack->top = height;
+    for (int i = 0; i < arity; i++)
+        if (!stack_push(stack, carried[i])) return 0;
+    return 1;
+}
+
 wasm_value i32_value(uint32_t bits);
 wasm_value i64_value(uint64_t bits);
 int address_value(const wasm_value *value, int is_64, uint64_t *out);

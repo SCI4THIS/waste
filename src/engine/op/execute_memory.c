@@ -147,8 +147,8 @@ exec_status exec_memory_instruction(waste_exec_context *context,
     uint64_t old_pages = memory->pages;
     uint64_t add = memory->is_64 ? (uint64_t)delta.i64 :
                                    (uint64_t)(uint32_t)delta.i32;
-    uint64_t limit = memory->is_64 ? UINT64_C(0x1000000000000) :
-                                     UINT64_C(65536);
+    uint64_t limit = memory->is_64 ? EXEC_MEM64_MAX_PAGES :
+                                     EXEC_MEM32_MAX_PAGES;
     int failed = old_pages > UINT64_MAX - add;
     uint64_t pages = failed ? 0 : old_pages + add;
     if (failed || pages > limit ||

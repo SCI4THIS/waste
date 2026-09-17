@@ -268,9 +268,9 @@ static exec_status instantiate_imports(waste_exec_engine *eng,
             uint64_t initial = limits->minimum;
             uint64_t maximum = limits->maximum;
             if ((flags & 0xfau) ||
-                initial > ((flags&4u) ? UINT64_C(0x1000000000000) : UINT64_C(65536)) ||
+                initial > ((flags&4u) ? EXEC_MEM64_MAX_PAGES : EXEC_MEM32_MAX_PAGES) ||
                 ((flags&1u) && (maximum < initial ||
-                    maximum > ((flags&4u) ? UINT64_C(0x1000000000000) : UINT64_C(65536)))) ||
+                    maximum > ((flags&4u) ? EXEC_MEM64_MAX_PAGES : EXEC_MEM32_MAX_PAGES))) ||
                 eng->memory_count >= WAST_MAX_MEMORIES)
                 return exec_fail(err,EXEC_ERROR_FORMAT,"invalid memory import type");
             exec_memory *memory=find_memory_import(imports,module_name,name);
@@ -399,9 +399,9 @@ static exec_status parse_memory(waste_exec_engine *eng, wasm_reader *sec, exec_e
         uint8_t flags;
         if (!wasm_reader_read_u8(sec, &flags) || (flags & 0xfau) || !wasm_reader_read_u64(sec, &initial) ||
             ((flags & 1u) && !wasm_reader_read_u64(sec, &maximum)) ||
-            initial > ((flags&4u) ? UINT64_C(0x1000000000000) : UINT64_C(65536)) ||
+            initial > ((flags&4u) ? EXEC_MEM64_MAX_PAGES : EXEC_MEM32_MAX_PAGES) ||
             ((flags & 1u) &&
-             (maximum > ((flags&4u) ? UINT64_C(0x1000000000000) : UINT64_C(65536)) ||
+             (maximum > ((flags&4u) ? EXEC_MEM64_MAX_PAGES : EXEC_MEM32_MAX_PAGES) ||
               maximum < initial)))
             return exec_fail(err, EXEC_ERROR_FORMAT, "invalid memory limits");
         uint32_t index = eng->memory_count;

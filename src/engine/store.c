@@ -1,4 +1,5 @@
 #include "store.h"
+#include "runtime_internal.h"
 #include "wasm/encode.h"
 #include "wast/runner.h"
 #include "wasm/decode.h"
@@ -54,7 +55,7 @@ void native_store_init(native_store *store) {
     store->spectest_memory.pages = 1;
     store->spectest_memory.max_pages = 2;
     store->spectest_memory.has_max = 1;
-    store->spectest_memory.data = calloc(65536, 1);
+    store->spectest_memory.data = calloc(EXEC_PAGE_SIZE, 1);
     store->spectest_table.size = 10;
     store->spectest_table.max_size = 20;
     store->spectest_table.has_max = 1;

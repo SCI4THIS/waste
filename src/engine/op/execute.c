@@ -371,28 +371,15 @@ int execute_op_branch(waste_exec_context *ctx, const exec_instr *instr) {
         return exec_fail(ctx->error, EXEC_ERROR_TRAP, "branch depth out of range");
     if (depth == (uint32_t)*ctx->control_top) {
         /* Branch to implicit function body block — act as return */
-        wasm_value carried[WAST_MAX_RESULTS];
-        int arity = ctx->type->result_count;
-        if (arity > ctx->operand_stack->top)
+        if (!stack_carry(ctx->operand_stack, ctx->type->result_count, 0))
             return exec_fail(ctx->error, EXEC_ERROR_TRAP, "branch values missing");
-        for (int i = arity; i-- > 0;) stack_pop(ctx->operand_stack, &carried[i]);
-        ctx->operand_stack->top = 0;
-        for (int i = 0; i < arity; i++)
-            if (!stack_push(ctx->operand_stack, carried[i]))
-                return exec_fail(ctx->error, EXEC_ERROR_TRAP, "stack overflow");
         return WASM_DISPATCH_RETURN;
     }
     {
     int target_index = *ctx->control_top - 1 - (int)depth;
     exec_control target = ctx->controls[target_index];
-    wasm_value carried[WAST_MAX_RESULTS];
-    if (target.branch_arity > ctx->operand_stack->top - target.stack_height)
+    if (!stack_carry(ctx->operand_stack, target.branch_arity, target.stack_height))
         return exec_fail(ctx->error, EXEC_ERROR_TRAP, "branch values missing");
-    for (int i = target.branch_arity; i-- > 0;) stack_pop(ctx->operand_stack, &carried[i]);
-    ctx->operand_stack->top = target.stack_height;
-    for (int i = 0; i < target.branch_arity; i++)
-        if (!stack_push(ctx->operand_stack, carried[i]))
-            return exec_fail(ctx->error, EXEC_ERROR_TRAP, "stack overflow");
     if (target.kind == 0x03) {
         *ctx->control_top = target_index + 1;
         *ctx->pc = target.start_pc - 1;

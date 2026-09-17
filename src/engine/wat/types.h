@@ -5,6 +5,14 @@
 
 #include <stddef.h>
 
+/* WAST assertion NaN/ref matching modes (stored in wasm_value.nan_mode) */
+#define NAN_MATCH_EXACT      0
+#define NAN_MATCH_F32_CANON  1
+#define NAN_MATCH_F32_ARITH  2
+#define NAN_MATCH_F64_CANON  3
+#define NAN_MATCH_F64_ARITH  4
+#define REF_MATCH_NULL       255
+
 /* Test argument / expected result value */
 typedef struct {
     char *data;
@@ -38,7 +46,6 @@ typedef enum {
 #define WAST_MAX_ARGS          32
 #define WAST_MAX_TYPES         128
 #define WAST_MAX_TYPE_FIELDS   64
-#define WAST_MAX_IMPORTS       64
 #define WAST_MAX_GLOBALS       64
 #define WAST_MAX_MEMORIES      32
 #define WAST_MAX_TABLES        8
@@ -69,9 +76,6 @@ typedef struct {
     int          code_len;
     int          is_import;
 
-    /* Legacy SIMD path — kept for compatibility */
-    uint32_t     _simd_instrs_unused[128*4]; /* old wasm_instr[] placeholder */
-    int          _simd_instr_count;
 } wast_func;
 
 typedef enum {
@@ -334,16 +338,5 @@ typedef struct {
     struct wat_context *parse_context; /* non-owning, valid only during parse */
     char           error[256];
 } wast_script;
-
-/* Backward-compat: wast_instrs field kept but code[] is used for new path */
-/* Legacy struct for SIMD only */
-typedef struct {
-    uint32_t opcode;
-    uint32_t simd_op;
-    uint32_t u32_imm;
-    wasm_v128 v128_imm;
-} wasm_instr;
-
-#define WAST_MAX_INSTRS 128
 
 #endif /* WASTE_TEXT_WAT_TYPES_H */

@@ -1,9 +1,8 @@
 #include "instantiate.h"
+#include "runtime_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
-
-enum { WASM_PAGE_SIZE = 65536 };
 
 exec_status wasm_instantiate_module(const wasm_module *module,
                                     const exec_imports *imports,
@@ -24,10 +23,10 @@ exec_status wasm_instance_allocate_memory(exec_memory *memory,
                                           uint32_t flags,
                                           exec_error *error) {
     size_t bytes;
-    if (!memory || initial > SIZE_MAX / WASM_PAGE_SIZE)
+    if (!memory || initial > SIZE_MAX / EXEC_PAGE_SIZE)
         return exec_fail(error, EXEC_ERROR_FORMAT,
                                "memory allocation failed");
-    bytes = (size_t)initial * WASM_PAGE_SIZE;
+    bytes = (size_t)initial * EXEC_PAGE_SIZE;
     memset(memory, 0, sizeof(*memory));
     memory->data = calloc(bytes ? bytes : 1, 1);
     if (!memory->data)

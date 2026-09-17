@@ -1,5 +1,6 @@
 #include "wasm/encode.h"
 #include "wasm/writer.h"
+#include "runtime_internal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -200,7 +201,7 @@ uint8_t *wast_encode_module(const wast_module *m,size_t *size_out,char *error){
         section(&out,4,&s);
     }
     for(int i=0;i<m->memory_count;i++){const wast_limits*ml=&m->memories[i].limits;
-        const uint64_t page_limit=ml->is_64?(UINT64_C(1)<<48):UINT64_C(65536);
+        const uint64_t page_limit=ml->is_64?EXEC_MEM64_MAX_PAGES:EXEC_MEM32_MAX_PAGES;
         if(ml->min>page_limit||(ml->has_max&&ml->max>page_limit)){if(error)snprintf(error,256,"memory size exceeds address type");goto fail;}}
     n=0;for(int i=0;i<m->memory_count;i++)n+=!m->memories[i].is_import;
     if(n){wasm_writer_write_u32(&s,n);for(int i=0;i<m->memory_count;i++)if(!m->memories[i].is_import)limits(&s,&m->memories[i].limits);section(&out,5,&s);}
