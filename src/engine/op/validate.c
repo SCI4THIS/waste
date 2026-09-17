@@ -530,6 +530,50 @@ static int validation_local_type(const exec_func_type *signature,
     return 1;
 }
 
+/* Resolve a branch label to its expected types and count.
+ * Returns 0 on out-of-bounds depth, 1 on success. */
+static int validation_resolve_label(const wasm_validate_context *ctx,
+                                    uint32_t depth,
+                                    const wasm_valtype **types,
+                                    int *count) {
+    if (depth > (uint32_t)*ctx->control_top) return 0;
+    if (depth == (uint32_t)*ctx->control_top) {
+        *types = ctx->signature->results;
+        *count = ctx->signature->result_count;
+    } else {
+        const wasm_validation_control *target =
+            &ctx->controls[*ctx->control_top - (int)depth];
+        if (target->kind == 0x03) {
+            *types = target->params;
+            *count = target->param_count;
+        } else {
+            *types = target->results;
+            *count = target->result_count;
+        }
+    }
+    return 1;
+}
+
+/* Validate tail-call result compatibility: callee results must match
+ * the enclosing function's results.  Marks the frame unreachable. */
+static wasm_validation_status validation_tail_call(
+    wasm_validate_context *ctx,
+    const exec_func_type *callee) {
+    const waste_exec_engine *eng = ctx->engine;
+    const exec_func_type *signature = ctx->signature;
+    wasm_validation_control *control = &ctx->controls[*ctx->control_top];
+    if (callee->result_count != signature->result_count)
+        return WASM_VALIDATION_INVALID;
+    for (int i = 0; i < callee->result_count; i++)
+        if (!global_type_is_compat(eng, callee->results[i], eng,
+                                   signature->results[i], 0))
+            return WASM_VALIDATION_INVALID;
+    *ctx->top = control->height;
+    control->unreachable = 1;
+    control->tail_call_seen = 1;
+    return WASM_VALIDATION_CONTINUE;
+}
+
 /* ---- Extracted per-opcode validation handlers ---- */
 
 wasm_validation_status validate_op_unreachable(wasm_validate_context *ctx,
@@ -552,7 +596,6 @@ wasm_validation_status validate_op_block(wasm_validate_context *ctx,
                                          const exec_instr *instr) {
     wasm_validation_control *control = &ctx->controls[*ctx->control_top];
     const waste_exec_engine *eng = ctx->engine;
-    const exec_func_type *signature = ctx->signature;
     const wasm_valtype *params = NULL;
     const wasm_valtype *results = NULL;
     int param_count = 0;
@@ -579,23 +622,11 @@ wasm_validation_status validate_op_block(wasm_validate_context *ctx,
     if (instr->opcode == 0x1f) {
         for (uint32_t i = 0; i < instr->catch_count; i++) {
             const exec_catch *catch_ = &instr->catches[i];
-            if (catch_->depth > (uint32_t)*ctx->control_top)
-                return WASM_VALIDATION_INVALID;
-
             const wasm_valtype *label_types;
             int label_count;
-            if (catch_->depth == (uint32_t)*ctx->control_top) {
-                label_types = signature->results;
-                label_count = signature->result_count;
-            } else {
-                const wasm_validation_control *target =
-                    &ctx->controls[*ctx->control_top -
-                                  (int)catch_->depth];
-                label_types = target->kind == 0x03 ?
-                    target->params : target->results;
-                label_count = target->kind == 0x03 ?
-                    target->param_count : target->result_count;
-            }
+            if (!validation_resolve_label(ctx, catch_->depth,
+                                          &label_types, &label_count))
+                return WASM_VALIDATION_INVALID;
 
             const exec_func_type *tag_type = NULL;
             int catch_value_count = (catch_->kind & 1u) ? 1 : 0;
@@ -802,30 +833,15 @@ wasm_validation_status validate_op_return(wasm_validate_context *ctx,
 wasm_validation_status validate_op_br(wasm_validate_context *ctx,
                                       const exec_instr *instr) {
     wasm_validation_control *control = &ctx->controls[*ctx->control_top];
-    const exec_func_type *signature = ctx->signature;
     uint32_t depth = instr->u32_imm;
     if (instr->opcode == 0x0d &&
         !validation_pop_type(ctx->stack, ctx->top, control,
                                     WASM_VALTYPE_I32))
         return WASM_VALIDATION_INVALID;
-    if (depth > (uint32_t)*ctx->control_top)
-        return WASM_VALIDATION_INVALID;
     const wasm_valtype *label_types;
     int label_count;
-    if (depth == (uint32_t)*ctx->control_top) {
-        label_types = signature->results;
-        label_count = signature->result_count;
-    } else {
-        const wasm_validation_control *target =
-            &ctx->controls[*ctx->control_top - (int)depth];
-        if (target->kind == 0x03) {
-            label_types = target->params;
-            label_count = target->param_count;
-        } else {
-            label_types = target->results;
-            label_count = target->result_count;
-        }
-    }
+    if (!validation_resolve_label(ctx, depth, &label_types, &label_count))
+        return WASM_VALIDATION_INVALID;
     for (int i = label_count; i > 0; i--)
         if (!validation_pop_type(
                 ctx->stack, ctx->top, control, label_types[i - 1]))
@@ -846,7 +862,6 @@ wasm_validation_status validate_op_br_table(wasm_validate_context *ctx,
                                             const exec_instr *instr) {
     wasm_validation_control *control = &ctx->controls[*ctx->control_top];
     const waste_exec_engine *eng = ctx->engine;
-    const exec_func_type *signature = ctx->signature;
     if (!validation_pop_type(ctx->stack, ctx->top, control,
                                     WASM_VALTYPE_I32))
         return WASM_VALIDATION_INVALID;
@@ -854,21 +869,10 @@ wasm_validation_status validate_op_br_table(wasm_validate_context *ctx,
     memcpy(&depths, instr->v128_imm.bytes, sizeof(depths));
     int common_count = -1;
     for (uint32_t i = 0; i <= instr->u32_imm; i++) {
-        uint32_t depth = depths[i];
+        const wasm_valtype *lt;
         int label_count;
-        if (depth > (uint32_t)*ctx->control_top)
+        if (!validation_resolve_label(ctx, depths[i], &lt, &label_count))
             return WASM_VALIDATION_INVALID;
-        if (depth == (uint32_t)*ctx->control_top) {
-            label_count = signature->result_count;
-        } else {
-            const wasm_validation_control *target =
-                &ctx->controls[*ctx->control_top - (int)depth];
-            if (target->kind == 0x03) {
-                label_count = target->param_count;
-            } else {
-                label_count = target->result_count;
-            }
-        }
         if (common_count < 0) {
             common_count = label_count;
         } else if (common_count != label_count)
@@ -880,16 +884,10 @@ wasm_validation_status validate_op_br_table(wasm_validate_context *ctx,
                 ctx->stack, ctx->top, control, &operands[i - 1]))
             return WASM_VALIDATION_INVALID;
     for (uint32_t i = 0; i <= instr->u32_imm; i++) {
-        uint32_t depth = depths[i];
         const wasm_valtype *label_types;
-        if (depth == (uint32_t)*ctx->control_top) {
-            label_types = signature->results;
-        } else {
-            const wasm_validation_control *target =
-                &ctx->controls[*ctx->control_top - (int)depth];
-            label_types = target->kind == 0x03 ?
-                          target->params : target->results;
-        }
+        int lc;
+        if (!validation_resolve_label(ctx, depths[i], &label_types, &lc))
+            return WASM_VALIDATION_INVALID;
         for (int j = 0; j < common_count; j++)
             if (operands[j] != WASM_BOTTOM_TYPE &&
                 !global_type_is_compat(
@@ -927,7 +925,6 @@ wasm_validation_status validate_op_br_on_null(wasm_validate_context *ctx,
                                               const exec_instr *instr) {
     wasm_validation_control *control = &ctx->controls[*ctx->control_top];
     const waste_exec_engine *eng = ctx->engine;
-    const exec_func_type *signature = ctx->signature;
     wasm_valtype reference = WASM_BOTTOM_TYPE;
     if (!validation_pop(ctx->stack, ctx->top, control, &reference) ||
         (reference != WASM_BOTTOM_TYPE &&
@@ -941,26 +938,14 @@ wasm_validation_status validate_op_br_on_null(wasm_validate_context *ctx,
     }
     wasm_valtype refined = reference == WASM_BOTTOM_TYPE ?
         reference : nonnullable_reference_type(reference);
-    uint32_t depth = instr->u32_imm;
-    if (depth > (uint32_t)*ctx->control_top) {
-
-        if (getenv("WAST_DEBUG_VALIDATION"))
-            fprintf(stderr, "ref-branch depth op=%x depth=%u control=%d\n",
-                    instr->opcode, depth, *ctx->control_top);
-        return WASM_VALIDATION_INVALID;
-    }
     const wasm_valtype *label_types;
     int label_count;
-    if (depth == (uint32_t)*ctx->control_top) {
-        label_types = signature->results;
-        label_count = signature->result_count;
-    } else {
-        const wasm_validation_control *target =
-            &ctx->controls[*ctx->control_top - (int)depth];
-        label_types = target->kind == 0x03 ? target->params :
-                                            target->results;
-        label_count = target->kind == 0x03 ? target->param_count :
-                                            target->result_count;
+    if (!validation_resolve_label(ctx, instr->u32_imm,
+                                  &label_types, &label_count)) {
+        if (getenv("WAST_DEBUG_VALIDATION"))
+            fprintf(stderr, "ref-branch depth op=%x depth=%u control=%d\n",
+                    instr->opcode, instr->u32_imm, *ctx->control_top);
+        return WASM_VALIDATION_INVALID;
     }
     int carried_count = label_count;
     if (instr->opcode == 0xd6) {
@@ -1141,7 +1126,6 @@ wasm_validation_status validate_op_call(wasm_validate_context *ctx,
                                         const exec_instr *instr) {
     wasm_validation_control *control = &ctx->controls[*ctx->control_top];
     const waste_exec_engine *eng = ctx->engine;
-    const exec_func_type *signature = ctx->signature;
     const exec_func_type *callee;
     if (instr->u32_imm < eng->import_func_count)
         callee = &eng->types[
@@ -1156,23 +1140,11 @@ wasm_validation_status validate_op_call(wasm_validate_context *ctx,
         if (!validation_pop_type(
                 ctx->stack, ctx->top, control, callee->params[i - 1]))
             return WASM_VALIDATION_INVALID;
-    if (instr->opcode == 0x12) {
-        if (callee->result_count != signature->result_count)
-            return WASM_VALIDATION_INVALID;
-        for (int i = 0; i < callee->result_count; i++)
-            if (!global_type_is_compat(
-                    eng, callee->results[i], eng,
-                    signature->results[i], 0))
-                return WASM_VALIDATION_INVALID;
-        *ctx->top = control->height;
-        control->unreachable = 1;
-        control->tail_call_seen = 1;
-    } else {
-        for (int i = 0; i < callee->result_count; i++)
-            if (!validation_push(ctx->stack, ctx->top,
-                                        callee->results[i]))
-                return WASM_VALIDATION_UNSUPPORTED;
-    }
+    if (instr->opcode == 0x12)
+        return validation_tail_call(ctx, callee);
+    for (int i = 0; i < callee->result_count; i++)
+        if (!validation_push(ctx->stack, ctx->top, callee->results[i]))
+            return WASM_VALIDATION_UNSUPPORTED;
     return WASM_VALIDATION_CONTINUE;
 }
 
@@ -1180,7 +1152,6 @@ wasm_validation_status validate_op_call_indirect(wasm_validate_context *ctx,
                                                  const exec_instr *instr) {
     wasm_validation_control *control = &ctx->controls[*ctx->control_top];
     const waste_exec_engine *eng = ctx->engine;
-    const exec_func_type *signature = ctx->signature;
     if (instr->u32_imm >= eng->type_count ||
         instr->simd_op >= eng->table_count ||
         !is_function_reference_type(
@@ -1194,23 +1165,11 @@ wasm_validation_status validate_op_call_indirect(wasm_validate_context *ctx,
         if (!validation_pop_type(
                 ctx->stack, ctx->top, control, callee->params[i - 1]))
             return WASM_VALIDATION_INVALID;
-    if (instr->opcode == 0x13) {
-        if (callee->result_count != signature->result_count)
-            return WASM_VALIDATION_INVALID;
-        for (int i = 0; i < callee->result_count; i++)
-            if (!global_type_is_compat(
-                    eng, callee->results[i], eng,
-                    signature->results[i], 0))
-                return WASM_VALIDATION_INVALID;
-        *ctx->top = control->height;
-        control->unreachable = 1;
-        control->tail_call_seen = 1;
-    } else {
-        for (int i = 0; i < callee->result_count; i++)
-            if (!validation_push(ctx->stack, ctx->top,
-                                        callee->results[i]))
-                return WASM_VALIDATION_UNSUPPORTED;
-    }
+    if (instr->opcode == 0x13)
+        return validation_tail_call(ctx, callee);
+    for (int i = 0; i < callee->result_count; i++)
+        if (!validation_push(ctx->stack, ctx->top, callee->results[i]))
+            return WASM_VALIDATION_UNSUPPORTED;
     return WASM_VALIDATION_CONTINUE;
 }
 
@@ -1218,7 +1177,6 @@ wasm_validation_status validate_op_call_ref(wasm_validate_context *ctx,
                                             const exec_instr *instr) {
     wasm_validation_control *control = &ctx->controls[*ctx->control_top];
     const waste_exec_engine *eng = ctx->engine;
-    const exec_func_type *signature = ctx->signature;
     if (instr->u32_imm >= eng->type_count)
         return WASM_VALIDATION_INVALID;
     const exec_func_type *callee = &eng->types[instr->u32_imm];
@@ -1234,23 +1192,11 @@ wasm_validation_status validate_op_call_ref(wasm_validate_context *ctx,
         if (!validation_pop_type(
                 ctx->stack, ctx->top, control, callee->params[i - 1]))
             return WASM_VALIDATION_INVALID;
-    if (instr->opcode == 0x15) {
-        if (callee->result_count != signature->result_count)
-            return WASM_VALIDATION_INVALID;
-        for (int i = 0; i < callee->result_count; i++)
-            if (!global_type_is_compat(
-                    eng, callee->results[i], eng,
-                    signature->results[i], 0))
-                return WASM_VALIDATION_INVALID;
-        *ctx->top = control->height;
-        control->unreachable = 1;
-        control->tail_call_seen = 1;
-    } else {
-        for (int i = 0; i < callee->result_count; i++)
-            if (!validation_push(ctx->stack, ctx->top,
-                                        callee->results[i]))
-                return WASM_VALIDATION_UNSUPPORTED;
-    }
+    if (instr->opcode == 0x15)
+        return validation_tail_call(ctx, callee);
+    for (int i = 0; i < callee->result_count; i++)
+        if (!validation_push(ctx->stack, ctx->top, callee->results[i]))
+            return WASM_VALIDATION_UNSUPPORTED;
     return WASM_VALIDATION_CONTINUE;
 }
 

@@ -87,93 +87,14 @@ static int decode_string(const char *source, size_t source_length,
 }
 
 wat_context *wast_builder_context_create(void) {
-    /* Most of this object is bounded scratch storage.  Its count fields guard
-     * every array read, so zero only live state instead of clearing roughly
-     * five megabytes for every WAST command/file parse. */
-    wat_context *context = (wat_context *)malloc(sizeof(*context));
+    wat_context *context = (wat_context *)calloc(1, sizeof(*context));
     if (!context) return NULL;
-    memset(&context->lex, 0, sizeof(context->lex));
     context->lex.line = 1;
     context->lex.column = 1;
-    context->lex.byte_offset = 0;
-    context->literal_scratch[0] = '\0';
-    context->lexer_error[0] = '\0';
-    context->skip_annotation_depth = 0;
-    context->skip_comment_depth = 0;
-    context->skip_in_string = 0;
-    context->skip_line_comment = 0;
-    context->skip_return_paren = 0;
     context->paren_line = 1;
     context->paren_column = 1;
-    context->inline_module = 0;
-    context->inline_token_emitted = 0;
-    context->strict_wat_mode = 0;
-    context->command_scan = 0;
-    context->command_scan_inline = 0;
-    context->command_scan_started = 0;
-    context->command_scan_finished = 0;
-    context->command_scan_depth = 0;
-    context->command_start_offset = 0;
-    context->command_end_offset = 0;
     context->command_start_line = 1;
-    context->numeric_kind = 0;
-    context->numeric_bits = 0;
-    context->numeric_remaining = 0;
-    context->v128_const_pending = 0;
-    context->raw_payload = (wast_raw_module){WAST_RAW_NONE, NULL, 0};
-    context->raw_payload_capacity = 0;
-    memset(&context->cur_func, 0, sizeof(context->cur_func));
-    context->in_func = 0;
-    context->cur_group = 0;
-    context->cur_func_index = 0;
-    context->label_depth = 0;
-    context->local_name_count = 0;
-    context->func_name_count = 0;
-    context->global_name_count = 0;
-    context->type_name_count = 0;
-    context->in_rec_group = 0;
-    context->parsing_type_definition = 0;
-    context->rec_group_start = 0;
-    context->table_name_count = 0;
-    context->memory_name_count = 0;
-    context->data_name_count = 0;
-    context->elem_name_count = 0;
-    context->tag_name_count = 0;
-    memset(&context->cur_tag, 0, sizeof(context->cur_tag));
-    context->func_fixup_count = 0;
-    context->type_fixup_count = 0;
-    context->code_fixup_count = 0;
-    context->meta_fixup_count = 0;
-    context->rec_fixup_count = 0;
-    memset(&context->cur_assert, 0, sizeof(context->cur_assert));
-    context->in_assert = 0;
-    context->invoke_name[0] = '\0';
-    context->module_assert_action = 0;
-    context->brtable_count = 0;
-    context->try_catch_count = 0;
-    context->select_result_count = 0;
-    context->lane_imm_count = 0;
-    context->inline_param_count = 0;
-    context->inline_result_count = 0;
-    context->import_module[0] = '\0';
-    context->import_name[0] = '\0';
-    context->export_kind = 0;
-    context->export_index = 0;
-    context->instance_args[0][0] = '\0';
-    context->instance_args[1][0] = '\0';
-    context->instance_arg_count = 0;
-    memset(&context->cur_global, 0, sizeof(context->cur_global));
-    memset(&context->cur_type, 0, sizeof(context->cur_type));
-    memset(&context->cur_data, 0, sizeof(context->cur_data));
-    memset(&context->cur_elem, 0, sizeof(context->cur_elem));
-    context->constexpr_target = NULL;
-    context->constexpr_length = NULL;
-    context->constexpr_capacity = 0;
-    context->blocktype_param_count = 0;
-    context->blocktype_result_count = 0;
     context->blocktype_explicit = -1;
-    context->typeuse_field_stage = 0;
-    context->signature_seen_result = 0;
     return context;
 }
 
