@@ -5,17 +5,30 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const root = path.resolve(__dirname, "..");
-const htmlPath = process.argv[2] || path.join(root, "build/html-rt/test.html");
+const stagingDir = path.join(root, "src/html-rt/src/tests");
+const payloadPath = process.argv[2] || path.join(stagingDir, "payload.json");
 const requestedFiles = new Set(process.argv.slice(3));
-const html = fs.readFileSync(htmlPath, "utf8");
-const pageScripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
-if (pageScripts.length !== 1) throw new Error("expected exactly one generated page script");
-new Function(pageScripts[0][1]);
-const payloadMatch = html.match(/^  const PAYLOAD = (.*);$/m);
-const workerMatch = html.match(/  const WORKER_SRC = String\.raw`([\s\S]*?)`;\n\n  \/\* ---- DOM helpers/);
-if (!payloadMatch || !workerMatch) throw new Error("cannot extract generated dashboard payload");
-const payload = JSON.parse(payloadMatch[1]);
-const engineBytes = Uint8Array.from(Buffer.from(payload.wasmB64, "base64"));
+
+/* Load payload — accept either payload.json directly or the legacy HTML path */
+let payload, engineBytes;
+if (payloadPath.endsWith(".json")) {
+  payload = JSON.parse(fs.readFileSync(payloadPath, "utf8"));
+  const wasmPath = path.join(root, "build/html-rt/waste-wast.wasm");
+  engineBytes = new Uint8Array(fs.readFileSync(wasmPath));
+} else {
+  /* Legacy: parse monolithic HTML */
+  const html = fs.readFileSync(payloadPath, "utf8");
+  const payloadMatch = html.match(/^  const PAYLOAD = (.*);$/m);
+  const workerMatch = html.match(/  const WORKER_SRC = String\.raw`([\s\S]*?)`;\n\n  \/\* ---- DOM helpers/);
+  if (!payloadMatch || !workerMatch) throw new Error("cannot extract generated dashboard payload");
+  payload = JSON.parse(payloadMatch[1]);
+  engineBytes = Uint8Array.from(Buffer.from(payload.wasmB64, "base64"));
+}
+
+/* Load worker source */
+const workerSrc = fs.readFileSync(
+  path.join(stagingDir, "worker.js"), "utf8"
+);
 
 (async () => {
   let failed = 0;
@@ -26,14 +39,25 @@ const engineBytes = Uint8Array.from(Buffer.from(payload.wasmB64, "base64"));
   if (requestedFiles.size && tests.length === 0)
     throw new Error("no requested C-engine browser tests found");
   for (const test of tests) {
+    /* For wast-stream tests, load source text from the original location */
+    let testSpec = test.spec;
+    if (testSpec.mode === "wast-stream" && !testSpec.wastB64 && !testSpec.wastText) {
+      const wastPath = testSpec.sourcePath
+        ? path.join(root, testSpec.sourcePath)
+        : path.join(stagingDir, "wast", test.file);
+      testSpec = Object.assign({}, testSpec, {
+        wastText: fs.readFileSync(wastPath, "utf8"),
+      });
+    }
+
     let message;
     const self = {postMessage(value) { message = value; }};
     const context = vm.createContext({
       self, WebAssembly, Uint8Array, DataView, TextDecoder, TextEncoder, BigInt, Error,
       String, Number, Math, Array, Map, Promise, atob,
     });
-    vm.runInContext(workerMatch[1], context, {filename: "c-engine-worker.js"});
-    await self.onmessage({data: {wasmBytes: engineBytes, testSpec: test.spec}});
+    vm.runInContext(workerSrc, context, {filename: "c-engine-worker.js"});
+    await self.onmessage({data: {wasmBytes: engineBytes, testSpec}});
     const ok = message?.type === "done" &&
       message.results.every(result => result.pass);
     console.log(`${ok ? "PASS" : "FAIL"} ${test.path || `${test.group}/${test.file}`}`);

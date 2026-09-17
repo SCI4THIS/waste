@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WASTE C engine tests</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="loading-overlay">
+    <div class="loading-content">
+      <h2>WASTE C engine tests</h2>
+      <p id="loading-status">Initializing&hellip;</p>
+      <p id="loading-detail"></p>
+    </div>
+  </div>
+  <header>
+    <h1>WASTE · embedded WebAssembly and POSIX tests (C engine)</h1>
+    <div id="execution-mode">Concurrent sandboxes:</div>
+    <div id="summary">loading…</div>
+    <div id="test-all-timing">Started at: — · Finished at: —</div>
+    <div id="runtime-controls">
+      <button class="runtime-control" id="pause-runtime" type="button">Pause</button>
+      <button class="runtime-control" id="resume-runtime" type="button">Resume</button>
+      <select class="runtime-control" id="signal-number" title="POSIX signal number">
+        <option value="2">SIGINT</option><option value="15">SIGTERM</option>
+        <option value="1">SIGHUP</option><option value="14">SIGALRM</option>
+        <option value="28">SIGWINCH</option>
+      </select>
+      <button class="runtime-control" id="send-signal" type="button">Send signal</button>
+      <span id="control-status"></span>
+    </div>
+    <button id="download-results" type="button" disabled>Download results</button>
+    <button id="test-all" type="button">Test all</button>
+  </header>
+  <main>
+    <div class="notice">
+      Tests run in Web Workers using the pre-compiled C engine (<code>waste-wast.wasm</code>).
+      Each test file gets its own Worker instance. Official WAST assertions use the WASTE C executor.
+      Repository DIY modules are assembled ahead of time and execute in the browser Wasm tier with
+      a sandbox-local compatibility kernel, including its process and signal probes.
+      Orange legacy modules are unsupported and excluded from Test all.
+      Unsupported WAST syntax and engine features are reported as failures, never passes.
+    </div>
+    <div id="groups"></div>
+  </main>
+  <script src="../../../../submodules/tarballjs/tarball.js"></script>
+  <script src="../shared/loader.js"></script>
+  <script>
+  var MANIFEST_URLS = [
+"manifest.tar.gz"
+  ];
+  var ZLIBAUX_URL =
+"zlibaux.wasm.b64"
+  ;
+  </script>
+  <script src="app.js"></script>
+  <script>
+  boot(startTests, function(msg, detail) {
+    var s = document.getElementById("loading-status");
+    var d = document.getElementById("loading-detail");
+    if (s) s.textContent = msg;
+    if (d) d.textContent = detail ? detail + " KB" : "";
+  });
+  </script>
+</body>
+</html>

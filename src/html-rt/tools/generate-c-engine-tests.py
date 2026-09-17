@@ -1194,14 +1194,18 @@ def main() -> int:
                         help="Path to waste-wast.wasm (browser C engine)")
     parser.add_argument("--tests", type=Path, action="append", default=[],
                         help="Directory containing .wast test files (repeatable)")
-    parser.add_argument("--output", type=Path, required=True,
-                        help="Output HTML file path")
+    parser.add_argument("--output", type=Path, default=None,
+                        help="Output HTML file path (monolithic mode)")
+    parser.add_argument("--output-dir", type=Path, default=None,
+                        help="Output directory for staging files (payload.json + wast/)")
     parser.add_argument("--wasm-as", default="wasm-as",
                         help="Binaryen wasm-as used for repository DIY fixtures")
     parser.add_argument("--count", action="store_true",
                         help="Use native runner to count assertions per file")
     args = parser.parse_args()
 
+    if not args.output and not args.output_dir:
+        parser.error("either --output or --output-dir is required")
     if not args.ocaml_layout and not args.tests:
         parser.error("at least one --tests directory or --ocaml-layout is required")
 
@@ -1275,8 +1279,12 @@ def main() -> int:
             except (subprocess.TimeoutExpired, ValueError):
                 pass
 
-    print(f"Embedding {len(test_entries)} test files…")
+    staging_mode = args.output_dir is not None
+
+    print(f"{'Collecting' if staging_mode else 'Embedding'} "
+          f"{len(test_entries)} test files…")
     tests = []
+    repo_root = args.repo_root.resolve() if args.repo_root else None
     for entry in test_entries:
         wast_file = entry["path"]
         if entry["suite"] == "diy-posix-test":
@@ -1288,22 +1296,32 @@ def main() -> int:
                 spec = {"file": wast_file.name, "mode": "browser-native",
                         "error": str(exc), "assertionCount": 0}
         else:
-            wast_text = wast_file.read_bytes()
-            wast_b64 = base64.b64encode(wast_text).decode("ascii")
+            wast_bytes = wast_file.read_bytes()
             n_assert = assertion_counts.get(wast_file, 0)
-            spec = {
-                "file": wast_file.name,
-                "mode": "wast-stream",
-                "wastB64": wast_b64,
-                "sourceBytes": len(wast_text),
-                "assertionCount": n_assert,
-            }
+            if staging_mode:
+                source_rel = str(wast_file.resolve().relative_to(repo_root))
+                spec = {
+                    "file": entry["relative"],
+                    "mode": "wast-stream",
+                    "sourcePath": source_rel,
+                    "sourceBytes": len(wast_bytes),
+                    "assertionCount": n_assert,
+                }
+            else:
+                wast_b64 = base64.b64encode(wast_bytes).decode("ascii")
+                spec = {
+                    "file": wast_file.name,
+                    "mode": "wast-stream",
+                    "wastB64": wast_b64,
+                    "sourceBytes": len(wast_bytes),
+                    "assertionCount": n_assert,
+                }
         n_display = total_assertions(spec) or len(spec.get("steps", []))
         print(f"  {wast_file.name}: {n_display or '?'} checks")
         tests.append({
             "path": entry["relative"],
             "name": wast_file.name,
-            "file": wast_file.name,
+            "file": entry["relative"] if staging_mode else wast_file.name,
             "group": entry["group"],
             "suite": entry["suite"],
             "expectFailure": entry["expectFailure"],
@@ -1312,27 +1330,46 @@ def main() -> int:
             "spec": spec,
         })
 
-    wasm_b64 = base64.b64encode(args.wasm.read_bytes()).decode("ascii")
-    print(f"Embedded waste-wast.wasm: {len(args.wasm.read_bytes()):,} bytes "
-          f"({len(wasm_b64):,} B base64)")
-
-    payload = {"wasmB64": wasm_b64, "tests": tests}
-
     total_files = len(tests)
     supported_files = sum(not test["unsupported"] for test in tests)
-    document = (
-        HTML
-        .replace("__TEST_COUNT__", str(supported_files))
-        .replace("__PAYLOAD__", script_json(payload))
-    )
-
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(document, encoding="utf-8")
-
     total_a = sum(total_assertions(t["spec"]) for t in tests)
-    print(f"Generated {args.output} ({args.output.stat().st_size:,} bytes)")
-    print(f"{total_files} test files ({supported_files} supported) · "
-          f"{total_a} total assertions")
+
+    if staging_mode:
+        out_dir = args.output_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write payload.json — WAST files are referenced by sourcePath and
+        # loaded directly from their original locations (submodule, tests/).
+        payload = {"tests": tests}
+        payload_path = out_dir / "payload.json"
+        payload_path.write_text(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        wast_count = sum(1 for t in tests
+                         if t["spec"].get("mode") == "wast-stream")
+        print(f"Generated {payload_path} ({payload_path.stat().st_size:,} bytes)")
+        print(f"{total_files} test files ({supported_files} supported) · "
+              f"{total_a} total assertions · {wast_count} wast files")
+    else:
+        wasm_b64 = base64.b64encode(args.wasm.read_bytes()).decode("ascii")
+        print(f"Embedded waste-wast.wasm: {len(args.wasm.read_bytes()):,} bytes "
+              f"({len(wasm_b64):,} B base64)")
+
+        payload = {"wasmB64": wasm_b64, "tests": tests}
+        document = (
+            HTML
+            .replace("__TEST_COUNT__", str(supported_files))
+            .replace("__PAYLOAD__", script_json(payload))
+        )
+
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(document, encoding="utf-8")
+
+        print(f"Generated {args.output} ({args.output.stat().st_size:,} bytes)")
+        print(f"{total_files} test files ({supported_files} supported) · "
+              f"{total_a} total assertions")
+
     return 0
 
 

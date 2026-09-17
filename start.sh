@@ -55,6 +55,9 @@ C_ENGINE_BASH_BROWSER_TEST="$REPO_ROOT/tests/c-engine-bash-browser-runtime.cjs"
 C_ENGINE_BASH_RUNTIME_WAST="$HTML_BUILD/bash-runtime.wast"
 C_ENGINE_BASH_HTML="$HTML_BUILD/bash.html"
 C_ENGINE_BASH_LOG="$LOG_DIR/c-engine-bash.log"
+C_ENGINE_BUILD_SH="$REPO_ROOT/src/html-rt/tools/build.sh"
+C_ENGINE_STAGING_TESTS="$REPO_ROOT/src/html-rt/src/tests"
+C_ENGINE_STAGING_BASH="$REPO_ROOT/src/html-rt/src/bash"
 
 mkdir -p "$LOG_DIR"
 
@@ -965,7 +968,7 @@ generate_c_engine_tests() {
     make -C "$REPO_ROOT/src/html-rt" \
     BUILD_DIR="$HTML_BUILD" ENGINE_BUILD_DIR="$ENGINE_BUILD" \
     wast-browser || return 1
-  run_logged_step "Generate relaxed-SIMD/POSIX browser dashboard" "$TEST_LOG" \
+  run_logged_step "Generate relaxed-SIMD/POSIX test data" "$TEST_LOG" \
     python3 "$C_ENGINE_GENERATOR" \
     --runner "$C_ENGINE_RUNNER" \
     --wasm "$C_ENGINE_WASM" \
@@ -973,9 +976,11 @@ generate_c_engine_tests() {
     --tests "$C_ENGINE_MEMORY64_TESTS" \
     --tests "$C_ENGINE_BULK_MEMORY_TESTS" \
     --tests "$C_ENGINE_DIY_POSIX_TESTS" \
-    --output "$C_ENGINE_HTML" || return 1
+    --output-dir "$C_ENGINE_STAGING_TESTS" || return 1
+  run_logged_step "Amalgamate browser dashboard" "$TEST_LOG" \
+    bash "$C_ENGINE_BUILD_SH" tests || return 1
   run_logged_step "Exercise generated browser dashboard" "$TEST_LOG" \
-    node "$C_ENGINE_BROWSER_TEST" "$C_ENGINE_HTML"
+    node "$C_ENGINE_BROWSER_TEST"
 }
 
 generate_c_engine_dashboard_html() {
@@ -1025,16 +1030,22 @@ generate_c_engine_dashboard_html() {
       "The C engine build failed.\n\nLog: $C_ENGINE_HTML_LOG"
     return 1
   fi
-  if ! run_logged_step "Embed specification and POSIX test suites" \
+  if ! run_logged_step "Generate test data (payload.json + wast files)" \
       "$C_ENGINE_HTML_LOG" python3 "$C_ENGINE_GENERATOR" \
       --repo-root "$REPO_ROOT" \
       --ocaml-layout \
       --runner "$C_ENGINE_RUNNER" \
       --wasm "$C_ENGINE_WASM" \
       --count \
-      --output "$C_ENGINE_OCAML_LAYOUT_HTML"; then
+      --output-dir "$C_ENGINE_STAGING_TESTS"; then
     show_message "C-engine browser dashboard failed" \
-      "HTML generation failed.\n\nLog: $C_ENGINE_HTML_LOG"
+      "Test data generation failed.\n\nLog: $C_ENGINE_HTML_LOG"
+    return 1
+  fi
+  if ! run_logged_step "Amalgamate test dashboard HTML" \
+      "$C_ENGINE_HTML_LOG" bash "$C_ENGINE_BUILD_SH" tests; then
+    show_message "C-engine browser dashboard failed" \
+      "HTML amalgamation failed.\n\nLog: $C_ENGINE_HTML_LOG"
     return 1
   fi
 
@@ -1096,21 +1107,26 @@ generate_c_engine_bash_html() {
     return 1
   fi
 
-  # Generate the HTML page
-  if ! run_logged_step "Generate the self-contained C-engine Bash page" \
+  # Copy staging data and amalgamate the HTML page
+  if ! run_logged_step "Copy staging data for Bash page" \
       "$C_ENGINE_BASH_LOG" python3 "$C_ENGINE_BASH_GENERATOR" \
       --repo-root "$REPO_ROOT" \
       --wasm "$C_ENGINE_WASM" \
       --launch "$C_ENGINE_BASH_RUNTIME_WAST" \
-      --output "$C_ENGINE_BASH_HTML"; then
+      --output-dir "$C_ENGINE_STAGING_BASH"; then
+    show_message "C-engine Bash staging failed" \
+      "Could not copy staging data.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+  if ! run_logged_step "Amalgamate the self-contained C-engine Bash page" \
+      "$C_ENGINE_BASH_LOG" bash "$C_ENGINE_BUILD_SH" bash; then
     show_message "C-engine Bash generation failed" \
-      "Could not generate the static page.\n\nLog: $C_ENGINE_BASH_LOG"
+      "Could not amalgamate the static page.\n\nLog: $C_ENGINE_BASH_LOG"
     return 1
   fi
 
   if ! run_logged_step "Run the C-engine Bash browser smoke test" \
-      "$C_ENGINE_BASH_LOG" node "$C_ENGINE_BASH_BROWSER_TEST" \
-      "$C_ENGINE_BASH_HTML"; then
+      "$C_ENGINE_BASH_LOG" node "$C_ENGINE_BASH_BROWSER_TEST"; then
     show_message "C-engine Bash browser test failed" \
       "The generated worker did not survive prompt, delayed input, command execution, and exit.\n\nLog: $C_ENGINE_BASH_LOG"
     return 1
@@ -1141,12 +1157,14 @@ generate_c_engine_core_tests() {
     make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$HTML_BUILD" \
     ENGINE_BUILD_DIR="$ENGINE_BUILD" \
     wast-browser || return 1
-  run_logged_step "Generate core WAST browser dashboard" "$TEST_LOG" \
+  run_logged_step "Generate core WAST test data" "$TEST_LOG" \
     python3 "$C_ENGINE_GENERATOR" --runner "$C_ENGINE_RUNNER" \
     --wasm "$C_ENGINE_WASM" --tests "$C_ENGINE_CORE_TESTS" \
-    --output "$C_ENGINE_CORE_HTML" || return 1
+    --output-dir "$C_ENGINE_STAGING_TESTS" || return 1
+  run_logged_step "Amalgamate core WAST browser dashboard" "$TEST_LOG" \
+    bash "$C_ENGINE_BUILD_SH" tests || return 1
   run_logged_step "Exercise core WAST browser dashboard" "$TEST_LOG" \
-    node "$C_ENGINE_BROWSER_TEST" "$C_ENGINE_CORE_HTML"
+    node "$C_ENGINE_BROWSER_TEST"
 }
 
 run_test_group() {

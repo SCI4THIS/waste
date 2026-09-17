@@ -1,3 +1,9 @@
 [submodule "submodules/wasm-spec"]
 	path = submodules/wasm-spec
 	url = https://github.com/WebAssembly/spec.git
+[submodule "submodules/zlib-wasm"]
+	path = submodules/zlib-wasm
+	url = https://github.com/SCI4THIS/zlib-wasm.git
+[submodule "submodules/tarballjs"]
+	path = submodules/tarballjs
+	url = https://github.com/ankitrohatgi/tarballjs.git

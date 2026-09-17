@@ -2,20 +2,30 @@
 "use strict";
 
 const fs = require("node:fs");
+const path = require("node:path");
 const vm = require("node:vm");
 const {TextDecoder, TextEncoder} = require("node:util");
 
-const htmlPath = process.argv[2] || "build/html-rt/bash.html";
-const html = fs.readFileSync(htmlPath, "utf8");
-const payloadMatch = html.match(/^    const PAYLOAD = (.*);$/m);
-const workerMatch = html.match(
-  /    const workerProgram = String\.raw`([\s\S]*?)\n    `;/,
-);
-if (!payloadMatch || !workerMatch) {
-  throw new Error(`could not extract C-engine Bash worker from ${htmlPath}`);
-}
+const root = path.resolve(__dirname, "..");
+const stagingDir = path.join(root, "src/html-rt/src/bash");
 
-const payload = JSON.parse(payloadMatch[1]);
+/* Load worker source, wasm, and launch script from staging files */
+const workerSrc = fs.readFileSync(path.join(stagingDir, "worker.js"), "utf8");
+
+/* Resolve waste-wast.wasm: staging symlink or build directory */
+let wasmPath = path.join(stagingDir, "waste-wast.wasm");
+if (!fs.existsSync(wasmPath)) {
+  wasmPath = path.join(root, "build/html-rt/waste-wast.wasm");
+}
+const wasmBytes = fs.readFileSync(wasmPath);
+
+/* Resolve launch.wast: staging symlink or build directory */
+let launchPath = path.join(stagingDir, "launch.wast");
+if (!fs.existsSync(launchPath)) {
+  launchPath = path.join(root, "build/html-rt/bash-runtime.wast");
+}
+const launchSource = fs.readFileSync(launchPath, "utf8");
+
 let output = "";
 let promptSeen = false;
 let commandSent = false;
@@ -69,11 +79,11 @@ const context = vm.createContext({
   clearTimeout,
   atob: text => Buffer.from(text, "base64").toString("binary"),
 });
-vm.runInContext(workerMatch[1], context, {filename: "c-engine-bash-worker.js"});
+vm.runInContext(workerSrc, context, {filename: "c-engine-bash-worker.js"});
 self.onmessage({data: {
   type: "start",
-  wasmB64: payload.wasmB64,
-  source: payload.launch,
+  wasmBytes: wasmBytes.buffer,
+  source: launchSource,
 }});
 
 let timeoutId;

@@ -331,33 +331,62 @@ def main() -> None:
                         help="Path to waste-wast.wasm (C engine)")
     parser.add_argument("--launch", type=Path, required=True,
                         help="Path to bash-runtime.wast (interactive mode)")
-    parser.add_argument("--output", type=Path, required=True,
-                        help="Output HTML file path")
+    parser.add_argument("--output", type=Path, default=None,
+                        help="Output HTML file path (monolithic mode)")
+    parser.add_argument("--output-dir", type=Path, default=None,
+                        help="Output directory for staging files (copy wasm + launch)")
     args = parser.parse_args()
+
+    if not args.output and not args.output_dir:
+        parser.error("either --output or --output-dir is required")
 
     if not args.wasm.is_file():
         raise SystemExit(f"C engine Wasm not found: {args.wasm}")
     if not args.launch.is_file():
         raise SystemExit(f"Bash launch script not found: {args.launch}")
 
-    launch_text = args.launch.read_text(encoding="utf-8")
-    wasm_bytes = args.wasm.read_bytes()
-    wasm_b64 = base64.b64encode(wasm_bytes).decode("ascii")
+    if args.output_dir:
+        import os
+        import shutil
+        out_dir = args.output_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-    payload = {
-        "wasmB64": wasm_b64,
-        "launch": launch_text,
-    }
+        def safe_copy(src: Path, dst: Path) -> None:
+            """Copy src to dst, skipping if they resolve to the same file."""
+            try:
+                if os.path.samefile(src, dst):
+                    return
+            except OSError:
+                pass
+            shutil.copy2(src, dst)
 
-    document = HTML.replace("__PAYLOAD__", script_json(payload))
+        safe_copy(args.wasm, out_dir / "waste-wast.wasm")
+        safe_copy(args.launch, out_dir / "launch.wast")
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(document, encoding="utf-8")
-    print(f"Generated {args.output}")
-    print(f"Output size: {args.output.stat().st_size:,} bytes")
-    print(f"C engine Wasm: {len(wasm_bytes):,} bytes "
-          f"({len(wasm_b64):,} B base64)")
-    print(f"Launch script: {len(launch_text):,} bytes")
+        wasm_size = args.wasm.stat().st_size
+        launch_size = args.launch.stat().st_size
+        print(f"Copied staging files to {out_dir}")
+        print(f"  waste-wast.wasm: {wasm_size:,} bytes")
+        print(f"  launch.wast: {launch_size:,} bytes")
+    else:
+        launch_text = args.launch.read_text(encoding="utf-8")
+        wasm_bytes = args.wasm.read_bytes()
+        wasm_b64 = base64.b64encode(wasm_bytes).decode("ascii")
+
+        payload = {
+            "wasmB64": wasm_b64,
+            "launch": launch_text,
+        }
+
+        document = HTML.replace("__PAYLOAD__", script_json(payload))
+
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(document, encoding="utf-8")
+        print(f"Generated {args.output}")
+        print(f"Output size: {args.output.stat().st_size:,} bytes")
+        print(f"C engine Wasm: {len(wasm_bytes):,} bytes "
+              f"({len(wasm_b64):,} B base64)")
+        print(f"Launch script: {len(launch_text):,} bytes")
 
 
 if __name__ == "__main__":

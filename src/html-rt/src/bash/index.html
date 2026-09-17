@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WASTE Bash (C engine)</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="loading-overlay">
+    <div class="loading-content">
+      <h2>WASTE Bash</h2>
+      <p id="loading-status">Initializing&hellip;</p>
+      <p id="loading-detail"></p>
+    </div>
+  </div>
+  <main>
+    <h1>WASTE Bash (C engine)</h1>
+    <p class="subtitle">A self-contained C WebAssembly engine, shared runtime namespace, guest libc, and Bash. No server or network access is required.</p>
+    <section class="panel">
+      <form id="start-form">
+        <button id="start" type="submit">Restart Bash</button>
+      </form>
+      <div class="controls">
+        <button id="pause" type="button" disabled>Pause</button>
+        <button id="resume" type="button" disabled>Resume</button>
+        <select id="signal" disabled>
+          <option value="2">SIGINT</option><option value="15">SIGTERM</option>
+          <option value="1">SIGHUP</option><option value="14">SIGALRM</option>
+          <option value="28">SIGWINCH</option>
+        </select>
+        <button id="send-signal" type="button" disabled>Send signal</button>
+        <button id="stop" type="button" disabled>Stop worker</button>
+        <span id="status">idle</span>
+      </div>
+      <pre id="terminal" aria-live="polite"></pre>
+      <form id="terminal-form" style="margin-top:10px">
+        <label for="terminal-input">input</label>
+        <input id="terminal-input" autocomplete="off" spellcheck="false" disabled>
+        <button id="send-input" type="submit" disabled>Send</button>
+      </form>
+    </section>
+  </main>
+  <script src="../../../../submodules/tarballjs/tarball.js"></script>
+  <script src="../shared/loader.js"></script>
+  <script>
+  var MANIFEST_URLS = [
+"manifest.tar.gz"
+  ];
+  var ZLIBAUX_URL =
+"zlibaux.wasm.b64"
+  ;
+  </script>
+  <script src="app.js"></script>
+  <script>
+  boot(startShell, function(msg, detail) {
+    var s = document.getElementById("loading-status");
+    var d = document.getElementById("loading-detail");
+    if (s) s.textContent = msg;
+    if (d) d.textContent = detail ? detail + " KB" : "";
+  });
+  </script>
+</body>
+</html>
