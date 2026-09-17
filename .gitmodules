@@ -3,7 +3,7 @@
 	url = https://github.com/WebAssembly/spec.git
 [submodule "submodules/zlib-wasm"]
 	path = submodules/zlib-wasm
-	url = https://github.com/SCI4THIS/zlib-wasm.git
+	url = https://github.com/SCI4THIS/zlib-wasm
 [submodule "submodules/tarballjs"]
 	path = submodules/tarballjs
-	url = https://github.com/ankitrohatgi/tarballjs.git
+	url = https://github.com/ankitrohatgi/tarballjs
