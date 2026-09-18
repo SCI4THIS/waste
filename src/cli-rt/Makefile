@@ -69,13 +69,14 @@ WASM_BINARY_TEST_TARGET := $(BUILD_DIR)/wasm-binary-primitives-sanitize
 WASM_IMPORT_TEST_TARGET := $(BUILD_DIR)/wasm-import-decode-sanitize
 WASM_VALIDATION_TEST_TARGET := $(BUILD_DIR)/wasm-validation-sanitize
 PARSER_REENTRANT_TEST_TARGET := $(BUILD_DIR)/wast-parser-reentrant-sanitize
+POSIX_SELECT_ABI_TEST_TARGET := $(BUILD_DIR)/posix-select-abi-sanitize
 I32_SMOKE_WASM := $(BUILD_DIR)/i32-smoke.wasm
 IMPORT_SMOKE_WASM := $(BUILD_DIR)/import-smoke.wasm
 EXTERN_PROVIDER_WASM := $(BUILD_DIR)/extern-provider.wasm
 EXTERN_CONSUMER_WASM := $(BUILD_DIR)/extern-consumer.wasm
 
 .PHONY: wast-native i32-smoke wasm-binary-primitives wasm-import-decode \
-	wasm-validation parser-reentrant gen lint clean
+	wasm-validation parser-reentrant posix-select-abi gen lint clean
 
 # ---- Parser generation (delegate to engine) ----
 
@@ -301,8 +302,21 @@ $(WASM_VALIDATION_TEST_TARGET): ../../tests/wasm-validation.c \
 		$(ENGINE_DIR)/wasm/load.c \
 		-lm -o $@
 
+# ---- POSIX select ABI unit tests (ASan/UBSan, uses system libc) ----
+
+posix-select-abi: $(POSIX_SELECT_ABI_TEST_TARGET)
+	ASAN_OPTIONS=detect_leaks=0 $(POSIX_SELECT_ABI_TEST_TARGET)
+
+$(POSIX_SELECT_ABI_TEST_TARGET): ../../tests/posix-select-abi.c \
+		$(ENGINE_DIR)/lib/select.c $(ENGINE_DIR)/lib/include/select.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
+		../../tests/posix-select-abi.c $(ENGINE_DIR)/lib/select.c \
+		-o $@
+
 clean:
 	rm -f $(WAST_TARGET) $(I32_SMOKE_TARGET) $(WASM_BINARY_TEST_TARGET) \
 		$(WASM_IMPORT_TEST_TARGET) $(WASM_VALIDATION_TEST_TARGET) \
-		$(PARSER_REENTRANT_TEST_TARGET) \
+		$(PARSER_REENTRANT_TEST_TARGET) $(POSIX_SELECT_ABI_TEST_TARGET) \
 		$(WAST_TAB_O) $(WAST_LEX_O) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)

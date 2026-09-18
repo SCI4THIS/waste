@@ -1,7 +1,7 @@
 /* identity.c — User/group/service database records and hostname for the WASTE
  * guest libc. */
 
-#include "common.h"
+#include "include/helper.h"
 
 typedef struct WastePasswd { char *name; char *password; u32 uid; u32 gid; char *gecos; char *directory; char *shell; } WastePasswd;
 typedef struct WasteGroup { char *name; char *password; u32 gid; char **members; } WasteGroup;

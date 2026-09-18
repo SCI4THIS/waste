@@ -31,7 +31,7 @@ char *strerror(int n) { (void)n; return "error"; }
 
 #else
 /* ---- Guest libc: full FILE I/O and printf ---- */
-#include "common.h"
+#include "include/helper.h"
 
 #ifdef WASTE_POSIX_IO
 extern i32 open(const char *path, i32 flags, i32 mode);

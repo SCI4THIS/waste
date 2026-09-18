@@ -1,7 +1,7 @@
 /* locale.c — Locale support, gettext, iconv, and wctype for the WASTE guest
  * libc. */
 
-#include "common.h"
+#include "include/helper.h"
 
 /* Character classification declared in wchar.c */
 extern i32 iswalnum(u32 c);

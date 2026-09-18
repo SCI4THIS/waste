@@ -88,7 +88,11 @@ LIBC_CLIENTS := $(wildcard $(REPO_ROOT)/tests/libc-test/*-client.wast.inc)
 LIBC_SOURCES := lib/stdlib.wat lib/stdio.c lib/wchar.c \
 	lib/locale.c lib/identity.c lib/string.c \
 	lib/stdlib.c lib/pattern.c lib/misc.c \
-	lib/common.h $(LIBC_CLIENTS) $(LIBC_BUILDER)
+	lib/time.c lib/termcap.c lib/termios.c \
+	lib/dirent.c lib/netdb.c lib/dlfcn.c lib/unistd.c \
+	lib/sys/random.c lib/sys/resource.c lib/sys/select.c \
+	lib/sys/ioctl.c lib/sys/socket.c \
+	lib/include/helper.h $(LIBC_CLIENTS) $(LIBC_BUILDER)
 LIBC_OUTPUT := $(BUILD_DIR)/waste-libc/waste-libc.wasm
 LIBC_FIXTURES := $(patsubst $(REPO_ROOT)/tests/libc-test/%-client.wast.inc,\
 	$(BUILD_DIR)/waste-libc/tests/%.wast,$(LIBC_CLIENTS))

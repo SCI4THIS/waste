@@ -2,7 +2,7 @@
  * wide string operations, and character classification for the WASTE guest
  * libc. */
 
-#include "common.h"
+#include "include/helper.h"
 
 static i32 utf8_decode(const unsigned char *source, u32 available, u32 *codepoint) {
   if (!source) return 0;

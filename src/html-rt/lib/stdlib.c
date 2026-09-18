@@ -210,8 +210,22 @@ void *realloc(void *ptr, size_t size) {
 }
 
 #else
-/* ---- Guest libc: number parsing, float conversion, arithmetic, sorting ---- */
-#include "common.h"
+/* ---- Guest libc: number parsing, float conversion, arithmetic, sorting,
+ * random numbers, and temporary files ---- */
+#include "include/helper.h"
+
+/* ---- Random numbers ---- */
+
+u32 random_state=0x6d2b79f5U;
+void waste_random_seed(u32 seed){random_state=seed?seed:1;}
+u32 arc4random(void){u32 x=random_state;x^=x<<13;x^=x>>17;x^=x<<5;return random_state=x;}
+
+/* ---- Temporary files ---- */
+
+static u32 temporary_counter;
+char *mktemp(char*pattern){u32 n=c_length(pattern),value=++temporary_counter;for(u32 i=n;i&&pattern[i-1]=='X';i--){pattern[i-1]=(char)('a'+value%26);value/=26;}return pattern;}
+i32 mkstemp(char*pattern){mktemp(pattern);*__errno_location()=38;return-1;}
+char *mkdtemp(char*pattern){mktemp(pattern);*__errno_location()=38;return 0;}
 
 /* Forward declaration from string.c */
 extern void *memset(void *d, i32 c, u32 n);

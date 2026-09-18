@@ -172,7 +172,7 @@ Split across `src/html-rt/lib/` in focused modules, this owns guest linear memor
 - C.UTF-8 locale (`lib/locale.c`), identity/passwd/group/service records (`lib/identity.c`)
 - String and conversion helpers (`lib/string.c`, `lib/stdlib.c`)
 - Regex and pattern matching (`lib/pattern.c`), resource-limit, time-formatting, terminal, and diagnostic helpers (`lib/misc.c`)
-- Shared declarations across libc modules (`lib/common.h`)
+- Shared declarations across libc modules (`lib/include/helper.h`)
 
 `src/html-rt/tools/build-bash-runtime.py` relinks Bash and libc to a neutral `waste-runtime` owner, then registers libc as an overlay on the OCaml host's `env` namespace. Operations requiring evaluator state (directory traversal, execve, descriptor readiness, dynamic loading, raw socket creation) deliberately return `ENOSYS` and must cross the OCaml process/VFS layer or the optional WebSocket broker.
 
@@ -230,7 +230,7 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 - `lib/string.c` — String and conversion helpers
 - `lib/pattern.c` — Regex and pattern matching
 - `lib/misc.c` — Resource-limit, time-formatting, terminal, and diagnostic helpers
-- `lib/common.h` — Shared declarations across guest libc modules
+- `lib/include/helper.h` — Shared declarations across guest libc modules
 - `tools/generate-browser-tests.py` — Collects `.wast` files, embeds interpreter, produces offline dashboard HTML
 - `tools/generate-bash-html.py` — Generates self-contained Bash interpreter page with CPS loader and libc
 - `tools/build-bash-runtime.py` — Relinks Bash and libc binaries to shared `waste-runtime` module
@@ -376,7 +376,8 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 │       │   ├── string.c              # String/conversion helpers
 │       │   ├── pattern.c             # Regex and pattern matching
 │       │   ├── misc.c                # Resource, time, terminal, diag
-│       │   └── common.h              # Shared guest libc declarations
+│       │   └── include/
+│       │       └── helper.h          # Shared guest libc declarations
 │       └── tools/                     # HTML generators & builders
 │           ├── generate-browser-tests.py
 │           ├── generate-bash-html.py

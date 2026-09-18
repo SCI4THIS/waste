@@ -1,6 +1,6 @@
 /* string.c — String and memory operations for the WASTE guest libc. */
 
-#include "common.h"
+#include "include/helper.h"
 
 u32 strlen(const char*s){return c_length(s);}
 u32 strnlen(const char*s,u32 n){u32 i=0;while(i<n&&s[i])i++;return i;}
@@ -23,3 +23,11 @@ char *strpbrk(const char*s,const char*accept){for(;*s;s++)if(strchr(accept,*s))r
 char *strstr(const char*h,const char*n){if(!*n)return(char*)h;u32 z=c_length(n);for(;*h;h++)if(!strncmp(h,n,z))return(char*)h;return 0;}
 char *strcasestr(const char*h,const char*n){if(!*n)return(char*)h;u32 z=c_length(n);for(;*h;h++)if(!strncasecmp(h,n,z))return(char*)h;return 0;}
 char *strdup(const char*s){u32 n=c_length(s)+1;char*d=malloc(n);if(d)bytes_copy(d,s,n);return d;}
+
+/* ---- Error/signal name formatting ---- */
+
+char error_text[32];
+char *number_text(const char*prefix,i32 number){u32 n=0;while(prefix[n]){error_text[n]=prefix[n];n++;}if(number<0){error_text[n++]='-';number=-number;}char digits[12];u32 d=0;do{digits[d++]=(char)('0'+number%10);number/=10;}while(number);while(d)error_text[n++]=digits[--d];error_text[n]=0;return error_text;}
+char *strerror(i32 error){return number_text("errno ",error);}
+char *strsignal(i32 signal){return number_text("signal ",signal);}
+i32 __libc_current_sigrtmin(void){return 32;} i32 __libc_current_sigrtmax(void){return 64;}

@@ -1,7 +1,7 @@
 /* pattern.c — Glob pattern matching and basic regular expressions for the
  * WASTE guest libc. */
 
-#include "common.h"
+#include "include/helper.h"
 
 static i32 glob_match(const char*p,const char*s,i32 insensitive){while(*p){if(*p=='*'){while(*p=='*')p++;if(!*p)return 1;do{if(glob_match(p,s,insensitive))return 1;}while(*s++);return 0;}if(!*s)return 0;if(*p=='?'){p++;s++;continue;}i32 a=(unsigned char)*p++,b=(unsigned char)*s++;if(insensitive){a=lower_ascii(a);b=lower_ascii(b);}if(a!=b)return 0;}return!*s;}
 i32 fnmatch(const char*pattern,const char*text,i32 flags){return glob_match(pattern,text,flags&16)?0:1;}

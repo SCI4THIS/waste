@@ -212,7 +212,7 @@ timeout write-back, and signal-mask behavior remain explicit differences.
 
 ## Implementation Stages
 
-### Stage 1: Freeze the ABI and add diagnostic tests
+### Stage 1: Freeze the ABI and add diagnostic tests — COMPLETE
 
 - Add compile-time ABI assertions to the guest-libc build.
 - Add native unit tests for set decoding/encoding and timeout validation.
@@ -222,6 +222,45 @@ timeout write-back, and signal-mask behavior remain explicit differences.
 
 Gate: the new tests describe current failures precisely and do not alter the
 generated libc module's behavior.
+
+#### Completed work
+
+**Guest ABI types** (`src/html-rt/lib/include/helper.h`): defined `waste_fd_set`
+(128 bytes, 32 × u32 words, `FD_SETSIZE` = 1024), `waste_timeval` (16 bytes:
+i64 tv_sec @ 0, i32 tv_usec @ 8), `waste_timespec` (16 bytes: i64 tv_sec @ 0,
+i32 tv_nsec @ 8), and `waste_sigset_t` (16 bytes: 4 × u32).  Compile-time
+`_Static_assert` guards verify sizes on every wasm32 libc build.  Exported
+size-probe functions and a WAST fixture (`tests/libc-test/select-abi-client.wast.inc`)
+verify the ABI at test time (6/6 pass).
+
+**Engine-side decode/encode** (`src/engine/posix/select.[ch]`): host-side
+`posix_fd_set`, `posix_timeval`, `posix_timespec` types with little-endian
+decode/encode from guest memory, bit-level fd_set operations (`posix_fd_zero`,
+`posix_fd_isset`, `posix_fd_set_bit`, `posix_fd_clr`, `posix_fd_count`), and
+validation for timeval, timespec, and nfds.
+
+**Native unit tests** (`tests/posix-select-abi.c`): 1097 tests under
+ASan/UBSan covering fd_set bit operations, decode/encode round-trips, timeval
+and timespec decode/validation, nfds validation, and NULL-argument handling.
+Built via `make -C src/cli-rt posix-select-abi`.
+
+**Split boundary fixture** (`tests/libc-test/environment-boundaries-client.wast.inc`):
+19 individual exported functions with per-call `assert_return` replacing the
+single aggregate `filesystem-and-process-boundaries` chain.
+
+#### Baseline results (2026-09-17)
+
+C engine (`waste-cli`): 17/19 pass.  `boundary-select` and `boundary-pselect`
+fail — both return 0 (the "always ready" shortcut returns 0 for nfds=0 with
+all-null sets) instead of -1 with errno=ENOSYS.
+
+OCaml sequential interpreter: same 2/19 failures on the same assertions.
+The libc binary is identical in both runners; the shortcut in `misc.c` is the
+sole cause.
+
+All other libc fixture suites (allocator, accounts, entropy-messages,
+locale-wide, matching-sort, memory-conversion, stdio, terminal,
+time-resource, select-abi) pass 100% under both runners.
 
 ### Stage 2: Introduce the sandbox kernel and descriptor readiness API
 
