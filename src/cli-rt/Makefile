@@ -12,7 +12,7 @@ FREESTANDING_FLAGS := -I$(ENGINE_DIR)/lib/include -fno-builtin -fno-stack-protec
 ENGINE_SOURCES := $(ENGINE_DIR)/wasm/load.c \
 	$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/encode.c \
 	$(ENGINE_DIR)/wast/stream.c $(ENGINE_DIR)/wast/command.c \
-	$(ENGINE_DIR)/store.c \
+	$(ENGINE_DIR)/store.c $(ENGINE_DIR)/lib/kernel.c \
 	$(ENGINE_DIR)/wast/runner.c $(ENGINE_DIR)/wast/assert.c \
 	$(ENGINE_DIR)/wat/builder.c $(ENGINE_DIR)/wat/literal.c \
 	$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
@@ -40,7 +40,8 @@ ENGINE_HEADERS := $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
 	$(ENGINE_DIR)/op/validate.h $(WAST_GEN_DIR)/dispatch_gen.h \
 	$(ENGINE_DIR)/instantiate.h $(ENGINE_DIR)/runtime_internal.h
 
-ENGINE_HEADERS += $(ENGINE_DIR)/include/waste.h
+ENGINE_HEADERS += $(ENGINE_DIR)/include/waste.h \
+	$(ENGINE_DIR)/lib/include/kernel.h
 
 # Freestanding library: shared (portable) sources from engine
 LIB_SHARED := $(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdio.c \
@@ -71,13 +72,17 @@ WASM_VALIDATION_TEST_TARGET := $(BUILD_DIR)/wasm-validation-sanitize
 PARSER_REENTRANT_TEST_TARGET := $(BUILD_DIR)/wast-parser-reentrant-sanitize
 POSIX_SELECT_ABI_TEST_TARGET := $(BUILD_DIR)/posix-select-abi-sanitize
 POSIX_KERNEL_TEST_TARGET := $(BUILD_DIR)/posix-kernel-sanitize
+CALLER_INSTANCE_TEST_TARGET := $(BUILD_DIR)/caller-instance-sanitize
 I32_SMOKE_WASM := $(BUILD_DIR)/i32-smoke.wasm
 IMPORT_SMOKE_WASM := $(BUILD_DIR)/import-smoke.wasm
 EXTERN_PROVIDER_WASM := $(BUILD_DIR)/extern-provider.wasm
 EXTERN_CONSUMER_WASM := $(BUILD_DIR)/extern-consumer.wasm
+CALLER_A_WASM := $(BUILD_DIR)/caller-a.wasm
+CALLER_B_WASM := $(BUILD_DIR)/caller-b.wasm
 
 .PHONY: wast-native i32-smoke wasm-binary-primitives wasm-import-decode \
-	wasm-validation parser-reentrant posix-select-abi posix-kernel gen lint clean
+	wasm-validation parser-reentrant posix-select-abi posix-kernel \
+	caller-instance gen lint clean
 
 # ---- Parser generation (delegate to engine) ----
 
@@ -329,9 +334,55 @@ $(POSIX_KERNEL_TEST_TARGET): ../../tests/posix-kernel.c \
 		../../tests/posix-kernel.c $(ENGINE_DIR)/lib/kernel.c \
 		-o $@
 
+# ---- Caller-instance host import tests (ASan/UBSan, uses system libc) ----
+
+caller-instance: $(CALLER_INSTANCE_TEST_TARGET) $(CALLER_A_WASM) $(CALLER_B_WASM)
+	ASAN_OPTIONS=detect_leaks=0 $(CALLER_INSTANCE_TEST_TARGET) $(CALLER_A_WASM) $(CALLER_B_WASM)
+
+$(CALLER_A_WASM): ../../tests/c-engine-caller-a.wat
+	mkdir -p $(BUILD_DIR)
+	wasm-as --enable-multivalue $< -o $@
+
+$(CALLER_B_WASM): ../../tests/c-engine-caller-b.wat
+	mkdir -p $(BUILD_DIR)
+	wasm-as --enable-multivalue $< -o $@
+
+$(CALLER_INSTANCE_TEST_TARGET): ../../tests/c-engine-caller-instance.c \
+		$(ENGINE_DIR)/wasm/load.c $(ENGINE_DIR)/wasm/opcode.c \
+		$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
+		$(ENGINE_DIR)/wasm/module.c $(ENGINE_DIR)/wasm/decode.c \
+		$(ENGINE_DIR)/op/validate.c \
+		$(ENGINE_DIR)/instantiate.c $(ENGINE_DIR)/op/execute.c \
+		$(ENGINE_DIR)/op/execute_memory.c \
+		$(ENGINE_DIR)/op/execute_numeric.c \
+		$(ENGINE_DIR)/op/execute_simd.c \
+		$(ENGINE_DIR)/op/execute_gc.c \
+		$(ENGINE_DIR)/op/execute_exception.c \
+		$(ENGINE_DIR)/op/execute_table.c \
+		$(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_DIR)/instance.c \
+		$(ENGINE_DIR)/api.c \
+		$(ENGINE_DIR)/engine_internal.h $(ENGINE_DIR)/include/waste.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
+		../../tests/c-engine-caller-instance.c $(ENGINE_DIR)/wasm/load.c \
+		$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/leb.c \
+		$(ENGINE_DIR)/wasm/reader.c $(ENGINE_DIR)/wasm/module.c \
+		$(ENGINE_DIR)/wasm/decode.c $(ENGINE_DIR)/op/validate.c \
+		$(ENGINE_DIR)/instantiate.c $(ENGINE_DIR)/op/execute.c \
+		$(ENGINE_DIR)/op/execute_memory.c \
+		$(ENGINE_DIR)/op/execute_numeric.c \
+		$(ENGINE_DIR)/op/execute_simd.c \
+		$(ENGINE_DIR)/op/execute_gc.c \
+		$(ENGINE_DIR)/op/execute_exception.c \
+		$(ENGINE_DIR)/op/execute_table.c \
+		$(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_DIR)/instance.c \
+		$(ENGINE_DIR)/api.c \
+		-lm -o $@
+
 clean:
 	rm -f $(WAST_TARGET) $(I32_SMOKE_TARGET) $(WASM_BINARY_TEST_TARGET) \
 		$(WASM_IMPORT_TEST_TARGET) $(WASM_VALIDATION_TEST_TARGET) \
 		$(PARSER_REENTRANT_TEST_TARGET) $(POSIX_SELECT_ABI_TEST_TARGET) \
-		$(POSIX_KERNEL_TEST_TARGET) \
+		$(POSIX_KERNEL_TEST_TARGET) $(CALLER_INSTANCE_TEST_TARGET) \
 		$(WAST_TAB_O) $(WAST_LEX_O) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)

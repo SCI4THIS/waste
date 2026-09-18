@@ -54,8 +54,9 @@ static int run_scalar_globals(waste_exec_engine *engine) {
 }
 
 static exec_status host_add(void *data, const wasm_value *args, int count,
-                            wasm_value *results, int *result_count, exec_error *error) {
-    (void)data; (void)error;
+                            wasm_value *results, int *result_count, exec_error *error,
+                            const waste_exec_engine *caller) {
+    (void)data; (void)error; (void)caller;
     if (count != 2) return EXEC_ERROR_TRAP;
     results[0].type=WASM_VALTYPE_I32;
     results[0].i32=(int32_t)((uint32_t)args[0].i32 + (uint32_t)args[1].i32);

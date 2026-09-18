@@ -14,7 +14,9 @@
 
 static exec_status native_linked_call(void *data, const wasm_value *args,
                                        int arg_count, wasm_value *results,
-                                       int *result_count, exec_error *error) {
+                                       int *result_count, exec_error *error,
+                                       const waste_exec_engine *caller) {
+    (void)caller;
     native_linked_func *function = (native_linked_func *)data;
     return exec_invoke(function->engine, function->func_idx, args, arg_count,
                        results, result_count, error);
@@ -24,8 +26,10 @@ static exec_status native_linked_call(void *data, const wasm_value *args,
 
 static exec_status native_spectest_noop(void *data, const wasm_value *args,
                                          int arg_count, wasm_value *results,
-                                         int *result_count, exec_error *error) {
+                                         int *result_count, exec_error *error,
+                                         const waste_exec_engine *caller) {
     (void)data; (void)args; (void)arg_count; (void)results; (void)error;
+    (void)caller;
     *result_count = 0;
     return EXEC_OK;
 }

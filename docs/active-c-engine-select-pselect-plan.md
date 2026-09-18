@@ -334,7 +334,7 @@ Stage 1 follow-up: `boundary-select` and `boundary-pselect` now expect 0 (no
 descriptors ready) rather than -1/ENOSYS, matching the readiness-reporting
 semantics.  All 19 boundary tests pass under both C engine and OCaml runners.
 
-### Stage 3: Make host imports instance-aware
+### Stage 3: Make host imports instance-aware — COMPLETE
 
 - Extend the host-call binding/invocation interface with an explicit caller
   instance or per-instance binding.
@@ -346,6 +346,65 @@ semantics.  All 19 boundary tests pass under both C engine and OCaml runners.
 Gate: all existing core/linker tests and the libc suite still pass except for
 the recorded boundary mismatch; AddressSanitizer and UndefinedBehaviorSanitizer
 remain clean with the repository's documented LeakSanitizer exception.
+
+#### Completed work
+
+**exec_host_func signature change** (`src/engine/engine_internal.h`): added a
+trailing `const waste_exec_engine *caller` parameter to the `exec_host_func`
+function pointer typedef.  The invocation site in `exec_invoke`
+(`src/engine/op/execute.c`) passes the calling engine as the last argument.
+Every host function now receives the engine that invoked it, enabling direct
+access to the caller's memory, tables, and globals without registry lookups.
+
+**POSIX stubs updated** (`src/html-rt/posix_stubs.c`): `native_posix_memory`
+now reads `caller->memory` directly instead of searching the store for a
+module named `"waste-runtime"`.  This eliminates the fragile name-based lookup
+that broke when libc was instantiated as `"waste-libc"` or any name other than
+`"waste-runtime"`.  All 13 POSIX host functions updated to accept the `caller`
+parameter; those that access guest memory (`open`, `read`, `write`, `getcwd`,
+`stat`) use it for memory access.  `getcwd` retains the store in `host_data`
+for its `malloc` call through the `env` module.
+
+**All host function implementations updated:**
+- `src/engine/store.c`: `native_linked_call`, `native_spectest_noop`
+- `src/html-rt/browser_api.c`: `linked_call`, `spectest_noop`
+- `src/html-rt/posix_stubs.c`: all 13 POSIX stubs
+- `tests/c-engine-i32-smoke.c`: `host_add`
+
+**Caller-instance test suite** (`tests/c-engine-caller-instance.c`): 28 tests
+under ASan/UBSan covering:
+- Direct host call from module A → host sees A's memory (initial data and
+  store/read round-trip)
+- Direct host call from module B → host sees B's memory (different initial
+  data)
+- Nested call: B calls A's export, A calls host → host sees A's memory (not
+  B's), and only A's memory is modified
+- Two instances of the same decoded module: each has independent memory,
+  stores to one are invisible to the other
+- Memory object and data pointer isolation between instances
+
+Test WAT modules: `tests/c-engine-caller-a.wat` (memory with `\de\ad\be\ef`
+data, imports `host.read_caller_mem`) and `tests/c-engine-caller-b.wat`
+(memory with `\ca\fe\ba\be` data, imports both host function and A's export).
+Built via `make -C src/cli-rt caller-instance`.
+
+**Build system** (`src/cli-rt/Makefile`): added `kernel.c` to ENGINE_SOURCES
+(required because `store.c` now depends on `posix_kernel_create`/`destroy`);
+added `caller-instance` target with wasm-as compilation of both WAT modules
+and ASan/UBSan-linked test binary.
+
+#### Baseline results (2026-09-18)
+
+All native test suites pass under ASan/UBSan:
+- caller-instance: 28/28
+- posix-kernel: 240/240
+- posix-select-abi: 1097/1097
+- i32-smoke: pass (direct, import, extern-alias, decoded-module-instance,
+  public-API)
+- wasm-binary-primitives: pass
+- wasm-import-decode: pass
+- wasm-validation: pass
+- parser-reentrant: pass (concurrent isolation)
 
 ### Stage 4: Add synchronous `select`/`pselect`
 

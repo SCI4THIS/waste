@@ -94,13 +94,14 @@ static linked_module *registered_module(const char *name) {
     for(uint32_t i=g_module_count;i>0;i--)if(strcmp(g_modules[i-1].registered,name)==0)return &g_modules[i-1];
     return (void *)0;
 }
-static exec_status linked_call(void *data,const wasm_value *args,int argc,wasm_value *results,int *result_count,exec_error *error) {
-    linked_func *f=(linked_func *)data;return exec_invoke(f->engine,f->func_idx,args,argc,results,result_count,error);
+static exec_status linked_call(void *data,const wasm_value *args,int argc,wasm_value *results,int *result_count,exec_error *error,const waste_exec_engine *caller) {
+    (void)caller;linked_func *f=(linked_func *)data;return exec_invoke(f->engine,f->func_idx,args,argc,results,result_count,error);
 }
 static exec_status spectest_noop(void *data,const wasm_value *args,int argc,
                                  wasm_value *results,int *result_count,
-                                 exec_error *error) {
-    (void)data;(void)args;(void)argc;(void)results;(void)error;*result_count=0;return EXEC_OK;
+                                 exec_error *error,
+                                 const waste_exec_engine *caller) {
+    (void)data;(void)args;(void)argc;(void)results;(void)error;(void)caller;*result_count=0;return EXEC_OK;
 }
 
 /* ---- Result buffer for waste_wast_run_script ---- */

@@ -23,19 +23,17 @@ extern int32_t waste_host_posix_write(int32_t descriptor, const void *buffer,
 
 /* ---- POSIX stub helpers ---- */
 
-static exec_status native_posix_memory(native_store *store,
+static exec_status native_posix_memory(const waste_exec_engine *caller,
                                        exec_memory **memory_out,
                                        exec_error *error) {
-    native_linked_module *runtime = native_registered_module(
-        store, "waste-runtime");
-    if (!runtime) {
-        error->status = EXEC_ERROR_NOT_FOUND;
-        snprintf(error->message, sizeof(error->message),
-                 "POSIX host call has no waste-runtime module");
-        return error->status;
+    if (caller->memory) {
+        *memory_out = caller->memory;
+        return EXEC_OK;
     }
-    return exec_find_export_memory(runtime->engine, "memory", memory_out,
-                                   error);
+    error->status = EXEC_ERROR_NOT_FOUND;
+    snprintf(error->message, sizeof(error->message),
+             "POSIX host call: caller has no memory");
+    return error->status;
 }
 
 static int native_posix_range(exec_memory *memory, uint32_t offset,
@@ -58,14 +56,15 @@ static exec_status native_posix_result(int32_t value, wasm_value *results,
 
 static exec_status native_posix_open(void *data, const wasm_value *args,
                                      int arg_count, wasm_value *results,
-                                     int *result_count, exec_error *error) {
-    native_store *store = (native_store *)data;
+                                     int *result_count, exec_error *error,
+                                     const waste_exec_engine *caller) {
+    (void)data;
     exec_memory *memory = (void *)0;
     uint8_t *path;
     uint64_t byte_size;
     uint32_t offset;
     size_t length = 0;
-    if (arg_count != 3 || native_posix_memory(store, &memory, error) != EXEC_OK)
+    if (arg_count != 3 || native_posix_memory(caller, &memory, error) != EXEC_OK)
         return error->status;
     offset = (uint32_t)args[0].i32;
     byte_size = memory->pages * UINT64_C(65536);
@@ -91,8 +90,9 @@ static exec_status native_posix_open(void *data, const wasm_value *args,
 
 static exec_status native_posix_close(void *data, const wasm_value *args,
                                       int arg_count, wasm_value *results,
-                                      int *result_count, exec_error *error) {
-    (void)data;
+                                      int *result_count, exec_error *error,
+                                      const waste_exec_engine *caller) {
+    (void)data; (void)caller;
     if (arg_count != 1) {
         error->status = EXEC_ERROR_FORMAT;
         snprintf(error->message, sizeof(error->message),
@@ -105,12 +105,13 @@ static exec_status native_posix_close(void *data, const wasm_value *args,
 
 static exec_status native_posix_read(void *data, const wasm_value *args,
                                      int arg_count, wasm_value *results,
-                                     int *result_count, exec_error *error) {
-    native_store *store = (native_store *)data;
+                                     int *result_count, exec_error *error,
+                                     const waste_exec_engine *caller) {
+    (void)data;
     exec_memory *memory = (void *)0;
     uint8_t *buffer;
     uint32_t count;
-    if (arg_count != 3 || native_posix_memory(store, &memory, error) != EXEC_OK)
+    if (arg_count != 3 || native_posix_memory(caller, &memory, error) != EXEC_OK)
         return error->status;
     count = (uint32_t)args[2].i32;
     if (!native_posix_range(memory, (uint32_t)args[1].i32, count, &buffer)) {
@@ -126,12 +127,13 @@ static exec_status native_posix_read(void *data, const wasm_value *args,
 
 static exec_status native_posix_write(void *data, const wasm_value *args,
                                       int arg_count, wasm_value *results,
-                                      int *result_count, exec_error *error) {
-    native_store *store = (native_store *)data;
+                                      int *result_count, exec_error *error,
+                                      const waste_exec_engine *caller) {
+    (void)data;
     exec_memory *memory = (void *)0;
     uint8_t *buffer;
     uint32_t count;
-    if (arg_count != 3 || native_posix_memory(store, &memory, error) != EXEC_OK)
+    if (arg_count != 3 || native_posix_memory(caller, &memory, error) != EXEC_OK)
         return error->status;
     count = (uint32_t)args[2].i32;
     if (!native_posix_range(memory, (uint32_t)args[1].i32, count, &buffer)) {
@@ -148,23 +150,26 @@ static exec_status native_posix_write(void *data, const wasm_value *args,
 static exec_status native_posix_i32_zero(void *data, const wasm_value *args,
                                          int arg_count, wasm_value *results,
                                          int *result_count,
-                                         exec_error *error) {
-    (void)data; (void)args; (void)arg_count; (void)error;
+                                         exec_error *error,
+                                         const waste_exec_engine *caller) {
+    (void)data; (void)args; (void)arg_count; (void)error; (void)caller;
     return native_posix_result(0, results, result_count);
 }
 
 static exec_status native_posix_i32_one(void *data, const wasm_value *args,
                                         int arg_count, wasm_value *results,
                                         int *result_count,
-                                        exec_error *error) {
-    (void)data; (void)args; (void)arg_count; (void)error;
+                                        exec_error *error,
+                                        const waste_exec_engine *caller) {
+    (void)data; (void)args; (void)arg_count; (void)error; (void)caller;
     return native_posix_result(1, results, result_count);
 }
 
 static exec_status native_posix_i32_sixty_four(
         void *data, const wasm_value *args, int arg_count,
-        wasm_value *results, int *result_count, exec_error *error) {
-    (void)data; (void)args; (void)arg_count; (void)error;
+        wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    (void)data; (void)args; (void)arg_count; (void)error; (void)caller;
     return native_posix_result(64, results, result_count);
 }
 
@@ -173,16 +178,18 @@ static exec_status native_posix_i32_negative(void *data,
                                              int arg_count,
                                              wasm_value *results,
                                              int *result_count,
-                                             exec_error *error) {
-    (void)data; (void)args; (void)arg_count; (void)error;
+                                             exec_error *error,
+                                             const waste_exec_engine *caller) {
+    (void)data; (void)args; (void)arg_count; (void)error; (void)caller;
     return native_posix_result(-1, results, result_count);
 }
 
 static exec_status native_posix_i64_zero(void *data, const wasm_value *args,
                                          int arg_count, wasm_value *results,
                                          int *result_count,
-                                         exec_error *error) {
-    (void)data; (void)args; (void)arg_count; (void)error;
+                                         exec_error *error,
+                                         const waste_exec_engine *caller) {
+    (void)data; (void)args; (void)arg_count; (void)error; (void)caller;
     results[0].type = WASM_VALTYPE_I64;
     results[0].i64 = 0;
     *result_count = 1;
@@ -194,8 +201,9 @@ static exec_status native_posix_i64_negative(void *data,
                                              int arg_count,
                                              wasm_value *results,
                                              int *result_count,
-                                             exec_error *error) {
-    (void)data; (void)args; (void)arg_count; (void)error;
+                                             exec_error *error,
+                                             const waste_exec_engine *caller) {
+    (void)data; (void)args; (void)arg_count; (void)error; (void)caller;
     results[0].type = WASM_VALTYPE_I64;
     results[0].i64 = -1;
     *result_count = 1;
@@ -204,8 +212,10 @@ static exec_status native_posix_i64_negative(void *data,
 
 static exec_status native_posix_void(void *data, const wasm_value *args,
                                      int arg_count, wasm_value *results,
-                                     int *result_count, exec_error *error) {
+                                     int *result_count, exec_error *error,
+                                     const waste_exec_engine *caller) {
     (void)data; (void)args; (void)arg_count; (void)results; (void)error;
+    (void)caller;
     *result_count = 0;
     return EXEC_OK;
 }
@@ -213,14 +223,15 @@ static exec_status native_posix_void(void *data, const wasm_value *args,
 static exec_status native_posix_getcwd(void *data, const wasm_value *args,
                                        int arg_count, wasm_value *results,
                                        int *result_count,
-                                       exec_error *error) {
+                                       exec_error *error,
+                                       const waste_exec_engine *caller) {
     native_store *store = (native_store *)data;
     exec_memory *memory = (void *)0;
     uint8_t *buffer;
     uint32_t offset;
     uint32_t capacity;
     if (arg_count != 2 ||
-        native_posix_memory(store, &memory, error) != EXEC_OK)
+        native_posix_memory(caller, &memory, error) != EXEC_OK)
         return native_posix_result(0, results, result_count);
     offset = (uint32_t)args[0].i32;
     capacity = (uint32_t)args[1].i32;
@@ -253,12 +264,13 @@ static exec_status native_posix_getcwd(void *data, const wasm_value *args,
 
 static exec_status native_posix_stat(void *data, const wasm_value *args,
                                      int arg_count, wasm_value *results,
-                                     int *result_count, exec_error *error) {
-    native_store *store = (native_store *)data;
+                                     int *result_count, exec_error *error,
+                                     const waste_exec_engine *caller) {
+    (void)data;
     exec_memory *memory = (void *)0;
     uint8_t *status;
     uint32_t offset;
-    if (arg_count != 2 || native_posix_memory(store, &memory, error) != EXEC_OK)
+    if (arg_count != 2 || native_posix_memory(caller, &memory, error) != EXEC_OK)
         return native_posix_result(-1, results, result_count);
     offset = (uint32_t)args[1].i32;
     if (!native_posix_range(memory, offset, 128, &status))

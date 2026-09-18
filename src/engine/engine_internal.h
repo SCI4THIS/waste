@@ -46,7 +46,8 @@ typedef struct {
 typedef exec_status (*exec_host_func)(void *host_data,
                                       const wasm_value *args, int arg_count,
                                       wasm_value *results, int *result_count,
-                                      exec_error *error);
+                                      exec_error *error,
+                                      const waste_exec_engine *caller);
 
 typedef enum {
     EXEC_HOST_CONTROL_NONE = 0,

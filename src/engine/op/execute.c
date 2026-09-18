@@ -1026,7 +1026,7 @@ tail_entry:
             return EXEC_ERROR_LONGJMP;
         }
         int count=0;
-        exec_status status=eng->import_funcs[func_idx](eng->import_host_data[func_idx],args,arg_count,results,&count,err);
+        exec_status status=eng->import_funcs[func_idx](eng->import_host_data[func_idx],args,arg_count,results,&count,err,eng);
         if (status != EXEC_OK) return status;
         if (count != type->result_count) return exec_fail(err, EXEC_ERROR_TRAP, "import result count mismatch");
         if (result_count) *result_count=count;
