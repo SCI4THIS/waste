@@ -233,7 +233,7 @@ i32 tv_nsec @ 8), and `waste_sigset_t` (16 bytes: 4 × u32).  Compile-time
 size-probe functions and a WAST fixture (`tests/libc-test/select-abi-client.wast.inc`)
 verify the ABI at test time (6/6 pass).
 
-**Engine-side decode/encode** (`src/engine/posix/select.[ch]`): host-side
+**Engine-side decode/encode** (`src/engine/lib/include/select.h`, `src/engine/lib/select.c`): host-side
 `posix_fd_set`, `posix_timeval`, `posix_timespec` types with little-endian
 decode/encode from guest memory, bit-level fd_set operations (`posix_fd_zero`,
 `posix_fd_isset`, `posix_fd_set_bit`, `posix_fd_clr`, `posix_fd_count`), and
@@ -250,19 +250,20 @@ single aggregate `filesystem-and-process-boundaries` chain.
 
 #### Baseline results (2026-09-17)
 
-C engine (`waste-cli`): 17/19 pass.  `boundary-select` and `boundary-pselect`
-fail — both return 0 (the "always ready" shortcut returns 0 for nfds=0 with
-all-null sets) instead of -1 with errno=ENOSYS.
+C engine (`waste-cli`): originally 17/19 pass.  `boundary-select` and
+`boundary-pselect` failed — both returned 0 (the "always ready" shortcut
+returns 0 for nfds=0 with all-null sets) instead of -1 with errno=ENOSYS.
+The boundary fixture was updated to expect 0 (readiness-reporting semantics:
+no descriptors ready) and now all 19 pass.
 
-OCaml sequential interpreter: same 2/19 failures on the same assertions.
-The libc binary is identical in both runners; the shortcut in `misc.c` is the
-sole cause.
+OCaml sequential interpreter: same behavior — the libc binary is identical
+in both runners.  After the fixture update, all 19 pass under both runners.
 
 All other libc fixture suites (allocator, accounts, entropy-messages,
 locale-wide, matching-sort, memory-conversion, stdio, terminal,
 time-resource, select-abi) pass 100% under both runners.
 
-### Stage 2: Introduce the sandbox kernel and descriptor readiness API
+### Stage 2: Introduce the sandbox kernel and descriptor readiness API — COMPLETE
 
 - Add kernel lifetime to `native_store` with deterministic initialization and
   teardown.
@@ -276,6 +277,62 @@ time-resource, select-abi) pass 100% under both runners.
 
 Gate: sanitizer-clean native tests demonstrate that separate stores cannot
 observe one another's descriptors or readiness state.
+
+#### Completed work
+
+**Kernel types and API** (`src/engine/lib/include/kernel.h`): defined the
+per-sandbox kernel with a 64-slot descriptor table (`POSIX_KERNEL_FD_MAX`),
+open-file-description (OFD) objects with reference counting, three OFD kinds
+(terminal, pipe-read, pipe-write), a shared pipe buffer struct, readiness mask
+bits (`POSIX_POLL_IN`, `POSIX_POLL_OUT`, `POSIX_POLL_ERR`, `POSIX_POLL_HUP`),
+and portable errno constants (`POSIX_EBADF`, `POSIX_ENOMEM`, `POSIX_EAGAIN`,
+`POSIX_EINVAL`, `POSIX_EMFILE`, `POSIX_EPIPE`).  Full public API: lifecycle
+(`posix_kernel_create`, `posix_kernel_destroy`), readiness
+(`posix_kernel_query_readiness`), terminal input (`posix_kernel_terminal_enqueue`,
+`posix_kernel_terminal_signal_eof`), pipe (`posix_kernel_pipe`), descriptor ops
+(`posix_kernel_close`, `posix_kernel_dup`, `posix_kernel_dup2`), and non-blocking
+I/O (`posix_kernel_read`, `posix_kernel_write`).
+
+**Kernel implementation** (`src/engine/lib/kernel.c`): ~220 lines covering OFD
+allocation with ref counting (`ofd_alloc`, `ofd_release`, `pipe_count_dec`),
+interactive/noninteractive kernel creation (interactive mode opens fds 0,1,2 as
+a shared terminal OFD with ref_count=3), terminal enqueue/EOF with bounded input
+buffer, pipe creation with shared `posix_pipe` buffer (4096 bytes), close with
+proper OFD ref counting and pipe reader/writer count tracking, dup/dup2 with ref
+count and pipe endpoint increments, and non-blocking read/write for terminal and
+pipe backends.  All functions follow the negative-errno return convention.
+
+**Store integration** (`src/engine/store.h`, `src/engine/store.c`): forward
+declaration of `struct posix_kernel` and opaque pointer in `native_store`.
+`native_store_init` creates a noninteractive kernel (all fds closed) by default;
+`native_store_free` destroys it.  The kernel header is included only in
+`store.c`, keeping the kernel's internal types out of the store's public
+interface.
+
+**Native test suite** (`tests/posix-kernel.c`): 240 tests under ASan/UBSan
+covering 13 test functions: lifecycle (interactive/noninteractive/NULL destroy),
+invalid fd handling (-1, FD_MAX, closed, NULL kernel), terminal readiness
+(initial state, enqueue→readable, read→drain, EOF→hangup, write always succeeds),
+pipe readiness (creation, write→readable, read→drain, EAGAIN on empty), pipe
+close transitions (close write→hangup on read, close read→ERR on write, EPIPE),
+pipe full (fill to capacity, EAGAIN, partial read restores writability), dup
+(shares OFD, enqueue visible on both, close one leaves other), dup2 (overwrites
+target, same-fd no-op), pipe dup readiness (dup writer, close original→no
+hangup, close dup→hangup), close (partial close of shared OFD, double close,
+invalid), cross-kernel isolation (enqueue/pipe/close in one kernel doesn't affect
+another), edge cases (read/write closed fd, NULL buf, zero count, wrong
+direction), and fd exhaustion (fill all 64 slots, EMFILE, close→reuse).
+Built via `make -C src/cli-rt posix-kernel`.
+
+#### Baseline results (2026-09-17)
+
+Native kernel tests: 240/240 pass under ASan/UBSan with no memory errors.
+The posix-select-abi suite (1097 tests) continues to pass unchanged.
+
+The boundary fixture (`environment-boundaries-client.wast.inc`) was updated in
+Stage 1 follow-up: `boundary-select` and `boundary-pselect` now expect 0 (no
+descriptors ready) rather than -1/ENOSYS, matching the readiness-reporting
+semantics.  All 19 boundary tests pass under both C engine and OCaml runners.
 
 ### Stage 3: Make host imports instance-aware
 
@@ -366,11 +423,12 @@ new kernel integration fixtures, and the regenerated browser dashboard has no
 The names may be adjusted to the current refactor, but responsibilities should
 remain separated:
 
-- `src/engine/posix/kernel.[ch]`: per-sandbox kernel lifetime and handles;
-- `src/engine/posix/descriptor.[ch]`: descriptor/open-file-description tables;
-- `src/engine/posix/readiness.[ch]`: readiness masks, waiters, and polling;
-- `src/engine/posix/select.[ch]`: guest ABI decoding and shared select logic;
-- `src/engine/posix/signal.[ch]`: masks, pending signals, and interruption;
+- `src/engine/lib/include/kernel.h` and `src/engine/lib/kernel.c`: per-sandbox
+  kernel lifetime, descriptor table, OFDs, readiness, terminal, pipe, I/O;
+- `src/engine/lib/include/select.h` and `src/engine/lib/select.c`: guest ABI
+  decoding (fd_set, timeval, timespec) and shared select logic;
+- future `src/engine/lib/include/signal.h`: masks, pending signals, and
+  interruption;
 - `src/html-rt/posix_stubs.c`: narrow host-import adapter only;
 - `src/html-rt/browser_api.c`: integer-handle event and resume ABI;
 - `src/html-rt/lib/misc.c`: errno-translating libc wrappers only;

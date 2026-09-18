@@ -35,6 +35,8 @@ typedef struct {
 typedef int (*native_host_resolver)(const char *module, const char *name,
                                      void *context, native_host_binding *out);
 
+struct posix_kernel;
+
 typedef struct {
     native_linked_module *modules;
     int module_count;
@@ -54,6 +56,8 @@ typedef struct {
        registered Wasm module. */
     native_host_resolver host_resolver;
     void *host_context;
+    /* Per-sandbox POSIX kernel: descriptor table, readiness, and wait state. */
+    struct posix_kernel *kernel;
 } native_store;
 
 void native_store_init(native_store *store);

@@ -4,6 +4,7 @@
 #include "wast/runner.h"
 #include "wasm/decode.h"
 #include "instantiate.h"
+#include "lib/include/kernel.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -69,6 +70,7 @@ void native_store_init(native_store *store) {
     store->spectest_f32.value.f32 = 666.6f;
     store->spectest_f64.value.type = WASM_VALTYPE_F64;
     store->spectest_f64.value.f64 = 666.6;
+    store->kernel = posix_kernel_create(0); /* noninteractive by default */
 }
 
 void native_store_free(native_store *store) {
@@ -87,6 +89,7 @@ void native_store_free(native_store *store) {
     free(store->orphan_engines);
     free(store->spectest_memory.data);
     free(store->spectest_table.elements);
+    posix_kernel_destroy(store->kernel);
     memset(store, 0, sizeof(*store));
 }
 
