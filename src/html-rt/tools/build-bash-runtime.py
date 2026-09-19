@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from libc_sources import libc_source_paths
+
 
 RUNTIME_MODULE = "waste-runtime"
 RUNTIME_PAGES = 5
@@ -227,14 +229,7 @@ def main() -> None:
         run([
             "clang", "--target=wasm32", "-O2", "-nostdlib", "-fno-builtin",
             "-DWASTE_POSIX_IO",
-            str(root / "src" / "html-rt" / "lib" / "stdio.c"),
-            str(root / "src" / "html-rt" / "lib" / "wchar.c"),
-            str(root / "src" / "html-rt" / "lib" / "locale.c"),
-            str(root / "src" / "html-rt" / "lib" / "identity.c"),
-            str(root / "src" / "html-rt" / "lib" / "string.c"),
-            str(root / "src" / "html-rt" / "lib" / "stdlib.c"),
-            str(root / "src" / "html-rt" / "lib" / "pattern.c"),
-            str(root / "src" / "html-rt" / "lib" / "misc.c"),
+            *(str(path) for path in libc_source_paths(root)),
             "-Wl,--no-entry",
             "-Wl,--import-memory", "-Wl,--import-table", "-Wl,--global-base=262144",
             "-Wl,-z,stack-size=16384", "-Wl,--initial-memory=327680",

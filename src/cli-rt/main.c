@@ -3,6 +3,9 @@
 
 #include "store.h"
 #include "wast/runner.h"
+#include "runtime_internal.h"
+#include "lib/include/kernel.h"
+#include "lib/include/select.h"
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -18,6 +21,130 @@ static const char *basename_simple(const char *path) {
     for (const char *p = path; *p; p++)
         if (*p == '/' || *p == '\\') last = p + 1;
     return last;
+}
+
+static exec_status cli_result(int32_t value, wasm_value *results,
+                              int *result_count) {
+    results[0].type = WASM_VALTYPE_I32;
+    results[0].i32 = value;
+    *result_count = 1;
+    return EXEC_OK;
+}
+
+static int cli_range(exec_memory *memory, uint32_t offset, uint32_t length,
+                     uint8_t **out) {
+    uint64_t size = memory->pages * UINT64_C(65536);
+    if ((uint64_t)offset + length > size) return 0;
+    *out = memory->data + offset;
+    return 1;
+}
+
+static exec_status cli_select_host(void *data, const wasm_value *args,
+                                   int arg_count, wasm_value *results,
+                                   int *result_count, exec_error *error,
+                                   const waste_exec_engine *caller) {
+    native_store *store = data;
+    if (arg_count != 5 || !caller->memory) return EXEC_ERROR_NOT_FOUND;
+    exec_memory *memory = caller->memory;
+    posix_fd_set rds, wrs, exs;
+    posix_fd_set *rp = NULL, *wp = NULL, *ep = NULL;
+    uint8_t *bytes;
+    uint32_t pointers[3] = {(uint32_t)args[1].i32,
+                            (uint32_t)args[2].i32,
+                            (uint32_t)args[3].i32};
+    posix_fd_set *sets[3] = {&rds, &wrs, &exs};
+    for (int i = 0; i < 3; i++) {
+        if (!pointers[i]) continue;
+        if (!cli_range(memory, pointers[i], POSIX_FD_SET_BYTES, &bytes))
+            return cli_result(-POSIX_EINVAL, results, result_count);
+        posix_fd_set_decode(sets[i], bytes);
+        if (i == 0) rp = sets[i];
+        if (i == 1) wp = sets[i];
+        if (i == 2) ep = sets[i];
+    }
+    posix_timeval tv;
+    const posix_timeval *tvp = NULL;
+    uint32_t timeout = (uint32_t)args[4].i32;
+    if (timeout) {
+        if (!cli_range(memory, timeout, POSIX_TIMEVAL_BYTES, &bytes))
+            return cli_result(-POSIX_EINVAL, results, result_count);
+        posix_timeval_decode(&tv, bytes);
+        tvp = &tv;
+    }
+    int32_t value = posix_kernel_select(store->kernel, args[0].i32,
+                                        rp, wp, ep, tvp);
+    if (value == -POSIX_EAGAIN) return EXEC_YIELD;
+    if (value >= 0) {
+        if (rp) posix_fd_set_encode(memory->data + pointers[0], rp);
+        if (wp) posix_fd_set_encode(memory->data + pointers[1], wp);
+        if (ep) posix_fd_set_encode(memory->data + pointers[2], ep);
+    }
+    (void)error;
+    return cli_result(value, results, result_count);
+}
+
+static exec_status cli_pselect_host(void *data, const wasm_value *args,
+                                    int arg_count, wasm_value *results,
+                                    int *result_count, exec_error *error,
+                                    const waste_exec_engine *caller) {
+    native_store *store = data;
+    if (arg_count != 6 || !caller->memory) return EXEC_ERROR_NOT_FOUND;
+    exec_memory *memory = caller->memory;
+    posix_fd_set rds, wrs, exs;
+    posix_fd_set *rp = NULL, *wp = NULL, *ep = NULL;
+    uint8_t *bytes;
+    uint32_t pointers[3] = {(uint32_t)args[1].i32,
+                            (uint32_t)args[2].i32,
+                            (uint32_t)args[3].i32};
+    posix_fd_set *sets[3] = {&rds, &wrs, &exs};
+    for (int i = 0; i < 3; i++) {
+        if (!pointers[i]) continue;
+        if (!cli_range(memory, pointers[i], POSIX_FD_SET_BYTES, &bytes))
+            return cli_result(-POSIX_EINVAL, results, result_count);
+        posix_fd_set_decode(sets[i], bytes);
+        if (i == 0) rp = sets[i];
+        if (i == 1) wp = sets[i];
+        if (i == 2) ep = sets[i];
+    }
+    posix_timespec ts;
+    const posix_timespec *tsp = NULL;
+    uint32_t timeout = (uint32_t)args[4].i32;
+    if (timeout) {
+        if (!cli_range(memory, timeout, POSIX_TIMESPEC_BYTES, &bytes))
+            return cli_result(-POSIX_EINVAL, results, result_count);
+        posix_timespec_decode(&ts, bytes);
+        tsp = &ts;
+    }
+    posix_sigset mask;
+    const posix_sigset *maskp = NULL;
+    uint32_t mask_ptr = (uint32_t)args[5].i32;
+    if (mask_ptr) {
+        if (!cli_range(memory, mask_ptr, POSIX_SIGSET_BYTES, &bytes))
+            return cli_result(-POSIX_EINVAL, results, result_count);
+        posix_sigset_decode(&mask, bytes);
+        maskp = &mask;
+    }
+    int32_t value = posix_kernel_pselect(store->kernel, args[0].i32,
+                                         rp, wp, ep, tsp, maskp);
+    if (value == -POSIX_EAGAIN) return EXEC_YIELD;
+    if (value >= 0) {
+        if (rp) posix_fd_set_encode(memory->data + pointers[0], rp);
+        if (wp) posix_fd_set_encode(memory->data + pointers[1], wp);
+        if (ep) posix_fd_set_encode(memory->data + pointers[2], ep);
+    }
+    (void)error;
+    return cli_result(value, results, result_count);
+}
+
+static int cli_host_resolver(const char *module, const char *name,
+                             void *context, native_host_binding *out) {
+    if (strcmp(module, "waste_kernel") != 0) return 0;
+    if (strcmp(name, "select_v1") == 0) out->function = cli_select_host;
+    else if (strcmp(name, "pselect_v1") == 0) out->function = cli_pselect_host;
+    else return 0;
+    out->host_data = context;
+    out->control = EXEC_HOST_CONTROL_NONE;
+    return 1;
 }
 
 /* Emit a JSON string with escaping */
@@ -59,6 +186,8 @@ static int run_normal(const char *path) {
     int first_assertion = 1;
     native_store store;
     native_store_init(&store);
+    store.host_resolver = cli_host_resolver;
+    store.host_context = &store;
 
     printf("{\"file\":");
     json_string(filename);

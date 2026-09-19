@@ -26,7 +26,8 @@ failure sentinel and set `errno` to `ENOSYS`.  In particular, it calls
 `select(0, NULL, NULL, NULL, NULL)` and the corresponding `pselect` form and
 expects `-1` plus `ENOSYS`.
 
-The current implementations in `src/html-rt/lib/misc.c` instead return:
+The historical implementations in `src/html-rt/lib/sys/select.c` instead
+returned:
 
 ```c
 return n > 0 && (r || w || x) ? 1 : 0;
@@ -38,10 +39,12 @@ input was available.  With the boundary fixture's all-zero arguments it
 returns `0`, so `filesystem-and-process-boundaries` returns `0` instead of
 `1`.
 
-The same generated fixture fails in the native C runner and the sequential
-OCaml runner.  The browser is faithfully reporting behavior already compiled
-into `waste-libc.wasm`; this is not a browser linker or C evaluator
-differential.
+The same generated fixture failed in the native C runner and the sequential
+OCaml runner.  The browser was faithfully reporting behavior already compiled
+into `waste-libc.wasm`; this was not a browser linker or C evaluator
+differential.  Stage 4 now routes these calls through the engine-owned kernel;
+the fixture's all-null, zero-descriptor case remains an immediate zero-result
+poll by design.
 
 Neither side of the current mismatch describes the desired final behavior.
 Once readiness is implemented, `select` and `pselect` are no longer
@@ -406,7 +409,7 @@ All native test suites pass under ASan/UBSan:
 - wasm-validation: pass
 - parser-reentrant: pass (concurrent isolation)
 
-### Stage 4: Add synchronous `select`/`pselect`
+### Stage 4: Add synchronous `select`/`pselect` — COMPLETE
 
 - Add the internal versioned imports and thin libc wrappers.
 - Implement argument, set, descriptor, and timeout validation.
@@ -418,7 +421,40 @@ All native test suites pass under ASan/UBSan:
 Gate: native tests pass for multiple sets, no ready descriptors, duplicated
 interest across sets, `EBADF`, `EINVAL`, zero timeout, and memory bounds.
 
-### Stage 5: Generalize yield/resume for descriptor waits
+#### Completed work — 2026-09-19
+
+**Versioned guest ABI imports** (`src/html-rt/lib/sys/select.c`): replaced the
+placeholder readiness return values with `waste_kernel.select_v1` and
+`waste_kernel.pselect_v1` imports.  The wrappers retain the POSIX signatures,
+translate negative engine errno values to `-1`, and write the translated value
+to the guest `errno` location.  The generated libc module now contains the
+explicit `waste_kernel` imports rather than recursively resolving public
+`select` symbols.
+
+**Kernel operation** (`src/engine/lib/kernel.c`): added one shared polling
+implementation for both operations.  It validates `nfds`, timeout ranges, and
+requested descriptors; scans independent read/write/exception sets; reports
+terminal and pipe readiness; clears non-ready output bits; counts ready bits;
+returns immediately for zero timeouts; and reports `-EAGAIN` after registering
+an engine-owned wait when a non-zero or indefinite wait is required.  `pselect`
+keeps its timespec and signal-mask ABI; signal-mask semantics are completed in
+Stage 6 below.
+
+**Instance-aware host bridge** (`src/html-rt/posix_stubs.c`): decodes and
+re-encodes fd sets and timeout structures through the invoking instance's
+linear memory, checks every non-null range before access, validates the
+optional pselect signal-set range, and dispatches only the versioned internal
+imports.  The HTML runtime Makefile now links the kernel and ABI codec objects
+into the browser engine.
+
+**Native and build gates:** `make -C src/cli-rt posix-select` passes 86/86
+ASan/UBSan tests covering multiple sets, duplicated interest, descriptor
+errors, invalid timeouts, zero/non-zero waits, pipes, EOF, and output-set
+construction.  `make -C src/html-rt wast-browser` links the browser runtime,
+and the generated `waste-libc.wasm` contains both versioned imports.  The
+documented LeakSanitizer-disabled sanitizer setting remains in effect.
+
+### Stage 5: Generalize yield/resume for descriptor waits — COMPLETE
 
 - Add explicit wait records and wait reasons to the executor/scheduler.
 - Register and cancel readiness watchers without retaining guest pointers.
@@ -430,7 +466,39 @@ Gate: native deterministic-clock tests cover ready-before-wait, readiness after
 yield, timeout, cancellation, repeated yield, and teardown.  The evaluator's
 existing `posix_read` test continues to pass during the transition.
 
-### Stage 6: Add signals and complete `pselect`
+#### Completed work — 2026-09-19
+
+**Pointer-free wait records** (`src/engine/lib/include/kernel.h` and
+`src/engine/lib/kernel.c`): each sandbox kernel now owns one copied wait
+record containing the descriptor sets, `nfds`, generation token, and optional
+monotonic deadline.  It never retains guest-memory pointers.  Readiness is
+rechecked through the kernel's descriptor table, and timeout polling is driven
+by an injectable monotonic clock.  Explicit cancellation clears the record;
+kernel destruction tears it down with the rest of the sandbox.
+
+**Select/pselect continuation:** a blocked synchronous operation registers or
+reuses the wait record and returns `-POSIX_EAGAIN`.  The host adapter marks the
+yield reason as `EXEC_YIELD_SELECT` and returns `EXEC_YIELD`, allowing the
+existing executor frame preservation and `waste_wast_resume` path to re-enter
+the import.  A readiness transition completes the operation and cancels the
+record; an expired finite deadline clears output sets and returns zero.  A
+repeated poll retains its generation token, so stale scheduler notifications
+cannot identify it as a new wait.  Existing no-input `posix_read` yields are
+classified as `EXEC_YIELD_READ` and remain compatible with the same machinery.
+
+**Deterministic gate** (`tests/posix-wait.c`): sanitizer-covered tests verify
+ready-before-wait, readiness after a registered yield, finite timeout expiry,
+explicit cancellation, repeated-yield generation stability, and teardown.
+The `posix-wait` Make target runs these alongside the existing select, kernel,
+and ABI suites.  The HTML runtime also rebuilds with the updated wait-aware
+kernel and host adapter.
+
+Native results: `posix-wait` 21/21, `posix-select` 86/86, `posix-kernel`
+240/240, and `posix-select-abi` 1097/1097 under ASan/UBSan with leak
+detection disabled per the repository environment.  `make -C src/html-rt
+wast-browser` links successfully.
+
+### Stage 6: Add signals and complete `pselect` — COMPLETE
 
 - Connect pending signals and per-thread masks to readiness waits.
 - Install the supplied `pselect` mask atomically with the readiness check.
@@ -443,7 +511,39 @@ Gate: deterministic tests cover pending-before-call, signal-after-yield,
 blocked signals, simultaneous signal/readiness, and mask restoration on every
 path.
 
-### Stage 7: Replace the browser transport shortcut
+#### Completed work — 2026-09-19
+
+**Per-sandbox signal state** (`src/engine/lib/include/kernel.h` and
+`src/engine/lib/kernel.c`): each kernel now owns a 128-bit pending-signal set
+and active signal mask.  Signals are raised, queried, and consumed through
+bounded engine APIs; no signal state is global.  Unmasked pending signals are
+reported as `POSIX_WAIT_SIGNAL` and produce `-EINTR`, while masked signals stay
+pending.
+
+**Atomic `pselect` mask handling:** the kernel decodes the guest's fixed
+16-byte `sigset_t`, saves the current mask, installs the temporary mask before
+the readiness/pending-signal check, and restores it on readiness, timeout,
+`EINTR`, validation errors, explicit cancellation, and sandbox teardown.
+Blocked waits retain the copied mask in the pointer-free wait record, so a
+signal delivered after yield is evaluated with the same mask.  `select` uses
+the kernel's persistent mask and is interrupted by an unmasked pending signal.
+When readiness and a signal arrive together, the pending signal is handled
+first and the wait returns `-EINTR`.
+
+**Host ABI:** `native_posix_pselect` now decodes and bounds-checks the optional
+signal set before passing it to the kernel.  `POSIX_EINTR` and the signal-set
+codec are part of the platform-independent POSIX ABI; no JavaScript signal
+policy was added in this stage.
+
+**Deterministic gate** (`tests/posix-signal.c`): ASan/UBSan tests cover
+pending-before-call, signal-after-yield, blocked signals, simultaneous
+signal/readiness, and restoration on ready, cancellation, and descriptor
+errors.  Results: `posix-signal` 26/26, `posix-wait` 21/21,
+`posix-select` 86/86, `posix-kernel` 240/240, and `posix-select-abi`
+1097/1097.  The HTML runtime's pselect host path compiles with the updated
+signal-set codec; browser event delivery remains Stage 7.
+
+### Stage 7: Replace the browser transport shortcut — COMPLETE
 
 - Add terminal-input and wait-state exports to `browser_api.c`.
 - Update the C-engine Bash HTML worker to enqueue input into the kernel and
@@ -456,7 +556,36 @@ Gate: the self-contained Bash page starts, reaches a prompt, waits without a
 busy loop, accepts multiple commands, handles EOF and interruption, and exits.
 Its existing 5/5 smoke gate must remain green.
 
-### Stage 8: Correct the libc fixtures and differential gates
+#### Completed work — 2026-09-19
+
+**Engine-owned interactive terminal** (`src/engine/store.h`, `src/engine/store.c`,
+and `src/engine/lib/kernel.c`): interactive launches can replace the default
+noninteractive kernel with terminal descriptors 0–2.  Reads use the kernel's
+bounded terminal queue and register a pointer-free read wait on `EAGAIN`;
+successful reads cancel the wait.  The JavaScript `-2` pseudo-result is no
+longer part of the interactive path.
+
+**Browser control ABI** (`src/html-rt/browser_api.c`): added integer-handle
+exports to enable the terminal sandbox, enqueue input bytes, signal EOF, raise
+a signal, and report the current wait kind.  Input is copied into the kernel
+from a temporary engine allocation and then released.  Yield reasons are
+preserved across resume so the worker can distinguish read/select waits.
+
+**Worker transport** (`src/html-rt/src/bash/worker.js` and
+`tools/generate-c-engine-bash-html.py`): removed the JavaScript input queue and
+`-2` handling.  The worker enables the terminal kernel before starting Bash,
+copies submitted bytes through `waste_wast_enqueue_input`, raises signals via
+the engine export, and only waits for browser messages before calling
+`waste_wast_resume`.  Output remains the narrow `posix_write` host capability;
+no server, asyncify transform, or shared-memory requirement was introduced.
+
+**Gate:** `node tests/c-engine-bash-browser-runtime.cjs` passes 5/5.  The
+native sanitizer suites from Stages 5–6 remain green, and the browser runtime
+rebuild links successfully.  Generic noninteractive WAST sandboxes retain
+their existing host-read fallback; only the explicitly enabled Bash sandbox
+uses the engine terminal.
+
+### Stage 8: Correct the libc fixtures and differential gates — COMPLETE
 
 - Remove `select` and `pselect` from the list of operations expected to return
   `ENOSYS` in `environment-boundaries-client.wast.inc`.
@@ -477,6 +606,47 @@ Gate: sequential and threaded libc tests pass, the native C runner passes the
 new kernel integration fixtures, and the regenerated browser dashboard has no
 `environment-boundaries.wast` mismatch.
 
+#### Completed work — 2026-09-19
+
+**Boundary expectations:** `tests/libc-test/environment-boundaries-client.wast.inc`
+now treats `select(0, ...)` and `pselect(0, ...)` as supported readiness polls:
+both return zero with no descriptors ready.  The fixture retains `ENOSYS`
+assertions for operations that remain outside the engine's capability boundary.
+
+**Focused libc coverage:** added
+`tests/libc-test/select-runtime-client.wast.inc`, covering immediate zero-timeout
+select/pselect results and invalid descriptor/`EINVAL` handling.  The existing
+native kernel/select/signal suites provide the deterministic finite-timeout,
+indefinite-wait/wakeup, and signal-interruption coverage without making a
+browser fixture block indefinitely.
+
+**OCaml differential provider:** `tests/libc-test/libc-runtime.cjs` prepends a
+small `waste_kernel` module for the OCaml oracle.  Its versioned `select_v1` and
+`pselect_v1` exports model the synchronous wrapper cases while leaving the
+C-engine/browser fixtures unprovided, so those paths exercise the real host
+resolver and engine kernel.
+
+**Native C integration:** `src/cli-rt/main.c` now resolves the same
+`waste_kernel` imports for native C-engine runs, decodes guest ABI structures
+through the caller instance, and returns the kernel's negative-errno results.
+The focused native fixture passes 4/4 assertions.
+
+**Differential and browser gates:** both sequential and threaded OCaml libc
+runs pass all 12 suites.  The regenerated dashboard payload contains the
+updated boundary and select fixtures; targeted C-engine browser execution
+passes `libc-test/environment-boundaries.wast` and
+`libc-test/select-runtime.wast` with no environment mismatch.
+
+**Bash relink integration:** the Bash runtime builder and the standalone libc
+builder now consume one shared guest-libc source manifest.  This prevents the
+runtime relink from omitting exports after libc sources are split, and ensures
+the interactive page links the versioned `waste_kernel` select imports.  The
+full `./start.sh --html-bash` generation path passes its 5/5 browser smoke gate.
+
+The full Stage 8 gate is therefore complete: the unsupported-call contract is
+explicit, synchronous wrappers have an OCaml oracle, native C-engine imports
+are exercised, and browser tests use the engine-owned readiness path.
+
 ## Likely File Boundaries
 
 The names may be adjusted to the current refactor, but responsibilities should
@@ -486,8 +656,9 @@ remain separated:
   kernel lifetime, descriptor table, OFDs, readiness, terminal, pipe, I/O;
 - `src/engine/lib/include/select.h` and `src/engine/lib/select.c`: guest ABI
   decoding (fd_set, timeval, timespec) and shared select logic;
-- future `src/engine/lib/include/signal.h`: masks, pending signals, and
-  interruption;
+- `src/engine/lib/include/kernel.h` and `src/engine/lib/kernel.c`: signal
+  masks, pending signals, and interruption remain part of the per-sandbox
+  kernel until a later decomposition warrants a dedicated signal module;
 - `src/html-rt/posix_stubs.c`: narrow host-import adapter only;
 - `src/html-rt/browser_api.c`: integer-handle event and resume ABI;
 - `src/html-rt/lib/misc.c`: errno-translating libc wrappers only;

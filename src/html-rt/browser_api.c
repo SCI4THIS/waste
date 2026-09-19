@@ -3,12 +3,14 @@
 #include "wasm/encode.h"
 #include "wast/stream.h"
 #include "posix_stubs.h"
+#include "lib/include/kernel.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
 
 /* ---- Engine state (existing per-module API) ---- */
 
@@ -575,6 +577,8 @@ static waste_exec_engine *g_yield_engine;
 static uint32_t g_yield_func_idx;
 static wasm_value g_yield_args[WAST_MAX_ARGS];
 static int g_yield_arg_count;
+static exec_yield_reason g_yield_reason;
+static int g_terminal_requested;
 
 static void browser_yield_cleanup(void) {
     wast_stream_destroy(&g_yield_stream);
@@ -612,6 +616,7 @@ static void browser_run_assertions(browser_wast_context *context,
             exec_find_export(selected, assertion->func_name,
                              &g_yield_func_idx, &error);
             g_yield_arg_count = assertion->arg_count;
+            g_yield_reason = error.yield_reason;
             for (int j = 0; j < assertion->arg_count; j++)
                 g_yield_args[j] = assertion->args[j];
             return;
@@ -675,6 +680,8 @@ static void browser_process_module(browser_wast_context *context,
         return;
     }
     if (status != EXEC_OK) {
+        add_command_failure("(module)", error.message[0] ? error.message :
+                            "module instantiation failed");
         return;
     }
     if (!native_store_add(&context->store, engine, &group->module,
@@ -785,9 +792,14 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
     g_linked_func_count = 0;
     g_engine = (void *)0;
     g_yield_active = 0;
+    g_yield_reason = EXEC_YIELD_NONE;
 
     memset(&g_yield_context, 0, sizeof(g_yield_context));
     native_store_init(&g_yield_context.store);
+    if (g_terminal_requested) {
+        native_store_enable_terminal(&g_yield_context.store);
+        g_terminal_requested = 0;
+    }
     g_yield_context.store.host_resolver = browser_host_resolver;
     g_yield_context.store.host_context = &g_yield_context.store;
     wast_stream_init(&g_yield_stream,
@@ -806,13 +818,52 @@ uint32_t waste_wast_resume(void) {
     exec_status st = exec_invoke(g_yield_engine, g_yield_func_idx,
                                  g_yield_args, g_yield_arg_count,
                                  results, &result_count, &error);
-    if (st == EXEC_YIELD) return 1;
+    if (st == EXEC_YIELD) {
+        g_yield_reason = error.yield_reason;
+        return 1;
+    }
 
     g_yield_active = 0;
+    g_yield_reason = EXEC_YIELD_NONE;
     add_result(st == EXEC_OK || st == EXEC_ERROR_EXIT, "main",
                (st == EXEC_OK || st == EXEC_ERROR_EXIT)
                    ? (void *)0 : error.message);
     return browser_stream_loop();
+}
+
+__attribute__((export_name("waste_wast_wait_kind")))
+uint32_t waste_wast_wait_kind(void) {
+    return g_yield_active ? (uint32_t)g_yield_reason : EXEC_YIELD_NONE;
+}
+
+__attribute__((export_name("waste_wast_enable_terminal")))
+int32_t waste_wast_enable_terminal(void) {
+    g_terminal_requested = 1;
+    return 0;
+}
+
+__attribute__((export_name("waste_wast_enqueue_input")))
+int32_t waste_wast_enqueue_input(uint32_t ptr, uint32_t length) {
+    int32_t result = -POSIX_EINVAL;
+    if (g_yield_context.store.kernel_terminal && length <= INT32_MAX)
+        result = posix_kernel_terminal_enqueue(
+            g_yield_context.store.kernel, 0,
+            (const uint8_t *)(uintptr_t)ptr, (int)length);
+    free((void *)(uintptr_t)ptr);
+    return result;
+}
+
+__attribute__((export_name("waste_wast_enqueue_eof")))
+int32_t waste_wast_enqueue_eof(void) {
+    if (!g_yield_context.store.kernel_terminal) return -POSIX_EINVAL;
+    return posix_kernel_terminal_signal_eof(g_yield_context.store.kernel, 0);
+}
+
+__attribute__((export_name("waste_wast_raise_signal")))
+int32_t waste_wast_raise_signal(uint32_t signal) {
+    if (!g_yield_context.store.kernel_terminal) return -POSIX_EINVAL;
+    return posix_kernel_signal_raise(g_yield_context.store.kernel,
+                                     (int)signal);
 }
 
 /* ---- Result accessor exports ---- */

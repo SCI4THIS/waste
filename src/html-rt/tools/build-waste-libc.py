@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from libc_sources import libc_source_paths
+
 
 def named_module(source: str) -> str:
     marker = "(module"
@@ -46,30 +48,10 @@ def main() -> None:
             [args.wasm_as, str(source_path), "-o", str(core_path), "--enable-bulk-memory"],
             check=True,
         )
-        lib_dir = root / "src" / "html-rt" / "lib"
         subprocess.run(
             [
                 "clang", "--target=wasm32", "-O2", "-nostdlib", "-fno-builtin",
-                str(lib_dir / "stdio.c"),
-                str(lib_dir / "wchar.c"),
-                str(lib_dir / "locale.c"),
-                str(lib_dir / "identity.c"),
-                str(lib_dir / "string.c"),
-                str(lib_dir / "stdlib.c"),
-                str(lib_dir / "pattern.c"),
-                str(lib_dir / "misc.c"),
-                str(lib_dir / "time.c"),
-                str(lib_dir / "termcap.c"),
-                str(lib_dir / "termios.c"),
-                str(lib_dir / "dirent.c"),
-                str(lib_dir / "netdb.c"),
-                str(lib_dir / "dlfcn.c"),
-                str(lib_dir / "unistd.c"),
-                str(lib_dir / "sys" / "random.c"),
-                str(lib_dir / "sys" / "resource.c"),
-                str(lib_dir / "sys" / "select.c"),
-                str(lib_dir / "sys" / "ioctl.c"),
-                str(lib_dir / "sys" / "socket.c"),
+                *(str(path) for path in libc_source_paths(root)),
                 "-Wl,--no-entry", "-Wl,--import-memory", "-Wl,--initial-memory=262144",
                 "-Wl,--allow-undefined", "-Wl,--export-all", "-Wl,--strip-all",
                 "-o", str(helpers_path),

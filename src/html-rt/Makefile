@@ -45,6 +45,8 @@ ENGINE_HEADERS := $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
 	$(ENGINE_DIR)/instantiate.h $(ENGINE_DIR)/runtime_internal.h
 
 ENGINE_HEADERS += $(ENGINE_DIR)/include/waste.h
+ENGINE_HEADERS += $(ENGINE_DIR)/lib/include/kernel.h \
+	$(ENGINE_DIR)/lib/include/select.h
 
 # Freestanding library: shared (portable) sources from engine
 LIB_SHARED_SRC := $(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdio.c \
@@ -54,7 +56,8 @@ LIB_SHARED_SRC := $(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdio.c \
 LIB_WASM_SRC := lib/stdlib.c lib/stdio.c lib/unistd.c
 
 # Object files
-ENGINE_OBJS := $(BUILD_DIR)/store.o $(BUILD_DIR)/wasm_load.o \
+ENGINE_OBJS := $(BUILD_DIR)/store.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/select.o \
+	$(BUILD_DIR)/wasm_load.o \
 	$(BUILD_DIR)/wast_runner.o $(BUILD_DIR)/wasm_encode.o \
 	$(BUILD_DIR)/wast_stream.o $(BUILD_DIR)/wast_command.o \
 	$(BUILD_DIR)/wast_assert.o \
@@ -84,6 +87,7 @@ WAST_LEX_WASM_O := $(BUILD_DIR)/wast.lex.wasm.o
 WAST_WASM_TARGET := $(BUILD_DIR)/waste-wast.wasm
 
 LIBC_BUILDER := tools/build-waste-libc.py
+LIBC_SOURCE_MANIFEST := tools/libc_sources.py
 LIBC_CLIENTS := $(wildcard $(REPO_ROOT)/tests/libc-test/*-client.wast.inc)
 LIBC_SOURCES := lib/stdlib.wat lib/stdio.c lib/wchar.c \
 	lib/locale.c lib/identity.c lib/string.c \
@@ -92,7 +96,7 @@ LIBC_SOURCES := lib/stdlib.wat lib/stdio.c lib/wchar.c \
 	lib/dirent.c lib/netdb.c lib/dlfcn.c lib/unistd.c \
 	lib/sys/random.c lib/sys/resource.c lib/sys/select.c \
 	lib/sys/ioctl.c lib/sys/socket.c \
-	lib/include/helper.h $(LIBC_CLIENTS) $(LIBC_BUILDER)
+	lib/include/helper.h $(LIBC_CLIENTS) $(LIBC_BUILDER) $(LIBC_SOURCE_MANIFEST)
 LIBC_OUTPUT := $(BUILD_DIR)/waste-libc/waste-libc.wasm
 LIBC_FIXTURES := $(patsubst $(REPO_ROOT)/tests/libc-test/%-client.wast.inc,\
 	$(BUILD_DIR)/waste-libc/tests/%.wast,$(LIBC_CLIENTS))
@@ -108,6 +112,16 @@ gen:
 # ---- Compile engine sources to Wasm objects ----
 
 $(BUILD_DIR)/store.o: $(ENGINE_DIR)/store.c $(ENGINE_HEADERS)
+	mkdir -p $(BUILD_DIR)
+	clang $(WASM_CC_FLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel.o: $(ENGINE_DIR)/lib/kernel.c $(ENGINE_HEADERS) \
+		$(ENGINE_DIR)/lib/include/kernel.h $(ENGINE_DIR)/lib/include/select.h
+	mkdir -p $(BUILD_DIR)
+	clang $(WASM_CC_FLAGS) -c $< -o $@
+
+$(BUILD_DIR)/select.o: $(ENGINE_DIR)/lib/select.c \
+		$(ENGINE_DIR)/lib/include/select.h
 	mkdir -p $(BUILD_DIR)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 

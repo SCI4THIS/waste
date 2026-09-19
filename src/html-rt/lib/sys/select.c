@@ -1,9 +1,45 @@
-/* sys/select.c — Descriptor readiness stubs for the WASTE guest libc.
- * Readiness is ultimately decided by the engine-owned asynchronous descriptor
- * operation.  Reporting a requested descriptor as ready lets Bash enter
- * read(), where the browser runtime can suspend without blocking the worker. */
+/* sys/select.c — Guest-facing select wrappers.
+ *
+ * The engine owns descriptor state and the fd_set ABI.  Keep the import
+ * versioned so the host can evolve this operation without silently changing
+ * the calling convention, and translate the engine's negative errno result
+ * into the libc convention (-1 plus errno).
+ */
 
 #include "../include/helper.h"
 
-i32 select(i32 n,void*r,void*w,void*x,void*t){(void)t;return n>0&&(r||w||x)?1:0;}
-i32 pselect(i32 n,void*r,void*w,void*x,const void*t,const void*m){(void)t;(void)m;return n>0&&(r||w||x)?1:0;}
+__attribute__((import_module("waste_kernel"), import_name("select_v1")))
+extern i32 waste_kernel_select_v1(i32 nfds, waste_fd_set *readfds,
+                                   waste_fd_set *writefds,
+                                   waste_fd_set *exceptfds,
+                                   waste_timeval *timeout);
+
+__attribute__((import_module("waste_kernel"), import_name("pselect_v1")))
+extern i32 waste_kernel_pselect_v1(i32 nfds, waste_fd_set *readfds,
+                                    waste_fd_set *writefds,
+                                    waste_fd_set *exceptfds,
+                                    waste_timespec *timeout,
+                                    waste_sigset_t *sigmask);
+
+static i32 select_result(i32 result) {
+  if (result < 0) {
+    *__errno_location() = 0 - result;
+    return -1;
+  }
+  return result;
+}
+
+i32 select(i32 nfds, void *readfds, void *writefds, void *exceptfds,
+           void *timeout) {
+  return select_result(waste_kernel_select_v1(
+      nfds, (waste_fd_set *)readfds, (waste_fd_set *)writefds,
+      (waste_fd_set *)exceptfds, (waste_timeval *)timeout));
+}
+
+i32 pselect(i32 nfds, void *readfds, void *writefds, void *exceptfds,
+            const void *timeout, const void *sigmask) {
+  return select_result(waste_kernel_pselect_v1(
+      nfds, (waste_fd_set *)readfds, (waste_fd_set *)writefds,
+      (waste_fd_set *)exceptfds, (waste_timespec *)timeout,
+      (waste_sigset_t *)sigmask));
+}

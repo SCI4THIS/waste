@@ -1,4 +1,7 @@
 #include "posix_stubs.h"
+#include "../engine/runtime_internal.h"
+#include "lib/include/kernel.h"
+#include "lib/include/select.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -107,7 +110,7 @@ static exec_status native_posix_read(void *data, const wasm_value *args,
                                      int arg_count, wasm_value *results,
                                      int *result_count, exec_error *error,
                                      const waste_exec_engine *caller) {
-    (void)data;
+    native_store *store = (native_store *)data;
     exec_memory *memory = (void *)0;
     uint8_t *buffer;
     uint32_t count;
@@ -120,8 +123,22 @@ static exec_status native_posix_read(void *data, const wasm_value *args,
                  "POSIX read buffer is outside guest memory");
         return error->status;
     }
-    int32_t read_result = waste_host_posix_read(args[0].i32, buffer, count);
-    if (read_result == -2) return EXEC_YIELD;
+    int32_t read_result;
+    if (store->kernel_terminal) {
+        read_result = posix_kernel_read(store->kernel, args[0].i32,
+                                        buffer, (int)count);
+        if (read_result == -POSIX_EAGAIN) {
+            error->yield_reason = EXEC_YIELD_READ;
+            return EXEC_YIELD;
+        }
+    } else {
+        /* Noninteractive WAST sandboxes retain the narrow host capability. */
+        read_result = waste_host_posix_read(args[0].i32, buffer, count);
+        if (read_result == -2) {
+            error->yield_reason = EXEC_YIELD_READ;
+            return EXEC_YIELD;
+        }
+    }
     return native_posix_result(read_result, results, result_count);
 }
 
@@ -279,10 +296,165 @@ static exec_status native_posix_stat(void *data, const wasm_value *args,
     return native_posix_result(0, results, result_count);
 }
 
+/* ---- Kernel select/pselect host imports ---- */
+
+static exec_status native_posix_select(void *data, const wasm_value *args,
+                                       int arg_count, wasm_value *results,
+                                       int *result_count, exec_error *error,
+                                       const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    exec_memory *memory = (void *)0;
+    if (arg_count != 5 ||
+        native_posix_memory(caller, &memory, error) != EXEC_OK)
+        return error->status;
+    if (!store->kernel)
+        return native_posix_result(-POSIX_EINVAL, results, result_count);
+
+    int32_t nfds = args[0].i32;
+    uint32_t read_ptr = (uint32_t)args[1].i32;
+    uint32_t write_ptr = (uint32_t)args[2].i32;
+    uint32_t except_ptr = (uint32_t)args[3].i32;
+    uint32_t timeout_ptr = (uint32_t)args[4].i32;
+    uint64_t byte_size = memory->pages * UINT64_C(65536);
+
+    /* Validate and decode fd_sets. */
+    posix_fd_set rds, wrs, exs;
+    posix_fd_set *rp = (void *)0, *wp = (void *)0, *ep = (void *)0;
+    if (read_ptr) {
+        if ((uint64_t)read_ptr + POSIX_FD_SET_BYTES > byte_size)
+            return native_posix_result(-POSIX_EINVAL, results, result_count);
+        posix_fd_set_decode(&rds, memory->data + read_ptr);
+        rp = &rds;
+    }
+    if (write_ptr) {
+        if ((uint64_t)write_ptr + POSIX_FD_SET_BYTES > byte_size)
+            return native_posix_result(-POSIX_EINVAL, results, result_count);
+        posix_fd_set_decode(&wrs, memory->data + write_ptr);
+        wp = &wrs;
+    }
+    if (except_ptr) {
+        if ((uint64_t)except_ptr + POSIX_FD_SET_BYTES > byte_size)
+            return native_posix_result(-POSIX_EINVAL, results, result_count);
+        posix_fd_set_decode(&exs, memory->data + except_ptr);
+        ep = &exs;
+    }
+
+    /* Decode timeout. */
+    const posix_timeval *tvp = (void *)0;
+    posix_timeval tv;
+    if (timeout_ptr) {
+        if ((uint64_t)timeout_ptr + POSIX_TIMEVAL_BYTES > byte_size)
+            return native_posix_result(-POSIX_EINVAL, results, result_count);
+        posix_timeval_decode(&tv, memory->data + timeout_ptr);
+        tvp = &tv;
+    }
+
+    int32_t ret = posix_kernel_select(store->kernel, nfds, rp, wp, ep, tvp);
+
+    if (ret == -POSIX_EAGAIN) {
+        error->yield_reason = EXEC_YIELD_SELECT;
+        return EXEC_YIELD;
+    }
+
+    /* Encode output sets back to guest memory on success. */
+    if (ret >= 0) {
+        if (rp) posix_fd_set_encode(memory->data + read_ptr, rp);
+        if (wp) posix_fd_set_encode(memory->data + write_ptr, wp);
+        if (ep) posix_fd_set_encode(memory->data + except_ptr, ep);
+    }
+
+    return native_posix_result(ret, results, result_count);
+}
+
+static exec_status native_posix_pselect(void *data, const wasm_value *args,
+                                        int arg_count, wasm_value *results,
+                                        int *result_count, exec_error *error,
+                                        const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    exec_memory *memory = (void *)0;
+    if (arg_count != 6 ||
+        native_posix_memory(caller, &memory, error) != EXEC_OK)
+        return error->status;
+    if (!store->kernel)
+        return native_posix_result(-POSIX_EINVAL, results, result_count);
+
+    int32_t nfds = args[0].i32;
+    uint32_t read_ptr = (uint32_t)args[1].i32;
+    uint32_t write_ptr = (uint32_t)args[2].i32;
+    uint32_t except_ptr = (uint32_t)args[3].i32;
+    uint32_t timeout_ptr = (uint32_t)args[4].i32;
+    uint32_t sigmask_ptr = (uint32_t)args[5].i32;
+    uint64_t byte_size = memory->pages * UINT64_C(65536);
+
+    /* Validate and decode fd_sets. */
+    posix_fd_set rds, wrs, exs;
+    posix_fd_set *rp = (void *)0, *wp = (void *)0, *ep = (void *)0;
+    if (read_ptr) {
+        if ((uint64_t)read_ptr + POSIX_FD_SET_BYTES > byte_size)
+            return native_posix_result(-POSIX_EINVAL, results, result_count);
+        posix_fd_set_decode(&rds, memory->data + read_ptr);
+        rp = &rds;
+    }
+    if (write_ptr) {
+        if ((uint64_t)write_ptr + POSIX_FD_SET_BYTES > byte_size)
+            return native_posix_result(-POSIX_EINVAL, results, result_count);
+        posix_fd_set_decode(&wrs, memory->data + write_ptr);
+        wp = &wrs;
+    }
+    if (except_ptr) {
+        if ((uint64_t)except_ptr + POSIX_FD_SET_BYTES > byte_size)
+            return native_posix_result(-POSIX_EINVAL, results, result_count);
+        posix_fd_set_decode(&exs, memory->data + except_ptr);
+        ep = &exs;
+    }
+
+    /* Decode timeout. */
+    const posix_timespec *tsp = (void *)0;
+    posix_timespec ts;
+    if (timeout_ptr) {
+        if ((uint64_t)timeout_ptr + POSIX_TIMESPEC_BYTES > byte_size)
+            return native_posix_result(-POSIX_EINVAL, results, result_count);
+        posix_timespec_decode(&ts, memory->data + timeout_ptr);
+        tsp = &ts;
+    }
+
+    /* Decode and validate the optional temporary signal mask. */
+    posix_sigset mask;
+    const posix_sigset *mask_ptr = (void *)0;
+    if (sigmask_ptr) {
+        if ((uint64_t)sigmask_ptr + POSIX_SIGSET_BYTES > byte_size)
+            return native_posix_result(-POSIX_EINVAL, results, result_count);
+        posix_sigset_decode(&mask, memory->data + sigmask_ptr);
+        mask_ptr = &mask;
+    }
+
+    int32_t ret = posix_kernel_pselect(store->kernel, nfds, rp, wp, ep,
+                                       tsp, mask_ptr);
+
+    if (ret == -POSIX_EAGAIN) {
+        error->yield_reason = EXEC_YIELD_SELECT;
+        return EXEC_YIELD;
+    }
+
+    /* Encode output sets back to guest memory on success. */
+    if (ret >= 0) {
+        if (rp) posix_fd_set_encode(memory->data + read_ptr, rp);
+        if (wp) posix_fd_set_encode(memory->data + write_ptr, wp);
+        if (ep) posix_fd_set_encode(memory->data + except_ptr, ep);
+    }
+
+    return native_posix_result(ret, results, result_count);
+}
+
 /* ---- POSIX function dispatch tables ---- */
 
 static exec_host_func native_posix_function(const char *module,
                                              const char *name) {
+    if (strcmp(module, "waste_kernel") == 0) {
+        if (strcmp(name, "select_v1") == 0) return native_posix_select;
+        if (strcmp(name, "pselect_v1") == 0) return native_posix_pselect;
+        return (void *)0;
+    }
     if (strcmp(module, "env") != 0) return (void *)0;
     if (strcmp(name, "open") == 0) return native_posix_open;
     if (strcmp(name, "close") == 0) return native_posix_close;

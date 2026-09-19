@@ -13,6 +13,7 @@ ENGINE_SOURCES := $(ENGINE_DIR)/wasm/load.c \
 	$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/encode.c \
 	$(ENGINE_DIR)/wast/stream.c $(ENGINE_DIR)/wast/command.c \
 	$(ENGINE_DIR)/store.c $(ENGINE_DIR)/lib/kernel.c \
+	$(ENGINE_DIR)/lib/select.c \
 	$(ENGINE_DIR)/wast/runner.c $(ENGINE_DIR)/wast/assert.c \
 	$(ENGINE_DIR)/wat/builder.c $(ENGINE_DIR)/wat/literal.c \
 	$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
@@ -72,6 +73,9 @@ WASM_VALIDATION_TEST_TARGET := $(BUILD_DIR)/wasm-validation-sanitize
 PARSER_REENTRANT_TEST_TARGET := $(BUILD_DIR)/wast-parser-reentrant-sanitize
 POSIX_SELECT_ABI_TEST_TARGET := $(BUILD_DIR)/posix-select-abi-sanitize
 POSIX_KERNEL_TEST_TARGET := $(BUILD_DIR)/posix-kernel-sanitize
+POSIX_SELECT_TEST_TARGET := $(BUILD_DIR)/posix-select-sanitize
+POSIX_WAIT_TEST_TARGET := $(BUILD_DIR)/posix-wait-sanitize
+POSIX_SIGNAL_TEST_TARGET := $(BUILD_DIR)/posix-signal-sanitize
 CALLER_INSTANCE_TEST_TARGET := $(BUILD_DIR)/caller-instance-sanitize
 I32_SMOKE_WASM := $(BUILD_DIR)/i32-smoke.wasm
 IMPORT_SMOKE_WASM := $(BUILD_DIR)/import-smoke.wasm
@@ -82,7 +86,7 @@ CALLER_B_WASM := $(BUILD_DIR)/caller-b.wasm
 
 .PHONY: wast-native i32-smoke wasm-binary-primitives wasm-import-decode \
 	wasm-validation parser-reentrant posix-select-abi posix-kernel \
-	caller-instance gen lint clean
+	posix-select posix-wait posix-signal caller-instance gen lint clean
 
 # ---- Parser generation (delegate to engine) ----
 
@@ -327,11 +331,58 @@ posix-kernel: $(POSIX_KERNEL_TEST_TARGET)
 	ASAN_OPTIONS=detect_leaks=0 $(POSIX_KERNEL_TEST_TARGET)
 
 $(POSIX_KERNEL_TEST_TARGET): ../../tests/posix-kernel.c \
-		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/include/kernel.h
+		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/select.c \
+		$(ENGINE_DIR)/lib/include/kernel.h $(ENGINE_DIR)/lib/include/select.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
 		../../tests/posix-kernel.c $(ENGINE_DIR)/lib/kernel.c \
+		$(ENGINE_DIR)/lib/select.c \
+		-o $@
+
+# ---- POSIX select/pselect unit tests (ASan/UBSan, uses system libc) ----
+
+posix-select: $(POSIX_SELECT_TEST_TARGET)
+	ASAN_OPTIONS=detect_leaks=0 $(POSIX_SELECT_TEST_TARGET)
+
+$(POSIX_SELECT_TEST_TARGET): ../../tests/posix-select.c \
+		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/select.c \
+		$(ENGINE_DIR)/lib/include/kernel.h $(ENGINE_DIR)/lib/include/select.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
+		../../tests/posix-select.c $(ENGINE_DIR)/lib/kernel.c \
+		$(ENGINE_DIR)/lib/select.c \
+		-o $@
+
+# ---- POSIX wait-record unit tests (ASan/UBSan, uses system libc) ----
+
+posix-wait: $(POSIX_WAIT_TEST_TARGET)
+	ASAN_OPTIONS=detect_leaks=0 $(POSIX_WAIT_TEST_TARGET)
+
+$(POSIX_WAIT_TEST_TARGET): ../../tests/posix-wait.c \
+		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/select.c \
+		$(ENGINE_DIR)/lib/include/kernel.h $(ENGINE_DIR)/lib/include/select.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
+		../../tests/posix-wait.c $(ENGINE_DIR)/lib/kernel.c \
+		$(ENGINE_DIR)/lib/select.c \
+		-o $@
+
+# ---- POSIX signal/pselect unit tests (ASan/UBSan, uses system libc) ----
+
+posix-signal: $(POSIX_SIGNAL_TEST_TARGET)
+	ASAN_OPTIONS=detect_leaks=0 $(POSIX_SIGNAL_TEST_TARGET)
+
+$(POSIX_SIGNAL_TEST_TARGET): ../../tests/posix-signal.c \
+		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/select.c \
+		$(ENGINE_DIR)/lib/include/kernel.h $(ENGINE_DIR)/lib/include/select.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
+		../../tests/posix-signal.c $(ENGINE_DIR)/lib/kernel.c \
+		$(ENGINE_DIR)/lib/select.c \
 		-o $@
 
 # ---- Caller-instance host import tests (ASan/UBSan, uses system libc) ----

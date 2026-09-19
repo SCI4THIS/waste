@@ -12,8 +12,6 @@ function watFloat(text, asF32) {
 
 let exp = null;
 let engineMemory = null;
-let inputQueue = [];
-let pendingSignal = -1;
 let ioResolve = null;
 let terminated = false;
 
@@ -24,18 +22,9 @@ function waitForIO() {
 const decoder = new TextDecoder();
 
 function posixRead(fd, ptr, count) {
-  if (fd !== 0) return 0;
-  if (terminated) return 0;
-  if (pendingSignal >= 0) { pendingSignal = -1; return -1; }
-  if (inputQueue.length > 0) {
-    const input = inputQueue[0];
-    const n = Math.min(input.length, count);
-    new Uint8Array(engineMemory.buffer, ptr, n).set(input.subarray(0, n));
-    if (n >= input.length) inputQueue.shift();
-    else inputQueue[0] = input.subarray(n);
-    return n;
-  }
-  return -2;
+  /* Interactive reads are owned by the engine kernel.  This import remains
+     only for noninteractive sandboxes and never uses the old -2 protocol. */
+  return terminated ? 0 : -1;
 }
 
 function posixWrite(fd, ptr, count) {
@@ -64,6 +53,7 @@ async function run(wasmBuf, source) {
   const {instance} = await WebAssembly.instantiate(wasmBytes, imports);
   exp = instance.exports;
   engineMemory = exp.memory;
+  exp.waste_wast_enable_terminal();
 
   const sourceBytes = new TextEncoder().encode(source);
   const scriptPtr = exp.waste_wast_alloc(sourceBytes.length);
@@ -108,10 +98,14 @@ self.onmessage = function(e) {
         error: error && (error.stack || error.message) || String(error)});
     });
   } else if (msg.type === "input") {
-    inputQueue.push(new Uint8Array(msg.bytes));
+    const bytes = new Uint8Array(msg.bytes);
+    const ptr = exp.waste_wast_alloc(bytes.length);
+    if (!ptr) throw new Error("C engine input allocation failed");
+    new Uint8Array(engineMemory.buffer, ptr, bytes.length).set(bytes);
+    exp.waste_wast_enqueue_input(ptr, bytes.length);
     if (ioResolve) { ioResolve(); ioResolve = null; }
   } else if (msg.type === "signal") {
-    pendingSignal = msg.signal;
+    exp.waste_wast_raise_signal(msg.signal);
     if (ioResolve) { ioResolve(); ioResolve = null; }
   } else if (msg.type === "stop") {
     terminated = true;

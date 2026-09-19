@@ -58,10 +58,12 @@ typedef struct {
     void *host_context;
     /* Per-sandbox POSIX kernel: descriptor table, readiness, and wait state. */
     struct posix_kernel *kernel;
+    int kernel_terminal;
 } native_store;
 
 void native_store_init(native_store *store);
 void native_store_free(native_store *store);
+void native_store_enable_terminal(native_store *store);
 
 int native_store_add(native_store *store, waste_exec_engine *engine,
                      const wast_module *identity,

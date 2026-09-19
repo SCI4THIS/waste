@@ -97,6 +97,13 @@ void native_store_free(native_store *store) {
     memset(store, 0, sizeof(*store));
 }
 
+void native_store_enable_terminal(native_store *store) {
+    if (!store) return;
+    if (store->kernel) posix_kernel_destroy(store->kernel);
+    store->kernel = posix_kernel_create(1);
+    store->kernel_terminal = store->kernel != NULL;
+}
+
 int native_store_keep_orphan(native_store *store,
                               waste_exec_engine *engine) {
     if (store->orphan_count == store->orphan_capacity) {
@@ -284,7 +291,15 @@ exec_status native_load_module(native_store *store,
                         continue;
                     }
                 }
-                if (status != EXEC_OK) goto fail;
+                if (status != EXEC_OK) {
+                    if (error) {
+                        error->status = EXEC_ERROR_NOT_FOUND;
+                        snprintf(error->message, sizeof(error->message),
+                                 "unresolved function import %.96s.%.96s",
+                                 request->module, request->name);
+                    }
+                    goto fail;
+                }
                 status = exec_get_func_type_index(
                     provider->engine, index, &type_index, error);
                 if (status != EXEC_OK) goto fail;
@@ -295,6 +310,15 @@ exec_status native_load_module(native_store *store,
                 functions[nf].type_owner = provider->engine;
                 functions[nf].type_index = type_index;
                 functions[nf].has_wasm_type = 1;
+            }
+            if (!functions[nf].function) {
+                if (error) {
+                    error->status = EXEC_ERROR_NOT_FOUND;
+                    snprintf(error->message, sizeof(error->message),
+                             "unresolved function import %.96s.%.96s",
+                             request->module, request->name);
+                }
+                goto fail;
             }
             nf++;
         } else if (request->kind == WASM_IMPORT_TABLE) {

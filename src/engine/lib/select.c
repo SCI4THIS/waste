@@ -87,6 +87,13 @@ int posix_timespec_decode(posix_timespec *out, const uint8_t *mem) {
     return 0;
 }
 
+int posix_sigset_decode(posix_sigset *out, const uint8_t *mem) {
+    if (!out || !mem) return -1;
+    for (int i = 0; i < POSIX_SIGSET_BYTES / 4; i++)
+        out->words[i] = read_le32(mem + i * 4);
+    return 0;
+}
+
 /* --- Validation --- */
 
 int posix_timeval_validate(const posix_timeval *tv) {

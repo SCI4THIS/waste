@@ -37,6 +37,11 @@ typedef struct {
     int32_t tv_nsec;
 } posix_timespec;
 
+/* Host-side guest sigset_t representation (128 signal bits). */
+typedef struct {
+    uint32_t words[POSIX_SIGSET_BYTES / 4];
+} posix_sigset;
+
 /* --- fd_set bit operations --- */
 
 static inline void posix_fd_zero(posix_fd_set *set) {
@@ -87,6 +92,9 @@ int posix_timeval_encode(uint8_t *mem, const posix_timeval *tv);
  * mem must point to at least POSIX_TIMESPEC_BYTES readable bytes.
  * Returns 0 on success, -1 if mem is NULL. */
 int posix_timespec_decode(posix_timespec *out, const uint8_t *mem);
+
+/* Decode the fixed-width guest sigset_t representation. */
+int posix_sigset_decode(posix_sigset *out, const uint8_t *mem);
 
 /* --- Validation --- */
 

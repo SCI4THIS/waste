@@ -22,9 +22,15 @@ typedef enum {
      * invocation while still keeping it distinct from a normal Wasm return. */
     EXEC_ERROR_EXIT,
     /* Host import requested a yield; interpreter frames are saved on the engine
-     * for resume.  Only produced by browser builds when posix_read has no data. */
+     * for resume.  POSIX read and descriptor waits use this path. */
     EXEC_YIELD,
 } exec_status;
+
+typedef enum {
+    EXEC_YIELD_NONE = 0,
+    EXEC_YIELD_READ,
+    EXEC_YIELD_SELECT,
+} exec_yield_reason;
 
 typedef struct {
     exec_status status;
@@ -41,6 +47,7 @@ typedef struct {
     uint32_t jump_environment;
     int32_t jump_value;
     int32_t exit_code;
+    exec_yield_reason yield_reason;
 } exec_error;
 
 typedef exec_status (*exec_host_func)(void *host_data,

@@ -12,11 +12,26 @@ const loaderPath = path.join(
   "wasm_cli.bc.wasm.js"
 );
 const fixtureRoot = path.join(root, "build/html-rt/waste-libc/tests");
+/* The OCaml oracle has no C-engine host resolver.  Provide only the small,
+ * deterministic synchronous kernel surface used by libc wrapper fixtures.
+ * C-engine/browser fixtures remain unprovided and therefore exercise the real
+ * waste_kernel host imports. */
+const oracleKernel = `(module $waste_kernel
+  (func (export "select_v1") (param $nfds i32) (param i32) (param i32)
+        (param i32) (param i32) (result i32)
+    local.get $nfds i32.const 0 i32.lt_s
+    if (result i32) i32.const -22 else i32.const 0 end)
+  (func (export "pselect_v1") (param $nfds i32) (param i32) (param i32)
+        (param i32) (param i32) (param i32) (result i32)
+    local.get $nfds i32.const 0 i32.lt_s
+    if (result i32) i32.const -22 else i32.const 0 end))
+(register "waste_kernel" $waste_kernel)
+`;
 const fixtures = fs.readdirSync(fixtureRoot)
   .filter(name => name.endsWith(".wast"))
   .filter(name => !fixtureFilter || name === fixtureFilter)
   .sort()
-  .map(name => ({name, source: fs.readFileSync(path.join(fixtureRoot, name), "utf8")}));
+.map(name => ({name, source: oracleKernel + fs.readFileSync(path.join(fixtureRoot, name), "utf8")}));
 
 globalThis.waste_exit_code = 0;
 process.argv = [

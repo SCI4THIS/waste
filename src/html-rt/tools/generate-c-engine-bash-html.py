@@ -6,10 +6,9 @@ launch script into a single offline HTML file.  The C engine processes the
 WAST script in a Web Worker.
 
 Terminal output is captured through the posix_write host import.  Interactive
-input uses native yield/resume: when posix_read has no data, waste_host_posix_read
-returns -2, the interpreter saves its frames and returns EXEC_YIELD.  The worker
-awaits input then calls waste_wast_resume to continue.  No asyncify transform,
-no SharedArrayBuffer, works on file://.
+input is copied into the engine-owned terminal kernel; a blocked read yields
+through the native continuation and the worker resumes after input arrives.
+No asyncify transform, no SharedArrayBuffer, works on file://.
 """
 
 import argparse
@@ -109,8 +108,6 @@ HTML = r'''<!doctype html>
 
       let exp = null;
       let engineMemory = null;
-      let inputQueue = [];
-      let pendingSignal = -1;
       let ioResolve = null;
       let terminated = false;
 
@@ -121,18 +118,7 @@ HTML = r'''<!doctype html>
       const decoder = new TextDecoder();
 
       function posixRead(fd, ptr, count) {
-        if (fd !== 0) return 0;
-        if (terminated) return 0;
-        if (pendingSignal >= 0) { pendingSignal = -1; return -1; }
-        if (inputQueue.length > 0) {
-          const input = inputQueue[0];
-          const n = Math.min(input.length, count);
-          new Uint8Array(engineMemory.buffer, ptr, n).set(input.subarray(0, n));
-          if (n >= input.length) inputQueue.shift();
-          else inputQueue[0] = input.subarray(n);
-          return n;
-        }
-        return -2;
+        return terminated ? 0 : -1;
       }
 
       function posixWrite(fd, ptr, count) {
@@ -161,6 +147,7 @@ HTML = r'''<!doctype html>
         const {instance} = await WebAssembly.instantiate(wasmBytes, imports);
         exp = instance.exports;
         engineMemory = exp.memory;
+        exp.waste_wast_enable_terminal();
 
         const sourceBytes = new TextEncoder().encode(source);
         const scriptPtr = exp.waste_wast_alloc(sourceBytes.length);
@@ -205,10 +192,14 @@ HTML = r'''<!doctype html>
               error: error && (error.stack || error.message) || String(error)});
           });
         } else if (msg.type === "input") {
-          inputQueue.push(new Uint8Array(msg.bytes));
+          const bytes = new Uint8Array(msg.bytes);
+          const ptr = exp.waste_wast_alloc(bytes.length);
+          if (!ptr) throw new Error("C engine input allocation failed");
+          new Uint8Array(engineMemory.buffer, ptr, bytes.length).set(bytes);
+          exp.waste_wast_enqueue_input(ptr, bytes.length);
           if (ioResolve) { ioResolve(); ioResolve = null; }
         } else if (msg.type === "signal") {
-          pendingSignal = msg.signal;
+          exp.waste_wast_raise_signal(msg.signal);
           if (ioResolve) { ioResolve(); ioResolve = null; }
         } else if (msg.type === "stop") {
           terminated = true;
