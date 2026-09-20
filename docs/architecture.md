@@ -210,8 +210,28 @@ likewise uses an explicit carrier containing runtime tag identity, payload,
 owner, and exception reference.
 
 Blocking work saves interpreter state and returns a yield status to the host.
-Resume reenters the saved execution without Asyncify.  The active POSIX plan
-generalizes the current input-oriented yield into scheduler-owned wait records.
+That status propagates through ordinary C returns until control reaches the
+host. Resume reenters the saved execution from engine-owned frames. The active
+POSIX plan generalizes the current input-oriented yield into scheduler-owned
+wait records.
+
+### No Asyncify invariant
+
+The C engine must run without Asyncify. Its Wasm binary is not passed through
+an Asyncify transform and must not import or export Asyncify start/stop,
+unwind, or rewind hooks. No Emscripten/Binaryen Asyncify flags belong in its
+build. "Yield," "continuation," and "resume" in this repository refer only to
+explicit engine data structures and status propagation; they do not refer to
+capturing or rewriting the browser Wasm call stack.
+
+At a blocking import, the interpreter records the guest PC, operand/control
+stacks, locals, call frames, and typed wait reason in engine-owned memory. It
+then returns `EXEC_YIELD` normally through each C caller and back to the worker.
+After the browser event arrives, the worker calls the explicit resume export,
+which reenters the interpreter and consumes the saved state. Process switching
+uses the same explicit model with owned evaluator snapshots and store
+checkpoints. Introducing Asyncify would duplicate that state machine and is an
+architecture regression.
 
 ## Browser Runtime
 
@@ -229,7 +249,8 @@ or WebAssembly semantics.
 The worker may return to its event loop when the C engine yields.  It later
 delivers input or another event and calls the explicit resume export.  No
 server, external asset, `SharedArrayBuffer`, cross-origin-isolation header, or
-Asyncify transform is required for the self-contained `file://` pages.
+Asyncify transform is used or permitted for the self-contained `file://`
+pages.
 
 Integer handles cross the JavaScript boundary.  C pointers must not be exposed
 as durable browser identities, and no pointer into a growable memory may
@@ -312,11 +333,13 @@ replace eager copying behind one memory-clone boundary without changing these
 semantics.
 
 The OCaml oracle currently owns the mature process/VFS/signal kernel used by
-its scheduled POSIX probes.  The C browser runtime currently has partial host
-adapters and explicit yield/resume for terminal reads; a complete C kernel is
-still being migrated.  Do not describe OCaml kernel behavior as already owned
-by the C runtime.  The `select`/`pselect` migration is specified in the active
-plan rather than duplicated here.
+its scheduled POSIX probes.  The C browser runtime now owns the bounded
+child-first fork/failed-`execve`/exit/`waitpid` continuation used by the Bash
+command-not-found path, including evaluator snapshots and store checkpoints.
+It still does not provide general concurrent process or guest-thread
+scheduling; that remains a separate migration.  Do not describe OCaml kernel
+behavior as already owned by the C runtime.  The `select`/`pselect` migration
+is specified in the active plan rather than duplicated here.
 
 ## Guest Libc
 

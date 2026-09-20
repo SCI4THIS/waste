@@ -201,9 +201,9 @@ int wast_v128_matches_any(const wasm_value *actual,
     return 0;
 }
 
-exec_status wast_run_assertion(waste_exec_engine *engine,
-                               const wast_assertion *assertion,
-                               exec_error *error) {
+exec_status wast_run_assertion_with_invoke(
+        waste_exec_engine *engine, const wast_assertion *assertion,
+        exec_error *error, wast_invoke_callback callback, void *callback_data) {
     if (assertion->action_kind == WAST_ACTION_GET) {
         exec_global *global = NULL;
         exec_status status = exec_find_export_global(
@@ -226,9 +226,8 @@ exec_status wast_run_assertion(waste_exec_engine *engine,
 
     wasm_value results[WAST_MAX_RESULTS];
     int result_count = 0;
-    st = exec_invoke(engine, func_idx,
-                     assertion->args, assertion->arg_count,
-                     results, &result_count, error);
+    st = callback(callback_data, engine, func_idx, assertion->args,
+                  assertion->arg_count, results, &result_count, error);
     if (st == EXEC_ERROR_EXIT && assertion->kind == WAST_ASSERT_RETURN &&
         assertion->alt_count == 0) {
         if (error) memset(error, 0, sizeof(*error));
@@ -301,4 +300,21 @@ exec_status wast_run_assertion(waste_exec_engine *engine,
                      "result mismatch for %s", assertion->func_name);
     }
     return EXEC_ERROR_TRAP;
+}
+
+static exec_status wast_direct_invoke(void *data, waste_exec_engine *engine,
+                                      uint32_t func_idx,
+                                      const wasm_value *args, int arg_count,
+                                      wasm_value *results, int *result_count,
+                                      exec_error *error) {
+    (void)data;
+    return exec_invoke(engine, func_idx, args, arg_count, results,
+                       result_count, error);
+}
+
+exec_status wast_run_assertion(waste_exec_engine *engine,
+                               const wast_assertion *assertion,
+                               exec_error *error) {
+    return wast_run_assertion_with_invoke(engine, assertion, error,
+                                          wast_direct_invoke, NULL);
 }

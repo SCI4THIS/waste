@@ -8,6 +8,17 @@ const {TextDecoder, TextEncoder} = require("node:util");
 
 const root = path.resolve(__dirname, "..");
 const stagingDir = path.join(root, "src/html-rt/src/bash");
+const baselineMissingCommand = process.argv.includes("--missing-command");
+const genericMissingCommand = "waste-definitely-missing-command";
+
+/* Keep the acceptance probe tied to the pathname/process imports in the Bash
+ * artifact. */
+const bashWat = fs.readFileSync(path.join(root, "examples/bash.wat"), "utf8");
+for (const name of ["stat", "lstat", "fstat", "eaccess", "faccessat", "fork"]) {
+  if (!bashWat.includes(`\"env\" \"${name}\"`)) {
+    throw new Error(`Bash import inventory lost env.${name}`);
+  }
+}
 
 /* Load worker source, wasm, and launch script from staging files */
 const workerSrc = fs.readFileSync(path.join(stagingDir, "worker.js"), "utf8");
@@ -29,7 +40,17 @@ const launchSource = fs.readFileSync(launchPath, "utf8");
 let output = "";
 let promptSeen = false;
 let commandSent = false;
+let environmentEchoSent = false;
+let environmentEchoSeen = false;
+let missingLsSent = false;
 let exitSent = false;
+let doneBeforeExit = false;
+let baselineFailureSeen = false;
+let commandNotFoundSeen = false;
+let statusSeen = false;
+let builtinSeen = false;
+let genericMissingSent = false;
+let genericMissingSeen = false;
 let finish;
 const completion = new Promise(resolve => { finish = resolve; });
 
@@ -38,19 +59,79 @@ const self = {
     if (message.type === "output") {
       output += message.text;
       process.stdout.write(message.text);
-      if (!promptSeen && /bash-[^\r\n]*[#$] ?/.test(output)) {
+      if (baselineMissingCommand) {
+        if (output.includes("/home/a")) environmentEchoSeen = true;
+        if (output.includes("bash: ls: command not found")) {
+          commandNotFoundSeen = true;
+          if (!statusSeen) {
+            statusSeen = true;
+            setTimeout(() => self.onmessage({data: {
+              type: "input",
+              bytes: Array.from(new TextEncoder().encode(
+                "printf '__C_ENGINE_STATUS_%s__\\n' \"$?\"\n",
+              )),
+            }}), 10);
+          }
+        }
+        if (output.includes("__C_ENGINE_STATUS_127__") && !builtinSeen) {
+          builtinSeen = true;
+          setTimeout(() => self.onmessage({data: {
+            type: "input",
+            bytes: Array.from(new TextEncoder().encode(
+              "echo __C_ENGINE_AFTER__\n",
+            )),
+          }}), 10);
+        }
+        if (output.includes("__C_ENGINE_AFTER__") && !genericMissingSent) {
+          genericMissingSent = true;
+          setTimeout(() => self.onmessage({data: {
+            type: "input",
+            bytes: Array.from(new TextEncoder().encode(
+              `${genericMissingCommand}\n`,
+            )),
+          }}), 10);
+        }
+        if (output.includes(`bash: ${genericMissingCommand}: command not found`) &&
+            !genericMissingSeen) {
+          genericMissingSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {
+            type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n")),
+          }}), 10);
+        }
+      }
+      const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
+      if (!promptSeen && messageHasPrompt) {
         promptSeen = true;
         setTimeout(() => {
           commandSent = true;
           self.onmessage({data: {
             type: "input",
             bytes: Array.from(new TextEncoder().encode(
-              "echo __C_ENGINE_BASH_OK__\n",
+              baselineMissingCommand
+                ? "HOME_DIR=/home/a\n"
+                : "echo __C_ENGINE_BASH_OK__\n",
             )),
           }});
         }, 10);
+      } else if (baselineMissingCommand && commandSent && messageHasPrompt &&
+                 !environmentEchoSent) {
+        environmentEchoSent = true;
+        setTimeout(() => self.onmessage({data: {
+          type: "input",
+          bytes: Array.from(new TextEncoder().encode("echo ${HOME_DIR}\n")),
+        }}), 10);
+      } else if (baselineMissingCommand && environmentEchoSeen &&
+                 messageHasPrompt && !missingLsSent) {
+        missingLsSent = true;
+        setTimeout(() => self.onmessage({data: {
+          type: "input",
+          bytes: Array.from(new TextEncoder().encode("ls\n")),
+        }}), 10);
       }
-      if (commandSent && !exitSent && output.includes("__C_ENGINE_BASH_OK__")) {
+      if (!baselineMissingCommand && commandSent && !exitSent &&
+          output.includes("__C_ENGINE_BASH_OK__")) {
         exitSent = true;
         setTimeout(() => self.onmessage({data: {
           type: "input",
@@ -58,6 +139,7 @@ const self = {
         }}), 10);
       }
     } else if (message.type === "done") {
+      if (!exitSent) doneBeforeExit = true;
       finish(message);
     }
   },
@@ -95,12 +177,22 @@ const timeout = new Promise(resolve => {
 
 Promise.race([completion, timeout]).then(result => {
   clearTimeout(timeoutId);
-  const passed = promptSeen && commandSent && exitSent &&
-    output.includes("__C_ENGINE_BASH_OK__") && result.ok;
+  const passed = baselineMissingCommand
+    ? promptSeen && commandSent && environmentEchoSent && environmentEchoSeen &&
+      missingLsSent && commandNotFoundSeen && statusSeen &&
+      builtinSeen && genericMissingSeen && exitSent && !doneBeforeExit &&
+      output.includes("__C_ENGINE_STATUS_127__") &&
+      output.includes("__C_ENGINE_AFTER__") && result.ok
+    : promptSeen && commandSent && exitSent && !doneBeforeExit &&
+      output.includes("__C_ENGINE_BASH_OK__") && result.ok;
   if (!passed) {
     console.error("\nC-engine Bash browser test failed:", result);
     process.exitCode = 1;
     return;
   }
-  console.log(`\nC-engine Bash browser test passed (${result.passed}/${result.total})`);
+  if (baselineMissingCommand) {
+    console.log("\nC-engine Bash command-not-found test passed");
+  } else {
+    console.log(`\nC-engine Bash browser test passed (${result.passed}/${result.total})`);
+  }
 });

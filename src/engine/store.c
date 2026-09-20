@@ -75,6 +75,15 @@ void native_store_init(native_store *store) {
     store->spectest_f64.value.type = WASM_VALTYPE_F64;
     store->spectest_f64.value.f64 = 666.6;
     store->kernel = posix_kernel_create(0); /* noninteractive by default */
+    if (store->kernel) {
+        store->processes[0].used = 1;
+        store->processes[0].pid = 1;
+        store->processes[0].ppid = 0;
+        store->processes[0].kernel = store->kernel;
+        store->process_count = 1;
+        store->active_pid = 1;
+        store->next_pid = 2;
+    }
 }
 
 void native_store_free(native_store *store) {
@@ -93,7 +102,12 @@ void native_store_free(native_store *store) {
     free(store->orphan_engines);
     free(store->spectest_memory.data);
     free(store->spectest_table.elements);
-    posix_kernel_destroy(store->kernel);
+    for (int i = 0; i < NATIVE_PROCESS_MAX; i++)
+        if (store->processes[i].used) {
+            posix_kernel_destroy(store->processes[i].kernel);
+            store->processes[i].kernel = NULL;
+        }
+    store->kernel = NULL;
     memset(store, 0, sizeof(*store));
 }
 
@@ -102,6 +116,9 @@ void native_store_enable_terminal(native_store *store) {
     if (store->kernel) posix_kernel_destroy(store->kernel);
     store->kernel = posix_kernel_create(1);
     store->kernel_terminal = store->kernel != NULL;
+    for (int i = 0; i < NATIVE_PROCESS_MAX; i++)
+        if (store->processes[i].used && store->processes[i].pid == store->active_pid)
+            store->processes[i].kernel = store->kernel;
 }
 
 int native_store_keep_orphan(native_store *store,

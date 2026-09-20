@@ -35,7 +35,7 @@ static int cli_range(exec_memory *memory, uint32_t offset, uint32_t length,
                      uint8_t **out) {
     uint64_t size = memory->pages * UINT64_C(65536);
     if ((uint64_t)offset + length > size) return 0;
-    *out = memory->data + offset;
+    if (out) *out = memory->data + offset;
     return 1;
 }
 
@@ -136,11 +136,50 @@ static exec_status cli_pselect_host(void *data, const wasm_value *args,
     return cli_result(value, results, result_count);
 }
 
+static exec_status cli_path_access_host(void *data, const wasm_value *args,
+                                        int arg_count, wasm_value *results,
+                                        int *result_count, exec_error *error,
+                                        const waste_exec_engine *caller) {
+    native_store *store = data;
+    if (arg_count != 4 || !caller->memory) return cli_result(-POSIX_EFAULT, results, result_count);
+    uint32_t offset = (uint32_t)args[0].i32;
+    uint32_t length = (uint32_t)args[1].i32;
+    if (!cli_range(caller->memory, offset, length, NULL))
+        return cli_result(-POSIX_EFAULT, results, result_count);
+    int result = posix_kernel_path_access(store->kernel,
+        caller->memory->data + offset, length, args[2].i32, args[3].i32);
+    (void)error;
+    return cli_result(result, results, result_count);
+}
+
+static exec_status cli_path_stat_host(void *data, const wasm_value *args,
+                                      int arg_count, wasm_value *results,
+                                      int *result_count, exec_error *error,
+                                      const waste_exec_engine *caller) {
+    native_store *store = data;
+    uint8_t *output;
+    if (arg_count != 4 || !caller->memory) return cli_result(-POSIX_EFAULT, results, result_count);
+    uint32_t offset = (uint32_t)args[0].i32;
+    uint32_t length = (uint32_t)args[1].i32;
+    uint32_t output_offset = (uint32_t)args[3].i32;
+    if (!cli_range(caller->memory, offset, length, NULL) ||
+        !cli_range(caller->memory, output_offset, POSIX_PATH_METADATA_BYTES, &output))
+        return cli_result(-POSIX_EFAULT, results, result_count);
+    posix_path_metadata metadata;
+    int result = posix_kernel_path_stat(store->kernel,
+        caller->memory->data + offset, length, args[2].i32, &metadata);
+    if (result == 0) posix_path_metadata_encode(output, &metadata);
+    (void)error;
+    return cli_result(result, results, result_count);
+}
+
 static int cli_host_resolver(const char *module, const char *name,
                              void *context, native_host_binding *out) {
     if (strcmp(module, "waste_kernel") != 0) return 0;
     if (strcmp(name, "select_v1") == 0) out->function = cli_select_host;
     else if (strcmp(name, "pselect_v1") == 0) out->function = cli_pselect_host;
+    else if (strcmp(name, POSIX_KERNEL_PATH_ACCESS_V1) == 0) out->function = cli_path_access_host;
+    else if (strcmp(name, POSIX_KERNEL_PATH_STAT_V1) == 0) out->function = cli_path_stat_host;
     else return 0;
     out->host_data = context;
     out->control = EXEC_HOST_CONTROL_NONE;

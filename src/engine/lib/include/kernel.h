@@ -2,6 +2,7 @@
 #define WASTE_POSIX_KERNEL_H
 
 #include "select.h"
+#include "path.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -26,6 +27,11 @@
 #define POSIX_EINVAL  22
 #define POSIX_EMFILE  24
 #define POSIX_EPIPE   32
+#define POSIX_ECHILD  10
+#define POSIX_EFAULT  14
+#define POSIX_WNOHANG 1
+#define POSIX_WUNTRACED 2
+#define POSIX_WCONTINUED 8
 
 #define POSIX_WAIT_BLOCKED 0
 #define POSIX_WAIT_READY   1
@@ -70,6 +76,11 @@ typedef struct {
     posix_ofd *ofd;    /* NULL = closed */
 } posix_fd_entry;
 
+typedef struct {
+    char path[POSIX_PATH_NODE_NAME_MAX];
+    posix_path_metadata metadata;
+} posix_kernel_path_node;
+
 typedef uint64_t (*posix_clock_now_fn)(void *data);
 
 /* A wait contains copied interests only; it never retains guest pointers. */
@@ -95,6 +106,9 @@ typedef struct posix_kernel {
     void *clock_data;
     posix_sigset signal_mask;
     posix_sigset pending_signals;
+    char cwd[POSIX_PATH_NODE_NAME_MAX];
+    posix_kernel_path_node path_nodes[POSIX_PATH_NODE_MAX];
+    int path_node_count;
 } posix_kernel;
 
 /* --- Lifecycle --- */
@@ -103,6 +117,10 @@ typedef struct posix_kernel {
    interactive=0 leaves all fds closed (for WAST test sandboxes).
    Returns NULL on allocation failure. */
 posix_kernel *posix_kernel_create(int interactive);
+
+/* Clone a process kernel.  Descriptor entries are copied while preserving
+   shared open-file descriptions and pipe endpoint identity. */
+posix_kernel *posix_kernel_clone(const posix_kernel *kernel);
 
 /* Destroy a kernel and all owned resources. */
 void posix_kernel_destroy(posix_kernel *kernel);

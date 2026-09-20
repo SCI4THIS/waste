@@ -1,4 +1,5 @@
 #include "store.h"
+#include "runtime_internal.h"
 #include "wast/runner.h"
 #include "wasm/encode.h"
 #include "wast/stream.h"
@@ -579,8 +580,27 @@ static wasm_value g_yield_args[WAST_MAX_ARGS];
 static int g_yield_arg_count;
 static exec_yield_reason g_yield_reason;
 static int g_terminal_requested;
+static native_store_checkpoint g_process_checkpoint;
+static exec_continuation g_process_continuation;
+static int g_process_state_initialized;
+static int g_process_fork_active;
+
+static void browser_process_state_init(void) {
+    if (g_process_state_initialized) return;
+    native_store_checkpoint_init(&g_process_checkpoint);
+    exec_continuation_init(&g_process_continuation);
+    g_process_state_initialized = 1;
+}
+
+static void browser_process_state_reset(void) {
+    if (!g_process_state_initialized) return;
+    native_store_checkpoint_destroy(&g_process_checkpoint);
+    exec_continuation_destroy(&g_process_continuation);
+    g_process_fork_active = 0;
+}
 
 static void browser_yield_cleanup(void) {
+    browser_process_state_reset();
     wast_stream_destroy(&g_yield_stream);
     native_store_free(&g_yield_context.store);
     for (uint32_t i = 0; i < g_yield_context.retained_count; i++) {
@@ -590,6 +610,77 @@ static void browser_yield_cleanup(void) {
     }
     free(g_yield_context.retained);
     memset(&g_yield_context, 0, sizeof(g_yield_context));
+}
+
+/* Drive an invocation through internal process transitions.  A fork yield is
+ * handled entirely inside the browser runtime: the parent evaluator and store
+ * are captured, the child continuation runs with fork returning zero, and a
+ * child exit restores the parent before the fork call is resumed with its PID.
+ * Terminal/select yields remain visible to JavaScript. */
+static exec_status browser_invoke_process(browser_wast_context *context,
+                                          waste_exec_engine *engine,
+                                          uint32_t func_idx,
+                                          const wasm_value *args, int arg_count,
+                                          wasm_value *results, int *result_count,
+                                          exec_error *error) {
+    for (;;) {
+        exec_status status = exec_invoke(engine, func_idx, args, arg_count,
+                                         results, result_count, error);
+        if (status == EXEC_ERROR_EXIT && g_process_fork_active &&
+            native_store_getpid(&context->store) ==
+                context->store.fork_child_pid) {
+            int parent_pid = context->store.fork_parent_pid;
+            (void)native_store_exit_process(&context->store, error->exit_code);
+            if (native_store_set_active_process(&context->store, parent_pid) != 0)
+                return exec_fail(error, EXEC_ERROR_TRAP,
+                                 "failed to restore parent process");
+            exec_status restored = native_store_checkpoint_restore(
+                &g_process_checkpoint, error);
+            if (restored != EXEC_OK) return restored;
+            restored = exec_continuation_restore(&g_process_continuation, error);
+            if (restored != EXEC_OK) return restored;
+            context->store.fork_parent_resume = 1;
+            g_process_fork_active = 0;
+            native_store_checkpoint_destroy(&g_process_checkpoint);
+            exec_continuation_destroy(&g_process_continuation);
+            continue;
+        }
+        if (status != EXEC_YIELD || error->yield_reason != EXEC_YIELD_FORK)
+            return status;
+        if (g_process_fork_active)
+            return exec_fail(error, EXEC_ERROR_TRAP,
+                             "nested browser fork is unsupported");
+        browser_process_state_init();
+        native_store_checkpoint_destroy(&g_process_checkpoint);
+        exec_continuation_destroy(&g_process_continuation);
+        native_store_checkpoint_init(&g_process_checkpoint);
+        exec_continuation_init(&g_process_continuation);
+        if (native_store_checkpoint_capture(&context->store,
+                                            &g_process_checkpoint, error) != EXEC_OK ||
+            exec_continuation_capture(engine, &g_process_continuation, error) != EXEC_OK)
+            return error->status;
+        int parent_pid = native_store_getpid(&context->store);
+        int child_pid = 0;
+        if (native_store_fork_process(&context->store, &child_pid) != 0 ||
+            native_store_set_active_process(&context->store, child_pid) != 0)
+            return exec_fail(error, EXEC_ERROR_TRAP,
+                             "failed to create browser child process");
+        context->store.fork_parent_pid = parent_pid;
+        context->store.fork_child_pid = child_pid;
+        context->store.fork_child_resume = 1;
+        g_process_fork_active = 1;
+    }
+}
+
+static exec_status browser_assertion_invoke(void *data,
+                                            waste_exec_engine *engine,
+                                            uint32_t func_idx,
+                                            const wasm_value *args, int arg_count,
+                                            wasm_value *results, int *result_count,
+                                            exec_error *error) {
+    return browser_invoke_process((browser_wast_context *)data, engine,
+                                   func_idx, args, arg_count, results,
+                                   result_count, error);
 }
 
 static void browser_run_assertions(browser_wast_context *context,
@@ -608,7 +699,8 @@ static void browser_run_assertions(browser_wast_context *context,
             snprintf(error.message, sizeof(error.message), "unknown module id");
             status = EXEC_ERROR_NOT_FOUND;
         } else {
-            status = wast_run_assertion(selected, assertion, &error);
+            status = wast_run_assertion_with_invoke(
+                selected, assertion, &error, browser_assertion_invoke, context);
         }
         if (status == EXEC_YIELD) {
             g_yield_active = 1;
@@ -783,6 +875,7 @@ static int browser_stream_loop(void) {
 
 __attribute__((export_name("waste_wast_run_script")))
 uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
+    browser_process_state_reset();
     g_browser_result_count = 0;
     g_browser_result_passed = 0;
     g_browser_command_line = 1;
@@ -815,9 +908,10 @@ uint32_t waste_wast_resume(void) {
     int result_count = 0;
     exec_error error;
     memset(&error, 0, sizeof(error));
-    exec_status st = exec_invoke(g_yield_engine, g_yield_func_idx,
-                                 g_yield_args, g_yield_arg_count,
-                                 results, &result_count, &error);
+    exec_status st = browser_invoke_process(&g_yield_context, g_yield_engine,
+                                            g_yield_func_idx, g_yield_args,
+                                            g_yield_arg_count, results,
+                                            &result_count, &error);
     if (st == EXEC_YIELD) {
         g_yield_reason = error.yield_reason;
         return 1;

@@ -12,8 +12,8 @@ FREESTANDING_FLAGS := -I$(ENGINE_DIR)/lib/include -fno-builtin -fno-stack-protec
 ENGINE_SOURCES := $(ENGINE_DIR)/wasm/load.c \
 	$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/encode.c \
 	$(ENGINE_DIR)/wast/stream.c $(ENGINE_DIR)/wast/command.c \
-	$(ENGINE_DIR)/store.c $(ENGINE_DIR)/lib/kernel.c \
-	$(ENGINE_DIR)/lib/select.c \
+	$(ENGINE_DIR)/store.c $(ENGINE_DIR)/checkpoint.c $(ENGINE_DIR)/process.c $(ENGINE_DIR)/lib/kernel.c \
+	$(ENGINE_DIR)/lib/select.c $(ENGINE_DIR)/lib/path.c \
 	$(ENGINE_DIR)/wast/runner.c $(ENGINE_DIR)/wast/assert.c \
 	$(ENGINE_DIR)/wat/builder.c $(ENGINE_DIR)/wat/literal.c \
 	$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
@@ -42,7 +42,8 @@ ENGINE_HEADERS := $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
 	$(ENGINE_DIR)/instantiate.h $(ENGINE_DIR)/runtime_internal.h
 
 ENGINE_HEADERS += $(ENGINE_DIR)/include/waste.h \
-	$(ENGINE_DIR)/lib/include/kernel.h
+	$(ENGINE_DIR)/lib/include/kernel.h \
+	$(ENGINE_DIR)/lib/include/path.h
 
 # Freestanding library: shared (portable) sources from engine
 LIB_SHARED := $(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdio.c \
@@ -72,21 +73,30 @@ WASM_IMPORT_TEST_TARGET := $(BUILD_DIR)/wasm-import-decode-sanitize
 WASM_VALIDATION_TEST_TARGET := $(BUILD_DIR)/wasm-validation-sanitize
 PARSER_REENTRANT_TEST_TARGET := $(BUILD_DIR)/wast-parser-reentrant-sanitize
 POSIX_SELECT_ABI_TEST_TARGET := $(BUILD_DIR)/posix-select-abi-sanitize
+POSIX_PATH_ABI_TEST_TARGET := $(BUILD_DIR)/posix-path-abi-sanitize
+POSIX_PATH_VFS_TEST_TARGET := $(BUILD_DIR)/posix-path-vfs-sanitize
 POSIX_KERNEL_TEST_TARGET := $(BUILD_DIR)/posix-kernel-sanitize
 POSIX_SELECT_TEST_TARGET := $(BUILD_DIR)/posix-select-sanitize
 POSIX_WAIT_TEST_TARGET := $(BUILD_DIR)/posix-wait-sanitize
 POSIX_SIGNAL_TEST_TARGET := $(BUILD_DIR)/posix-signal-sanitize
 CALLER_INSTANCE_TEST_TARGET := $(BUILD_DIR)/caller-instance-sanitize
+PROCESS_CONTINUATION_TEST_TARGET := $(BUILD_DIR)/process-continuation-sanitize
+CONTINUATION_TEST_TARGET := $(BUILD_DIR)/continuation-sanitize
+STORE_CHECKPOINT_TEST_TARGET := $(BUILD_DIR)/store-checkpoint-sanitize
+PROCESS_LIFECYCLE_TEST_TARGET := $(BUILD_DIR)/process-lifecycle-sanitize
 I32_SMOKE_WASM := $(BUILD_DIR)/i32-smoke.wasm
 IMPORT_SMOKE_WASM := $(BUILD_DIR)/import-smoke.wasm
 EXTERN_PROVIDER_WASM := $(BUILD_DIR)/extern-provider.wasm
 EXTERN_CONSUMER_WASM := $(BUILD_DIR)/extern-consumer.wasm
 CALLER_A_WASM := $(BUILD_DIR)/caller-a.wasm
 CALLER_B_WASM := $(BUILD_DIR)/caller-b.wasm
+PROCESS_CONTINUATION_WASM := $(BUILD_DIR)/process-continuation.wasm
+CONTINUATION_WASM := $(BUILD_DIR)/continuation.wasm
+CONTINUATION_CONSUMER_WASM := $(BUILD_DIR)/continuation-consumer.wasm
 
 .PHONY: wast-native i32-smoke wasm-binary-primitives wasm-import-decode \
-	wasm-validation parser-reentrant posix-select-abi posix-kernel \
-	posix-select posix-wait posix-signal caller-instance gen lint clean
+	wasm-validation parser-reentrant posix-select-abi posix-path-abi posix-path-vfs posix-kernel \
+	posix-select posix-wait posix-signal caller-instance process-continuation continuation store-checkpoint process-lifecycle gen lint clean
 
 # ---- Parser generation (delegate to engine) ----
 
@@ -317,6 +327,30 @@ $(WASM_VALIDATION_TEST_TARGET): ../../tests/wasm-validation.c \
 posix-select-abi: $(POSIX_SELECT_ABI_TEST_TARGET)
 	ASAN_OPTIONS=detect_leaks=0 $(POSIX_SELECT_ABI_TEST_TARGET)
 
+posix-path-abi: $(POSIX_PATH_ABI_TEST_TARGET)
+	ASAN_OPTIONS=detect_leaks=0 $(POSIX_PATH_ABI_TEST_TARGET)
+
+posix-path-vfs: $(POSIX_PATH_VFS_TEST_TARGET)
+	ASAN_OPTIONS=detect_leaks=0 $(POSIX_PATH_VFS_TEST_TARGET)
+
+$(POSIX_PATH_ABI_TEST_TARGET): ../../tests/posix-path-abi.c \
+		$(ENGINE_DIR)/lib/path.c $(ENGINE_DIR)/lib/include/path.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		-I$(ENGINE_DIR)/lib \
+		../../tests/posix-path-abi.c $(ENGINE_DIR)/lib/path.c -o $@
+
+$(POSIX_PATH_VFS_TEST_TARGET): ../../tests/posix-path-vfs.c \
+		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/path.c \
+		$(ENGINE_DIR)/lib/include/kernel.h $(ENGINE_DIR)/lib/include/path.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		-I$(ENGINE_DIR)/lib \
+		../../tests/posix-path-vfs.c $(ENGINE_DIR)/lib/kernel.c \
+		$(ENGINE_DIR)/lib/select.c $(ENGINE_DIR)/lib/path.c -o $@
+
 $(POSIX_SELECT_ABI_TEST_TARGET): ../../tests/posix-select-abi.c \
 		$(ENGINE_DIR)/lib/select.c $(ENGINE_DIR)/lib/include/select.h
 	mkdir -p $(BUILD_DIR)
@@ -332,12 +366,13 @@ posix-kernel: $(POSIX_KERNEL_TEST_TARGET)
 
 $(POSIX_KERNEL_TEST_TARGET): ../../tests/posix-kernel.c \
 		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/select.c \
-		$(ENGINE_DIR)/lib/include/kernel.h $(ENGINE_DIR)/lib/include/select.h
+		$(ENGINE_DIR)/lib/path.c $(ENGINE_DIR)/lib/include/kernel.h \
+		$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
 		../../tests/posix-kernel.c $(ENGINE_DIR)/lib/kernel.c \
-		$(ENGINE_DIR)/lib/select.c \
+		$(ENGINE_DIR)/lib/select.c $(ENGINE_DIR)/lib/path.c \
 		-o $@
 
 # ---- POSIX select/pselect unit tests (ASan/UBSan, uses system libc) ----
@@ -347,12 +382,13 @@ posix-select: $(POSIX_SELECT_TEST_TARGET)
 
 $(POSIX_SELECT_TEST_TARGET): ../../tests/posix-select.c \
 		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/select.c \
-		$(ENGINE_DIR)/lib/include/kernel.h $(ENGINE_DIR)/lib/include/select.h
+		$(ENGINE_DIR)/lib/path.c $(ENGINE_DIR)/lib/include/kernel.h \
+		$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
 		../../tests/posix-select.c $(ENGINE_DIR)/lib/kernel.c \
-		$(ENGINE_DIR)/lib/select.c \
+		$(ENGINE_DIR)/lib/select.c $(ENGINE_DIR)/lib/path.c \
 		-o $@
 
 # ---- POSIX wait-record unit tests (ASan/UBSan, uses system libc) ----
@@ -362,12 +398,13 @@ posix-wait: $(POSIX_WAIT_TEST_TARGET)
 
 $(POSIX_WAIT_TEST_TARGET): ../../tests/posix-wait.c \
 		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/select.c \
-		$(ENGINE_DIR)/lib/include/kernel.h $(ENGINE_DIR)/lib/include/select.h
+		$(ENGINE_DIR)/lib/path.c $(ENGINE_DIR)/lib/include/kernel.h \
+		$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
 		../../tests/posix-wait.c $(ENGINE_DIR)/lib/kernel.c \
-		$(ENGINE_DIR)/lib/select.c \
+		$(ENGINE_DIR)/lib/select.c $(ENGINE_DIR)/lib/path.c \
 		-o $@
 
 # ---- POSIX signal/pselect unit tests (ASan/UBSan, uses system libc) ----
@@ -377,12 +414,13 @@ posix-signal: $(POSIX_SIGNAL_TEST_TARGET)
 
 $(POSIX_SIGNAL_TEST_TARGET): ../../tests/posix-signal.c \
 		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/select.c \
-		$(ENGINE_DIR)/lib/include/kernel.h $(ENGINE_DIR)/lib/include/select.h
+		$(ENGINE_DIR)/lib/path.c $(ENGINE_DIR)/lib/include/kernel.h \
+		$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
 		../../tests/posix-signal.c $(ENGINE_DIR)/lib/kernel.c \
-		$(ENGINE_DIR)/lib/select.c \
+		$(ENGINE_DIR)/lib/select.c $(ENGINE_DIR)/lib/path.c \
 		-o $@
 
 # ---- Caller-instance host import tests (ASan/UBSan, uses system libc) ----
@@ -431,9 +469,110 @@ $(CALLER_INSTANCE_TEST_TARGET): ../../tests/c-engine-caller-instance.c \
 		$(ENGINE_DIR)/api.c \
 		-lm -o $@
 
+process-continuation: $(PROCESS_CONTINUATION_TEST_TARGET) $(PROCESS_CONTINUATION_WASM)
+	ASAN_OPTIONS=detect_leaks=0 $(PROCESS_CONTINUATION_TEST_TARGET) $(PROCESS_CONTINUATION_WASM)
+
+$(PROCESS_CONTINUATION_WASM): ../../tests/c-engine-process-continuation.wat
+	mkdir -p $(BUILD_DIR)
+	wasm-as --enable-multivalue $< -o $@
+
+$(PROCESS_CONTINUATION_TEST_TARGET): ../../tests/c-engine-process-continuation.c \
+		$(ENGINE_DIR)/wasm/load.c $(ENGINE_DIR)/wasm/opcode.c \
+		$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
+		$(ENGINE_DIR)/wasm/module.c $(ENGINE_DIR)/wasm/decode.c \
+		$(ENGINE_DIR)/op/validate.c $(ENGINE_DIR)/instantiate.c \
+		$(ENGINE_DIR)/op/execute.c $(ENGINE_DIR)/op/execute_memory.c \
+		$(ENGINE_DIR)/op/execute_numeric.c $(ENGINE_DIR)/op/execute_simd.c \
+		$(ENGINE_DIR)/op/execute_gc.c $(ENGINE_DIR)/op/execute_exception.c \
+		$(ENGINE_DIR)/op/execute_table.c $(WAST_GEN_DIR)/dispatch_gen.c \
+		$(ENGINE_DIR)/instance.c $(ENGINE_DIR)/api.c \
+		$(ENGINE_DIR)/engine_internal.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		-I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
+		../../tests/c-engine-process-continuation.c \
+		$(ENGINE_DIR)/wasm/load.c $(ENGINE_DIR)/wasm/opcode.c \
+		$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
+		$(ENGINE_DIR)/wasm/module.c $(ENGINE_DIR)/wasm/decode.c \
+		$(ENGINE_DIR)/op/validate.c $(ENGINE_DIR)/instantiate.c \
+		$(ENGINE_DIR)/op/execute.c $(ENGINE_DIR)/op/execute_memory.c \
+		$(ENGINE_DIR)/op/execute_numeric.c $(ENGINE_DIR)/op/execute_simd.c \
+		$(ENGINE_DIR)/op/execute_gc.c $(ENGINE_DIR)/op/execute_exception.c \
+		$(ENGINE_DIR)/op/execute_table.c $(WAST_GEN_DIR)/dispatch_gen.c \
+		$(ENGINE_DIR)/instance.c $(ENGINE_DIR)/api.c -lm -o $@
+
+continuation: $(CONTINUATION_TEST_TARGET) $(CONTINUATION_WASM) $(CONTINUATION_CONSUMER_WASM)
+	ASAN_OPTIONS=detect_leaks=0 $(CONTINUATION_TEST_TARGET) $(CONTINUATION_WASM) \
+		$(CONTINUATION_CONSUMER_WASM)
+
+store-checkpoint: $(STORE_CHECKPOINT_TEST_TARGET)
+	ASAN_OPTIONS=detect_leaks=0 $(STORE_CHECKPOINT_TEST_TARGET)
+
+process-lifecycle: $(PROCESS_LIFECYCLE_TEST_TARGET)
+	ASAN_OPTIONS=detect_leaks=0 $(PROCESS_LIFECYCLE_TEST_TARGET)
+
+$(PROCESS_LIFECYCLE_TEST_TARGET): ../../tests/c-engine-process-lifecycle.c \
+		$(ENGINE_DIR)/process.c $(ENGINE_DIR)/lib/kernel.c \
+		$(ENGINE_DIR)/lib/path.c $(ENGINE_DIR)/lib/select.c $(ENGINE_DIR)/store.h \
+		$(ENGINE_DIR)/lib/include/kernel.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		-I$(ENGINE_DIR) -I$(ENGINE_DIR)/include \
+		../../tests/c-engine-process-lifecycle.c $(ENGINE_DIR)/process.c \
+		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/path.c \
+		$(ENGINE_DIR)/lib/select.c -o $@
+
+$(STORE_CHECKPOINT_TEST_TARGET): ../../tests/c-engine-store-checkpoint.c \
+		$(ENGINE_DIR)/checkpoint.c $(ENGINE_DIR)/store.h \
+		$(ENGINE_DIR)/runtime_internal.h $(ENGINE_DIR)/engine_internal.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		-I$(ENGINE_DIR) -I$(ENGINE_DIR)/include \
+		../../tests/c-engine-store-checkpoint.c $(ENGINE_DIR)/checkpoint.c -o $@
+
+$(CONTINUATION_WASM): ../../tests/c-engine-continuation.wat
+	mkdir -p $(BUILD_DIR)
+	wasm-as --enable-multivalue $< -o $@
+
+$(CONTINUATION_CONSUMER_WASM): ../../tests/c-engine-continuation-consumer.wat
+	mkdir -p $(BUILD_DIR)
+	wasm-as --enable-multivalue $< -o $@
+
+$(CONTINUATION_TEST_TARGET): ../../tests/c-engine-continuation.c \
+		$(ENGINE_DIR)/wasm/load.c $(ENGINE_DIR)/wasm/opcode.c \
+		$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
+		$(ENGINE_DIR)/wasm/module.c $(ENGINE_DIR)/wasm/decode.c \
+		$(ENGINE_DIR)/op/validate.c $(ENGINE_DIR)/instantiate.c \
+		$(ENGINE_DIR)/op/execute.c $(ENGINE_DIR)/op/execute_memory.c \
+		$(ENGINE_DIR)/op/execute_numeric.c $(ENGINE_DIR)/op/execute_simd.c \
+		$(ENGINE_DIR)/op/execute_gc.c $(ENGINE_DIR)/op/execute_exception.c \
+		$(ENGINE_DIR)/op/execute_table.c $(WAST_GEN_DIR)/dispatch_gen.c \
+		$(ENGINE_DIR)/instance.c $(ENGINE_DIR)/api.c \
+		$(ENGINE_DIR)/engine_internal.h $(ENGINE_DIR)/runtime_internal.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		-I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
+		../../tests/c-engine-continuation.c \
+		$(ENGINE_DIR)/wasm/load.c $(ENGINE_DIR)/wasm/opcode.c \
+		$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
+		$(ENGINE_DIR)/wasm/module.c $(ENGINE_DIR)/wasm/decode.c \
+		$(ENGINE_DIR)/op/validate.c $(ENGINE_DIR)/instantiate.c \
+		$(ENGINE_DIR)/op/execute.c $(ENGINE_DIR)/op/execute_memory.c \
+		$(ENGINE_DIR)/op/execute_numeric.c $(ENGINE_DIR)/op/execute_simd.c \
+		$(ENGINE_DIR)/op/execute_gc.c $(ENGINE_DIR)/op/execute_exception.c \
+		$(ENGINE_DIR)/op/execute_table.c $(WAST_GEN_DIR)/dispatch_gen.c \
+		$(ENGINE_DIR)/instance.c $(ENGINE_DIR)/api.c -lm -o $@
+
 clean:
 	rm -f $(WAST_TARGET) $(I32_SMOKE_TARGET) $(WASM_BINARY_TEST_TARGET) \
 		$(WASM_IMPORT_TEST_TARGET) $(WASM_VALIDATION_TEST_TARGET) \
 		$(PARSER_REENTRANT_TEST_TARGET) $(POSIX_SELECT_ABI_TEST_TARGET) \
 		$(POSIX_KERNEL_TEST_TARGET) $(CALLER_INSTANCE_TEST_TARGET) \
+		$(PROCESS_CONTINUATION_TEST_TARGET) $(PROCESS_CONTINUATION_WASM) \
+		$(CONTINUATION_TEST_TARGET) $(CONTINUATION_WASM) \
+		$(CONTINUATION_CONSUMER_WASM) \
 		$(WAST_TAB_O) $(WAST_LEX_O) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)

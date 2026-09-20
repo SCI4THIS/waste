@@ -37,6 +37,12 @@ and explicit about `errno`, cancellation, and readiness. Without it, return an
 unsupported error. The dashboard must remain a self-contained `file://`
 document; broker use is optional.
 
+The C engine must not use Asyncify. Blocking imports save explicit
+engine-owned evaluator/process state, return `EXEC_YIELD` through ordinary C
+returns, and later resume through the exported engine API. Do not add an
+Asyncify transform, Asyncify runtime hooks, or documentation that describes
+this explicit return path as stack unwinding/rewinding.
+
 ## Build, Test, and Development Commands
 
 - `./start.sh`: open the dependency/build/dashboard wizard.

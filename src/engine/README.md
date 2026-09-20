@@ -46,10 +46,36 @@ type-relation and operand/control-stack validation pass. These modules share
 the bounded private `waste_exec_context` declared by `runtime_internal.h`; no
 implementation file is textually included by another C source file.
 
+## Explicit suspension; no Asyncify
+
+The engine must not use Asyncify. Browser builds are not transformed with
+Binaryen/Emscripten Asyncify and must not contain Asyncify unwind/rewind hooks.
+When an import blocks, the executor stores the guest PC, operands, controls,
+locals, call frames, and yield reason in engine-owned structures, then returns
+`EXEC_YIELD` normally. The browser worker later calls `waste_wast_resume`,
+which enters the engine in a new Wasm invocation and resumes from that explicit
+state. Process continuations additionally use owned evaluator snapshots and
+store checkpoints; they do not capture the native or browser Wasm stack.
+
+Accordingly, "yield propagation" means ordinary C return-value propagation.
+Do not describe it as stack unwinding/rewinding, and do not add Asyncify build
+flags, transforms, imports, exports, or runtime APIs.
+
 ```sh
 make -C src/cli-rt wast-native
 make -C src/html-rt wast-browser
 ```
+
+The current continuation regression is covered by both browser Bash modes:
+
+```sh
+node tests/c-engine-bash-browser-runtime.cjs
+node tests/c-engine-bash-browser-runtime.cjs --missing-command
+```
+
+The second mode verifies Bash's canonical diagnostic, status 127, a later
+builtin, a second guaranteed-missing command, and clean exit. The native core
+corpus currently runs as 97 files with 20,066/20,066 assertions passing.
 
 ## Fast WAST parser checks
 

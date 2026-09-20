@@ -11,6 +11,200 @@ void runtime_free_jump_snapshots(waste_exec_engine *eng) {
     free(eng->jump_snapshots);
 }
 
+void exec_continuation_init(exec_continuation *continuation) {
+    if (continuation) memset(continuation, 0, sizeof(*continuation));
+}
+
+void exec_continuation_destroy(exec_continuation *continuation) {
+    if (!continuation) return;
+    for (uint32_t i = 0; i < EXEC_MAX_CALL_DEPTH; i++)
+        free(continuation->frames[i].locals);
+    if (continuation->jump_snapshots) {
+        for (uint32_t i = 0; i < continuation->jump_snapshot_count; i++)
+            free(continuation->jump_snapshots[i].locals);
+    }
+    free(continuation->jump_snapshots);
+    memset(continuation, 0, sizeof(*continuation));
+}
+
+static exec_status continuation_allocation_error(exec_error *error,
+                                                 const char *message) {
+    return exec_fail(error, EXEC_ERROR_TRAP, message);
+}
+
+exec_status exec_continuation_capture(waste_exec_engine *engine,
+                                      exec_continuation *continuation,
+                                      exec_error *error) {
+    if (!engine || !continuation)
+        return continuation_allocation_error(error,
+                                             "invalid continuation capture");
+    exec_continuation_destroy(continuation);
+    continuation->engine = engine;
+    continuation->active_call_depth = engine->active_call_depth;
+    for (uint32_t i = 0; i < EXEC_MAX_CALL_DEPTH; i++) {
+        exec_continuation_frame *saved = &continuation->frames[i];
+        continuation->local_frame_capacities[i] =
+            engine->local_frame_capacities[i];
+        continuation->frame_generations[i] = engine->frame_generations[i];
+        continuation->yield_frames[i] = engine->yield_frames[i];
+        saved->allocated = (engine->local_frames[i] != NULL ||
+                            engine->operand_frames[i] != NULL ||
+                            engine->control_frames[i] != NULL);
+        if (engine->operand_frames[i])
+            saved->operand = *engine->operand_frames[i];
+        if (engine->control_frames[i])
+            memcpy(saved->controls, engine->control_frames[i],
+                   sizeof(saved->controls));
+        saved->local_capacity = engine->local_frame_capacities[i];
+        if (saved->local_capacity) {
+            saved->locals = (wasm_value *)malloc(
+                (size_t)saved->local_capacity * sizeof(*saved->locals));
+            if (!saved->locals)
+                goto allocation_failure;
+            if (engine->local_frames[i])
+                memcpy(saved->locals, engine->local_frames[i],
+                       (size_t)saved->local_capacity * sizeof(*saved->locals));
+            else
+                memset(saved->locals, 0,
+                       (size_t)saved->local_capacity * sizeof(*saved->locals));
+        }
+    }
+    continuation->jump_snapshot_count = engine->jump_snapshot_count;
+    if (continuation->jump_snapshot_count) {
+        continuation->jump_snapshots = (exec_jump_snapshot *)calloc(
+            continuation->jump_snapshot_count,
+            sizeof(*continuation->jump_snapshots));
+        if (!continuation->jump_snapshots) goto allocation_failure;
+        for (uint32_t i = 0; i < continuation->jump_snapshot_count; i++) {
+            exec_jump_snapshot *source = &engine->jump_snapshots[i];
+            exec_jump_snapshot *saved = &continuation->jump_snapshots[i];
+            *saved = *source;
+            saved->locals = NULL;
+            if (source->local_count) {
+                saved->locals = (wasm_value *)malloc(
+                    (size_t)source->local_count * sizeof(*saved->locals));
+                if (!saved->locals) goto allocation_failure;
+                memcpy(saved->locals, source->locals,
+                       (size_t)source->local_count * sizeof(*saved->locals));
+            }
+        }
+    }
+    return EXEC_OK;
+
+allocation_failure:
+    exec_continuation_destroy(continuation);
+    return continuation_allocation_error(error,
+                                         "continuation snapshot allocation failed");
+}
+
+static exec_status continuation_prepare_frames(
+        exec_continuation *continuation, exec_error *error) {
+    waste_exec_engine *engine = continuation->engine;
+    for (uint32_t i = 0; i < EXEC_MAX_CALL_DEPTH; i++) {
+        exec_continuation_frame *saved = &continuation->frames[i];
+        if (!saved->allocated) continue;
+        if (!engine->operand_frames[i]) {
+            engine->operand_frames[i] = (exec_stack *)calloc(1,
+                sizeof(*engine->operand_frames[i]));
+            if (!engine->operand_frames[i])
+                return continuation_allocation_error(error,
+                    "continuation operand frame allocation failed");
+        }
+        if (!engine->control_frames[i]) {
+            engine->control_frames[i] = (exec_control *)calloc(
+                EXEC_MAX_CONTROL, sizeof(*engine->control_frames[i]));
+            if (!engine->control_frames[i])
+                return continuation_allocation_error(error,
+                    "continuation control frame allocation failed");
+        }
+        if (saved->local_capacity && !engine->local_frames[i]) {
+            engine->local_frames[i] = (wasm_value *)malloc(
+                (size_t)saved->local_capacity * sizeof(*engine->local_frames[i]));
+            if (!engine->local_frames[i])
+                return continuation_allocation_error(error,
+                    "continuation local frame allocation failed");
+        } else if (saved->local_capacity &&
+                   engine->local_frame_capacities[i] < saved->local_capacity) {
+            wasm_value *next = (wasm_value *)realloc(
+                engine->local_frames[i],
+                (size_t)saved->local_capacity * sizeof(*next));
+            if (!next)
+                return continuation_allocation_error(error,
+                    "continuation local frame growth failed");
+            engine->local_frames[i] = next;
+        }
+    }
+    return EXEC_OK;
+}
+
+exec_status exec_continuation_restore(exec_continuation *continuation,
+                                      exec_error *error) {
+    if (!continuation || !continuation->engine)
+        return continuation_allocation_error(error,
+                                             "invalid continuation restore");
+    waste_exec_engine *engine = continuation->engine;
+    exec_status prepared = continuation_prepare_frames(continuation, error);
+    if (prepared != EXEC_OK) return prepared;
+    for (uint32_t i = 0; i < EXEC_MAX_CALL_DEPTH; i++) {
+        exec_continuation_frame *saved = &continuation->frames[i];
+        if (!saved->allocated) {
+            free(engine->local_frames[i]);
+            free(engine->operand_frames[i]);
+            free(engine->control_frames[i]);
+            engine->local_frames[i] = NULL;
+            engine->operand_frames[i] = NULL;
+            engine->control_frames[i] = NULL;
+            engine->local_frame_capacities[i] = 0;
+            continue;
+        }
+        if (engine->operand_frames[i])
+            *engine->operand_frames[i] = saved->operand;
+        if (engine->control_frames[i])
+            memcpy(engine->control_frames[i], saved->controls,
+                   sizeof(saved->controls));
+        if (saved->local_capacity && engine->local_frames[i])
+            memcpy(engine->local_frames[i], saved->locals,
+                   (size_t)saved->local_capacity * sizeof(*saved->locals));
+        engine->local_frame_capacities[i] = saved->local_capacity;
+    }
+    engine->active_call_depth = continuation->active_call_depth;
+    memcpy(engine->frame_generations, continuation->frame_generations,
+           sizeof(engine->frame_generations));
+    memcpy(engine->yield_frames, continuation->yield_frames,
+           sizeof(engine->yield_frames));
+
+    exec_jump_snapshot *restored = NULL;
+    if (continuation->jump_snapshot_count) {
+        restored = (exec_jump_snapshot *)calloc(
+            continuation->jump_snapshot_count, sizeof(*restored));
+        if (!restored)
+            return continuation_allocation_error(error,
+                "continuation jump snapshot allocation failed");
+        for (uint32_t i = 0; i < continuation->jump_snapshot_count; i++) {
+            restored[i] = continuation->jump_snapshots[i];
+            restored[i].locals = NULL;
+            if (restored[i].local_count) {
+                restored[i].locals = (wasm_value *)malloc(
+                    (size_t)restored[i].local_count * sizeof(*restored[i].locals));
+                if (!restored[i].locals) {
+                    for (uint32_t j = 0; j <= i; j++) free(restored[j].locals);
+                    free(restored);
+                    return continuation_allocation_error(error,
+                        "continuation jump local allocation failed");
+                }
+                memcpy(restored[i].locals,
+                       continuation->jump_snapshots[i].locals,
+                       (size_t)restored[i].local_count * sizeof(*restored[i].locals));
+            }
+        }
+    }
+    runtime_free_jump_snapshots(engine);
+    engine->jump_snapshots = restored;
+    engine->jump_snapshot_count = continuation->jump_snapshot_count;
+    engine->jump_snapshot_capacity = continuation->jump_snapshot_count;
+    return EXEC_OK;
+}
+
 static void invalidate_jump_depth(waste_exec_engine *eng, uint32_t depth) {
     for (uint32_t i = 0; i < eng->jump_snapshot_count; i++)
         if (eng->jump_snapshots[i].valid &&

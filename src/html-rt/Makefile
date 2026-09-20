@@ -16,7 +16,7 @@ WASM_CC_FLAGS := --target=wasm32 -O2 -std=c11 -Wall -Wextra \
 ENGINE_SOURCES := $(ENGINE_DIR)/wasm/load.c \
 	$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/encode.c \
 	$(ENGINE_DIR)/wast/stream.c $(ENGINE_DIR)/wast/command.c \
-	$(ENGINE_DIR)/store.c \
+	$(ENGINE_DIR)/store.c $(ENGINE_DIR)/checkpoint.c $(ENGINE_DIR)/process.c $(ENGINE_DIR)/lib/path.c \
 	$(ENGINE_DIR)/wast/runner.c $(ENGINE_DIR)/wast/assert.c \
 	$(ENGINE_DIR)/wat/builder.c $(ENGINE_DIR)/wat/literal.c \
 	$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
@@ -56,7 +56,7 @@ LIB_SHARED_SRC := $(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdio.c \
 LIB_WASM_SRC := lib/stdlib.c lib/stdio.c lib/unistd.c
 
 # Object files
-ENGINE_OBJS := $(BUILD_DIR)/store.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/select.o \
+ENGINE_OBJS := $(BUILD_DIR)/store.o $(BUILD_DIR)/checkpoint.o $(BUILD_DIR)/process.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/select.o $(BUILD_DIR)/path.o \
 	$(BUILD_DIR)/wasm_load.o \
 	$(BUILD_DIR)/wast_runner.o $(BUILD_DIR)/wasm_encode.o \
 	$(BUILD_DIR)/wast_stream.o $(BUILD_DIR)/wast_command.o \
@@ -115,6 +115,14 @@ $(BUILD_DIR)/store.o: $(ENGINE_DIR)/store.c $(ENGINE_HEADERS)
 	mkdir -p $(BUILD_DIR)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
+$(BUILD_DIR)/checkpoint.o: $(ENGINE_DIR)/checkpoint.c $(ENGINE_HEADERS)
+	mkdir -p $(BUILD_DIR)
+	clang $(WASM_CC_FLAGS) -c $< -o $@
+
+$(BUILD_DIR)/process.o: $(ENGINE_DIR)/process.c $(ENGINE_HEADERS)
+	mkdir -p $(BUILD_DIR)
+	clang $(WASM_CC_FLAGS) -c $< -o $@
+
 $(BUILD_DIR)/kernel.o: $(ENGINE_DIR)/lib/kernel.c $(ENGINE_HEADERS) \
 		$(ENGINE_DIR)/lib/include/kernel.h $(ENGINE_DIR)/lib/include/select.h
 	mkdir -p $(BUILD_DIR)
@@ -122,6 +130,11 @@ $(BUILD_DIR)/kernel.o: $(ENGINE_DIR)/lib/kernel.c $(ENGINE_HEADERS) \
 
 $(BUILD_DIR)/select.o: $(ENGINE_DIR)/lib/select.c \
 		$(ENGINE_DIR)/lib/include/select.h
+	mkdir -p $(BUILD_DIR)
+	clang $(WASM_CC_FLAGS) -c $< -o $@
+
+$(BUILD_DIR)/path.o: $(ENGINE_DIR)/lib/path.c \
+		$(ENGINE_DIR)/lib/include/path.h
 	mkdir -p $(BUILD_DIR)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 

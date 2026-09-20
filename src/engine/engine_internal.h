@@ -30,6 +30,9 @@ typedef enum {
     EXEC_YIELD_NONE = 0,
     EXEC_YIELD_READ,
     EXEC_YIELD_SELECT,
+    /* Internal process transition. Browser drivers consume this without
+     * returning to JavaScript, because no external I/O is pending. */
+    EXEC_YIELD_FORK,
 } exec_yield_reason;
 
 typedef struct {

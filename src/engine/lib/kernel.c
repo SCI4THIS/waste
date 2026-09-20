@@ -50,11 +50,169 @@ static int fd_valid(int fd) {
     return fd >= 0 && fd < POSIX_KERNEL_FD_MAX;
 }
 
+/* --- Engine-owned pathname namespace --- */
+
+static size_t bounded_length(const char *text) {
+    if (!text) return 0;
+    size_t length = 0;
+    while (length < POSIX_PATH_NODE_NAME_MAX && text[length]) length++;
+    if (length == POSIX_PATH_NODE_NAME_MAX && text[length]) return length + 1;
+    return length;
+}
+
+static int path_normalize(const posix_kernel *kernel, const uint8_t *path,
+                          size_t length, char *out) {
+    if (!kernel || !path || !out || length == 0 || length >= POSIX_PATH_MAX)
+        return -POSIX_EINVAL;
+    size_t cwd_length = bounded_length(kernel->cwd);
+    if (cwd_length == 0 || cwd_length >= POSIX_PATH_MAX) return -POSIX_EINVAL;
+    char combined[POSIX_PATH_MAX * 2];
+    size_t combined_length = 0;
+    if (path[0] != '/') {
+        if (cwd_length + 1 + length >= sizeof(combined)) return -POSIX_EINVAL;
+        memcpy(combined, kernel->cwd, cwd_length);
+        combined[cwd_length] = '/';
+        combined_length = cwd_length + 1;
+    }
+    if (combined_length + length >= sizeof(combined)) return -POSIX_EINVAL;
+    for (size_t i = 0; i < length; i++) {
+        if (path[i] == 0) return -POSIX_EINVAL;
+        combined[combined_length++] = (char)path[i];
+    }
+    size_t segment_start[POSIX_PATH_MAX / 2];
+    size_t segment_length[POSIX_PATH_MAX / 2];
+    size_t segments = 0;
+    size_t at = 0;
+    while (at < combined_length) {
+        while (at < combined_length && combined[at] == '/') at++;
+        size_t start = at;
+        while (at < combined_length && combined[at] != '/') at++;
+        size_t part_length = at - start;
+        if (part_length == 0 || (part_length == 1 && combined[start] == '.')) continue;
+        if (part_length == 2 && combined[start] == '.' && combined[start + 1] == '.') {
+            if (segments > 0) segments--;
+            continue;
+        }
+        if (segments >= sizeof(segment_start) / sizeof(segment_start[0]) ||
+            part_length >= POSIX_PATH_NODE_NAME_MAX) return -POSIX_EINVAL;
+        segment_start[segments] = start;
+        segment_length[segments] = part_length;
+        segments++;
+    }
+    size_t out_length = 1;
+    out[0] = '/';
+    for (size_t i = 0; i < segments; i++) {
+        if (out_length > 1) out[out_length++] = '/';
+        if (out_length + segment_length[i] >= POSIX_PATH_NODE_NAME_MAX)
+            return -POSIX_EINVAL;
+        memcpy(out + out_length, combined + segment_start[i], segment_length[i]);
+        out_length += segment_length[i];
+    }
+    out[out_length] = 0;
+    return 0;
+}
+
+static posix_kernel_path_node *path_find(posix_kernel *kernel,
+                                         const char *normalized) {
+    for (int i = 0; i < kernel->path_node_count; i++)
+        if (strcmp(kernel->path_nodes[i].path, normalized) == 0)
+            return &kernel->path_nodes[i];
+    return NULL;
+}
+
+static int path_prefix_is_file(const posix_kernel *kernel, const char *path) {
+    char prefix[POSIX_PATH_NODE_NAME_MAX];
+    size_t length = strlen(path);
+    for (size_t at = 1; at < length; at++) {
+        if (path[at] != '/') continue;
+        if (at >= sizeof(prefix)) return 0;
+        memcpy(prefix, path, at);
+        prefix[at] = 0;
+        for (int i = 0; i < kernel->path_node_count; i++) {
+            const posix_kernel_path_node *node = &kernel->path_nodes[i];
+            if (strcmp(node->path, prefix) == 0 &&
+                node->metadata.kind != POSIX_NODE_DIRECTORY)
+                return 1;
+        }
+    }
+    return 0;
+}
+
+int posix_kernel_path_add(posix_kernel *kernel, const char *path,
+                          const posix_path_metadata *metadata) {
+    if (!kernel || !path || !metadata ||
+        posix_path_metadata_validate(metadata) < 0) return -POSIX_EINVAL;
+    size_t length = bounded_length(path);
+    if (length == 0 || length >= POSIX_PATH_MAX) return -POSIX_EINVAL;
+    char normalized[POSIX_PATH_NODE_NAME_MAX];
+    int result = path_normalize(kernel, (const uint8_t *)path, length, normalized);
+    if (result < 0) return result;
+    posix_kernel_path_node *existing = path_find(kernel, normalized);
+    if (existing) { existing->metadata = *metadata; return 0; }
+    if (kernel->path_node_count >= POSIX_PATH_NODE_MAX) return -POSIX_ENOMEM;
+    existing = &kernel->path_nodes[kernel->path_node_count++];
+    memcpy(existing->path, normalized, strlen(normalized) + 1);
+    existing->metadata = *metadata;
+    return 0;
+}
+
+int posix_kernel_path_set_cwd(posix_kernel *kernel, const char *path) {
+    if (!kernel || !path) return -POSIX_EINVAL;
+    size_t length = bounded_length(path);
+    char normalized[POSIX_PATH_NODE_NAME_MAX];
+    int result = path_normalize(kernel, (const uint8_t *)path, length, normalized);
+    if (result < 0) return result;
+    posix_kernel_path_node *node = path_find(kernel, normalized);
+    if (!node) return path_prefix_is_file(kernel, normalized) ? -POSIX_ENOTDIR : -POSIX_ENOENT;
+    if (node->metadata.kind != POSIX_NODE_DIRECTORY) return -POSIX_ENOTDIR;
+    memcpy(kernel->cwd, normalized, strlen(normalized) + 1);
+    return 0;
+}
+
+int posix_kernel_path_stat(posix_kernel *kernel, const uint8_t *path,
+                           size_t length, int follow,
+                           posix_path_metadata *metadata) {
+    (void)follow;
+    if (!kernel || !metadata) return -POSIX_EFAULT;
+    char normalized[POSIX_PATH_NODE_NAME_MAX];
+    int result = path_normalize(kernel, path, length, normalized);
+    if (result < 0) return result;
+    posix_kernel_path_node *node = path_find(kernel, normalized);
+    if (!node) return path_prefix_is_file(kernel, normalized) ? -POSIX_ENOTDIR : -POSIX_ENOENT;
+    *metadata = node->metadata;
+    return 0;
+}
+
+int posix_kernel_path_access(posix_kernel *kernel, const uint8_t *path,
+                             size_t length, int mode, int flags) {
+    if (flags != 0 || (mode & ~(POSIX_F_OK | POSIX_X_OK | POSIX_W_OK | POSIX_R_OK)))
+        return -POSIX_EINVAL;
+    posix_path_metadata metadata;
+    int result = posix_kernel_path_stat(kernel, path, length, 1, &metadata);
+    if (result < 0 || mode == POSIX_F_OK) return result;
+    int permissions = 0;
+    if (metadata.mode & 0444) permissions |= POSIX_R_OK;
+    if (metadata.mode & 0222) permissions |= POSIX_W_OK;
+    if (metadata.mode & 0111) permissions |= POSIX_X_OK;
+    return (permissions & mode) == mode ? 0 : -POSIX_EACCES;
+}
+
 /* --- Lifecycle --- */
 
 posix_kernel *posix_kernel_create(int interactive) {
     posix_kernel *k = calloc(1, sizeof(posix_kernel));
     if (!k) return NULL;
+
+    memcpy(k->cwd, "/", 2);
+    const posix_path_metadata root = { POSIX_NODE_DIRECTORY, 0755, 0, 0, 0, 1 };
+    const posix_path_metadata directory = { POSIX_NODE_DIRECTORY, 0755, 0, 0, 0, 2 };
+    if (posix_kernel_path_add(k, "/", &root) < 0 ||
+        posix_kernel_path_add(k, "/bin", &directory) < 0 ||
+        posix_kernel_path_add(k, "/usr", &directory) < 0 ||
+        posix_kernel_path_add(k, "/usr/bin", &directory) < 0) {
+        free(k);
+        return NULL;
+    }
 
     if (interactive) {
         posix_ofd *tty = ofd_alloc(POSIX_OFD_TERMINAL);
@@ -71,6 +229,25 @@ posix_kernel *posix_kernel_create(int interactive) {
         k->fds[2].ofd = tty;
     }
     return k;
+}
+
+posix_kernel *posix_kernel_clone(const posix_kernel *source) {
+    if (!source) return NULL;
+    posix_kernel *clone = calloc(1, sizeof(*clone));
+    if (!clone) return NULL;
+    memcpy(clone, source, sizeof(*clone));
+    memset(clone->fds, 0, sizeof(clone->fds));
+    clone->wait.active = 0;
+    for (int fd = 0; fd < POSIX_KERNEL_FD_MAX; fd++) {
+        const posix_ofd *source_ofd = source->fds[fd].ofd;
+        if (!source_ofd) continue;
+        posix_ofd *shared = (posix_ofd *)source_ofd;
+        clone->fds[fd].ofd = shared;
+        shared->ref_count++;
+        if (shared->kind == POSIX_OFD_PIPE_READ) shared->pipe->readers++;
+        if (shared->kind == POSIX_OFD_PIPE_WRITE) shared->pipe->writers++;
+    }
+    return clone;
 }
 
 void posix_kernel_destroy(posix_kernel *kernel) {

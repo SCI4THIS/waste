@@ -109,9 +109,14 @@ HTML = r'''<!doctype html>
       let exp = null;
       let engineMemory = null;
       let ioResolve = null;
+      let ioPending = false;
       let terminated = false;
 
       function waitForIO() {
+        if (ioPending) {
+          ioPending = false;
+          return Promise.resolve();
+        }
         return new Promise(resolve => { ioResolve = resolve; });
       }
 
@@ -198,6 +203,7 @@ HTML = r'''<!doctype html>
           new Uint8Array(engineMemory.buffer, ptr, bytes.length).set(bytes);
           exp.waste_wast_enqueue_input(ptr, bytes.length);
           if (ioResolve) { ioResolve(); ioResolve = null; }
+          else ioPending = true;
         } else if (msg.type === "signal") {
           exp.waste_wast_raise_signal(msg.signal);
           if (ioResolve) { ioResolve(); ioResolve = null; }

@@ -217,8 +217,8 @@ stale environments and normalize a requested zero return value according to
 the guest ABI.  Signal-mask restoration is part of `sigsetjmp` semantics, not
 native process state.
 
-This design keeps the browser artifact independent of native unwinding and
-permits deterministic cleanup on traps, exits, or cancellation.
+This design avoids native stack-unwinding machinery and permits deterministic
+cleanup on traps, exits, or cancellation.
 
 ## Explicit Yield and Resume
 
@@ -229,13 +229,41 @@ per-depth records retain PC, function identity, and control height.
 
 On resume, reenter the original top-level invocation.  Saved frames recognize
 the resume path, retry the pending import, and either complete or yield again.
-Push original call arguments back before unwinding so the imported instruction
-can be retried exactly.
+Push original call arguments back before propagating `EXEC_YIELD` through
+ordinary C returns so the imported instruction can be retried exactly.
+
+This is not Asyncify and must never be implemented with an Asyncify transform,
+runtime hooks, or unwind/rewind imports. The native C/Wasm call stack is not
+saved. Only interpreter-owned data is retained, and the later resume export
+starts a new host-to-Wasm call that reenters those saved evaluator frames. When
+reviewing a build, any Asyncify flag or `asyncify_*` import/export is a failure,
+not an optional optimization.
 
 Do not reset a partially resumed engine, retain pointers into guest memory
 across the yield, or infer the blocked operation in JavaScript.  The POSIX
 runtime should attach an explicit wait reason, stable handles, deadline, and
 cancellation generation as described by the active `select`/`pselect` plan.
+
+## Bounded process continuation
+
+The browser Bash command-not-found path uses a bounded child-first process
+transition. At `fork`, capture the parent evaluator and mutable store state;
+run the child until failed `execve` and `exit(127)`; record the zombie; restore
+the parent; resume `fork` with the child PID; and let `waitpid` reap the saved
+status. Child and parent transitions remain inside the C driver. Only terminal
+or select waits cross into the browser worker.
+
+This slice is intentionally not a general scheduler: process records do not
+make multiple guest threads concurrently runnable. Add per-thread runnable and
+blocked states before extending it to independent live parent/child work. The
+regression must exercise more than one post-fork terminal read, because the
+single-command smoke path does not validate repeated continuation re-entry.
+The static Bash-page build therefore runs an assignment/expansion/process
+sequence (`HOME_DIR=/home/a`, `echo ${HOME_DIR}`, `ls`), verifies exit status
+127, accepts a later builtin and a second missing command, and exits normally.
+Run this gate against the same staged worker and engine bytes embedded in the
+self-contained page; an older generated page can otherwise hide a corrected
+runtime behind stale assets.
 
 ## Proposal-Specific Representation
 

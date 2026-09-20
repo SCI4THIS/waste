@@ -140,6 +140,27 @@ typedef struct {
     int control_top;
 } exec_yield_frame;
 
+/* Deep copy of resumable evaluator state. Mutable Wasm memories, tables,
+ * globals, and heaps are store/process state and are checkpointed separately. */
+typedef struct {
+    uint8_t allocated;
+    exec_stack operand;
+    exec_control controls[EXEC_MAX_CONTROL];
+    wasm_value *locals;
+    uint32_t local_capacity;
+} exec_continuation_frame;
+
+typedef struct {
+    waste_exec_engine *engine;
+    uint32_t active_call_depth;
+    exec_continuation_frame frames[EXEC_MAX_CALL_DEPTH];
+    uint32_t local_frame_capacities[EXEC_MAX_CALL_DEPTH];
+    uint64_t frame_generations[EXEC_MAX_CALL_DEPTH];
+    exec_yield_frame yield_frames[EXEC_MAX_CALL_DEPTH];
+    exec_jump_snapshot *jump_snapshots;
+    uint32_t jump_snapshot_count;
+} exec_continuation;
+
 struct waste_exec_engine {
     exec_func_type *types;
     uint32_t type_count;
@@ -356,5 +377,13 @@ uint64_t trunc_sat_i64_s_f64(double value);
 uint64_t trunc_sat_i64_u_f64(double value);
 
 void runtime_free_jump_snapshots(waste_exec_engine *engine);
+
+void exec_continuation_init(exec_continuation *continuation);
+exec_status exec_continuation_capture(waste_exec_engine *engine,
+                                      exec_continuation *continuation,
+                                      exec_error *error);
+exec_status exec_continuation_restore(exec_continuation *continuation,
+                                      exec_error *error);
+void exec_continuation_destroy(exec_continuation *continuation);
 
 #endif
