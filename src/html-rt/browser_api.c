@@ -98,7 +98,9 @@ static linked_module *registered_module(const char *name) {
     return (void *)0;
 }
 static exec_status linked_call(void *data,const wasm_value *args,int argc,wasm_value *results,int *result_count,exec_error *error,const waste_exec_engine *caller) {
-    (void)caller;linked_func *f=(linked_func *)data;return exec_invoke(f->engine,f->func_idx,args,argc,results,result_count,error);
+    linked_func *f=(linked_func *)data;
+    waste_exec_engine *provider = exec_clone_resolve(caller, f->engine);
+    return exec_invoke(provider,f->func_idx,args,argc,results,result_count,error);
 }
 static exec_status spectest_noop(void *data,const wasm_value *args,int argc,
                                  wasm_value *results,int *result_count,
@@ -140,6 +142,11 @@ static void add_result(int pass, const char *func, const char *err) {
 __attribute__((export_name("waste_wast_alloc")))
 uint32_t waste_wast_alloc(uint32_t size) {
     return (uint32_t)(uintptr_t)malloc((size_t)size);
+}
+
+__attribute__((export_name("waste_wast_free")))
+void waste_wast_free(uint32_t ptr) {
+    free((void *)(uintptr_t)ptr);
 }
 
 __attribute__((export_name("waste_wast_load_module")))
@@ -579,24 +586,171 @@ static uint32_t g_yield_func_idx;
 static wasm_value g_yield_args[WAST_MAX_ARGS];
 static int g_yield_arg_count;
 static exec_yield_reason g_yield_reason;
+/* The process driver may switch from the suspended Bash child to a newly
+ * committed executable image before exposing a terminal/select yield. */
+static waste_exec_engine *g_process_active_engine;
+static uint32_t g_process_active_func_idx;
+static wasm_value g_process_active_args[WAST_MAX_ARGS];
+static int g_process_active_arg_count;
 static int g_terminal_requested;
-static native_store_checkpoint g_process_checkpoint;
 static exec_continuation g_process_continuation;
 static int g_process_state_initialized;
 static int g_process_fork_active;
+/* Immutable parent invocation captured at fork.  The active image has its
+ * own descriptor; successful exec must never overwrite this record. */
+static int g_process_parent_restored;
+static int g_process_image_active;
+static uint8_t *g_boot_executable;
+static size_t g_boot_executable_size;
+
+/* The browser-facing scheduler owns one explicit driver record.  The store
+ * remains authoritative for process state; this record only identifies the
+ * capsule currently being driven and the reason JavaScript must resume it. */
+typedef enum {
+    BROWSER_DRIVER_IDLE = 0,
+    BROWSER_DRIVER_RUNNING,
+    BROWSER_DRIVER_BROWSER_WAIT,
+    BROWSER_DRIVER_DONE,
+    BROWSER_DRIVER_ERROR
+} browser_driver_state;
+
+typedef struct {
+    browser_driver_state state;
+    int pid;
+    waste_exec_engine *engine;
+    uint32_t func_idx;
+    wasm_value args[WAST_MAX_ARGS];
+    int arg_count;
+    exec_yield_reason wait_reason;
+} browser_process_driver;
+
+static browser_process_driver g_process_driver;
+
+static void browser_driver_reset(void) {
+    memset(&g_process_driver, 0, sizeof(g_process_driver));
+    g_process_driver.state = BROWSER_DRIVER_IDLE;
+}
+
+static void browser_driver_select(browser_wast_context *context,
+                                  waste_exec_engine *engine,
+                                  uint32_t func_idx,
+                                  const wasm_value *args, int arg_count) {
+    native_process_capsule *capsule =
+        native_store_active_capsule(&context->store);
+    g_process_driver.state = BROWSER_DRIVER_RUNNING;
+    g_process_driver.pid = native_store_getpid(&context->store);
+    g_process_driver.engine = engine;
+    g_process_driver.func_idx = func_idx;
+    g_process_driver.arg_count = arg_count > WAST_MAX_ARGS ? WAST_MAX_ARGS : arg_count;
+    for (int i = 0; i < g_process_driver.arg_count; i++)
+        g_process_driver.args[i] = args[i];
+    if (capsule && capsule->engine) {
+        g_process_driver.engine = capsule->engine;
+        g_process_driver.func_idx = capsule->root_func_idx;
+        g_process_driver.arg_count = capsule->root_arg_count;
+        for (int i = 0; i < g_process_driver.arg_count; i++)
+            g_process_driver.args[i] = capsule->root_args[i];
+    }
+}
+
+static void browser_driver_publish_wait(void) {
+    g_process_driver.state = BROWSER_DRIVER_BROWSER_WAIT;
+    g_process_driver.wait_reason = g_yield_reason;
+    g_yield_engine = g_process_driver.engine;
+    g_yield_func_idx = g_process_driver.func_idx;
+    g_yield_arg_count = g_process_driver.arg_count;
+    for (int i = 0; i < g_yield_arg_count; i++)
+        g_yield_args[i] = g_process_driver.args[i];
+}
+
+static void browser_consume_parent_continuation(native_process_capsule *capsule) {
+    if (!capsule || !capsule->continuation) return;
+    exec_continuation_destroy(capsule->continuation);
+    free(capsule->continuation);
+    capsule->continuation = NULL;
+    capsule->continuation_valid = 0;
+}
+
+static int browser_engine_seen(waste_exec_engine **engines, uint32_t count,
+                               waste_exec_engine *engine) {
+    for (uint32_t i = 0; i < count; i++)
+        if (engines[i] == engine) return 1;
+    return 0;
+}
+
+static exec_status browser_capture_parent_graph(browser_wast_context *context,
+                                                native_process_capsule *capsule,
+                                                waste_exec_engine *root,
+                                                exec_error *error) {
+    uint32_t capacity = (uint32_t)context->store.module_count +
+                        (uint32_t)context->store.orphan_count;
+    waste_exec_engine **engines = NULL;
+    exec_continuation *continuations = NULL;
+    uint32_t count = 0;
+    if (capacity) {
+        engines = calloc(capacity, sizeof(*engines));
+        continuations = calloc(capacity, sizeof(*continuations));
+        if (!engines || !continuations) {
+            free(engines); free(continuations);
+            return exec_fail(error, EXEC_ERROR_TRAP,
+                             "parent continuation graph allocation failed");
+        }
+    }
+    for (int pass = 0; pass < 2; pass++) {
+        uint32_t n = pass == 0 ? (uint32_t)context->store.module_count :
+                                (uint32_t)context->store.orphan_count;
+        for (uint32_t i = 0; i < n; i++) {
+            waste_exec_engine *engine = pass == 0 ?
+                context->store.modules[i].engine :
+                context->store.orphan_engines[i];
+            if (!engine || engine == root ||
+                browser_engine_seen(engines, count, engine)) continue;
+            if (count == capacity || exec_continuation_capture(
+                    engine, &continuations[count], error) != EXEC_OK) {
+                for (uint32_t j = 0; j < count; j++)
+                    exec_continuation_destroy(&continuations[j]);
+                free(engines); free(continuations);
+                return error->status;
+            }
+            engines[count++] = engine;
+        }
+    }
+    capsule->continuation_engines = engines;
+    capsule->continuations = continuations;
+    capsule->continuation_count = count;
+    return EXEC_OK;
+}
+
+static exec_status browser_restore_parent_graph(native_process_capsule *capsule,
+                                                exec_error *error) {
+    if (!capsule) return exec_fail(error, EXEC_ERROR_TRAP,
+                                   "missing parent continuation capsule");
+    for (uint32_t i = 0; i < capsule->continuation_count; i++) {
+        exec_status status = exec_continuation_resume(
+            &capsule->continuations[i], capsule->continuation_engines[i],
+            0, EXEC_YIELD_NONE, error);
+        if (status != EXEC_OK) return status;
+    }
+    return EXEC_OK;
+}
 
 static void browser_process_state_init(void) {
     if (g_process_state_initialized) return;
-    native_store_checkpoint_init(&g_process_checkpoint);
     exec_continuation_init(&g_process_continuation);
+    browser_driver_reset();
     g_process_state_initialized = 1;
 }
 
 static void browser_process_state_reset(void) {
     if (!g_process_state_initialized) return;
-    native_store_checkpoint_destroy(&g_process_checkpoint);
     exec_continuation_destroy(&g_process_continuation);
     g_process_fork_active = 0;
+    g_process_parent_restored = 0;
+    g_process_image_active = 0;
+    g_process_active_engine = NULL;
+    g_process_active_func_idx = 0;
+    g_process_active_arg_count = 0;
+    browser_driver_reset();
 }
 
 static void browser_yield_cleanup(void) {
@@ -623,43 +777,232 @@ static exec_status browser_invoke_process(browser_wast_context *context,
                                           const wasm_value *args, int arg_count,
                                           wasm_value *results, int *result_count,
                                           exec_error *error) {
+    browser_process_state_init();
+    browser_driver_select(context, engine, func_idx, args, arg_count);
+    waste_exec_engine *active_engine = engine;
+    uint32_t active_func_idx = func_idx;
+    int image_active = g_process_image_active;
+    int child_exit_recorded = 0;
+    native_process_capsule *capsule =
+        native_store_active_capsule(&context->store);
+    g_process_active_engine = active_engine;
+    g_process_active_func_idx = active_func_idx;
+    g_process_active_arg_count = arg_count;
+    for (int i = 0; i < arg_count && i < WAST_MAX_ARGS; i++)
+        g_process_active_args[i] = args[i];
+    if (capsule) {
+        capsule->engine = active_engine;
+        capsule->root_func_idx = active_func_idx;
+        capsule->root_arg_count = arg_count;
+        for (int i = 0; i < arg_count && i < WAST_MAX_ARGS; i++)
+            capsule->root_args[i] = args[i];
+        capsule->state = image_active ? NATIVE_PROCESS_RUNNABLE :
+                                        NATIVE_PROCESS_RUNNABLE;
+    }
     for (;;) {
-        exec_status status = exec_invoke(engine, func_idx, args, arg_count,
+        exec_status status = exec_invoke(active_engine, active_func_idx,
+                                         args, arg_count,
                                          results, result_count, error);
+        if (status == EXEC_YIELD &&
+            error->yield_reason == EXEC_YIELD_EXEC) {
+            native_process_image *image = NULL;
+            if (native_store_prepare_process_exec(
+                    &context->store, &context->store.exec_request) != 0)
+                return exec_fail(error, EXEC_ERROR_TRAP,
+                                 "invalid process exec transition");
+            exec_status loaded = native_store_instantiate_executable(
+                &context->store, &context->store.exec_request, &image, error);
+            if (loaded != EXEC_OK) {
+                /* Leave the old evaluator suspended. Its next import retry
+                 * consumes this one-shot errno and returns from execve. */
+                context->store.exec_request.failure_errno = POSIX_ENOEXEC;
+                native_store_abort_process_exec(&context->store);
+                continue;
+            }
+            /* Eagerly restore the dormant parent before running replacement
+             * guest code.  The child then runs against an independent image,
+             * and child exit only selects the already-restored parent. */
+            if (g_process_fork_active && !g_process_parent_restored) {
+                native_process_capsule *parent_capsule =
+                    native_store_process_capsule(&context->store,
+                                                 context->store.fork_parent_pid);
+                if (!parent_capsule)
+                    return exec_fail(error, EXEC_ERROR_TRAP,
+                                     "missing parent process capsule");
+                exec_status restored = browser_restore_parent_graph(
+                    parent_capsule, error);
+                if (restored != EXEC_OK) {
+                    native_process_image_release(image);
+                    return restored;
+                }
+                if (!parent_capsule || !parent_capsule->continuation)
+                    return exec_fail(error, EXEC_ERROR_TRAP,
+                                     "missing parent continuation capsule");
+                restored = exec_continuation_resume(
+                    parent_capsule->continuation, parent_capsule->engine,
+                    context->store.fork_parent_pid, EXEC_YIELD_FORK, error);
+                if (restored != EXEC_OK) {
+                    native_process_image_release(image);
+                    return restored;
+                }
+                g_process_parent_restored = 1;
+                browser_consume_parent_continuation(parent_capsule);
+            }
+            if (native_store_commit_process_image(&context->store, image) != 0) {
+                native_process_image_release(image);
+                /* Once the parent has been eagerly restored there is no
+                 * coherent child evaluator left to retry.  Treat a commit
+                 * failure as an internal transition error rather than
+                 * resuming the stale pre-exec child. */
+                if (g_process_parent_restored)
+                    return exec_fail(error, EXEC_ERROR_TRAP,
+                                     "failed to commit executable image");
+                native_store_abort_process_exec(&context->store);
+                context->store.exec_request.failure_errno = POSIX_ENOMEM;
+                continue;
+            }
+            native_exec_request_destroy(&context->store.exec_request);
+            active_engine = image->engine;
+            active_func_idx = image->entry_func;
+            image_active = 1;
+            g_process_image_active = 1;
+            g_process_active_engine = active_engine;
+            g_process_active_func_idx = active_func_idx;
+            g_process_active_arg_count = 0;
+            args = NULL;
+            arg_count = 0;
+            capsule = native_store_active_capsule(&context->store);
+            if (capsule) {
+                capsule->engine = active_engine;
+                capsule->image = image;
+                capsule->root_func_idx = active_func_idx;
+                capsule->root_arg_count = 0;
+                capsule->generation++;
+            }
+            continue;
+        }
+        if (image_active && status != EXEC_YIELD) {
+            if (status == EXEC_ERROR_EXIT) {
+                /* Preserve an explicit guest exit code. */
+            } else if (status == EXEC_OK) {
+                error->exit_code = 0;
+            } else {
+                error->exit_code = 127;
+            }
+            (void)native_store_exit_process(&context->store,
+                                             error->exit_code);
+            child_exit_recorded = 1;
+            status = EXEC_ERROR_EXIT;
+            image_active = 0;
+            g_process_image_active = 0;
+        }
         if (status == EXEC_ERROR_EXIT && g_process_fork_active &&
             native_store_getpid(&context->store) ==
                 context->store.fork_child_pid) {
             int parent_pid = context->store.fork_parent_pid;
-            (void)native_store_exit_process(&context->store, error->exit_code);
-            if (native_store_set_active_process(&context->store, parent_pid) != 0)
+            if (!child_exit_recorded)
+                (void)native_store_exit_process(&context->store,
+                                                error->exit_code);
+            if (native_store_wake_process(&context->store, parent_pid,
+                                          context->store.fork_child_pid) != 0)
                 return exec_fail(error, EXEC_ERROR_TRAP,
                                  "failed to restore parent process");
-            exec_status restored = native_store_checkpoint_restore(
-                &g_process_checkpoint, error);
-            if (restored != EXEC_OK) return restored;
-            restored = exec_continuation_restore(&g_process_continuation, error);
-            if (restored != EXEC_OK) return restored;
-            context->store.fork_parent_resume = 1;
+            if (!g_process_parent_restored) {
+                native_process_capsule *parent_capsule =
+                    native_store_process_capsule(&context->store, parent_pid);
+                if (!parent_capsule)
+                    return exec_fail(error, EXEC_ERROR_TRAP,
+                                     "missing parent process capsule");
+                exec_status restored = browser_restore_parent_graph(
+                    parent_capsule, error);
+                if (restored != EXEC_OK) return restored;
+                if (!parent_capsule || !parent_capsule->continuation)
+                    return exec_fail(error, EXEC_ERROR_TRAP,
+                                     "missing parent continuation capsule");
+                restored = exec_continuation_resume(
+                    parent_capsule->continuation, parent_capsule->engine,
+                    parent_pid, EXEC_YIELD_FORK, error);
+                if (restored != EXEC_OK) return restored;
+                browser_consume_parent_continuation(parent_capsule);
+            }
             g_process_fork_active = 0;
-            native_store_checkpoint_destroy(&g_process_checkpoint);
+            native_process_capsule *parent_capsule =
+                native_store_process_capsule(&context->store, parent_pid);
             exec_continuation_destroy(&g_process_continuation);
+            /* The child image has finished.  Resume the original parent
+             * evaluator at the suspended fork import; otherwise the next
+             * iteration would invoke the replacement image a second time. */
+            active_engine = parent_capsule ? parent_capsule->engine : active_engine;
+            active_func_idx = parent_capsule ? parent_capsule->root_func_idx : active_func_idx;
+            args = parent_capsule ? parent_capsule->root_args : args;
+            arg_count = parent_capsule ? parent_capsule->root_arg_count : arg_count;
+            image_active = 0;
+            g_process_image_active = 0;
+            g_process_parent_restored = 0;
+            g_process_active_engine = active_engine;
+            g_process_active_func_idx = active_func_idx;
+            g_process_active_arg_count = arg_count;
+            capsule = native_store_active_capsule(&context->store);
+            if (capsule) {
+                capsule->engine = active_engine;
+                capsule->root_func_idx = active_func_idx;
+                capsule->root_arg_count = arg_count;
+                capsule->state = NATIVE_PROCESS_RUNNABLE;
+                /* native_store_wake_process already queued the child PID;
+                 * keep that result authoritative for the resumed fork. */
+                capsule->pending_result_valid = 1;
+            }
             continue;
         }
-        if (status != EXEC_YIELD || error->yield_reason != EXEC_YIELD_FORK)
+        if (status != EXEC_YIELD || error->yield_reason != EXEC_YIELD_FORK) {
+            if (status == EXEC_YIELD) {
+                g_process_driver.engine = g_process_active_engine ?
+                    g_process_active_engine : active_engine;
+                g_process_driver.func_idx = g_process_active_engine ?
+                    g_process_active_func_idx : active_func_idx;
+                g_process_driver.arg_count = g_process_active_engine ?
+                    g_process_active_arg_count : arg_count;
+                for (int i = 0; i < g_process_driver.arg_count; i++)
+                    g_process_driver.args[i] = g_process_active_engine ?
+                        g_process_active_args[i] : args[i];
+                g_process_driver.pid = native_store_getpid(&context->store);
+            }
             return status;
+        }
         if (g_process_fork_active)
             return exec_fail(error, EXEC_ERROR_TRAP,
                              "nested browser fork is unsupported");
         browser_process_state_init();
-        native_store_checkpoint_destroy(&g_process_checkpoint);
+        native_process_capsule *parent_capsule =
+            native_store_process_capsule(&context->store,
+                                         native_store_getpid(&context->store));
+        if (!parent_capsule)
+            return exec_fail(error, EXEC_ERROR_TRAP,
+                             "missing parent process capsule");
         exec_continuation_destroy(&g_process_continuation);
-        native_store_checkpoint_init(&g_process_checkpoint);
         exec_continuation_init(&g_process_continuation);
-        if (native_store_checkpoint_capture(&context->store,
-                                            &g_process_checkpoint, error) != EXEC_OK ||
-            exec_continuation_capture(engine, &g_process_continuation, error) != EXEC_OK)
+        if (exec_continuation_capture(active_engine, &g_process_continuation,
+                                      error) != EXEC_OK)
             return error->status;
+        parent_capsule->engine = active_engine;
+        parent_capsule->root_func_idx = active_func_idx;
+        parent_capsule->root_arg_count = arg_count;
+        for (int i = 0; i < arg_count && i < WAST_MAX_ARGS; i++)
+            parent_capsule->root_args[i] = args[i];
         int parent_pid = native_store_getpid(&context->store);
+        exec_continuation_describe(&g_process_continuation, active_engine,
+                                   active_func_idx, args, arg_count,
+                                   EXEC_YIELD_FORK, parent_pid, 1);
+        parent_capsule->continuation = malloc(sizeof(*parent_capsule->continuation));
+        if (!parent_capsule->continuation)
+            return exec_fail(error, EXEC_ERROR_TRAP,
+                             "parent continuation capsule allocation failed");
+        *parent_capsule->continuation = g_process_continuation;
+        parent_capsule->continuation_valid = 1;
+        exec_continuation_init(&g_process_continuation);
+        if (browser_capture_parent_graph(context, parent_capsule,
+                                          active_engine, error) != EXEC_OK)
+            return error->status;
         int child_pid = 0;
         if (native_store_fork_process(&context->store, &child_pid) != 0 ||
             native_store_set_active_process(&context->store, child_pid) != 0)
@@ -667,8 +1010,31 @@ static exec_status browser_invoke_process(browser_wast_context *context,
                              "failed to create browser child process");
         context->store.fork_parent_pid = parent_pid;
         context->store.fork_child_pid = child_pid;
-        context->store.fork_child_resume = 1;
+        if (native_store_clone_process_graph(&context->store, parent_pid,
+                                             child_pid) != 0)
+            return exec_fail(error, EXEC_ERROR_TRAP,
+                             "failed to clone linked process graph");
+        capsule = native_store_active_capsule(&context->store);
+        if (capsule) {
+            capsule->pending_result = 0;
+            capsule->pending_result_valid = 1;
+        }
         g_process_fork_active = 1;
+        if (parent_capsule)
+            parent_capsule->state = NATIVE_PROCESS_BROWSER_BLOCKED;
+        capsule = native_store_active_capsule(&context->store);
+        if (capsule) {
+            /* Fork cloned the evaluator state before selecting the child.
+             * Continue with the child-owned engine and descriptor. */
+            active_engine = capsule->engine;
+            active_func_idx = capsule->root_func_idx;
+            args = capsule->root_args;
+            arg_count = capsule->root_arg_count;
+            capsule->state = NATIVE_PROCESS_RUNNABLE;
+            g_process_active_engine = active_engine;
+            g_process_active_func_idx = active_func_idx;
+            g_process_active_arg_count = arg_count;
+        }
     }
 }
 
@@ -686,6 +1052,9 @@ static exec_status browser_assertion_invoke(void *data,
 static void browser_run_assertions(browser_wast_context *context,
                                    const wast_script *script,
                                    const wast_group *group) {
+    /* Executable manifests are immutable store state; refresh the active
+     * process namespace after terminal/kernel replacement or fork cloning. */
+    (void)native_store_bind_executable_paths(&context->store);
     for (int i = 0; i < group->assertion_count; i++) {
         const wast_assertion *assertion =
             &script->assertions[group->assertion_start + i];
@@ -704,13 +1073,18 @@ static void browser_run_assertions(browser_wast_context *context,
         }
         if (status == EXEC_YIELD) {
             g_yield_active = 1;
-            g_yield_engine = selected;
-            exec_find_export(selected, assertion->func_name,
-                             &g_yield_func_idx, &error);
-            g_yield_arg_count = assertion->arg_count;
             g_yield_reason = error.yield_reason;
-            for (int j = 0; j < assertion->arg_count; j++)
-                g_yield_args[j] = assertion->args[j];
+            if (!g_process_active_engine) {
+                g_process_driver.engine = selected;
+                g_process_driver.func_idx = 0;
+                g_process_driver.arg_count = assertion->arg_count;
+                exec_find_export(selected, assertion->func_name,
+                                 &g_process_driver.func_idx, &error);
+                for (int j = 0; j < assertion->arg_count; j++)
+                    g_process_driver.args[j] = assertion->args[j];
+            }
+            g_process_driver.pid = native_store_getpid(&context->store);
+            browser_driver_publish_wait();
             return;
         }
         add_result(status == EXEC_OK, assertion->func_name,
@@ -889,6 +1263,14 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
 
     memset(&g_yield_context, 0, sizeof(g_yield_context));
     native_store_init(&g_yield_context.store);
+    if (g_boot_executable) {
+        (void)native_store_register_executable(
+            &g_yield_context.store, "/bin/waste-probe", g_boot_executable,
+            g_boot_executable_size, 0755u, 1u, "_start");
+        free(g_boot_executable);
+        g_boot_executable = NULL;
+        g_boot_executable_size = 0;
+    }
     if (g_terminal_requested) {
         native_store_enable_terminal(&g_yield_context.store);
         g_terminal_requested = 0;
@@ -904,6 +1286,18 @@ __attribute__((export_name("waste_wast_resume")))
 uint32_t waste_wast_resume(void) {
     if (!g_yield_active) return 0;
 
+    /* Resume the exact capsule that published the browser wait.  Internal
+     * fork/exec transitions never come through this entry point. */
+    if (g_process_driver.pid > 0 &&
+        native_store_set_active_process(&g_yield_context.store,
+                                        g_process_driver.pid) != 0) {
+        g_process_driver.state = BROWSER_DRIVER_ERROR;
+        g_yield_active = 0;
+        add_result(0, "main", "browser process capsule is no longer runnable");
+        browser_stream_loop();
+        return 0;
+    }
+
     wasm_value results[WAST_MAX_RESULTS];
     int result_count = 0;
     exec_error error;
@@ -914,11 +1308,22 @@ uint32_t waste_wast_resume(void) {
                                             &result_count, &error);
     if (st == EXEC_YIELD) {
         g_yield_reason = error.yield_reason;
+        browser_driver_select(&g_yield_context, g_process_active_engine ?
+                              g_process_active_engine : g_yield_engine,
+                              g_process_active_engine ?
+                              g_process_active_func_idx : g_yield_func_idx,
+                              g_process_active_engine ? g_process_active_args :
+                              g_yield_args,
+                              g_process_active_engine ?
+                              g_process_active_arg_count : g_yield_arg_count);
+        browser_driver_publish_wait();
         return 1;
     }
 
     g_yield_active = 0;
     g_yield_reason = EXEC_YIELD_NONE;
+    g_process_driver.state = st == EXEC_OK || st == EXEC_ERROR_EXIT ?
+                             BROWSER_DRIVER_DONE : BROWSER_DRIVER_ERROR;
     add_result(st == EXEC_OK || st == EXEC_ERROR_EXIT, "main",
                (st == EXEC_OK || st == EXEC_ERROR_EXIT)
                    ? (void *)0 : error.message);
@@ -934,6 +1339,30 @@ __attribute__((export_name("waste_wast_enable_terminal")))
 int32_t waste_wast_enable_terminal(void) {
     g_terminal_requested = 1;
     return 0;
+}
+
+
+__attribute__((export_name("waste_wast_stage_executable")))
+int32_t waste_wast_stage_executable(uint32_t ptr, uint32_t size) {
+    uint8_t *copy;
+    if (size == 0 || size > NATIVE_EXEC_BYTES_MAX) return -POSIX_EINVAL;
+    copy = (uint8_t *)malloc(size);
+    if (!copy) return -POSIX_ENOMEM;
+    memcpy(copy, (const void *)(uintptr_t)ptr, size);
+    free(g_boot_executable);
+    g_boot_executable = copy;
+    g_boot_executable_size = size;
+    return 0;
+}
+
+__attribute__((export_name("waste_wast_resize_terminal")))
+int32_t waste_wast_resize_terminal(uint32_t columns, uint32_t rows) {
+    if (!g_yield_context.store.kernel_terminal || columns == 0 || rows == 0 ||
+        columns > UINT16_MAX || rows > UINT16_MAX)
+        return -POSIX_EINVAL;
+    posix_winsize size = {(uint16_t)rows, (uint16_t)columns, 0, 0};
+    return posix_kernel_terminal_set_winsize(g_yield_context.store.kernel, 0,
+                                             &size);
 }
 
 __attribute__((export_name("waste_wast_enqueue_input")))

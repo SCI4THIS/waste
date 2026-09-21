@@ -38,6 +38,8 @@ typedef struct {
 
 typedef struct {
     waste_exec_engine *engine;
+    exec_continuation evaluator;
+    uint8_t evaluator_valid;
     uint8_t elem_dropped[WAST_MAX_ELEM_SEGS];
     uint8_t data_dropped[WAST_MAX_DATA_SEGS];
     uint32_t elem_count;
@@ -160,6 +162,8 @@ static void free_impl(checkpoint_impl *impl) {
     for (size_t i = 0; i < impl->table_count; i++) free(impl->tables[i].elements);
     for (size_t i = 0; i < impl->engine_count; i++) {
         engine_snapshot *snapshot = &impl->engines[i];
+        if (snapshot->evaluator_valid)
+            exec_continuation_destroy(&snapshot->evaluator);
         for (uint32_t j = 0; j < snapshot->gc_object_count; j++)
             free(snapshot->gc_objects[j].values);
         free(snapshot->gc_objects);
@@ -221,6 +225,11 @@ static int copy_table(table_snapshot *snapshot) {
 
 static int copy_engine(engine_snapshot *snapshot) {
     waste_exec_engine *engine = snapshot->engine;
+    exec_continuation_init(&snapshot->evaluator);
+    if (exec_continuation_capture(engine, &snapshot->evaluator, NULL) !=
+        EXEC_OK)
+        return 0;
+    snapshot->evaluator_valid = 1;
     memcpy(snapshot->elem_dropped, engine->elem_dropped,
            sizeof(snapshot->elem_dropped));
     memcpy(snapshot->data_dropped, engine->data_dropped,
@@ -355,6 +364,11 @@ exec_status native_store_checkpoint_restore(native_store_checkpoint *checkpoint,
     for (size_t i = 0; i < impl->engine_count; i++) {
         engine_snapshot *snapshot = &impl->engines[i];
         waste_exec_engine *engine = snapshot->engine;
+        if (snapshot->evaluator_valid) {
+            exec_status evaluator_status = exec_continuation_restore(
+                &snapshot->evaluator, error);
+            if (evaluator_status != EXEC_OK) return evaluator_status;
+        }
         memcpy(engine->elem_dropped, snapshot->elem_dropped, sizeof(engine->elem_dropped));
         memcpy(engine->data_dropped, snapshot->data_dropped, sizeof(engine->data_dropped));
         engine->elem_count = snapshot->elem_count;

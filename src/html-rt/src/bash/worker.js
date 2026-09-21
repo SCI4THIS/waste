@@ -41,7 +41,7 @@ function posixWrite(fd, ptr, count) {
   return count;
 }
 
-async function run(wasmBuf, source) {
+async function run(wasmBuf, source, probeBuf) {
   const wasmBytes = new Uint8Array(wasmBuf);
   const hostFloat = (ptr, length, asF32) => {
     const bytes = new Uint8Array(engineMemory.buffer, ptr, length);
@@ -59,6 +59,15 @@ async function run(wasmBuf, source) {
   exp = instance.exports;
   engineMemory = exp.memory;
   exp.waste_wast_enable_terminal();
+  if (probeBuf && exp.waste_wast_stage_executable) {
+    const probeBytes = new Uint8Array(probeBuf);
+    const probePtr = exp.waste_wast_alloc(probeBytes.length);
+    if (!probePtr) throw new Error("C engine executable staging allocation failed");
+    new Uint8Array(engineMemory.buffer, probePtr, probeBytes.length).set(probeBytes);
+    const staged = exp.waste_wast_stage_executable(probePtr, probeBytes.length);
+    exp.waste_wast_free?.(probePtr);
+    if (staged !== 0) throw new Error("C engine executable staging failed");
+  }
 
   const sourceBytes = new TextEncoder().encode(source);
   const scriptPtr = exp.waste_wast_alloc(sourceBytes.length);
@@ -98,7 +107,7 @@ async function run(wasmBuf, source) {
 self.onmessage = function(e) {
   const msg = e.data;
   if (msg.type === "start") {
-    run(msg.wasmBytes, msg.source).catch(error => {
+    run(msg.wasmBytes, msg.source, msg.probeBytes).catch(error => {
       self.postMessage({type: "done", ok: false,
         error: error && (error.stack || error.message) || String(error)});
     });
@@ -112,6 +121,9 @@ self.onmessage = function(e) {
     else ioPending = true;
   } else if (msg.type === "signal") {
     exp.waste_wast_raise_signal(msg.signal);
+    if (ioResolve) { ioResolve(); ioResolve = null; }
+  } else if (msg.type === "resize") {
+    exp.waste_wast_resize_terminal(msg.columns, msg.rows);
     if (ioResolve) { ioResolve(); ioResolve = null; }
   } else if (msg.type === "stop") {
     terminated = true;

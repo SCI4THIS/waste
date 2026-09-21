@@ -106,6 +106,9 @@ elif [ "$TARGET" = "bash" ]; then
     echo "error: launch.wast not found" >&2
     exit 1
   fi
+  if [ -f "$REPO_ROOT/build/cli-rt/waste-probe.wasm" ]; then
+    cp "$REPO_ROOT/build/cli-rt/waste-probe.wasm" "$STAGING/"
+  fi
 fi
 
 echo "  Staged $(find "$STAGING" -type f | wc -l) files"

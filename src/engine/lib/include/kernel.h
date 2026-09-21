@@ -12,6 +12,44 @@
 #define POSIX_KERNEL_FD_MAX      64
 #define POSIX_PIPE_CAPACITY    4096
 #define POSIX_TERMINAL_INPUT_CAPACITY 4096
+#define POSIX_TERMIOS_CC_COUNT 20
+
+/* Stable wasm32 terminal ABI.  The layout intentionally uses fixed-width
+ * fields instead of the host libc's termios definition. */
+#define POSIX_TERMIOS_IFLAG_ICRNL 0x0001u
+#define POSIX_TERMIOS_LFLAG_ISIG  0x0001u
+#define POSIX_TERMIOS_LFLAG_ICANON 0x0002u
+#define POSIX_TERMIOS_LFLAG_ECHO  0x0008u
+#define POSIX_TERMIOS_LFLAG_IEXTEN 0x8000u
+#define POSIX_TERMIOS_VINTR  0
+#define POSIX_TERMIOS_VEOF   4
+#define POSIX_TERMIOS_VERASE 2
+#define POSIX_TERMIOS_VKILL  3
+#define POSIX_TERMIOS_VMIN   6
+#define POSIX_TERMIOS_VTIME  5
+#define POSIX_TCIFLUSH 0
+#define POSIX_TCOFLUSH 1
+#define POSIX_TCIOFLUSH 2
+#define POSIX_TCOOFF 0
+#define POSIX_TCOON 1
+#define POSIX_TCIOFF 2
+#define POSIX_TCION 3
+#define POSIX_SIGWINCH 28
+
+typedef struct {
+    uint32_t iflag;
+    uint32_t oflag;
+    uint32_t cflag;
+    uint32_t lflag;
+    uint8_t cc[POSIX_TERMIOS_CC_COUNT];
+} posix_termios;
+
+typedef struct {
+    uint16_t rows;
+    uint16_t columns;
+    uint16_t xpixels;
+    uint16_t ypixels;
+} posix_winsize;
 
 /* Readiness mask bits */
 #define POSIX_POLL_IN   0x01   /* readable data available */
@@ -21,6 +59,8 @@
 
 /* Errno values (POSIX, independent of host libc) */
 #define POSIX_EBADF    9
+#define POSIX_E2BIG    7
+#define POSIX_ENOEXEC  8
 #define POSIX_EINTR    4
 #define POSIX_ENOMEM  12
 #define POSIX_EAGAIN  11
@@ -29,9 +69,14 @@
 #define POSIX_EPIPE   32
 #define POSIX_ECHILD  10
 #define POSIX_EFAULT  14
+#define POSIX_EEXIST  17
+#define POSIX_EBUSY   16
+#define POSIX_ENOSYS  38
 #define POSIX_WNOHANG 1
 #define POSIX_WUNTRACED 2
 #define POSIX_WCONTINUED 8
+#define POSIX_TIOCGWINSZ 0x5413u
+#define POSIX_TIOCSWINSZ 0x5414u
 
 #define POSIX_WAIT_BLOCKED 0
 #define POSIX_WAIT_READY   1
@@ -66,6 +111,8 @@ typedef struct posix_ofd {
             int input_length;
             int input_capacity;
             int eof;
+            posix_termios termios;
+            posix_winsize winsize;
         } terminal;
         posix_pipe *pipe;
     };
@@ -164,6 +211,16 @@ int posix_kernel_terminal_enqueue(posix_kernel *kernel, int fd,
 /* Signal EOF on the terminal associated with fd.
    Returns 0 on success or negative errno. */
 int posix_kernel_terminal_signal_eof(posix_kernel *kernel, int fd);
+int posix_kernel_isatty(const posix_kernel *kernel, int fd);
+int posix_kernel_tcgetattr(posix_kernel *kernel, int fd,
+                           posix_termios *termios);
+int posix_kernel_tcsetattr(posix_kernel *kernel, int fd,
+                           const posix_termios *termios);
+int posix_kernel_tcflow(posix_kernel *kernel, int fd, int action);
+int posix_kernel_terminal_get_winsize(const posix_kernel *kernel, int fd,
+                                      posix_winsize *winsize);
+int posix_kernel_terminal_set_winsize(posix_kernel *kernel, int fd,
+                                      const posix_winsize *winsize);
 
 /* --- Pipe --- */
 

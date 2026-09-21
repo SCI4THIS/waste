@@ -151,7 +151,18 @@ typedef struct {
 } exec_continuation_frame;
 
 typedef struct {
+    /* Lifecycle is intentionally explicit: a continuation is either empty,
+     * captured, or consumed.  It may never be resumed twice. */
+    uint8_t state;
     waste_exec_engine *engine;
+    struct native_process_image *image;
+    waste_exec_engine *owner_engine;
+    uint32_t root_func_idx;
+    wasm_value root_args[WAST_MAX_ARGS];
+    int root_arg_count;
+    exec_yield_reason expected_yield;
+    int owner_pid;
+    uint64_t generation;
     uint32_t active_call_depth;
     exec_continuation_frame frames[EXEC_MAX_CALL_DEPTH];
     uint32_t local_frame_capacities[EXEC_MAX_CALL_DEPTH];
@@ -161,7 +172,16 @@ typedef struct {
     uint32_t jump_snapshot_count;
 } exec_continuation;
 
+enum {
+    EXEC_CONTINUATION_EMPTY = 0,
+    EXEC_CONTINUATION_CAPTURED = 1,
+    EXEC_CONTINUATION_CONSUMED = 2
+};
+
 struct waste_exec_engine {
+    /* Cloned process engines share immutable decoded code/type/export tables;
+     * exec_free releases only mutable owned state when this is set. */
+    uint8_t shared_static;
     exec_func_type *types;
     uint32_t type_count;
     exec_func *funcs;
@@ -226,6 +246,8 @@ struct waste_exec_engine {
     uint32_t jump_snapshot_count;
     uint32_t jump_snapshot_capacity;
     exec_yield_frame yield_frames[EXEC_MAX_CALL_DEPTH];
+    exec_clone_binding *clone_bindings;
+    uint32_t clone_binding_count;
 };
 
 /* Return values for opcode dispatch execute handlers.
@@ -382,8 +404,29 @@ void exec_continuation_init(exec_continuation *continuation);
 exec_status exec_continuation_capture(waste_exec_engine *engine,
                                       exec_continuation *continuation,
                                       exec_error *error);
+exec_status exec_clone_engine(const waste_exec_engine *source,
+                              waste_exec_engine **clone_out,
+                              exec_error *error);
+exec_status exec_clone_engine_bind(waste_exec_engine *clone,
+                                   const exec_clone_binding *bindings,
+                                   uint32_t binding_count,
+                                   exec_error *error);
+waste_exec_engine *exec_clone_resolve(const waste_exec_engine *caller,
+                                      const waste_exec_engine *source);
 exec_status exec_continuation_restore(exec_continuation *continuation,
                                       exec_error *error);
+exec_status exec_continuation_resume(exec_continuation *continuation,
+                                     waste_exec_engine *engine, int owner_pid,
+                                     exec_yield_reason reason,
+                                     exec_error *error);
+void exec_continuation_describe(exec_continuation *continuation,
+                                waste_exec_engine *engine,
+                                uint32_t root_func_idx,
+                                const wasm_value *root_args, int root_arg_count,
+                                exec_yield_reason reason, int owner_pid,
+                                uint64_t generation);
+void exec_continuation_pin_image(exec_continuation *continuation,
+                                 struct native_process_image *image);
 void exec_continuation_destroy(exec_continuation *continuation);
 
 #endif

@@ -14,7 +14,9 @@ button:disabled { cursor:not-allowed; opacity:.48; }
 #start,#send-input { background:#135c8e; border-color:#2984bd; font-weight:650; }
 .controls { margin-top:10px; }
 #status { margin-left:auto; color:var(--muted); }
-pre { min-height:480px; max-height:68vh; overflow:auto; margin:16px 0 0; padding:16px; border:1px solid #263449; border-radius:8px; background:#070b10; color:#dce8d5; white-space:pre-wrap; overflow-wrap:anywhere; font:14px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; }
+#terminal-canvas { display:block; width:100%; min-height:432px; margin:16px 0 0; border:1px solid #263449; border-radius:8px; background:#070b10; image-rendering:auto; outline:none; }
+#terminal-canvas:focus { border-color:var(--accent); box-shadow:0 0 0 2px #62b4ff33; }
+#terminal-transcript { max-height:9rem; overflow:auto; margin:10px 0 0; padding:8px; border:1px solid #263449; border-radius:8px; background:#070b10; color:#b8c7b0; white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
 code { color:#b9ddff; }
 #loading-overlay {
   position: fixed; inset: 0; z-index: 100;

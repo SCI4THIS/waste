@@ -32,6 +32,23 @@ Do not add a second handwritten comment/string scanner, or use `setjmp`,
 command.  Boundary recognition belongs to the shared scanner; recovery policy
 belongs to the command driver.
 
+## Process-Continuation Diagnostics
+
+When a fork/exec regression occurs, compare the parent capsule and resumed
+frame before the first post-fork guest store: PID, function/program counter,
+locals, memory object and backing buffer identity, page count, and stack-pointer
+global.  Then inspect linked provider continuations (especially libc); a store
+checkpoint that restores memory without restoring provider evaluator frames can
+resume a child `execve` activation in the parent.
+
+Keep the browser process driver as a selector, not a scheduler of its own.  It
+records the selected capsule and wait reason, re-selects that PID on resume,
+and resets deterministically on completion or error.  Exercise successful exec,
+failed exec, command-not-found, repeated terminal waits, child exit, and parent
+reaping under warnings-as-errors plus ASan/UBSan.  Disable LeakSanitizer only
+for the documented ptrace environment; do not treat that exception as a reason
+to weaken ownership checks.
+
 ## WAT and WAST Parser Policy
 
 WAT and WAST should not have competing lexers or module grammars.  The same

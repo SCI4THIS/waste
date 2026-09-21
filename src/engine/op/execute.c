@@ -1,4 +1,13 @@
 #include "dispatch_gen.h"
+#include "../store.h"
+
+/* The core evaluator is also linked by standalone tests that do not include
+ * the native store.  Keep image pinning optional at that layer; the browser
+ * store supplies the strong definitions. */
+extern void native_process_image_pin(native_process_image *image)
+    __attribute__((weak));
+extern void native_process_image_unpin(native_process_image *image)
+    __attribute__((weak));
 
 #include <stdint.h>
 #include <stdio.h>
@@ -23,6 +32,8 @@ void exec_continuation_destroy(exec_continuation *continuation) {
         for (uint32_t i = 0; i < continuation->jump_snapshot_count; i++)
             free(continuation->jump_snapshots[i].locals);
     }
+    if (continuation->image && native_process_image_unpin)
+        native_process_image_unpin(continuation->image);
     free(continuation->jump_snapshots);
     memset(continuation, 0, sizeof(*continuation));
 }
@@ -39,7 +50,9 @@ exec_status exec_continuation_capture(waste_exec_engine *engine,
         return continuation_allocation_error(error,
                                              "invalid continuation capture");
     exec_continuation_destroy(continuation);
+    continuation->state = EXEC_CONTINUATION_CAPTURED;
     continuation->engine = engine;
+    continuation->owner_engine = engine;
     continuation->active_call_depth = engine->active_call_depth;
     for (uint32_t i = 0; i < EXEC_MAX_CALL_DEPTH; i++) {
         exec_continuation_frame *saved = &continuation->frames[i];
@@ -141,7 +154,10 @@ exec_status exec_continuation_restore(exec_continuation *continuation,
                                       exec_error *error) {
     if (!continuation || !continuation->engine)
         return continuation_allocation_error(error,
-                                             "invalid continuation restore");
+                                         "invalid continuation restore");
+    if (continuation->state != EXEC_CONTINUATION_CAPTURED)
+        return continuation_allocation_error(error,
+                                             "continuation is not resumable");
     waste_exec_engine *engine = continuation->engine;
     exec_status prepared = continuation_prepare_frames(continuation, error);
     if (prepared != EXEC_OK) return prepared;
@@ -202,6 +218,69 @@ exec_status exec_continuation_restore(exec_continuation *continuation,
     engine->jump_snapshots = restored;
     engine->jump_snapshot_count = continuation->jump_snapshot_count;
     engine->jump_snapshot_capacity = continuation->jump_snapshot_count;
+    return EXEC_OK;
+}
+
+void exec_continuation_describe(exec_continuation *continuation,
+                                waste_exec_engine *engine,
+                                uint32_t root_func_idx,
+                                const wasm_value *root_args, int root_arg_count,
+                                exec_yield_reason reason, int owner_pid,
+                                uint64_t generation) {
+    if (!continuation) return;
+    continuation->owner_engine = engine;
+    continuation->root_func_idx = root_func_idx;
+    continuation->root_arg_count = root_arg_count < 0 ? 0 :
+                                   root_arg_count > WAST_MAX_ARGS ?
+                                   WAST_MAX_ARGS : root_arg_count;
+    for (int i = 0; i < continuation->root_arg_count; i++)
+        continuation->root_args[i] = root_args[i];
+    continuation->expected_yield = reason;
+    continuation->owner_pid = owner_pid;
+    continuation->generation = generation;
+}
+
+void exec_continuation_pin_image(exec_continuation *continuation,
+                                 native_process_image *image) {
+    if (!continuation || continuation->state != EXEC_CONTINUATION_CAPTURED ||
+        !image || continuation->image == image)
+        return;
+    if (continuation->image && native_process_image_unpin)
+        native_process_image_unpin(continuation->image);
+    continuation->image = image;
+    if (native_process_image_pin)
+        native_process_image_pin(image);
+}
+
+exec_status exec_continuation_resume(exec_continuation *continuation,
+                                     waste_exec_engine *engine, int owner_pid,
+                                     exec_yield_reason reason,
+                                     exec_error *error) {
+    if (!continuation || continuation->state != EXEC_CONTINUATION_CAPTURED)
+        return continuation_allocation_error(error,
+                                             "continuation already consumed");
+    if (continuation->owner_engine && continuation->owner_engine != engine)
+        return continuation_allocation_error(error,
+                                             "continuation engine mismatch");
+    if (continuation->expected_yield &&
+        continuation->expected_yield != reason)
+        return continuation_allocation_error(error,
+                                             "continuation yield mismatch");
+    if (continuation->owner_pid && continuation->owner_pid != owner_pid)
+        return continuation_allocation_error(error,
+                                             "continuation process mismatch");
+    exec_status status = exec_continuation_restore(continuation, error);
+    if (status != EXEC_OK) return status;
+    continuation->state = EXEC_CONTINUATION_CONSUMED;
+    if (continuation->image) {
+        if (native_process_image_unpin)
+            native_process_image_unpin(continuation->image);
+        continuation->image = NULL;
+    }
+    if (error) {
+        error->status = EXEC_OK;
+        error->yield_reason = EXEC_YIELD_NONE;
+    }
     return EXEC_OK;
 }
 

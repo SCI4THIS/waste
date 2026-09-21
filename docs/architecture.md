@@ -394,3 +394,21 @@ The browser dashboard and Bash page remain single offline HTML documents.
 Optional broker use does not change the packaging requirement: opening the
 page through `file://` must work without a server when broker-backed features
 are not requested.
+
+## Process Capsules and Browser Resumption
+
+Each native process owns a capsule containing its current engine/image,
+invocation descriptor, mutable continuation, linked-provider continuations,
+pending fork result, and lifecycle state.  The store owns capsule selection,
+fork cloning, executable-image replacement, child exit, wakeup, and zombie
+reaping.  Browser code may cache only a bounded driver record identifying the
+currently selected PID, entry invocation, and genuine browser wait reason.
+
+Fork captures the parent descriptor and continuation before selecting the child.
+Successful `execve` commits a new image to the child and eagerly restores the
+parent capsule; child exit then selects and resumes that already-restored
+parent.  Failed `execve` resumes the old child continuation once with its
+one-shot errno.  JavaScript sees only terminal/select/input waits: internal
+fork, exec, exit, wake, and process-selection transitions never become browser
+callbacks.  This design does not use Asyncify, JSPI, native stack copying, or
+`setjmp`/`longjmp`.

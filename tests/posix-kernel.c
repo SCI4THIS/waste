@@ -124,6 +124,67 @@ static void test_terminal_readiness(void) {
     posix_kernel_destroy(k);
 }
 
+static void test_terminal_modes(void) {
+    posix_kernel *k = posix_kernel_create(1);
+    posix_termios termios;
+    CHECK(posix_kernel_tcgetattr(k, 0, &termios) == 0, "get terminal attributes");
+    termios.iflag = POSIX_TERMIOS_IFLAG_ICRNL;
+    termios.lflag = POSIX_TERMIOS_LFLAG_ICANON | POSIX_TERMIOS_LFLAG_ISIG;
+    termios.cc[POSIX_TERMIOS_VERASE] = 127;
+    termios.cc[POSIX_TERMIOS_VKILL] = 21;
+    termios.cc[POSIX_TERMIOS_VINTR] = 3;
+    CHECK(posix_kernel_tcsetattr(k, 0, &termios) == 0, "set canonical mode");
+
+    const uint8_t partial[] = "ab";
+    CHECK(posix_kernel_terminal_enqueue(k, 0, partial, 2) == 0,
+          "enqueue canonical partial line");
+    CHECK((posix_kernel_query_readiness(k, 0) & POSIX_POLL_IN) == 0,
+          "partial canonical line is not readable");
+    const uint8_t line[] = "c\n";
+    CHECK(posix_kernel_terminal_enqueue(k, 0, line, 2) == 0,
+          "enqueue canonical newline");
+    CHECK((posix_kernel_query_readiness(k, 0) & POSIX_POLL_IN) != 0,
+          "complete canonical line is readable");
+    uint8_t buffer[16] = {0};
+    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == 4,
+          "canonical read returns one line");
+    CHECK(memcmp(buffer, "abc\n", 4) == 0, "canonical line contents");
+
+    const uint8_t edited[] = "xy\bZ\n";
+    posix_kernel_terminal_enqueue(k, 0, edited, sizeof(edited) - 1);
+    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == 3,
+          "erase edits canonical line");
+    CHECK(memcmp(buffer, "xZ\n", 3) == 0, "erase result");
+
+    posix_kernel_terminal_enqueue(k, 0, (const uint8_t *)"q", 1);
+    posix_kernel_terminal_enqueue(k, 0, (const uint8_t *)"\003", 1);
+    CHECK(posix_kernel_signal_pending(k, 2), "intr raises SIGINT");
+    CHECK((posix_kernel_query_readiness(k, 0) & POSIX_POLL_IN) == 0,
+          "intr discards partial line");
+
+    termios.lflag = 0;
+    termios.cc[POSIX_TERMIOS_VMIN] = 3;
+    termios.cc[POSIX_TERMIOS_VTIME] = 0;
+    CHECK(posix_kernel_tcsetattr(k, 0, &termios) == 0,
+          "set noncanonical minimum-byte mode");
+    posix_kernel_terminal_enqueue(k, 0, (const uint8_t *)"xy", 2);
+    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == -POSIX_EAGAIN,
+          "raw read waits for VMIN bytes");
+    posix_kernel_terminal_enqueue(k, 0, (const uint8_t *)"z", 1);
+    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == 3,
+          "raw read releases at VMIN");
+    CHECK(posix_kernel_tcflow(k, 0, POSIX_TCOON) == 0,
+          "tcflow accepts output-on action");
+    CHECK(posix_kernel_tcflow(k, 0, 99) == -POSIX_EINVAL,
+          "tcflow rejects unknown action");
+    posix_winsize winsize = {40, 100, 0, 0};
+    CHECK(posix_kernel_terminal_set_winsize(k, 0, &winsize) == 0,
+          "set terminal window size");
+    CHECK(posix_kernel_signal_pending(k, POSIX_SIGWINCH),
+          "resize raises SIGWINCH");
+    posix_kernel_destroy(k);
+}
+
 /* --- Pipe creation and readiness --- */
 
 static void test_pipe_readiness(void) {
@@ -464,6 +525,7 @@ int main(void) {
     test_lifecycle();
     test_invalid_fd();
     test_terminal_readiness();
+    test_terminal_modes();
     test_pipe_readiness();
     test_pipe_close_transitions();
     test_pipe_full();

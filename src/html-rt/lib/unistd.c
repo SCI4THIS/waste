@@ -2,7 +2,19 @@
 
 #include "include/helper.h"
 
+#ifndef WASTE_ENGINE
+__attribute__((import_module("waste_kernel"), import_name("isatty_v1")))
+extern i32 waste_kernel_isatty_v1(i32 descriptor);
+#endif
+
+#ifdef WASTE_ENGINE
 i32 isatty(i32 fd){(void)fd;return 0;}
+#else
+i32 isatty(i32 fd){return waste_kernel_isatty_v1(fd);}
+__attribute__((import_module("env"), import_name("execve")))
+extern i32 waste_env_execve(const char *path, char *const *argv,
+                            char *const *envp);
+#endif
 
 static char tty_path[9]={'/','d','e','v','/','t','t','y',0};
 char *ttyname(i32 descriptor){return descriptor>=0&&descriptor<=2?tty_path:0;}
@@ -12,7 +24,11 @@ i32 sysconf(i32 name){(void)name;return 1024;}
 i32 pathconf(const char*path,i32 name){(void)path;(void)name;return 255;}
 u32 confstr(i32 name,char*buffer,u32 capacity){(void)name;const char*value="/bin:/usr/bin";u32 needed=c_length(value)+1;if(buffer&&capacity){u32 n=needed<capacity?needed:capacity;bytes_copy(buffer,value,n);buffer[n-1]=0;}return needed;}
 
+#ifdef WASTE_ENGINE
 i32 execve(const char*p,char*const*a,char*const*e){(void)p;(void)a;(void)e;return unsupported();}
+#else
+i32 execve(const char*p,char*const*a,char*const*e){return waste_env_execve(p,a,e);}
+#endif
 i32 chown(const char*p,u32 u,u32 g){(void)p;(void)u;(void)g;return unsupported();}
 i32 readlink(const char*p,char*b,u32 n){(void)p;(void)b;(void)n;return unsupported();}
 

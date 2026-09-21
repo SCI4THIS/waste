@@ -32,6 +32,7 @@ int main(void) {
     memory->data[13] = 0x5a;
     provider->memories[0] = memory;
     provider->memory_count = 1;
+    provider->memory = memory;
     provider->owns_memories[0] = 1;
     consumer->memories[0] = memory;
     consumer->memory_count = 1;
@@ -82,6 +83,14 @@ int main(void) {
     table->elements[1].func_idx = 99;
     table->size = 2;
     global->value.i32 = 99;
+    provider->active_call_depth = 1;
+    provider->yield_frames[0].valid = 1;
+    provider->yield_frames[0].func_idx = 17;
+    provider->yield_frames[0].pc = 23;
+    provider->local_frame_capacities[0] = 1;
+    provider->local_frames[0] = calloc(1, sizeof(*provider->local_frames[0]));
+    provider->local_frames[0][0].type = WASM_VALTYPE_I32;
+    provider->local_frames[0][0].i32 = -1;
     check(native_store_checkpoint_restore(&checkpoint, &error) == EXEC_OK,
           "restore succeeds");
     check(provider->memories[0] == consumer->memories[0],
@@ -95,6 +104,28 @@ int main(void) {
     check(table->size == 1 && table->elements[0].func_idx == 17,
           "table contents and growth are restored");
     check(global->value.i32 == 7, "global value is restored");
+    check(provider->active_call_depth == 0 &&
+          !provider->yield_frames[0].valid &&
+          provider->local_frames[0] == NULL,
+          "linked evaluator yield state is restored");
+
+    waste_exec_engine *provider_clone = NULL;
+    exec_clone_binding binding;
+    memset(&error, 0, sizeof(error));
+    check(exec_clone_engine(provider, &provider_clone, &error) == EXEC_OK &&
+          provider_clone != NULL, "provider clone succeeds");
+    if (provider_clone) {
+        binding.source = provider;
+        binding.clone = provider_clone;
+        check(exec_clone_engine_bind(provider_clone, &binding, 1, &error) ==
+                  EXEC_OK, "provider clone binding succeeds");
+        provider_clone->memory->data[13] = 0x3c;
+        check(provider->memory->data[13] == 0x5a,
+              "cloned provider memory is isolated");
+        check(exec_clone_resolve(provider_clone, provider) == provider_clone,
+              "clone provider resolution is local");
+        exec_free(provider_clone);
+    }
 
     native_store_checkpoint_destroy(&checkpoint);
     free(table->elements);

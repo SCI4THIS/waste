@@ -9,6 +9,7 @@ const {TextDecoder, TextEncoder} = require("node:util");
 const root = path.resolve(__dirname, "..");
 const stagingDir = path.join(root, "src/html-rt/src/bash");
 const baselineMissingCommand = process.argv.includes("--missing-command");
+const executableProbe = process.argv.includes("--exec-probe");
 const genericMissingCommand = "waste-definitely-missing-command";
 
 /* Keep the acceptance probe tied to the pathname/process imports in the Bash
@@ -29,6 +30,11 @@ if (!fs.existsSync(wasmPath)) {
   wasmPath = path.join(root, "build/html-rt/waste-wast.wasm");
 }
 const wasmBytes = fs.readFileSync(wasmPath);
+let probePath = path.join(stagingDir, "waste-probe.wasm");
+if (!fs.existsSync(probePath)) probePath = path.join(root, "build/cli-rt/waste-probe.wasm");
+const probeBytes = executableProbe && fs.existsSync(probePath) ? fs.readFileSync(probePath) : null;
+const asArrayBuffer = bytes => bytes && bytes.buffer.slice(
+  bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 
 /* Resolve launch.wast: staging symlink or build directory */
 let launchPath = path.join(stagingDir, "launch.wast");
@@ -51,6 +57,14 @@ let statusSeen = false;
 let builtinSeen = false;
 let genericMissingSent = false;
 let genericMissingSeen = false;
+let probeSent = false;
+let probeSeen = false;
+let probeAfterSeen = false;
+let probeStatus0Seen = false;
+let probeMissingSeen = false;
+let probeStatus127Seen = false;
+let probeSecondSeen = false;
+let probeFinalStatusSeen = false;
 let finish;
 const completion = new Promise(resolve => { finish = resolve; });
 
@@ -100,6 +114,52 @@ const self = {
             bytes: Array.from(new TextEncoder().encode("exit\n")),
           }}), 10);
         }
+      } else if (executableProbe) {
+        if (output.includes("WASTE_PROBE_OK") && !probeSeen) {
+          probeSeen = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode(
+              "printf '__C_ENGINE_EXEC_STATUS_%s__\\n' \"$?\"\n",
+            ))}}), 10);
+        }
+        if (output.includes("__C_ENGINE_EXEC_STATUS_0__") && !probeStatus0Seen) {
+          probeStatus0Seen = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode(
+              `${genericMissingCommand}\n`,
+            ))}}), 10);
+        }
+        if (output.includes(`bash: ${genericMissingCommand}: command not found`) &&
+            !probeMissingSeen) {
+          probeMissingSeen = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode(
+              "printf '__C_ENGINE_EXEC_STATUS_%s__\\n' \"$?\"\n",
+            ))}}), 10);
+        }
+        if (output.includes("__C_ENGINE_EXEC_STATUS_127__") && !probeStatus127Seen) {
+          probeStatus127Seen = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode(
+              "/bin/waste-probe again\n",
+            ))}}), 10);
+        }
+        if (output.includes("WASTE_PROBE_OK") && probeStatus127Seen &&
+            !probeSecondSeen) {
+          probeSecondSeen = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode(
+              "printf '__C_ENGINE_EXEC_STATUS_%s__\\n' \"$?\"\n",
+            ))}}), 10);
+        }
+        if (output.includes("__C_ENGINE_EXEC_STATUS_0__") &&
+            probeSecondSeen && !probeFinalStatusSeen) {
+          probeFinalStatusSeen = true;
+          probeAfterSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        }
       }
       const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
       if (!promptSeen && messageHasPrompt) {
@@ -111,7 +171,9 @@ const self = {
             bytes: Array.from(new TextEncoder().encode(
               baselineMissingCommand
                 ? "HOME_DIR=/home/a\n"
-                : "echo __C_ENGINE_BASH_OK__\n",
+                : executableProbe
+                  ? "/bin/waste-probe one two\n"
+                  : "echo __C_ENGINE_BASH_OK__\n",
             )),
           }});
         }, 10);
@@ -164,7 +226,8 @@ const context = vm.createContext({
 vm.runInContext(workerSrc, context, {filename: "c-engine-bash-worker.js"});
 self.onmessage({data: {
   type: "start",
-  wasmBytes: wasmBytes.buffer,
+  wasmBytes: asArrayBuffer(wasmBytes),
+  probeBytes: asArrayBuffer(probeBytes),
   source: launchSource,
 }});
 
@@ -183,8 +246,13 @@ Promise.race([completion, timeout]).then(result => {
       builtinSeen && genericMissingSeen && exitSent && !doneBeforeExit &&
       output.includes("__C_ENGINE_STATUS_127__") &&
       output.includes("__C_ENGINE_AFTER__") && result.ok
-    : promptSeen && commandSent && exitSent && !doneBeforeExit &&
-      output.includes("__C_ENGINE_BASH_OK__") && result.ok;
+    : executableProbe
+      ? promptSeen && commandSent && probeSeen && probeStatus0Seen &&
+        probeMissingSeen && probeStatus127Seen && probeSecondSeen &&
+        probeFinalStatusSeen && probeAfterSeen && exitSent && !doneBeforeExit &&
+        result.ok
+      : promptSeen && commandSent && exitSent && !doneBeforeExit &&
+        output.includes("__C_ENGINE_BASH_OK__") && result.ok;
   if (!passed) {
     console.error("\nC-engine Bash browser test failed:", result);
     process.exitCode = 1;

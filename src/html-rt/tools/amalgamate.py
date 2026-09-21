@@ -37,9 +37,12 @@ def main() -> int:
     index_html = page_dir / "index.html"
     style_css = page_dir / "style.css"
     app_js = page_dir / "app.js"
+    terminal_model_js = page_dir / "terminal" / "model.js"
+    terminal_renderer_js = page_dir / "terminal" / "renderer.js"
 
     for f in [index_html, style_css, app_js, args.tarball_js,
-              args.loader_js, args.manifest_tar_gz, args.zlibaux_wasm]:
+              terminal_model_js, terminal_renderer_js, args.loader_js,
+              args.manifest_tar_gz, args.zlibaux_wasm]:
         if not f.is_file():
             print(f"error: required file not found: {f}", file=sys.stderr)
             return 1
@@ -73,6 +76,15 @@ def main() -> int:
         '<script src="app.js"></script>',
         "<script>\n" + app + "\n</script>"
     )
+
+    # 4b. Inline the terminal model and renderer.  These are intentionally
+    # separate source files for Node fixtures, but the final page must remain
+    # a single file:// document.
+    for source_path, tag in [
+            (terminal_model_js, '<script src="terminal/model.js"></script>'),
+            (terminal_renderer_js, '<script src="terminal/renderer.js"></script>')]:
+        source = source_path.read_text(encoding="utf-8")
+        html = html.replace(tag, "<script>\n" + source + "\n</script>")
 
     # 5. Split manifest.tar.gz into chunks and base64 encode as data URIs
     tar_data = args.manifest_tar_gz.read_bytes()

@@ -33,7 +33,8 @@
         <button id="stop" type="button" disabled>Stop worker</button>
         <span id="status">idle</span>
       </div>
-      <pre id="terminal" aria-live="polite"></pre>
+      <canvas id="terminal-canvas" tabindex="0" aria-label="WASTE Bash terminal"></canvas>
+      <pre id="terminal-transcript" aria-live="polite"></pre>
       <form id="terminal-form" style="margin-top:10px">
         <label for="terminal-input">input</label>
         <input id="terminal-input" autocomplete="off" spellcheck="false" disabled>
@@ -51,6 +52,8 @@
 "zlibaux.wasm.b64"
   ;
   </script>
+  <script src="terminal/model.js"></script>
+  <script src="terminal/renderer.js"></script>
   <script src="app.js"></script>
   <script>
   boot(startShell, function(msg, detail) {

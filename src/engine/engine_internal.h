@@ -7,6 +7,10 @@
 
 typedef struct waste_exec_engine waste_exec_engine;
 typedef struct exec_tag exec_tag;
+typedef struct exec_clone_binding {
+    const waste_exec_engine *source;
+    waste_exec_engine *clone;
+} exec_clone_binding;
 
 typedef enum {
     EXEC_OK = 0,
@@ -33,6 +37,10 @@ typedef enum {
     /* Internal process transition. Browser drivers consume this without
      * returning to JavaScript, because no external I/O is pending. */
     EXEC_YIELD_FORK,
+    /* Internal executable-image transition. The C process driver consumes
+     * this after the caller's path/argv/envp have been copied into owned
+     * storage; it is never exposed as browser I/O. */
+    EXEC_YIELD_EXEC,
 } exec_yield_reason;
 
 typedef struct {

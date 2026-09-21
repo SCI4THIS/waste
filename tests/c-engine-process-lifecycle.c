@@ -31,23 +31,45 @@ int main(void) {
     int child_pid = 0;
     check(native_store_fork_process(&store, &child_pid) == 0 && child_pid == 2,
           "fork allocates child pid");
+    check(&store.processes[0].capsule != &store.processes[1].capsule,
+          "fork creates distinct parent and child capsules");
     check(native_store_getpid(&store) == 1 && native_store_getppid(&store) == 0,
           "parent pid and ppid are stable");
+    check(native_store_active_capsule(&store) != NULL &&
+          native_store_active_capsule(&store)->state == NATIVE_PROCESS_RUNNABLE,
+          "parent execution capsule is selected");
+    native_exec_request request;
+    memset(&request, 0, sizeof(request));
+    request.active = 1;
+    request.pid = 1;
+    check(native_store_prepare_process_exec(&store, &request) == 0 &&
+          native_store_active_capsule(&store)->pending_transition ==
+              NATIVE_PROCESS_TRANSITION_EXEC,
+          "exec transition is prepared on parent capsule");
+    native_store_abort_process_exec(&store);
+    check(native_store_active_capsule(&store)->pending_transition ==
+              NATIVE_PROCESS_TRANSITION_NONE,
+          "exec transition abort clears pending state");
     check(native_store_set_active_process(&store, child_pid) == 0,
           "child can be selected");
     check(native_store_getpid(&store) == child_pid && native_store_getppid(&store) == 1,
           "child observes pid and parent pid");
+    check(native_store_active_capsule(&store) != NULL &&
+          native_store_active_capsule(&store)->state == NATIVE_PROCESS_RUNNABLE,
+          "child execution capsule is selected");
     check(posix_kernel_write(store.kernel, fds[1], "x", 1) == 1,
           "child inherited shared open-file description");
-    check(native_store_exit_process(&store, 127) == 0,
-          "child becomes zombie with exit status");
+    check(native_store_exit_process(&store, 7) == 0,
+          "child becomes zombie with explicit nonzero status");
+    check(native_store_exit_process(&store, 9) == 0,
+          "duplicate child exit is idempotent");
     check(native_store_set_active_process(&store, 1) == 0,
           "parent is restored after child exit");
 
     int status = 0;
     check(native_store_wait_process(&store, child_pid, 0, &status) == child_pid,
           "parent reaps requested child");
-    check(status == (127 << 8), "wait status uses POSIX exit encoding");
+    check(status == (7 << 8), "wait status uses POSIX exit encoding");
     check(native_store_wait_process(&store, child_pid, 0, &status) == -POSIX_ECHILD,
           "child can only be reaped once");
     char byte = 0;

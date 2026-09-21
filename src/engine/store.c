@@ -10,6 +10,218 @@
 #include <string.h>
 #include <stdio.h>
 
+void native_exec_request_init(native_exec_request *request) {
+    if (request) memset(request, 0, sizeof(*request));
+}
+
+void native_exec_request_destroy(native_exec_request *request) {
+    if (!request) return;
+    for (uint32_t i = 0; i < request->argc; i++) free(request->argv[i]);
+    for (uint32_t i = 0; i < request->envc; i++) free(request->envp[i]);
+    memset(request, 0, sizeof(*request));
+}
+
+void native_process_image_init(native_process_image *image) {
+    if (image) memset(image, 0, sizeof(*image));
+}
+
+void native_process_image_retain(native_process_image *image) {
+    if (image) image->references++;
+}
+
+void native_process_image_pin(native_process_image *image) {
+    if (image) image->checkpoint_pins++;
+}
+
+void native_process_image_unpin(native_process_image *image) {
+    if (!image || image->checkpoint_pins == 0) return;
+    image->checkpoint_pins--;
+    if (image->checkpoint_pins == 0 && image->references == 0) {
+        exec_free(image->engine);
+        free(image);
+    }
+}
+
+void native_process_image_release(native_process_image *image) {
+    if (!image || image->references == 0) return;
+    image->references--;
+    if (image->references == 0 && image->checkpoint_pins == 0) {
+        exec_free(image->engine);
+        free(image);
+    }
+}
+
+static int native_executable_path_valid(const char *path) {
+    size_t length;
+    if (!path || path[0] != '/') return 0;
+    length = strlen(path);
+    if (length == 0 || length >= NATIVE_EXEC_PATH_MAX) return 0;
+    if (strcmp(path, "/") == 0) return 0;
+    for (size_t i = 1; path[i]; i++)
+        if (path[i] == '/' && path[i - 1] == '/') return 0;
+    return 1;
+}
+
+static int native_executable_import_allowed(const wasm_import *import) {
+    if (!import) return 0;
+    /* The first external-image ABI deliberately has one tiny escape hatch for
+     * the probe. Production libc/kernel images use versioned waste_kernel
+     * imports and are expanded only when their ABI entries are implemented. */
+    if (strcmp(import->module, "env") == 0 &&
+        (strcmp(import->name, "write") == 0 ||
+         strcmp(import->name, "memory") == 0))
+        return 1;
+    if (strcmp(import->module, "waste_kernel") == 0) return 1;
+    return 0;
+}
+
+static int native_executable_has_asyncify_name(const char *name) {
+    const char *needle = "asyncify";
+    if (!name) return 0;
+    for (size_t i = 0; name[i]; i++) {
+        size_t j = 0;
+        while (needle[j] && name[i + j] == needle[j]) j++;
+        if (!needle[j]) return 1;
+    }
+    return 0;
+}
+
+const native_executable *native_store_find_executable(
+        const native_store *store, const char *path) {
+    if (!store || !native_executable_path_valid(path)) return NULL;
+    for (uint32_t i = 0; i < store->executable_count; i++)
+        if (strcmp(store->executables[i].path, path) == 0)
+            return &store->executables[i];
+    return NULL;
+}
+
+int native_store_bind_executable_paths(native_store *store) {
+    if (!store || !store->kernel) return -POSIX_EINVAL;
+    for (uint32_t i = 0; i < store->executable_count; i++) {
+        const native_executable *executable = &store->executables[i];
+        posix_path_metadata metadata = {
+            POSIX_NODE_REGULAR, executable->mode, 0, 0,
+            (int64_t)executable->size, (uint64_t)(3u + i)
+        };
+        int status = posix_kernel_path_add(store->kernel, executable->path,
+                                            &metadata);
+        if (status != 0) return status;
+    }
+    return 0;
+}
+
+int native_store_register_executable(native_store *store, const char *path,
+                                     const uint8_t *bytes, size_t size,
+                                     uint32_t mode, uint32_t abi_version,
+                                     const char *entry) {
+    native_executable *next;
+    int bind_status;
+    size_t path_length, entry_length;
+    wasm_module decoded;
+    wasm_decode_error decode_error;
+    if (!store || !native_executable_path_valid(path) || !bytes || size == 0 ||
+        size > NATIVE_EXEC_BYTES_MAX || !(mode & 0111u) || !entry ||
+        strcmp(entry, "_start") != 0 || abi_version != 1)
+        return -POSIX_EINVAL;
+    wasm_module_init(&decoded);
+    if (wasm_decode_module(bytes, size, &decoded, &decode_error) != WASM_DECODE_OK) {
+        wasm_module_dispose(&decoded);
+        return -POSIX_ENOEXEC;
+    }
+    for (uint32_t i = 0; i < decoded.section_count; i++) {
+        if (decoded.sections[i].id == 8) {
+            wasm_module_dispose(&decoded);
+            return -POSIX_EINVAL;
+        }
+    }
+    for (uint32_t i = 0; i < decoded.import_count; i++) {
+        if (native_executable_has_asyncify_name(decoded.imports[i].module) ||
+            native_executable_has_asyncify_name(decoded.imports[i].name) ||
+            !native_executable_import_allowed(&decoded.imports[i])) {
+            wasm_module_dispose(&decoded);
+            return -POSIX_ENOSYS;
+        }
+    }
+    wasm_module_dispose(&decoded);
+    if (native_store_find_executable(store, path)) return -POSIX_EEXIST;
+    path_length = strlen(path);
+    entry_length = strlen(entry);
+    if (entry_length >= WAST_MAX_EXPORT_NAME) return -POSIX_EINVAL;
+    if (store->executable_count == store->executable_capacity) {
+        uint32_t capacity = store->executable_capacity ?
+                            store->executable_capacity * 2u : 8u;
+        next = realloc(store->executables,
+                       (size_t)capacity * sizeof(*next));
+        if (!next) return -POSIX_ENOMEM;
+        store->executables = next;
+        store->executable_capacity = capacity;
+    }
+    native_executable *executable =
+        &store->executables[store->executable_count];
+    memset(executable, 0, sizeof(*executable));
+    executable->bytes = malloc(size);
+    if (!executable->bytes) return -POSIX_ENOMEM;
+    memcpy(executable->bytes, bytes, size);
+    memcpy(executable->path, path, path_length + 1);
+    memcpy(executable->entry, entry, entry_length + 1);
+    executable->size = size;
+    executable->mode = mode;
+    executable->abi_version = abi_version;
+    executable->validated = 1;
+    store->executable_count++;
+    bind_status = store->kernel ? native_store_bind_executable_paths(store) : 0;
+    if (bind_status != 0) {
+        store->executable_count--;
+        free(executable->bytes);
+        memset(executable, 0, sizeof(*executable));
+        return bind_status;
+    }
+    return 0;
+}
+
+exec_status native_store_instantiate_executable(
+        native_store *store, const native_exec_request *request,
+        native_process_image **image_out, exec_error *error) {
+    const native_executable *executable;
+    native_process_image *image;
+    waste_exec_engine *engine = NULL;
+    uint32_t entry_func = 0;
+    exec_status status;
+    if (!store || !request || !image_out || !request->active) {
+        if (error) {
+            error->status = EXEC_ERROR_FORMAT;
+            snprintf(error->message, sizeof(error->message),
+                     "invalid executable request");
+        }
+        return EXEC_ERROR_FORMAT;
+    }
+    *image_out = NULL;
+    executable = native_store_find_executable(store, request->path);
+    if (!executable || !executable->validated)
+        return exec_fail(error, EXEC_ERROR_NOT_FOUND,
+                         "executable is not registered");
+    status = native_load_module(store, NULL, executable->bytes,
+                                executable->size, &engine, error);
+    if (status != EXEC_OK) return status;
+    status = exec_find_export(engine, executable->entry, &entry_func, error);
+    if (status != EXEC_OK) {
+        exec_free(engine);
+        return status;
+    }
+    image = (native_process_image *)calloc(1, sizeof(*image));
+    if (!image) {
+        exec_free(engine);
+        return exec_fail(error, EXEC_ERROR_TRAP,
+                         "executable image allocation failed");
+    }
+    image->engine = engine;
+    image->entry_func = entry_func;
+    image->references = 1;
+    snprintf(image->path, sizeof(image->path), "%s", executable->path);
+    *image_out = image;
+    return EXEC_OK;
+}
+
 /* ---- cross-module call trampoline ---- */
 
 static exec_status native_linked_call(void *data, const wasm_value *args,
@@ -57,6 +269,7 @@ static exec_global *native_spectest_global(native_store *store,
 
 void native_store_init(native_store *store) {
     memset(store, 0, sizeof(*store));
+    native_exec_request_init(&store->exec_request);
     store->spectest_memory.pages = 1;
     store->spectest_memory.max_pages = 2;
     store->spectest_memory.has_max = 1;
@@ -80,6 +293,7 @@ void native_store_init(native_store *store) {
         store->processes[0].pid = 1;
         store->processes[0].ppid = 0;
         store->processes[0].kernel = store->kernel;
+        native_process_capsule_init(&store->processes[0].capsule);
         store->process_count = 1;
         store->active_pid = 1;
         store->next_pid = 2;
@@ -87,6 +301,10 @@ void native_store_init(native_store *store) {
 }
 
 void native_store_free(native_store *store) {
+    native_exec_request_destroy(&store->exec_request);
+    for (uint32_t i = 0; i < store->executable_count; i++)
+        free(store->executables[i].bytes);
+    free(store->executables);
     for (int i = store->module_count; i > 0; i--)
         exec_free(store->modules[i - 1].engine);
     for (int i = store->orphan_count; i > 0; i--)
@@ -104,6 +322,7 @@ void native_store_free(native_store *store) {
     free(store->spectest_table.elements);
     for (int i = 0; i < NATIVE_PROCESS_MAX; i++)
         if (store->processes[i].used) {
+            native_process_capsule_destroy(&store->processes[i].capsule);
             posix_kernel_destroy(store->processes[i].kernel);
             store->processes[i].kernel = NULL;
         }
@@ -116,6 +335,18 @@ void native_store_enable_terminal(native_store *store) {
     if (store->kernel) posix_kernel_destroy(store->kernel);
     store->kernel = posix_kernel_create(1);
     store->kernel_terminal = store->kernel != NULL;
+    if (store->kernel) {
+        posix_termios termios;
+        if (posix_kernel_tcgetattr(store->kernel, 0, &termios) == 0) {
+            termios.iflag |= POSIX_TERMIOS_IFLAG_ICRNL;
+            termios.lflag |= POSIX_TERMIOS_LFLAG_ISIG |
+                             POSIX_TERMIOS_LFLAG_ICANON |
+                             POSIX_TERMIOS_LFLAG_ECHO |
+                             POSIX_TERMIOS_LFLAG_IEXTEN;
+            (void)posix_kernel_tcsetattr(store->kernel, 0, &termios);
+        }
+        (void)native_store_bind_executable_paths(store);
+    }
     for (int i = 0; i < NATIVE_PROCESS_MAX; i++)
         if (store->processes[i].used && store->processes[i].pid == store->active_pid)
             store->processes[i].kernel = store->kernel;

@@ -5,9 +5,17 @@ let startedAt = null;
 let startedEpoch = null;
 let statusTimer = null;
 let starting = false;
-const terminal = document.querySelector("#terminal");
+const terminal = document.querySelector("#terminal-canvas");
+const transcript = document.querySelector("#terminal-transcript");
 const status = document.querySelector("#status");
 const controls = ["#pause","#resume","#signal","#send-signal","#stop"];
+const model = new WasteTerminalModel(80, 24);
+const renderer = new WasteTerminalRenderer(terminal, model);
+const transcriptLimit = 65536;
+
+function sendTerminalResize() {
+  if (worker) worker.postMessage({type: "resize", columns: model.columns, rows: model.rows});
+}
 
 function setRunning(running) {
   for (const selector of controls) document.querySelector(selector).disabled = !running;
@@ -18,13 +26,14 @@ function setRunning(running) {
 }
 
 function append(line) {
-  terminal.textContent += line + "\n";
-  terminal.scrollTop = terminal.scrollHeight;
+  appendRaw(line + "\n");
 }
 
 function appendRaw(text) {
-  terminal.textContent += text;
-  terminal.scrollTop = terminal.scrollHeight;
+  model.write(text);
+  renderer.markDirty();
+  transcript.textContent = (transcript.textContent + text).slice(-transcriptLimit);
+  transcript.scrollTop = transcript.scrollHeight;
 }
 
 function finish(message) {
@@ -46,12 +55,16 @@ async function startShell(event) {
 
     const source = await loadText("launch.wast");
     const wasmBytes = await loadBinary("waste-wast.wasm");
+    let probeBytes = null;
+    try { probeBytes = await loadBinary("waste-probe.wasm"); } catch (_) { /* optional during development */ }
 
     /* Remove loading overlay — everything is inflated and ready */
     var overlay = document.getElementById("loading-overlay");
     if (overlay) overlay.remove();
 
-    terminal.textContent = "";
+    model.fullReset();
+    renderer.markDirty();
+    transcript.textContent = "";
     status.textContent = "Starting C engine (0.0 s)";
     setRunning(true);
     document.querySelector("#terminal-input").disabled = true;
@@ -76,7 +89,7 @@ async function startShell(event) {
           status.textContent = `Bash running after ${wallSeconds.toFixed(3)} s by Date (${monotonicSeconds.toFixed(3)} s monotonic)`;
           document.querySelector("#terminal-input").disabled = false;
           document.querySelector("#send-input").disabled = false;
-          document.querySelector("#terminal-input").focus();
+          terminal.focus();
         }
       }
       else if (data.type === "started" && starting) {
@@ -88,7 +101,8 @@ async function startShell(event) {
       }
     };
     worker.onerror = event => { append(event.message || "worker error"); finish("failed"); };
-    worker.postMessage({type: "start", wasmBytes, source});
+    worker.postMessage({type: "start", wasmBytes, source, probeBytes});
+    sendTerminalResize();
   } catch (error) { status.textContent = error.message || String(error); }
 }
 document.querySelector("#start-form").addEventListener("submit", startShell);
@@ -98,10 +112,14 @@ document.querySelector("#terminal-form").addEventListener("submit", event => {
   const input = document.querySelector("#terminal-input");
   const bytes = new TextEncoder().encode(input.value + "\n");
   if (worker) worker.postMessage({type: "input", bytes: Array.from(bytes)});
-  append(input.value);
   input.value = "";
   status.textContent = "Bash running";
+  terminal.focus();
 });
+
+function sendInputBytes(bytes) {
+  if (worker) worker.postMessage({type: "input", bytes: Array.from(bytes)});
+}
 
 document.querySelector("#pause").onclick = () => status.textContent = "paused (C engine executes synchronously)";
 document.querySelector("#resume").onclick = () => status.textContent = "running";
@@ -112,3 +130,25 @@ document.querySelector("#send-signal").onclick = () => {
   status.textContent = `${select.selectedOptions[0].textContent} queued`;
 };
 document.querySelector("#stop").onclick = () => finish("stopped");
+
+/* The engine owns canonical editing and echo. The canvas only translates
+ * browser events into terminal bytes; visible output still comes exclusively
+ * from the guest terminal path. */
+terminal.addEventListener("keydown", event => {
+  if (event.metaKey) return;
+  if (event.key === "Enter") { sendInputBytes(new Uint8Array([10])); event.preventDefault(); return; }
+  if (event.key === "Backspace") { sendInputBytes(new Uint8Array([127])); event.preventDefault(); return; }
+  if (event.key === "Tab") { sendInputBytes(new Uint8Array([9])); event.preventDefault(); return; }
+  if (event.ctrlKey && event.key.length === 1) {
+    const code = event.key.toUpperCase().charCodeAt(0) - 64;
+    if (code > 0 && code < 32) sendInputBytes(new Uint8Array([code]));
+    event.preventDefault(); return;
+  }
+  if (event.key.length === 1) { sendInputBytes(new TextEncoder().encode(event.key)); event.preventDefault(); }
+});
+terminal.addEventListener("paste", event => {
+  sendInputBytes(new TextEncoder().encode(event.clipboardData?.getData("text") || ""));
+  event.preventDefault();
+});
+
+window.addEventListener("resize", sendTerminalResize);
