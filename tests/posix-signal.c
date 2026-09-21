@@ -158,12 +158,78 @@ static void test_cancel_and_error_restore(void) {
     posix_kernel_destroy(kernel);
 }
 
+static void test_signal_dispositions(void) {
+    posix_kernel *kernel = posix_kernel_create(1);
+    posix_signal_disposition disposition;
+    uint32_t handler;
+    CHECK(posix_kernel_signal_get_disposition(kernel, 2, &disposition) == 0,
+          "get default disposition");
+    CHECK(disposition == POSIX_SIGNAL_DEFAULT, "signals start default");
+    CHECK(posix_kernel_signal_get_handler(kernel, 2, &handler) == 0 &&
+          handler == POSIX_SIG_DFL, "signals start with SIG_DFL handler");
+    CHECK(posix_kernel_signal_set_disposition(kernel, 2,
+              POSIX_SIGNAL_IGNORE) == 0, "install ignore disposition");
+    CHECK(posix_kernel_signal_raise(kernel, 2) == 0,
+          "ignored signal raise succeeds");
+    CHECK(!posix_kernel_signal_pending(kernel, 2),
+          "ignored signal is not pending");
+    CHECK(posix_kernel_signal_set_disposition(kernel, 2,
+              POSIX_SIGNAL_HANDLER) == 0, "install handler disposition");
+    CHECK(posix_kernel_signal_set_handler(kernel, 2, 0x1234u) == 0,
+          "install handler pointer");
+    CHECK(posix_kernel_signal_get_handler(kernel, 2, &handler) == 0 &&
+          handler == 0x1234u, "handler pointer round trip");
+    CHECK(posix_kernel_signal_raise(kernel, 2) == 0,
+          "caught signal raise succeeds");
+    CHECK(posix_kernel_signal_pending(kernel, 2),
+          "caught signal remains pending for delivery");
+    CHECK(posix_kernel_signal_set_disposition(kernel, 2,
+              POSIX_SIGNAL_IGNORE) == 0, "reset signal to ignore");
+    CHECK(!posix_kernel_signal_pending(kernel, 2),
+          "changing to ignore clears pending signal");
+    CHECK(posix_kernel_signal_set_disposition(kernel, POSIX_SIGKILL,
+              POSIX_SIGNAL_IGNORE) == -POSIX_EINVAL,
+          "SIGKILL cannot be ignored");
+    CHECK(posix_kernel_signal_set_disposition(kernel, POSIX_SIGSTOP,
+              POSIX_SIGNAL_HANDLER) == -POSIX_EINVAL,
+          "SIGSTOP cannot be caught");
+    CHECK(posix_kernel_signal_set_disposition(kernel, 2, 99) == -POSIX_EINVAL,
+          "invalid disposition rejected");
+    posix_kernel_destroy(kernel);
+}
+
+static void test_handler_mask_round_trip(void) {
+    posix_kernel *kernel = posix_kernel_create(1);
+    posix_sigset action = {{0, 0, 0, 0}};
+    posix_sigset saved = {{0, 0, 0, 0}};
+    posix_sigset current;
+    mask_signal(&action, 15);
+    CHECK(posix_kernel_signal_set_action_mask(kernel, 2, &action) == 0,
+          "set handler mask failed");
+    posix_sigset decoded;
+    CHECK(posix_kernel_signal_get_action_mask(kernel, 2, &decoded) == 0 &&
+          mask_has(&decoded, 15), "handler mask round trip failed");
+    CHECK(posix_kernel_signal_enter_handler(kernel, 2, &saved) == 0,
+          "enter handler failed");
+    posix_kernel_get_signal_mask(kernel, &current);
+    CHECK(mask_has(&current, 2) && mask_has(&current, 15),
+          "handler did not apply self/action mask");
+    posix_kernel_signal_leave_handler(kernel, &saved);
+    posix_kernel_get_signal_mask(kernel, &current);
+    CHECK(current.words[0] == 0 && current.words[1] == 0 &&
+          current.words[2] == 0 && current.words[3] == 0,
+          "handler mask was not restored");
+    posix_kernel_destroy(kernel);
+}
+
 int main(void) {
     test_pending_before_call();
     test_signal_after_yield();
     test_blocked_signal();
     test_simultaneous_and_restore();
     test_cancel_and_error_restore();
+    test_signal_dispositions();
+    test_handler_mask_round_trip();
     if (failures) {
         fprintf(stderr, "%d/%d tests FAILED\n", failures, tests);
         return 1;

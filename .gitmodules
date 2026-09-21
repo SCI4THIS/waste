@@ -7,3 +7,6 @@
 [submodule "submodules/tarballjs"]
 	path = submodules/tarballjs
 	url = https://github.com/ankitrohatgi/tarballjs
+[submodule "submodules/coreutils"]
+	path = submodules/coreutils
+	url = https://github.com/coreutils/coreutils

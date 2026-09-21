@@ -17,6 +17,8 @@
 /* Stable wasm32 terminal ABI.  The layout intentionally uses fixed-width
  * fields instead of the host libc's termios definition. */
 #define POSIX_TERMIOS_IFLAG_ICRNL 0x0001u
+#define POSIX_TERMIOS_OFLAG_OPOST 0x0001u
+#define POSIX_TERMIOS_OFLAG_ONLCR 0x0002u
 #define POSIX_TERMIOS_LFLAG_ISIG  0x0001u
 #define POSIX_TERMIOS_LFLAG_ICANON 0x0002u
 #define POSIX_TERMIOS_LFLAG_ECHO  0x0008u
@@ -35,6 +37,16 @@
 #define POSIX_TCIOFF 2
 #define POSIX_TCION 3
 #define POSIX_SIGWINCH 28
+#define POSIX_SIGKILL 9
+#define POSIX_SIGSTOP 19
+#define POSIX_SIG_DFL UINT32_C(0)
+#define POSIX_SIG_IGN UINT32_C(0xfffffffe)
+
+typedef enum {
+    POSIX_SIGNAL_DEFAULT = 0,
+    POSIX_SIGNAL_IGNORE = 1,
+    POSIX_SIGNAL_HANDLER = 2
+} posix_signal_disposition;
 
 typedef struct {
     uint32_t iflag;
@@ -77,6 +89,14 @@ typedef struct {
 #define POSIX_WCONTINUED 8
 #define POSIX_TIOCGWINSZ 0x5413u
 #define POSIX_TIOCSWINSZ 0x5414u
+#define POSIX_F_GETFD 1
+#define POSIX_F_SETFD 2
+#define POSIX_FD_CLOEXEC 1
+#define POSIX_O_WRONLY 1
+#define POSIX_O_RDWR 2
+#define POSIX_O_CREAT 64
+#define POSIX_O_TRUNC 512
+#define POSIX_O_APPEND 1024
 
 #define POSIX_WAIT_BLOCKED 0
 #define POSIX_WAIT_READY   1
@@ -90,7 +110,11 @@ typedef enum {
     POSIX_OFD_TERMINAL,
     POSIX_OFD_PIPE_READ,
     POSIX_OFD_PIPE_WRITE,
+    POSIX_OFD_REGULAR,
+    POSIX_OFD_DIRECTORY,
 } posix_ofd_kind;
+
+typedef struct posix_kernel_path_node posix_kernel_path_node;
 
 /* Shared pipe buffer between read and write endpoints. */
 typedef struct posix_pipe {
@@ -113,7 +137,20 @@ typedef struct posix_ofd {
             int eof;
             posix_termios termios;
             posix_winsize winsize;
+            int foreground_pgid;
+            posix_sigset pending_signals;
         } terminal;
+        struct {
+            posix_kernel_path_node *node;
+            size_t offset;
+            int readable;
+            int writable;
+            int append;
+        } regular;
+        struct {
+            posix_kernel_path_node *node;
+            int index;
+        } directory;
         posix_pipe *pipe;
     };
 } posix_ofd;
@@ -121,12 +158,16 @@ typedef struct posix_ofd {
 /* Per-fd table entry. */
 typedef struct {
     posix_ofd *ofd;    /* NULL = closed */
+    uint8_t cloexec;
 } posix_fd_entry;
 
-typedef struct {
+struct posix_kernel_path_node {
     char path[POSIX_PATH_NODE_NAME_MAX];
     posix_path_metadata metadata;
-} posix_kernel_path_node;
+    uint8_t *data;
+    size_t data_capacity;
+    char *link_target;
+};
 
 typedef uint64_t (*posix_clock_now_fn)(void *data);
 
@@ -153,6 +194,12 @@ typedef struct posix_kernel {
     void *clock_data;
     posix_sigset signal_mask;
     posix_sigset pending_signals;
+    /* Signal consumed by the most recent interrupted wait, if any. */
+    int delivered_signal;
+    int process_group_id;
+    uint8_t signal_disposition[POSIX_SIGSET_BYTES * 8 + 1];
+    uint32_t signal_handlers[POSIX_SIGSET_BYTES * 8 + 1];
+    posix_sigset signal_action_masks[POSIX_SIGSET_BYTES * 8 + 1];
     char cwd[POSIX_PATH_NODE_NAME_MAX];
     posix_kernel_path_node path_nodes[POSIX_PATH_NODE_MAX];
     int path_node_count;
@@ -194,6 +241,29 @@ void posix_kernel_get_signal_mask(const posix_kernel *kernel,
 int posix_kernel_signal_raise(posix_kernel *kernel, int signal);
 int posix_kernel_signal_clear(posix_kernel *kernel, int signal);
 int posix_kernel_signal_pending(const posix_kernel *kernel, int signal);
+int posix_kernel_signal_last_delivered(posix_kernel *kernel);
+int posix_kernel_signal_set_disposition(posix_kernel *kernel, int signal,
+                                        posix_signal_disposition disposition);
+int posix_kernel_signal_get_disposition(const posix_kernel *kernel, int signal,
+                                        posix_signal_disposition *disposition);
+int posix_kernel_signal_set_handler(posix_kernel *kernel, int signal,
+                                    uint32_t handler);
+int posix_kernel_signal_get_handler(const posix_kernel *kernel, int signal,
+                                    uint32_t *handler);
+int posix_kernel_signal_set_action_mask(posix_kernel *kernel, int signal,
+                                         const posix_sigset *mask);
+int posix_kernel_signal_get_action_mask(const posix_kernel *kernel, int signal,
+                                        posix_sigset *mask);
+int posix_kernel_signal_enter_handler(posix_kernel *kernel, int signal,
+                                      posix_sigset *saved_mask);
+void posix_kernel_signal_leave_handler(posix_kernel *kernel,
+                                       const posix_sigset *saved_mask);
+int posix_kernel_getpgid(const posix_kernel *kernel);
+int posix_kernel_setpgid(posix_kernel *kernel, int pgid);
+int posix_kernel_terminal_get_foreground_pgid(const posix_kernel *kernel,
+                                              int fd);
+int posix_kernel_terminal_set_foreground_pgid(posix_kernel *kernel, int fd,
+                                              int pgid);
 
 /* --- Readiness --- */
 
@@ -211,6 +281,11 @@ int posix_kernel_terminal_enqueue(posix_kernel *kernel, int fd,
 /* Signal EOF on the terminal associated with fd.
    Returns 0 on success or negative errno. */
 int posix_kernel_terminal_signal_eof(posix_kernel *kernel, int fd);
+
+/* Apply terminal output flags to a bounded byte span. */
+int posix_kernel_terminal_process_output(const posix_kernel *kernel, int fd,
+                                         const uint8_t *input, int length,
+                                         uint8_t *output, int capacity);
 int posix_kernel_isatty(const posix_kernel *kernel, int fd);
 int posix_kernel_tcgetattr(posix_kernel *kernel, int fd,
                            posix_termios *termios);
@@ -232,6 +307,12 @@ int posix_kernel_pipe(posix_kernel *kernel, int fds[2]);
 
 /* Close a descriptor.  Returns 0 on success or negative errno. */
 int posix_kernel_close(posix_kernel *kernel, int fd);
+int posix_kernel_open(posix_kernel *kernel, const uint8_t *path, size_t length,
+                      int flags, int mode);
+int posix_kernel_readdir(posix_kernel *kernel, int fd, char *name,
+                         size_t capacity, posix_path_metadata *metadata);
+int posix_kernel_lseek(posix_kernel *kernel, int fd, int64_t offset,
+                       int whence, int64_t *result);
 
 /* Duplicate a descriptor to the lowest available fd.
    Returns the new fd or negative errno. */
@@ -240,6 +321,9 @@ int posix_kernel_dup(posix_kernel *kernel, int oldfd);
 /* Duplicate oldfd to exactly newfd.  If newfd is open, it is closed first.
    Returns newfd on success or negative errno. */
 int posix_kernel_dup2(posix_kernel *kernel, int oldfd, int newfd);
+int posix_kernel_get_cloexec(const posix_kernel *kernel, int fd);
+int posix_kernel_set_cloexec(posix_kernel *kernel, int fd, int enabled);
+void posix_kernel_close_on_exec(posix_kernel *kernel);
 
 /* --- I/O (non-blocking) --- */
 

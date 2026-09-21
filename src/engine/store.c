@@ -25,6 +25,108 @@ void native_process_image_init(native_process_image *image) {
     if (image) memset(image, 0, sizeof(*image));
 }
 
+static void native_process_image_dispose_startup(native_process_image *image) {
+    if (!image) return;
+    for (uint32_t i = 0; i < image->argc; i++) free(image->argv[i]);
+    for (uint32_t i = 0; i < image->envc; i++) free(image->envp[i]);
+    image->argc = 0;
+    image->envc = 0;
+}
+
+static char *native_process_image_strdup(const char *value) {
+    size_t length;
+    char *copy;
+    if (!value) return NULL;
+    length = strlen(value) + 1;
+    copy = (char *)malloc(length);
+    if (copy) memcpy(copy, value, length);
+    return copy;
+}
+
+static void native_store_u32(uint8_t *bytes, uint32_t value) {
+    bytes[0] = (uint8_t)value;
+    bytes[1] = (uint8_t)(value >> 8);
+    bytes[2] = (uint8_t)(value >> 16);
+    bytes[3] = (uint8_t)(value >> 24);
+}
+
+/* Materialize the optional __waste_startup(i32) block at the top of the
+ * process image's memory.  The block is deliberately self-describing through
+ * fixed offsets so a libc shim can consume it without host pointers. */
+static exec_status native_process_image_startup_block(
+        native_process_image *image, const native_exec_request *request,
+        native_store *store, exec_error *error) {
+    uint32_t hook;
+    uint32_t type_index;
+    exec_memory *memory = image->engine ? image->engine->memory : NULL;
+    size_t vector_bytes, string_bytes, total;
+    uint32_t base, argv_ptr, envp_ptr, cursor;
+    exec_func_type *type;
+    wasm_value argument;
+    int result_count = 0;
+    exec_error hook_error;
+    int has_hook = exec_find_export(image->engine, "__waste_startup", &hook,
+                                    error) == EXEC_OK;
+    if (!memory || memory->pages == 0)
+        return exec_fail(error, EXEC_ERROR_FORMAT,
+                         "startup hook requires linear memory");
+    if (has_hook && (exec_get_func_type_index(image->engine, hook, &type_index, error) != EXEC_OK ||
+        type_index >= image->engine->type_count))
+        return EXEC_ERROR_FORMAT;
+    if (has_hook) {
+        type = &image->engine->types[type_index];
+        if (type->param_count != 1 || type->params[0] != WASM_VALTYPE_I32 ||
+            type->result_count != 0)
+            return exec_fail(error, EXEC_ERROR_FORMAT,
+                             "__waste_startup must have type (i32) -> ()");
+    }
+    vector_bytes = ((size_t)request->argc + 1u +
+                    (size_t)request->envc + 1u) * sizeof(uint32_t);
+    string_bytes = strlen(image->cwd) + 1u;
+    for (uint32_t i = 0; i < request->argc; i++) string_bytes += strlen(request->argv[i]) + 1u;
+    for (uint32_t i = 0; i < request->envc; i++) string_bytes += strlen(request->envp[i]) + 1u;
+    total = 44u + vector_bytes + string_bytes;
+    if (total > memory->pages * (size_t)EXEC_PAGE_SIZE || total > UINT32_MAX)
+        return exec_fail(error, EXEC_ERROR_TRAP, "startup block exceeds memory");
+    base = (uint32_t)(memory->pages * (size_t)EXEC_PAGE_SIZE - total);
+    argv_ptr = base + 44u;
+    envp_ptr = argv_ptr + (request->argc + 1u) * 4u;
+    cursor = envp_ptr + (request->envc + 1u) * 4u;
+    native_store_u32(memory->data + base + 0, request->argc);
+    native_store_u32(memory->data + base + 4, argv_ptr);
+    native_store_u32(memory->data + base + 8, request->envc);
+    native_store_u32(memory->data + base + 12, envp_ptr);
+    native_store_u32(memory->data + base + 16, (uint32_t)image->pid);
+    native_store_u32(memory->data + base + 20, cursor);
+    for (uint32_t i = 0; i < request->argc; i++) {
+        native_store_u32(memory->data + argv_ptr + i * 4u, cursor);
+        size_t length = strlen(request->argv[i]) + 1u;
+        memcpy(memory->data + cursor, request->argv[i], length);
+        cursor += (uint32_t)length;
+    }
+    native_store_u32(memory->data + argv_ptr + request->argc * 4u, 0);
+    for (uint32_t i = 0; i < request->envc; i++) {
+        native_store_u32(memory->data + envp_ptr + i * 4u, cursor);
+        size_t length = strlen(request->envp[i]) + 1u;
+        memcpy(memory->data + cursor, request->envp[i], length);
+        cursor += (uint32_t)length;
+    }
+    native_store_u32(memory->data + envp_ptr + request->envc * 4u, 0);
+    memcpy(memory->data + cursor, image->cwd, strlen(image->cwd) + 1u);
+    image->startup_ptr = base;
+    image->startup_size = (uint32_t)total;
+    if (has_hook) {
+        argument.type = WASM_VALTYPE_I32;
+        argument.i32 = (int32_t)base;
+        memset(&hook_error, 0, sizeof(hook_error));
+        if (exec_invoke(image->engine, hook, &argument, 1, NULL, &result_count,
+                        &hook_error) != EXEC_OK)
+            return exec_fail(error, EXEC_ERROR_TRAP, "startup hook failed");
+    }
+    (void)store;
+    return EXEC_OK;
+}
+
 void native_process_image_retain(native_process_image *image) {
     if (image) image->references++;
 }
@@ -37,6 +139,7 @@ void native_process_image_unpin(native_process_image *image) {
     if (!image || image->checkpoint_pins == 0) return;
     image->checkpoint_pins--;
     if (image->checkpoint_pins == 0 && image->references == 0) {
+        native_process_image_dispose_startup(image);
         exec_free(image->engine);
         free(image);
     }
@@ -46,6 +149,7 @@ void native_process_image_release(native_process_image *image) {
     if (!image || image->references == 0) return;
     image->references--;
     if (image->references == 0 && image->checkpoint_pins == 0) {
+        native_process_image_dispose_startup(image);
         exec_free(image->engine);
         free(image);
     }
@@ -69,6 +173,8 @@ static int native_executable_import_allowed(const wasm_import *import) {
      * imports and are expanded only when their ABI entries are implemented. */
     if (strcmp(import->module, "env") == 0 &&
         (strcmp(import->name, "write") == 0 ||
+         strcmp(import->name, "exit") == 0 ||
+         strcmp(import->name, "fcntl") == 0 ||
          strcmp(import->name, "memory") == 0))
         return 1;
     if (strcmp(import->module, "waste_kernel") == 0) return 1;
@@ -218,6 +324,46 @@ exec_status native_store_instantiate_executable(
     image->entry_func = entry_func;
     image->references = 1;
     snprintf(image->path, sizeof(image->path), "%s", executable->path);
+    image->pid = request->pid;
+    if (store->kernel) {
+        posix_path_metadata cwd_metadata;
+        if (posix_kernel_path_stat(store->kernel,
+                                   (const uint8_t *)store->kernel->cwd,
+                                   strlen(store->kernel->cwd), 1,
+                                   &cwd_metadata) != 0 ||
+            cwd_metadata.kind != POSIX_NODE_DIRECTORY)
+            (void)posix_kernel_path_set_cwd(store->kernel, "/");
+        snprintf(image->cwd, sizeof(image->cwd), "%s", store->kernel->cwd);
+    }
+    for (uint32_t i = 0; i < request->argc; i++) {
+        image->argv[i] = native_process_image_strdup(request->argv[i]);
+        if (!image->argv[i]) {
+            native_process_image_dispose_startup(image);
+            exec_free(image->engine);
+            free(image);
+            return exec_fail(error, EXEC_ERROR_TRAP,
+                             "executable argv allocation failed");
+        }
+        image->argc++;
+    }
+    for (uint32_t i = 0; i < request->envc; i++) {
+        image->envp[i] = native_process_image_strdup(request->envp[i]);
+        if (!image->envp[i]) {
+            native_process_image_dispose_startup(image);
+            exec_free(image->engine);
+            free(image);
+            return exec_fail(error, EXEC_ERROR_TRAP,
+                             "executable environment allocation failed");
+        }
+        image->envc++;
+    }
+    status = native_process_image_startup_block(image, request, store, error);
+    if (status != EXEC_OK) {
+        native_process_image_dispose_startup(image);
+        exec_free(image->engine);
+        free(image);
+        return status;
+    }
     *image_out = image;
     return EXEC_OK;
 }
@@ -339,6 +485,8 @@ void native_store_enable_terminal(native_store *store) {
         posix_termios termios;
         if (posix_kernel_tcgetattr(store->kernel, 0, &termios) == 0) {
             termios.iflag |= POSIX_TERMIOS_IFLAG_ICRNL;
+            termios.oflag |= POSIX_TERMIOS_OFLAG_OPOST |
+                             POSIX_TERMIOS_OFLAG_ONLCR;
             termios.lflag |= POSIX_TERMIOS_LFLAG_ISIG |
                              POSIX_TERMIOS_LFLAG_ICANON |
                              POSIX_TERMIOS_LFLAG_ECHO |

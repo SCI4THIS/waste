@@ -603,6 +603,19 @@ static int g_process_image_active;
 static uint8_t *g_boot_executable;
 static size_t g_boot_executable_size;
 
+/* Boot-time packaged VFS manifest.  The browser submits only bounded path
+ * metadata; file contents and executable bytes remain separate staged images
+ * until the VFS data plane is added in Stage 7. */
+#define BROWSER_VFS_MANIFEST_MAX 24
+typedef struct {
+    char path[POSIX_PATH_NODE_NAME_MAX];
+    posix_path_metadata metadata;
+    uint8_t *data;
+    size_t data_length;
+} browser_vfs_manifest_entry;
+static browser_vfs_manifest_entry g_vfs_manifest[BROWSER_VFS_MANIFEST_MAX];
+static uint32_t g_vfs_manifest_count;
+
 /* The browser-facing scheduler owns one explicit driver record.  The store
  * remains authoritative for process state; this record only identifies the
  * capsule currently being driven and the reason JavaScript must resume it. */
@@ -1275,6 +1288,18 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
         native_store_enable_terminal(&g_yield_context.store);
         g_terminal_requested = 0;
     }
+    /* Terminal creation replaces the initial noninteractive kernel, so bind
+     * packaged metadata only after that optional replacement. */
+    for (uint32_t i = 0; i < g_vfs_manifest_count; i++) {
+        (void)posix_kernel_path_add_data(g_yield_context.store.kernel,
+                                          g_vfs_manifest[i].path,
+                                          &g_vfs_manifest[i].metadata,
+                                          g_vfs_manifest[i].data,
+                                          g_vfs_manifest[i].data_length);
+        free(g_vfs_manifest[i].data);
+        g_vfs_manifest[i].data = NULL;
+    }
+    g_vfs_manifest_count = 0;
     g_yield_context.store.host_resolver = browser_host_resolver;
     g_yield_context.store.host_context = &g_yield_context.store;
     wast_stream_init(&g_yield_stream,
@@ -1353,6 +1378,57 @@ int32_t waste_wast_stage_executable(uint32_t ptr, uint32_t size) {
     g_boot_executable = copy;
     g_boot_executable_size = size;
     return 0;
+}
+
+__attribute__((export_name("waste_wast_stage_path")))
+int32_t waste_wast_stage_path(uint32_t ptr, uint32_t length,
+                              uint32_t kind, uint32_t mode, uint32_t size) {
+    browser_vfs_manifest_entry *entry;
+    if (!length || length >= POSIX_PATH_NODE_NAME_MAX ||
+        g_vfs_manifest_count >= BROWSER_VFS_MANIFEST_MAX ||
+        kind == POSIX_NODE_NONE || kind > POSIX_NODE_SYMLINK)
+        return -POSIX_EINVAL;
+    entry = &g_vfs_manifest[g_vfs_manifest_count];
+    memcpy(entry->path, (const void *)(uintptr_t)ptr, length);
+    entry->path[length] = '\0';
+    entry->metadata.kind = kind;
+    entry->metadata.mode = mode;
+    entry->metadata.uid = 0;
+    entry->metadata.gid = 0;
+    entry->metadata.size = size;
+    entry->metadata.inode = 1000u + g_vfs_manifest_count;
+    g_vfs_manifest_count++;
+    return 0;
+}
+
+__attribute__((export_name("waste_wast_stage_file")))
+int32_t waste_wast_stage_file(uint32_t path_ptr, uint32_t path_length,
+                              uint32_t data_ptr, uint32_t data_length,
+                              uint32_t mode) {
+    if (!path_length || path_length >= POSIX_PATH_NODE_NAME_MAX ||
+        data_length > NATIVE_EXEC_BYTES_MAX ||
+        g_vfs_manifest_count >= BROWSER_VFS_MANIFEST_MAX)
+        return -POSIX_EINVAL;
+    browser_vfs_manifest_entry *entry = &g_vfs_manifest[g_vfs_manifest_count];
+    entry->data = data_length ? malloc(data_length) : NULL;
+    if (data_length && !entry->data) return -POSIX_ENOMEM;
+    memcpy(entry->path, (const void *)(uintptr_t)path_ptr, path_length);
+    entry->path[path_length] = '\0';
+    if (data_length) memcpy(entry->data, (const void *)(uintptr_t)data_ptr, data_length);
+    entry->data_length = data_length;
+    entry->metadata = (posix_path_metadata){ POSIX_NODE_REGULAR, mode,
+        0, 0, (int64_t)data_length, 1000u + g_vfs_manifest_count };
+    g_vfs_manifest_count++;
+    return 0;
+}
+
+__attribute__((export_name("waste_wast_path_access")))
+int32_t waste_wast_path_access(uint32_t ptr, uint32_t length, uint32_t mode) {
+    if (!g_yield_context.store.kernel || length >= POSIX_PATH_MAX)
+        return -POSIX_EINVAL;
+    return posix_kernel_path_access(g_yield_context.store.kernel,
+                                    (const uint8_t *)(uintptr_t)ptr, length,
+                                    (int)mode, 0);
 }
 
 __attribute__((export_name("waste_wast_resize_terminal")))

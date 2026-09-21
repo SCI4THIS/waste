@@ -155,10 +155,30 @@ int main(int argc, char **argv) {
     memset(&request, 0, sizeof(request));
     request.active = 1; request.pid = 1;
     snprintf(request.path, sizeof(request.path), "/bin/matrix");
+    request.argv[0] = (char *)malloc(8);
+    request.argv[1] = (char *)malloc(6);
+    request.envp[0] = (char *)malloc(9);
+    if (request.argv[0]) memcpy(request.argv[0], "matrix", 7);
+    if (request.argv[1]) memcpy(request.argv[1], "first", 6);
+    if (request.envp[0]) memcpy(request.envp[0], "K=VALUE", 8);
+    request.argc = 2;
+    request.envc = 1;
     memset(&error, 0, sizeof(error));
     CHECK(native_store_instantiate_executable(&store, &request, &image,
                                               &error) == EXEC_OK && image,
           "valid candidate instantiates before commit");
+    CHECK(image && image->pid == 1 && strcmp(image->cwd, "/") == 0,
+          "startup pid and cwd copied");
+    CHECK(image && image->argc == 2 && strcmp(image->argv[1], "first") == 0,
+          "startup argv copied");
+    CHECK(image && image->envc == 1 && strcmp(image->envp[0], "K=VALUE") == 0,
+          "startup environment copied");
+    CHECK(image && image->startup_ptr != 0 && image->startup_size > 44,
+          "startup block materialized");
+    if (image && image->engine && image->engine->memory)
+        CHECK(image->engine->memory->data[100] ==
+                  (uint8_t)image->startup_ptr,
+              "startup hook received block pointer");
     if (image) native_process_image_release(image);
 
     CHECK(native_store_fork_process(&store, &child) == 0,
@@ -183,6 +203,7 @@ int main(int argc, char **argv) {
     CHECK(native_store_wait_process(&store, child, 0, &status) == child &&
           status == (130 << 8), "signal status is reapable");
 
+    native_exec_request_destroy(&request);
     free(bytes);
     native_store_free(&store);
     printf("C-engine exec transition matrix: %d checks, %d failures\n",

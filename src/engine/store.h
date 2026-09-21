@@ -60,6 +60,14 @@ struct native_process_image {
     waste_exec_engine *engine;
     uint32_t entry_func;
     char path[NATIVE_EXEC_PATH_MAX];
+    int pid;
+    char cwd[POSIX_PATH_NODE_NAME_MAX];
+    char *argv[NATIVE_EXEC_ARG_MAX];
+    uint32_t argc;
+    char *envp[NATIVE_EXEC_ENV_MAX];
+    uint32_t envc;
+    uint32_t startup_ptr;
+    uint32_t startup_size;
     uint32_t references;
     uint32_t checkpoint_pins;
 };
@@ -230,6 +238,7 @@ int native_store_fork_process(native_store *store, int *pid_out);
 int native_store_clone_process_graph(native_store *store, int parent_pid,
                                      int child_pid);
 int native_store_exit_process(native_store *store, int status);
+int native_store_signal_process(native_store *store, int pid, int signal);
 int native_store_wait_process(native_store *store, int pid, int options,
                               int *status_out);
 

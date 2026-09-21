@@ -3,6 +3,52 @@
 #include "include/helper.h"
 
 #ifndef WASTE_ENGINE
+__attribute__((import_module("waste_kernel"), import_name("startup_v1")))
+extern i32 waste_kernel_startup_v1(void);
+#endif
+
+extern i32 open(const char *path, i32 flags, i32 mode);
+extern i32 close(i32 descriptor);
+extern i32 waste_env_chdir(const char *path) __attribute__((import_module("env"), import_name("chdir")));
+extern i32 waste_env_getcwd(char *buffer, i32 capacity) __attribute__((import_module("env"), import_name("getcwd")));
+i32 chdir(const char *path) { return waste_env_chdir(path); }
+char *getcwd(char *buffer, u32 capacity) {
+  i32 result = waste_env_getcwd(buffer, (i32)capacity);
+  return result ? buffer : 0;
+}
+
+/* Decode the engine-owned startup block for the guest libc entry shim.  The
+ * returned pointers remain in this image's linear memory for its lifetime. */
+i32 __waste_startup_view(i32 *argc, char ***argv, i32 *envc, char ***envp) {
+#ifdef WASTE_ENGINE
+  (void)argc; (void)argv; (void)envc; (void)envp;
+  return -1;
+#else
+  i32 block = waste_kernel_startup_v1();
+  if (block < 0 || !argc || !argv || !envc || !envp) return -1;
+  *argc = *(i32 *)(unsigned long)(u32)block;
+  *argv = (char **)(unsigned long)*(u32 *)(unsigned long)((u32)block + 4);
+  *envc = *(i32 *)(unsigned long)((u32)block + 8);
+  *envp = (char **)(unsigned long)*(u32 *)(unsigned long)((u32)block + 12);
+  return 0;
+#endif
+}
+
+/* CRT bridge used by application-specific _start shims.  The callback is a
+ * guest function pointer, so no engine or JavaScript function address crosses
+ * the ABI boundary. */
+typedef i32 (*waste_main_entry)(i32 argc, char **argv, char **envp);
+
+i32 __waste_startup_call(waste_main_entry entry) {
+  i32 argc, envc;
+  char **argv, **envp;
+  (void)envc;
+  if (!entry || __waste_startup_view(&argc, &argv, &envc, &envp) != 0)
+    return -1;
+  return entry(argc, argv, envp);
+}
+
+#ifndef WASTE_ENGINE
 __attribute__((import_module("waste_kernel"), import_name("isatty_v1")))
 extern i32 waste_kernel_isatty_v1(i32 descriptor);
 #endif
@@ -30,7 +76,11 @@ i32 execve(const char*p,char*const*a,char*const*e){(void)p;(void)a;(void)e;retur
 i32 execve(const char*p,char*const*a,char*const*e){return waste_env_execve(p,a,e);}
 #endif
 i32 chown(const char*p,u32 u,u32 g){(void)p;(void)u;(void)g;return unsupported();}
-i32 readlink(const char*p,char*b,u32 n){(void)p;(void)b;(void)n;return unsupported();}
+extern i32 waste_env_readlink(const char *path, char *buffer, u32 capacity)
+  __attribute__((import_module("env"), import_name("readlink")));
+i32 readlink(const char *path, char *buffer, u32 capacity) {
+  return waste_env_readlink(path, buffer, capacity);
+}
 
 /* Path queries cross the versioned engine-owned kernel boundary. The kernel
  * receives a bounded span and compact metadata; these wrappers retain the

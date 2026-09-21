@@ -38,10 +38,12 @@ def main() -> int:
     style_css = page_dir / "style.css"
     app_js = page_dir / "app.js"
     terminal_model_js = page_dir / "terminal" / "model.js"
+    terminal_glf_js = page_dir / "terminal" / "glf.js"
     terminal_renderer_js = page_dir / "terminal" / "renderer.js"
 
     for f in [index_html, style_css, app_js, args.tarball_js,
-              terminal_model_js, terminal_renderer_js, args.loader_js,
+              terminal_model_js, terminal_glf_js, terminal_renderer_js,
+              args.loader_js,
               args.manifest_tar_gz, args.zlibaux_wasm]:
         if not f.is_file():
             print(f"error: required file not found: {f}", file=sys.stderr)
@@ -82,6 +84,7 @@ def main() -> int:
     # a single file:// document.
     for source_path, tag in [
             (terminal_model_js, '<script src="terminal/model.js"></script>'),
+            (terminal_glf_js, '<script src="terminal/glf.js"></script>'),
             (terminal_renderer_js, '<script src="terminal/renderer.js"></script>')]:
         source = source_path.read_text(encoding="utf-8")
         html = html.replace(tag, "<script>\n" + source + "\n</script>")

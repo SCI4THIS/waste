@@ -185,6 +185,81 @@ static void test_terminal_modes(void) {
     posix_kernel_destroy(k);
 }
 
+static void test_terminal_eof_and_output(void) {
+    posix_kernel *k = posix_kernel_create(1);
+    posix_termios termios;
+    uint8_t buffer[32];
+    uint8_t output[16];
+    const uint8_t lines[] = "a\nb";
+
+    CHECK(posix_kernel_tcgetattr(k, 0, &termios) == 0,
+          "get attributes for EOF/output test");
+    termios.iflag = POSIX_TERMIOS_IFLAG_ICRNL;
+    termios.oflag = POSIX_TERMIOS_OFLAG_OPOST | POSIX_TERMIOS_OFLAG_ONLCR;
+    termios.lflag = POSIX_TERMIOS_LFLAG_ICANON;
+    termios.cc[POSIX_TERMIOS_VEOF] = 4;
+    CHECK(posix_kernel_tcsetattr(k, 0, &termios) == 0,
+          "set canonical EOF/output mode");
+    posix_kernel_terminal_enqueue(k, 0, (const uint8_t *)"partial", 7);
+    posix_kernel_terminal_enqueue(k, 0, (const uint8_t *)"\004", 1);
+    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == 7,
+          "VEOF releases pending canonical input");
+    CHECK(memcmp(buffer, "partial", 7) == 0, "VEOF preserves pending bytes");
+    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == 0,
+          "VEOF produces EOF after pending input");
+
+    CHECK(posix_kernel_terminal_process_output(k, 1, lines, 3, output,
+                                               sizeof(output)) == 4,
+          "ONLCR expands LF");
+    CHECK(memcmp(output, "a\r\nb", 4) == 0, "ONLCR output bytes");
+    termios.oflag = 0;
+    CHECK(posix_kernel_tcsetattr(k, 0, &termios) == 0,
+          "disable raw output processing");
+    CHECK(posix_kernel_terminal_process_output(k, 1, lines, 3, output,
+                                               sizeof(output)) == 3,
+          "raw output preserves length");
+    CHECK(memcmp(output, lines, 3) == 0, "raw output bytes");
+    posix_kernel_destroy(k);
+}
+
+static uint64_t test_clock_now(void *data) {
+    return *(uint64_t *)data;
+}
+
+static void test_terminal_vtime(void) {
+    posix_kernel *k = posix_kernel_create(1);
+    posix_termios termios;
+    uint8_t buffer[16];
+    uint64_t now = 0;
+    posix_kernel_set_clock(k, test_clock_now, &now);
+    CHECK(posix_kernel_tcgetattr(k, 0, &termios) == 0, "get VTIME attributes");
+    termios.lflag = 0;
+    termios.cc[POSIX_TERMIOS_VMIN] = 0;
+    termios.cc[POSIX_TERMIOS_VTIME] = 2;
+    CHECK(posix_kernel_tcsetattr(k, 0, &termios) == 0, "set VTIME zero-min mode");
+    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == -POSIX_EAGAIN,
+          "VMIN=0 VTIME read yields");
+    CHECK(posix_kernel_wait_active(k), "VMIN=0 VTIME registers wait");
+    now = 200000000;
+    CHECK(posix_kernel_wait_poll(k) == POSIX_WAIT_TIMEOUT,
+          "VMIN=0 VTIME expires");
+    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == 0,
+          "VMIN=0 VTIME returns zero at timeout");
+
+    termios.cc[POSIX_TERMIOS_VMIN] = 3;
+    termios.cc[POSIX_TERMIOS_VTIME] = 2;
+    CHECK(posix_kernel_tcsetattr(k, 0, &termios) == 0, "set VMIN/VTIME mode");
+    now = 300000000;
+    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == -POSIX_EAGAIN,
+          "VMIN/VTIME read yields");
+    posix_kernel_terminal_enqueue(k, 0, (const uint8_t *)"x", 1);
+    now = 500000000;
+    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == 1,
+          "VMIN/VTIME returns partial bytes at timeout");
+    CHECK(buffer[0] == 'x', "VMIN/VTIME partial byte preserved");
+    posix_kernel_destroy(k);
+}
+
 /* --- Pipe creation and readiness --- */
 
 static void test_pipe_readiness(void) {
@@ -521,11 +596,73 @@ static void test_fd_exhaustion(void) {
     posix_kernel_destroy(k);
 }
 
+static void test_close_on_exec(void) {
+    posix_kernel *k = posix_kernel_create(0);
+    int fds[2];
+    CHECK(posix_kernel_pipe(k, fds) == 0, "cloexec pipe creates");
+    CHECK(posix_kernel_set_cloexec(k, fds[1], POSIX_FD_CLOEXEC) == 0,
+          "set cloexec");
+    CHECK(posix_kernel_get_cloexec(k, fds[1]) == POSIX_FD_CLOEXEC,
+          "get cloexec");
+    int duplicate = posix_kernel_dup(k, fds[1]);
+    CHECK(duplicate >= 0 && posix_kernel_get_cloexec(k, duplicate) == 0,
+          "dup clears cloexec");
+    CHECK(posix_kernel_set_cloexec(k, duplicate, POSIX_FD_CLOEXEC) == 0,
+          "set cloexec on duplicate");
+    CHECK(posix_kernel_dup2(k, fds[0], duplicate) == duplicate &&
+          posix_kernel_get_cloexec(k, duplicate) == 0,
+          "dup2 replacement clears cloexec");
+    posix_kernel_close_on_exec(k);
+    CHECK(posix_kernel_get_cloexec(k, fds[1]) == -POSIX_EBADF,
+          "exec closes marked descriptor");
+    CHECK(posix_kernel_get_cloexec(k, duplicate) == 0,
+          "exec preserves unmarked duplicate");
+    posix_kernel *child = posix_kernel_clone(k);
+    CHECK(child && posix_kernel_get_cloexec(child, duplicate) == 0,
+          "unmarked descriptor survives clone");
+    if (child) posix_kernel_destroy(child);
+    posix_kernel_destroy(k);
+}
+
+static void test_foreground_process_group_routing(void) {
+    posix_kernel *k = posix_kernel_create(1);
+    posix_termios termios;
+    posix_fd_set readfds;
+    posix_sigset empty = {{0, 0, 0, 0}};
+    posix_timespec zero = {0, 0};
+    const uint8_t intr = 3;
+    CHECK(posix_kernel_getpgid(k) == 1, "initial process group");
+    CHECK(posix_kernel_setpgid(k, 2) == 2 && posix_kernel_getpgid(k) == 2,
+          "set process group");
+    CHECK(posix_kernel_terminal_get_foreground_pgid(k, 0) == 1,
+          "initial foreground group");
+    CHECK(posix_kernel_tcgetattr(k, 0, &termios) == 0, "get pgrp termios");
+    termios.lflag |= POSIX_TERMIOS_LFLAG_ISIG;
+    termios.cc[POSIX_TERMIOS_VINTR] = 3;
+    CHECK(posix_kernel_tcsetattr(k, 0, &termios) == 0, "set pgrp termios");
+    CHECK(posix_kernel_terminal_enqueue(k, 0, &intr, 1) == 0,
+          "enqueue background interrupt");
+    CHECK(!posix_kernel_signal_pending(k, 2),
+          "background group received terminal signal");
+    CHECK(posix_kernel_terminal_set_foreground_pgid(k, 0, 2) == 0,
+          "set foreground group");
+    posix_fd_zero(&readfds);
+    posix_fd_set_bit(0, &readfds);
+    CHECK(posix_kernel_pselect(k, 1, &readfds, NULL, NULL, &zero, &empty) ==
+              -POSIX_EINTR,
+          "foreground group did not receive queued interrupt");
+    CHECK(!posix_kernel_signal_pending(k, 2),
+          "foreground interrupt was not consumed");
+    posix_kernel_destroy(k);
+}
+
 int main(void) {
     test_lifecycle();
     test_invalid_fd();
     test_terminal_readiness();
     test_terminal_modes();
+    test_terminal_eof_and_output();
+    test_terminal_vtime();
     test_pipe_readiness();
     test_pipe_close_transitions();
     test_pipe_full();
@@ -536,6 +673,8 @@ int main(void) {
     test_isolation();
     test_edge_cases();
     test_fd_exhaustion();
+    test_foreground_process_group_routing();
+    test_close_on_exec();
 
     if (failures)
         fprintf(stderr, "%d/%d tests FAILED\n", failures, tests);

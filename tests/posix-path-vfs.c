@@ -20,12 +20,65 @@ int main(void) {
     const posix_path_metadata directory = { POSIX_NODE_DIRECTORY, 0755, 0, 0, 0, 6 };
     const posix_path_metadata readonly = { POSIX_NODE_REGULAR, 0444, 0, 0, 1, 4 };
     const posix_path_metadata inaccessible = { POSIX_NODE_REGULAR, 0000, 0, 0, 1, 5 };
+    const uint8_t hello[] = "hello";
+    posix_path_metadata actual;
     CHECK(posix_kernel_path_add(first, "/bin/tool", &regular) == 0);
     CHECK(posix_kernel_path_add(first, "/data", &directory) == 0);
     CHECK(posix_kernel_path_add(first, "/data/readme", &readonly) == 0);
     CHECK(posix_kernel_path_add(first, "/data/secret", &inaccessible) == 0);
+    CHECK(posix_kernel_path_add_data(first, "/data/readme", &readonly,
+                                     hello, sizeof(hello) - 1) == 0);
+    const posix_path_metadata symlink = { POSIX_NODE_SYMLINK, 0777, 0, 0, 0, 7 };
+    CHECK(posix_kernel_path_add_symlink(first, "/data/alias", &symlink,
+                                       "/data/readme") == 0);
+    int fd = posix_kernel_open(first, (const uint8_t *)"/data/readme", 12, 0, 0);
+    CHECK(fd >= 0);
+    uint8_t readback[8] = {0};
+    CHECK(posix_kernel_read(first, fd, readback, 5) == 5);
+    CHECK(memcmp(readback, "hello", 5) == 0);
+    CHECK(posix_kernel_close(first, fd) == 0);
+    fd = posix_kernel_open(first, (const uint8_t *)"/tmp/new", 8,
+                           POSIX_O_RDWR | POSIX_O_CREAT, 0666);
+    CHECK(fd >= 0);
+    CHECK(posix_kernel_write(first, fd, "abc", 3) == 3);
+    CHECK(posix_kernel_close(first, fd) == 0);
+    CHECK(posix_kernel_path_stat(first, (const uint8_t *)"/tmp/new", 8, 1,
+                                 &actual) == 0 && actual.size == 3);
+    CHECK(posix_kernel_path_stat(first, (const uint8_t *)"/data/alias", 11,
+                                 0, &actual) == 0 && actual.kind == POSIX_NODE_SYMLINK);
+    CHECK(posix_kernel_path_stat(first, (const uint8_t *)"/data/alias", 11,
+                                 1, &actual) == 0 && actual.size == 5);
+    char link_target[32] = {0};
+    CHECK(posix_kernel_path_readlink(first, (const uint8_t *)"/data/alias", 11,
+                                     link_target, sizeof(link_target)) == 12 &&
+          memcmp(link_target, "/data/readme", 12) == 0);
+    fd = posix_kernel_open(first, (const uint8_t *)"/data/readme", 12, 0, 0);
+    int64_t position = -1;
+    CHECK(fd >= 0 && posix_kernel_lseek(first, fd, 2, 0, &position) == 0 &&
+          position == 2);
+    CHECK(posix_kernel_lseek(first, fd, 1, 1, &position) == 0 && position == 3);
+    CHECK(posix_kernel_close(first, fd) == 0);
+    int directory_fd = posix_kernel_open(first, (const uint8_t *)"/data", 5, 0, 0);
+    CHECK(directory_fd >= 0);
+    char entry[POSIX_PATH_NODE_NAME_MAX];
+    int entries = 0;
+    while (directory_fd >= 0 && posix_kernel_readdir(first, directory_fd, entry,
+                                                     sizeof(entry), &actual) > 0)
+        entries++;
+    CHECK(entries == 3);
+    CHECK(posix_kernel_close(first, directory_fd) == 0);
+    CHECK(posix_kernel_path_mkdir(first, (const uint8_t *)"/tmp/work", 9,
+                                  0777) == 0);
+    CHECK(posix_kernel_path_rename(first, (const uint8_t *)"/tmp/new", 8,
+                                   (const uint8_t *)"/tmp/work/file", 14) == 0);
+    CHECK(posix_kernel_path_stat(first, (const uint8_t *)"/tmp/work/file", 14,
+                                 1, &actual) == 0 && actual.size == 3);
+    CHECK(posix_kernel_path_unlink(first, (const uint8_t *)"/tmp/work/file",
+                                   14, 0) == 0);
+    CHECK(posix_kernel_path_stat(first, (const uint8_t *)"/tmp/work/file", 14,
+                                 1, &actual) == -POSIX_ENOENT);
+    CHECK(posix_kernel_path_unlink(first, (const uint8_t *)"/tmp/work", 9, 1) == 0);
 
-    posix_path_metadata actual;
     CHECK(posix_kernel_path_stat(first, (const uint8_t *)"/bin/tool", 9, 1, &actual) == 0);
     CHECK(actual.size == 12 && actual.kind == POSIX_NODE_REGULAR);
     CHECK(posix_kernel_path_access(first, (const uint8_t *)"/bin/tool", 9, POSIX_X_OK, 0) == 0);
@@ -35,6 +88,9 @@ int main(void) {
     CHECK(posix_kernel_path_stat(first, (const uint8_t *)"/bin/tool/child", 15, 1, &actual) == -POSIX_ENOTDIR);
 
     CHECK(posix_kernel_path_set_cwd(first, "/data") == 0);
+    char cwd[POSIX_PATH_NODE_NAME_MAX];
+    CHECK(posix_kernel_getcwd(first, cwd, sizeof(cwd)) == 0 &&
+          strcmp(cwd, "/data") == 0);
     CHECK(posix_kernel_path_stat(first, (const uint8_t *)"././readme", 10, 1, &actual) == 0);
     CHECK(posix_kernel_path_stat(first, (const uint8_t *)"../bin/../bin/tool", sizeof("../bin/../bin/tool") - 1, 1, &actual) == 0);
     CHECK(posix_kernel_path_stat(first, (const uint8_t *)"../../../../bin/tool", 20, 1, &actual) == 0);

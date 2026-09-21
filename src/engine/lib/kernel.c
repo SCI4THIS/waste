@@ -19,6 +19,8 @@ static posix_ofd *ofd_alloc(posix_ofd_kind kind) {
    fd close (not once per OFD destruction) so that the pipe's reader/writer
    tallies track open descriptors, not OFD objects. */
 static void pipe_count_dec(posix_ofd *ofd) {
+    if (!ofd || (ofd->kind != POSIX_OFD_PIPE_READ &&
+                 ofd->kind != POSIX_OFD_PIPE_WRITE)) return;
     if (ofd->kind == POSIX_OFD_PIPE_READ) ofd->pipe->readers--;
     else if (ofd->kind == POSIX_OFD_PIPE_WRITE) ofd->pipe->writers--;
 }
@@ -28,6 +30,10 @@ static void ofd_release(posix_ofd *ofd) {
     switch (ofd->kind) {
     case POSIX_OFD_TERMINAL:
         free(ofd->terminal.input);
+        break;
+    case POSIX_OFD_REGULAR:
+        break;
+    case POSIX_OFD_DIRECTORY:
         break;
     case POSIX_OFD_PIPE_READ:
     case POSIX_OFD_PIPE_WRITE:
@@ -48,6 +54,20 @@ static int kernel_find_free_fd(posix_kernel *k, int from) {
 
 static int fd_valid(int fd) {
     return fd >= 0 && fd < POSIX_KERNEL_FD_MAX;
+}
+
+static int terminal_wait_with_timeout(posix_kernel *kernel, int fd,
+                                      uint8_t vtime) {
+    int result = posix_kernel_wait_read(kernel, fd);
+    if (result == -POSIX_EAGAIN && vtime > 0 && kernel->clock_now &&
+        !kernel->wait.has_deadline) {
+        uint64_t now = kernel->clock_now(kernel->clock_data);
+        uint64_t duration = (uint64_t)vtime * UINT64_C(100000000);
+        kernel->wait.has_deadline = 1;
+        kernel->wait.deadline_ns = now > UINT64_MAX - duration ?
+            UINT64_MAX : now + duration;
+    }
+    return result;
 }
 
 /* --- Engine-owned pathname namespace --- */
@@ -140,20 +160,167 @@ static int path_prefix_is_file(const posix_kernel *kernel, const char *path) {
 
 int posix_kernel_path_add(posix_kernel *kernel, const char *path,
                           const posix_path_metadata *metadata) {
+    return posix_kernel_path_add_data(kernel, path, metadata, NULL, 0);
+}
+
+int posix_kernel_path_add_data(posix_kernel *kernel, const char *path,
+                               const posix_path_metadata *metadata,
+                               const uint8_t *data, size_t data_length) {
     if (!kernel || !path || !metadata ||
         posix_path_metadata_validate(metadata) < 0) return -POSIX_EINVAL;
+    if (metadata->kind != POSIX_NODE_REGULAR && data_length != 0)
+        return -POSIX_EINVAL;
+    if (data_length > 0 && !data) return -POSIX_EFAULT;
     size_t length = bounded_length(path);
     if (length == 0 || length >= POSIX_PATH_MAX) return -POSIX_EINVAL;
     char normalized[POSIX_PATH_NODE_NAME_MAX];
     int result = path_normalize(kernel, (const uint8_t *)path, length, normalized);
     if (result < 0) return result;
     posix_kernel_path_node *existing = path_find(kernel, normalized);
-    if (existing) { existing->metadata = *metadata; return 0; }
+    if (existing) {
+        uint8_t *copy = NULL;
+        if (data_length > 0) {
+            copy = malloc(data_length);
+            if (!copy) return -POSIX_ENOMEM;
+            memcpy(copy, data, data_length);
+        }
+        free(existing->data);
+        free(existing->link_target);
+        existing->link_target = NULL;
+        existing->data = copy;
+        existing->data_capacity = data_length;
+        existing->metadata = *metadata;
+        if (metadata->kind == POSIX_NODE_REGULAR && data_length > 0)
+            existing->metadata.size = (int64_t)data_length;
+        return 0;
+    }
     if (kernel->path_node_count >= POSIX_PATH_NODE_MAX) return -POSIX_ENOMEM;
     existing = &kernel->path_nodes[kernel->path_node_count++];
+    memset(existing, 0, sizeof(*existing));
     memcpy(existing->path, normalized, strlen(normalized) + 1);
     existing->metadata = *metadata;
+    if (metadata->kind == POSIX_NODE_REGULAR && data_length > 0)
+        existing->metadata.size = (int64_t)data_length;
+    if (data_length > 0) {
+        existing->data = malloc(data_length);
+        if (!existing->data) {
+            kernel->path_node_count--;
+            return -POSIX_ENOMEM;
+        }
+        memcpy(existing->data, data, data_length);
+        existing->data_capacity = data_length;
+    }
     return 0;
+}
+
+int posix_kernel_path_add_symlink(posix_kernel *kernel, const char *path,
+                                  const posix_path_metadata *metadata,
+                                  const char *target) {
+    if (!kernel || !target || !metadata || metadata->kind != POSIX_NODE_SYMLINK)
+        return -POSIX_EINVAL;
+    int result = posix_kernel_path_add_data(kernel, path, metadata, NULL, 0);
+    if (result < 0) return result;
+    char normalized[POSIX_PATH_NODE_NAME_MAX];
+    size_t length = bounded_length(path);
+    if (length == 0 || length >= POSIX_PATH_MAX ||
+        path_normalize(kernel, (const uint8_t *)path, length, normalized) < 0)
+        return -POSIX_EINVAL;
+    posix_kernel_path_node *node = path_find(kernel, normalized);
+    size_t target_length = bounded_length(target);
+    if (!node || target_length == 0 || target_length >= POSIX_PATH_NODE_NAME_MAX)
+        return -POSIX_EINVAL;
+    node->link_target = malloc(target_length + 1);
+    if (!node->link_target) return -POSIX_ENOMEM;
+    memcpy(node->link_target, target, target_length + 1);
+    return 0;
+}
+
+int posix_kernel_getcwd(const posix_kernel *kernel, char *buffer, size_t capacity) {
+    if (!kernel || !buffer || capacity == 0) return -POSIX_EINVAL;
+    size_t length = strlen(kernel->cwd) + 1;
+    if (length > capacity) return -POSIX_ERANGE;
+    memcpy(buffer, kernel->cwd, length);
+    return 0;
+}
+
+int posix_kernel_path_mkdir(posix_kernel *kernel, const uint8_t *path,
+                            size_t length, int mode) {
+    char normalized[POSIX_PATH_NODE_NAME_MAX];
+    if (!kernel || path_normalize(kernel, path, length, normalized) < 0)
+        return -POSIX_EINVAL;
+    if (path_find(kernel, normalized)) return -POSIX_EEXIST;
+    posix_path_metadata metadata = { POSIX_NODE_DIRECTORY,
+        (uint32_t)(mode ? mode : 0777), 0, 0, 0,
+        1000u + (uint64_t)kernel->path_node_count };
+    return posix_kernel_path_add_data(kernel, normalized, &metadata, NULL, 0);
+}
+
+int posix_kernel_path_unlink(posix_kernel *kernel, const uint8_t *path,
+                             size_t length, int directory) {
+    char normalized[POSIX_PATH_NODE_NAME_MAX];
+    if (!kernel || path_normalize(kernel, path, length, normalized) < 0)
+        return -POSIX_EINVAL;
+    posix_kernel_path_node *node = path_find(kernel, normalized);
+    if (!node) return -POSIX_ENOENT;
+    if (directory != (node->metadata.kind == POSIX_NODE_DIRECTORY))
+        return directory ? -POSIX_ENOTDIR : -POSIX_EISDIR;
+    if (directory) {
+        size_t prefix = strlen(normalized);
+        for (int i = 0; i < kernel->path_node_count; i++) {
+            if (kernel->path_nodes[i].path[0] &&
+                strncmp(kernel->path_nodes[i].path, normalized, prefix) == 0 &&
+                kernel->path_nodes[i].path[prefix] == '/')
+                return -POSIX_ENOTEMPTY;
+        }
+    }
+    free(node->data);
+    free(node->link_target);
+    int index = (int)(node - kernel->path_nodes);
+    for (int i = index; i + 1 < kernel->path_node_count; i++)
+        kernel->path_nodes[i] = kernel->path_nodes[i + 1];
+    memset(&kernel->path_nodes[--kernel->path_node_count], 0,
+           sizeof(kernel->path_nodes[0]));
+    return 0;
+}
+
+int posix_kernel_path_rename(posix_kernel *kernel,
+                             const uint8_t *source, size_t source_length,
+                             const uint8_t *destination, size_t destination_length) {
+    char source_name[POSIX_PATH_NODE_NAME_MAX];
+    char destination_name[POSIX_PATH_NODE_NAME_MAX];
+    if (!kernel || path_normalize(kernel, source, source_length, source_name) < 0 ||
+        path_normalize(kernel, destination, destination_length, destination_name) < 0)
+        return -POSIX_EINVAL;
+    posix_kernel_path_node *from = path_find(kernel, source_name);
+    posix_kernel_path_node *to = path_find(kernel, destination_name);
+    if (!from) return -POSIX_ENOENT;
+    if (to) {
+        if (to->metadata.kind == POSIX_NODE_DIRECTORY) return -POSIX_EISDIR;
+        free(to->data); free(to->link_target);
+        *to = *from;
+        from->data = NULL; from->link_target = NULL;
+        memset(from, 0, sizeof(*from));
+        return 0;
+    }
+    size_t length = strlen(destination_name);
+    memcpy(from->path, destination_name, length + 1);
+    return 0;
+}
+
+int posix_kernel_path_readlink(posix_kernel *kernel, const uint8_t *path,
+                               size_t length, char *buffer, size_t capacity) {
+    char normalized[POSIX_PATH_NODE_NAME_MAX];
+    if (!kernel || !buffer || capacity == 0 ||
+        path_normalize(kernel, path, length, normalized) < 0)
+        return -POSIX_EINVAL;
+    posix_kernel_path_node *node = path_find(kernel, normalized);
+    if (!node) return -POSIX_ENOENT;
+    if (node->metadata.kind != POSIX_NODE_SYMLINK || !node->link_target)
+        return -POSIX_EINVAL;
+    size_t target_length = strlen(node->link_target);
+    if (target_length > capacity) target_length = capacity;
+    memcpy(buffer, node->link_target, target_length);
+    return (int)target_length;
 }
 
 int posix_kernel_path_set_cwd(posix_kernel *kernel, const char *path) {
@@ -179,6 +346,18 @@ int posix_kernel_path_stat(posix_kernel *kernel, const uint8_t *path,
     if (result < 0) return result;
     posix_kernel_path_node *node = path_find(kernel, normalized);
     if (!node) return path_prefix_is_file(kernel, normalized) ? -POSIX_ENOTDIR : -POSIX_ENOENT;
+    if (follow) {
+        int depth = 0;
+        while (node && node->metadata.kind == POSIX_NODE_SYMLINK &&
+               node->link_target && depth++ < 8) {
+            if (path_normalize(kernel, (const uint8_t *)node->link_target,
+                               strlen(node->link_target), normalized) < 0)
+                return -POSIX_EINVAL;
+            node = path_find(kernel, normalized);
+        }
+        if (!node) return -POSIX_ENOENT;
+        if (node->metadata.kind == POSIX_NODE_SYMLINK) return -POSIX_ELOOP;
+    }
     *metadata = node->metadata;
     return 0;
 }
@@ -236,30 +415,88 @@ posix_kernel *posix_kernel_create(int interactive) {
         tty->terminal.termios.cc[POSIX_TERMIOS_VTIME] = 0;
         tty->terminal.winsize.rows = 24;
         tty->terminal.winsize.columns = 80;
+        tty->terminal.foreground_pgid = 1;
         /* fds 0, 1, 2 share the same terminal OFD */
         tty->ref_count = 3;
         k->fds[0].ofd = tty;
         k->fds[1].ofd = tty;
         k->fds[2].ofd = tty;
     }
+    k->process_group_id = 1;
     return k;
 }
+
+void posix_kernel_destroy(posix_kernel *kernel);
+posix_kernel *posix_kernel_clone(const posix_kernel *source);
 
 posix_kernel *posix_kernel_clone(const posix_kernel *source) {
     if (!source) return NULL;
     posix_kernel *clone = calloc(1, sizeof(*clone));
     if (!clone) return NULL;
     memcpy(clone, source, sizeof(*clone));
+    for (int i = 0; i < clone->path_node_count; i++) {
+        clone->path_nodes[i].data = NULL;
+        if (source->path_nodes[i].data_capacity) {
+            clone->path_nodes[i].data = malloc(source->path_nodes[i].data_capacity);
+            if (!clone->path_nodes[i].data) {
+                posix_kernel_destroy(clone);
+                return NULL;
+            }
+            memcpy(clone->path_nodes[i].data, source->path_nodes[i].data,
+                   source->path_nodes[i].data_capacity);
+        }
+        if (source->path_nodes[i].link_target) {
+            size_t length = strlen(source->path_nodes[i].link_target);
+            clone->path_nodes[i].link_target = malloc(length + 1);
+            if (!clone->path_nodes[i].link_target) {
+                posix_kernel_destroy(clone);
+                return NULL;
+            }
+            memcpy(clone->path_nodes[i].link_target,
+                   source->path_nodes[i].link_target, length + 1);
+        }
+    }
     memset(clone->fds, 0, sizeof(clone->fds));
     clone->wait.active = 0;
+    const posix_ofd *regular_sources[POSIX_KERNEL_FD_MAX] = {0};
+    posix_ofd *regular_clones[POSIX_KERNEL_FD_MAX] = {0};
+    int regular_count = 0;
     for (int fd = 0; fd < POSIX_KERNEL_FD_MAX; fd++) {
         const posix_ofd *source_ofd = source->fds[fd].ofd;
         if (!source_ofd) continue;
         posix_ofd *shared = (posix_ofd *)source_ofd;
-        clone->fds[fd].ofd = shared;
-        shared->ref_count++;
-        if (shared->kind == POSIX_OFD_PIPE_READ) shared->pipe->readers++;
-        if (shared->kind == POSIX_OFD_PIPE_WRITE) shared->pipe->writers++;
+        if (shared->kind == POSIX_OFD_REGULAR) {
+            ptrdiff_t index = shared->regular.node - source->path_nodes;
+            if (index < 0 || index >= source->path_node_count) {
+                posix_kernel_destroy(clone);
+                return NULL;
+            }
+            /* Open descriptions are shared by fork; the cloned kernel gets
+             * the corresponding private pathname data. */
+            posix_ofd *copy = NULL;
+            for (int i = 0; i < regular_count; i++)
+                if (regular_sources[i] == source_ofd) copy = regular_clones[i];
+            if (!copy) {
+                if (regular_count >= POSIX_KERNEL_FD_MAX) {
+                    posix_kernel_destroy(clone); return NULL;
+                }
+                copy = malloc(sizeof(*copy));
+                if (!copy) { posix_kernel_destroy(clone); return NULL; }
+                *copy = *shared;
+                copy->ref_count = 1;
+                copy->regular.node = &clone->path_nodes[index];
+                regular_sources[regular_count] = source_ofd;
+                regular_clones[regular_count++] = copy;
+            } else {
+                copy->ref_count++;
+            }
+            clone->fds[fd].ofd = copy;
+        } else {
+            clone->fds[fd].ofd = shared;
+            shared->ref_count++;
+            if (shared->kind == POSIX_OFD_PIPE_READ) shared->pipe->readers++;
+            if (shared->kind == POSIX_OFD_PIPE_WRITE) shared->pipe->writers++;
+        }
     }
     return clone;
 }
@@ -274,6 +511,8 @@ void posix_kernel_destroy(posix_kernel *kernel) {
             ofd_release(ofd);
         }
     }
+    for (int i = 0; i < kernel->path_node_count; i++)
+        { free(kernel->path_nodes[i].data); free(kernel->path_nodes[i].link_target); }
     free(kernel);
 }
 
@@ -325,6 +564,8 @@ void posix_kernel_get_signal_mask(const posix_kernel *kernel,
 
 int posix_kernel_signal_raise(posix_kernel *kernel, int signal) {
     if (!kernel || !signal_valid(signal)) return -POSIX_EINVAL;
+    if (kernel->signal_disposition[signal] == POSIX_SIGNAL_IGNORE)
+        return 0;
     signal_bit_set(&kernel->pending_signals, signal);
     return 0;
 }
@@ -338,6 +579,123 @@ int posix_kernel_signal_clear(posix_kernel *kernel, int signal) {
 int posix_kernel_signal_pending(const posix_kernel *kernel, int signal) {
     if (!kernel || !signal_valid(signal)) return 0;
     return signal_bit_test(&kernel->pending_signals, signal);
+}
+
+int posix_kernel_signal_last_delivered(posix_kernel *kernel) {
+    int signal;
+    if (!kernel) return -POSIX_EINVAL;
+    signal = kernel->delivered_signal;
+    kernel->delivered_signal = 0;
+    return signal;
+}
+
+int posix_kernel_signal_set_disposition(posix_kernel *kernel, int signal,
+                                        posix_signal_disposition disposition) {
+    if (!kernel || !signal_valid(signal) ||
+        disposition < POSIX_SIGNAL_DEFAULT ||
+        disposition > POSIX_SIGNAL_HANDLER)
+        return -POSIX_EINVAL;
+    if ((signal == POSIX_SIGKILL || signal == POSIX_SIGSTOP) &&
+        disposition != POSIX_SIGNAL_DEFAULT)
+        return -POSIX_EINVAL;
+    kernel->signal_disposition[signal] = (uint8_t)disposition;
+    if (disposition == POSIX_SIGNAL_IGNORE)
+        signal_bit_clear(&kernel->pending_signals, signal);
+    return 0;
+}
+
+int posix_kernel_signal_get_disposition(const posix_kernel *kernel, int signal,
+                                        posix_signal_disposition *disposition) {
+    if (!kernel || !signal_valid(signal) || !disposition)
+        return -POSIX_EINVAL;
+    *disposition = (posix_signal_disposition)kernel->signal_disposition[signal];
+    return 0;
+}
+
+int posix_kernel_signal_set_handler(posix_kernel *kernel, int signal,
+                                    uint32_t handler) {
+    if (!kernel || !signal_valid(signal)) return -POSIX_EINVAL;
+    kernel->signal_handlers[signal] = handler;
+    return 0;
+}
+
+int posix_kernel_signal_get_handler(const posix_kernel *kernel, int signal,
+                                    uint32_t *handler) {
+    if (!kernel || !signal_valid(signal) || !handler) return -POSIX_EINVAL;
+    *handler = kernel->signal_handlers[signal];
+    return 0;
+}
+
+int posix_kernel_signal_set_action_mask(posix_kernel *kernel, int signal,
+                                        const posix_sigset *mask) {
+    if (!kernel || !signal_valid(signal) || !mask) return -POSIX_EINVAL;
+    kernel->signal_action_masks[signal] = *mask;
+    return 0;
+}
+
+int posix_kernel_signal_get_action_mask(const posix_kernel *kernel, int signal,
+                                        posix_sigset *mask) {
+    if (!kernel || !signal_valid(signal) || !mask) return -POSIX_EINVAL;
+    *mask = kernel->signal_action_masks[signal];
+    return 0;
+}
+
+int posix_kernel_signal_enter_handler(posix_kernel *kernel, int signal,
+                                      posix_sigset *saved_mask) {
+    posix_sigset action_mask;
+    if (!kernel || !signal_valid(signal) || !saved_mask) return -POSIX_EINVAL;
+    *saved_mask = kernel->signal_mask;
+    if (posix_kernel_signal_get_action_mask(kernel, signal, &action_mask) < 0)
+        return -POSIX_EINVAL;
+    for (size_t i = 0; i < POSIX_SIGSET_BYTES / sizeof(uint32_t); i++)
+        kernel->signal_mask.words[i] |= action_mask.words[i];
+    signal_bit_set(&kernel->signal_mask, signal);
+    return 0;
+}
+
+void posix_kernel_signal_leave_handler(posix_kernel *kernel,
+                                       const posix_sigset *saved_mask) {
+    if (kernel && saved_mask) kernel->signal_mask = *saved_mask;
+}
+
+int posix_kernel_getpgid(const posix_kernel *kernel) {
+    return kernel ? kernel->process_group_id : -POSIX_EINVAL;
+}
+
+int posix_kernel_setpgid(posix_kernel *kernel, int pgid) {
+    if (!kernel || pgid <= 0) return -POSIX_EINVAL;
+    kernel->process_group_id = pgid;
+    return pgid;
+}
+
+int posix_kernel_terminal_get_foreground_pgid(const posix_kernel *kernel,
+                                              int fd) {
+    if (!posix_kernel_isatty(kernel, fd)) return -POSIX_EBADF;
+    return kernel->fds[fd].ofd->terminal.foreground_pgid;
+}
+
+int posix_kernel_terminal_set_foreground_pgid(posix_kernel *kernel, int fd,
+                                              int pgid) {
+    if (!posix_kernel_isatty(kernel, fd) || pgid <= 0) return -POSIX_EINVAL;
+    kernel->fds[fd].ofd->terminal.foreground_pgid = pgid;
+    return 0;
+}
+
+static void route_terminal_signals(posix_kernel *kernel) {
+    if (!kernel || kernel->process_group_id <= 0) return;
+    for (int fd = 0; fd < POSIX_KERNEL_FD_MAX; fd++) {
+        posix_ofd *ofd = kernel->fds[fd].ofd;
+        if (!ofd || ofd->kind != POSIX_OFD_TERMINAL ||
+            ofd->terminal.foreground_pgid != kernel->process_group_id)
+            continue;
+        for (int signal = 1; signal <= POSIX_SIGNAL_MAX; signal++) {
+            if (signal_bit_test(&ofd->terminal.pending_signals, signal)) {
+                signal_bit_clear(&ofd->terminal.pending_signals, signal);
+                (void)posix_kernel_signal_raise(kernel, signal);
+            }
+        }
+        return;
+    }
 }
 
 void posix_kernel_cancel_wait(posix_kernel *kernel) {
@@ -379,6 +737,7 @@ static int wait_sets_ready(posix_kernel *kernel,
 
 int posix_kernel_wait_poll(posix_kernel *kernel) {
     if (!kernel || !kernel->wait.active) return POSIX_WAIT_BLOCKED;
+    route_terminal_signals(kernel);
     if (first_unmasked_pending(kernel)) return POSIX_WAIT_SIGNAL;
     if (wait_sets_ready(kernel, &kernel->wait)) return POSIX_WAIT_READY;
     if (kernel->wait.has_deadline && kernel->clock_now) {
@@ -446,6 +805,15 @@ int posix_kernel_query_readiness(posix_kernel *kernel, int fd) {
         else if (ofd->pipe->length < ofd->pipe->capacity)
             mask |= POSIX_POLL_OUT;
         break;
+    case POSIX_OFD_REGULAR:
+        if (ofd->regular.readable &&
+            ofd->regular.offset < ofd->regular.node->data_capacity)
+            mask |= POSIX_POLL_IN;
+        if (ofd->regular.writable) mask |= POSIX_POLL_OUT;
+        break;
+    case POSIX_OFD_DIRECTORY:
+        mask |= POSIX_POLL_IN;
+        break;
     }
     return mask;
 }
@@ -466,7 +834,10 @@ int posix_kernel_terminal_enqueue(posix_kernel *kernel, int fd,
         if ((ofd->terminal.termios.lflag & POSIX_TERMIOS_LFLAG_ISIG) &&
             byte == ofd->terminal.termios.cc[POSIX_TERMIOS_VINTR]) {
             ofd->terminal.input_length = 0;
-            posix_kernel_signal_raise(kernel, 2);
+            if (ofd->terminal.foreground_pgid == kernel->process_group_id)
+                posix_kernel_signal_raise(kernel, 2);
+            else
+                signal_bit_set(&ofd->terminal.pending_signals, 2);
             avail = ofd->terminal.input_capacity;
             continue;
         }
@@ -488,7 +859,9 @@ int posix_kernel_terminal_enqueue(posix_kernel *kernel, int fd,
                 continue;
             }
             if (byte == ofd->terminal.termios.cc[POSIX_TERMIOS_VEOF]) {
-                if (ofd->terminal.input_length == 0) ofd->terminal.eof = 1;
+                /* VEOF terminates pending canonical input without adding a
+                 * byte, and produces immediate EOF on an empty line. */
+                ofd->terminal.eof = 1;
                 continue;
             }
         }
@@ -505,6 +878,31 @@ int posix_kernel_terminal_signal_eof(posix_kernel *kernel, int fd) {
     if (ofd->kind != POSIX_OFD_TERMINAL) return -POSIX_EINVAL;
     ofd->terminal.eof = 1;
     return 0;
+}
+
+int posix_kernel_terminal_process_output(const posix_kernel *kernel, int fd,
+                                         const uint8_t *input, int length,
+                                         uint8_t *output, int capacity) {
+    if (!kernel || !fd_valid(fd) || !input || length < 0 || !output || capacity < 0)
+        return -POSIX_EINVAL;
+    const posix_ofd *ofd = kernel->fds[fd].ofd;
+    if (!ofd) return -POSIX_EBADF;
+    if (ofd->kind != POSIX_OFD_TERMINAL) return -POSIX_EINVAL;
+    int post = (ofd->terminal.termios.oflag & POSIX_TERMIOS_OFLAG_OPOST) != 0;
+    int onlcr = (ofd->terminal.termios.oflag & POSIX_TERMIOS_OFLAG_ONLCR) != 0;
+    if (!post || !onlcr) {
+        if (length > capacity) return -POSIX_E2BIG;
+        if (length > 0) memcpy(output, input, (size_t)length);
+        return length;
+    }
+    int written = 0;
+    for (int i = 0; i < length; i++) {
+        int extra = input[i] == '\n' ? 2 : 1;
+        if (written > capacity - extra) return -POSIX_E2BIG;
+        if (extra == 2) output[written++] = '\r';
+        output[written++] = input[i];
+    }
+    return written;
 }
 
 int posix_kernel_isatty(const posix_kernel *kernel, int fd) {
@@ -600,6 +998,102 @@ int posix_kernel_close(posix_kernel *kernel, int fd) {
     return 0;
 }
 
+int posix_kernel_open(posix_kernel *kernel, const uint8_t *path, size_t length,
+                      int flags, int mode) {
+    if (!kernel || !path || length == 0) return -POSIX_EINVAL;
+    if (flags & ~(POSIX_O_WRONLY | POSIX_O_RDWR | POSIX_O_CREAT |
+                  POSIX_O_TRUNC | POSIX_O_APPEND)) return -POSIX_EINVAL;
+    if ((flags & POSIX_O_WRONLY) && (flags & POSIX_O_RDWR))
+        return -POSIX_EINVAL;
+    char normalized[POSIX_PATH_NODE_NAME_MAX];
+    int result = path_normalize(kernel, path, length, normalized);
+    if (result < 0) return result;
+    posix_kernel_path_node *node = path_find(kernel, normalized);
+    if (!node) {
+        if (!(flags & POSIX_O_CREAT)) return path_prefix_is_file(kernel, normalized) ?
+            -POSIX_ENOTDIR : -POSIX_ENOENT;
+        posix_path_metadata metadata = { POSIX_NODE_REGULAR,
+            (uint32_t)(mode ? mode : 0666), 0, 0, 0,
+            1000u + (uint64_t)kernel->path_node_count };
+        result = posix_kernel_path_add_data(kernel, normalized, &metadata, NULL, 0);
+        if (result < 0) return result;
+        node = path_find(kernel, normalized);
+    }
+    if (!node) return -POSIX_ENOENT;
+    if (node->metadata.kind == POSIX_NODE_DIRECTORY) {
+        if (flags & (POSIX_O_WRONLY | POSIX_O_RDWR | POSIX_O_CREAT |
+                     POSIX_O_TRUNC | POSIX_O_APPEND)) return -POSIX_EISDIR;
+        int directory_fd = kernel_find_free_fd(kernel, 0);
+        if (directory_fd < 0) return directory_fd;
+        posix_ofd *directory = ofd_alloc(POSIX_OFD_DIRECTORY);
+        if (!directory) return -POSIX_ENOMEM;
+        directory->directory.node = node;
+        directory->directory.index = 0;
+        kernel->fds[directory_fd].ofd = directory;
+        return directory_fd;
+    }
+    if (node->metadata.kind != POSIX_NODE_REGULAR) return -POSIX_ENOENT;
+    int fd = kernel_find_free_fd(kernel, 0);
+    if (fd < 0) return fd;
+    posix_ofd *ofd = ofd_alloc(POSIX_OFD_REGULAR);
+    if (!ofd) return -POSIX_ENOMEM;
+    ofd->regular.node = node;
+    ofd->regular.offset = (flags & POSIX_O_APPEND) ? node->data_capacity : 0;
+    ofd->regular.readable = !(flags & POSIX_O_WRONLY);
+    ofd->regular.writable = (flags & (POSIX_O_WRONLY | POSIX_O_RDWR)) != 0;
+    ofd->regular.append = (flags & POSIX_O_APPEND) != 0;
+    if ((flags & POSIX_O_TRUNC) && ofd->regular.writable) {
+        free(node->data); node->data = NULL; node->data_capacity = 0;
+        node->metadata.size = 0;
+    }
+    kernel->fds[fd].ofd = ofd;
+    kernel->fds[fd].cloexec = 0;
+    return fd;
+}
+
+int posix_kernel_readdir(posix_kernel *kernel, int fd, char *name,
+                         size_t capacity, posix_path_metadata *metadata) {
+    if (!kernel || !fd_valid(fd) || !name || capacity == 0 || !metadata)
+        return -POSIX_EINVAL;
+    posix_ofd *ofd = kernel->fds[fd].ofd;
+    if (!ofd) return -POSIX_EBADF;
+    if (ofd->kind != POSIX_OFD_DIRECTORY) return -POSIX_ENOTDIR;
+    const char *parent = ofd->directory.node->path;
+    size_t parent_length = strlen(parent);
+    for (int i = ofd->directory.index; i < kernel->path_node_count; i++) {
+        const char *candidate = kernel->path_nodes[i].path;
+        size_t length = strlen(candidate);
+        size_t start = parent_length == 1 ? 1 : parent_length + 1;
+        if (length <= start || strncmp(candidate, parent, parent_length) != 0 ||
+            (parent_length > 1 && candidate[parent_length] != '/')) continue;
+        int nested = 0;
+        for (size_t at = start; at < length; at++)
+            if (candidate[at] == '/') { nested = 1; break; }
+        if (nested) continue;
+        size_t name_length = length - start;
+        ofd->directory.index = i + 1;
+        if (name_length + 1 > capacity) return -POSIX_ERANGE;
+        memcpy(name, candidate + start, name_length + 1);
+        *metadata = kernel->path_nodes[i].metadata;
+        return 1;
+    }
+    ofd->directory.index = kernel->path_node_count;
+    return 0;
+}
+
+int posix_kernel_lseek(posix_kernel *kernel, int fd, int64_t offset,
+                       int whence, int64_t *result) {
+    if (!kernel || !result || !fd_valid(fd)) return -POSIX_EINVAL;
+    posix_ofd *ofd = kernel->fds[fd].ofd;
+    if (!ofd || ofd->kind != POSIX_OFD_REGULAR) return -POSIX_ESPIPE;
+    int64_t base = whence == 0 ? 0 : whence == 1 ? (int64_t)ofd->regular.offset :
+        whence == 2 ? (int64_t)ofd->regular.node->data_capacity : INT64_MIN;
+    if (base == INT64_MIN || offset < -base) return -POSIX_EINVAL;
+    ofd->regular.offset = (size_t)(base + offset);
+    *result = (int64_t)ofd->regular.offset;
+    return 0;
+}
+
 int posix_kernel_dup(posix_kernel *kernel, int oldfd) {
     if (!kernel || !fd_valid(oldfd)) return -POSIX_EINVAL;
     posix_ofd *ofd = kernel->fds[oldfd].ofd;
@@ -612,6 +1106,7 @@ int posix_kernel_dup(posix_kernel *kernel, int oldfd) {
     if (ofd->kind == POSIX_OFD_PIPE_READ) ofd->pipe->readers++;
     if (ofd->kind == POSIX_OFD_PIPE_WRITE) ofd->pipe->writers++;
     kernel->fds[newfd].ofd = ofd;
+    kernel->fds[newfd].cloexec = 0;
     return newfd;
 }
 
@@ -629,7 +1124,28 @@ int posix_kernel_dup2(posix_kernel *kernel, int oldfd, int newfd) {
     if (ofd->kind == POSIX_OFD_PIPE_READ) ofd->pipe->readers++;
     if (ofd->kind == POSIX_OFD_PIPE_WRITE) ofd->pipe->writers++;
     kernel->fds[newfd].ofd = ofd;
+    kernel->fds[newfd].cloexec = 0;
     return newfd;
+}
+
+int posix_kernel_get_cloexec(const posix_kernel *kernel, int fd) {
+    if (!kernel || !fd_valid(fd) || !kernel->fds[fd].ofd) return -POSIX_EBADF;
+    return kernel->fds[fd].cloexec ? POSIX_FD_CLOEXEC : 0;
+}
+
+int posix_kernel_set_cloexec(posix_kernel *kernel, int fd, int enabled) {
+    if (!kernel || !fd_valid(fd) || !kernel->fds[fd].ofd)
+        return -POSIX_EBADF;
+    if (enabled != 0 && enabled != POSIX_FD_CLOEXEC) return -POSIX_EINVAL;
+    kernel->fds[fd].cloexec = enabled ? 1 : 0;
+    return 0;
+}
+
+void posix_kernel_close_on_exec(posix_kernel *kernel) {
+    if (!kernel) return;
+    for (int fd = 0; fd < POSIX_KERNEL_FD_MAX; fd++)
+        if (kernel->fds[fd].ofd && kernel->fds[fd].cloexec)
+            (void)posix_kernel_close(kernel, fd);
 }
 
 /* --- I/O --- */
@@ -645,7 +1161,18 @@ int posix_kernel_read(posix_kernel *kernel, int fd, void *buf, int count) {
     case POSIX_OFD_TERMINAL: {
         if (ofd->terminal.input_length == 0) {
             if (ofd->terminal.eof) return 0;
-            posix_kernel_wait_read(kernel, fd);
+            if (!(ofd->terminal.termios.lflag & POSIX_TERMIOS_LFLAG_ICANON) &&
+                ofd->terminal.termios.cc[POSIX_TERMIOS_VMIN] == 0 &&
+                ofd->terminal.termios.cc[POSIX_TERMIOS_VTIME] == 0)
+                return 0;
+            terminal_wait_with_timeout(kernel, fd,
+                ofd->terminal.termios.cc[POSIX_TERMIOS_VTIME]);
+            if (!(ofd->terminal.termios.lflag & POSIX_TERMIOS_LFLAG_ICANON) &&
+                kernel->wait.has_deadline && kernel->clock_now &&
+                kernel->clock_now(kernel->clock_data) >= kernel->wait.deadline_ns) {
+                posix_kernel_cancel_wait(kernel);
+                return 0;
+            }
             return -POSIX_EAGAIN;
         }
         int available = ofd->terminal.input_length;
@@ -658,11 +1185,20 @@ int posix_kernel_read(posix_kernel *kernel, int fd, void *buf, int count) {
                 posix_kernel_wait_read(kernel, fd);
                 return -POSIX_EAGAIN;
             }
-        } else if (ofd->terminal.termios.cc[POSIX_TERMIOS_VMIN] > 0 &&
-                   available < ofd->terminal.termios.cc[POSIX_TERMIOS_VMIN] &&
-                   !ofd->terminal.eof) {
-            posix_kernel_wait_read(kernel, fd);
-            return -POSIX_EAGAIN;
+        } else {
+            uint8_t vmin = ofd->terminal.termios.cc[POSIX_TERMIOS_VMIN];
+            uint8_t vtime = ofd->terminal.termios.cc[POSIX_TERMIOS_VTIME];
+            if (vmin > 0 && available < vmin && !ofd->terminal.eof) {
+                terminal_wait_with_timeout(kernel, fd, vtime);
+                if (kernel->wait.has_deadline && kernel->clock_now &&
+                    kernel->clock_now(kernel->clock_data) >= kernel->wait.deadline_ns) {
+                    posix_kernel_cancel_wait(kernel);
+                    /* A VMIN/VTIME read returns bytes received before the
+                     * timer expired, even when fewer than VMIN arrived. */
+                } else {
+                    return -POSIX_EAGAIN;
+                }
+            }
         }
         int n = count < available ? count : available;
         memcpy(buf, ofd->terminal.input, n);
@@ -688,8 +1224,20 @@ int posix_kernel_read(posix_kernel *kernel, int fd, void *buf, int count) {
         posix_kernel_cancel_wait(kernel);
         return n;
     }
+    case POSIX_OFD_REGULAR: {
+        posix_kernel_path_node *node = ofd->regular.node;
+        if (!ofd->regular.readable) return -POSIX_EBADF;
+        if (ofd->regular.offset >= node->data_capacity) return 0;
+        size_t available = node->data_capacity - ofd->regular.offset;
+        int n = available < (size_t)count ? (int)available : count;
+        memcpy(buf, node->data + ofd->regular.offset, (size_t)n);
+        ofd->regular.offset += (size_t)n;
+        return n;
+    }
     case POSIX_OFD_PIPE_WRITE:
         return -POSIX_EBADF;
+    case POSIX_OFD_DIRECTORY:
+        return -POSIX_EISDIR;
     }
     return -POSIX_EINVAL;
 }
@@ -719,6 +1267,25 @@ int posix_kernel_write(posix_kernel *kernel, int fd,
     }
     case POSIX_OFD_PIPE_READ:
         return -POSIX_EBADF;
+    case POSIX_OFD_DIRECTORY:
+        return -POSIX_EISDIR;
+    case POSIX_OFD_REGULAR: {
+        posix_kernel_path_node *node = ofd->regular.node;
+        if (!ofd->regular.writable) return -POSIX_EBADF;
+        size_t offset = ofd->regular.append ? node->data_capacity : ofd->regular.offset;
+        size_t needed = offset + (size_t)count;
+        if (needed < offset) return -POSIX_ENOSPC;
+        if (needed > node->data_capacity) {
+            uint8_t *grown = realloc(node->data, needed);
+            if (!grown) return -POSIX_ENOMEM;
+            node->data = grown;
+            node->data_capacity = needed;
+        }
+        memcpy(node->data + offset, buf, (size_t)count);
+        ofd->regular.offset = offset + (size_t)count;
+        node->metadata.size = (int64_t)node->data_capacity;
+        return count;
+    }
     }
     return -POSIX_EINVAL;
 }
@@ -731,6 +1298,7 @@ static int kernel_select_core(posix_kernel *kernel, int nfds,
                               int has_deadline, uint64_t deadline_ns,
                               const posix_sigset *temporary_mask) {
     if (!kernel) return -POSIX_EINVAL;
+    route_terminal_signals(kernel);
     if (posix_nfds_validate(nfds) != 0) {
         posix_kernel_cancel_wait(kernel);
         return -POSIX_EINVAL;
@@ -760,7 +1328,10 @@ static int kernel_select_core(posix_kernel *kernel, int nfds,
         int wait_status = posix_kernel_wait_poll(kernel);
         if (wait_status == POSIX_WAIT_SIGNAL) {
             int signal = first_unmasked_pending(kernel);
-            if (signal) signal_bit_clear(&kernel->pending_signals, signal);
+            if (signal) {
+                signal_bit_clear(&kernel->pending_signals, signal);
+                kernel->delivered_signal = signal;
+            }
             posix_kernel_cancel_wait(kernel);
             if (readfds) posix_fd_zero(readfds);
             if (writefds) posix_fd_zero(writefds);
@@ -781,6 +1352,7 @@ static int kernel_select_core(posix_kernel *kernel, int nfds,
     if (first_unmasked_pending(kernel)) {
         int signal = first_unmasked_pending(kernel);
         signal_bit_clear(&kernel->pending_signals, signal);
+        kernel->delivered_signal = signal;
         posix_kernel_cancel_wait(kernel);
         if (readfds) posix_fd_zero(readfds);
         if (writefds) posix_fd_zero(writefds);

@@ -11,7 +11,13 @@
 #define POSIX_ENOENT   2
 #define POSIX_EACCES  13
 #define POSIX_ENOTDIR 20
+#define POSIX_EISDIR  21
+#define POSIX_ERANGE  34
+#define POSIX_ELOOP   40
+#define POSIX_ENOTEMPTY 39
+#define POSIX_ESPIPE   29
 #define POSIX_ENOSYS  38
+#define POSIX_ENOSPC  28
 
 #define POSIX_PATH_MAX 4096
 #define POSIX_PATH_NODE_MAX 32
@@ -108,6 +114,23 @@ int posix_guest_stat_decode(posix_guest_stat *stat, const uint8_t *bytes);
 struct posix_kernel;
 int posix_kernel_path_add(struct posix_kernel *kernel, const char *path,
                           const posix_path_metadata *metadata);
+int posix_kernel_path_add_data(struct posix_kernel *kernel, const char *path,
+                               const posix_path_metadata *metadata,
+                               const uint8_t *data, size_t length);
+int posix_kernel_path_add_symlink(struct posix_kernel *kernel, const char *path,
+                                  const posix_path_metadata *metadata,
+                                  const char *target);
+int posix_kernel_getcwd(const struct posix_kernel *kernel, char *buffer,
+                        size_t capacity);
+int posix_kernel_path_mkdir(struct posix_kernel *kernel, const uint8_t *path,
+                            size_t length, int mode);
+int posix_kernel_path_unlink(struct posix_kernel *kernel, const uint8_t *path,
+                             size_t length, int directory);
+int posix_kernel_path_rename(struct posix_kernel *kernel,
+                             const uint8_t *source, size_t source_length,
+                             const uint8_t *destination, size_t destination_length);
+int posix_kernel_path_readlink(struct posix_kernel *kernel, const uint8_t *path,
+                               size_t length, char *buffer, size_t capacity);
 int posix_kernel_path_set_cwd(struct posix_kernel *kernel, const char *path);
 int posix_kernel_path_stat(struct posix_kernel *kernel, const uint8_t *path,
                            size_t length, int follow,

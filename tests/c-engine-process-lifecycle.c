@@ -80,6 +80,19 @@ int main(void) {
     check(native_store_wait_process(&store, 0, 0, &status) == -POSIX_ECHILD,
           "empty process-group wait reports ECHILD");
 
+    int group_child = 0;
+    check(native_store_fork_process(&store, &group_child) == 0,
+          "fork for group signal status");
+    check(posix_kernel_setpgid(store.processes[1].kernel, 7) == 7,
+          "assign child signal group");
+    check(native_store_signal_process(&store, group_child, 15) == 0,
+          "group member receives signal");
+    check(native_store_set_active_process(&store, 1) == 0,
+          "restore parent after group signal");
+    check(native_store_wait_process(&store, group_child, 0, &status) == group_child &&
+          status == ((128 + 15) << 8),
+          "group signal status is reapable");
+
     posix_kernel_destroy(store.kernel);
     printf("C-engine process lifecycle: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

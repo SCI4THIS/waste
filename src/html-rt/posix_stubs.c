@@ -193,7 +193,7 @@ static exec_status native_posix_open(void *data, const wasm_value *args,
                                      int arg_count, wasm_value *results,
                                      int *result_count, exec_error *error,
                                      const waste_exec_engine *caller) {
-    (void)data;
+    native_store *store = (native_store *)data;
     exec_memory *memory = (void *)0;
     uint8_t *path;
     uint64_t byte_size;
@@ -217,10 +217,13 @@ static exec_status native_posix_open(void *data, const wasm_value *args,
                  "unterminated POSIX open path");
         return error->status;
     }
-    return native_posix_result(
-        waste_host_posix_open((const char *)path, length, args[1].i32,
-                              args[2].i32),
-        results, result_count);
+    if (store && store->kernel)
+        return native_posix_result(posix_kernel_open(
+            store->kernel, path, length, args[1].i32, args[2].i32),
+            results, result_count);
+    return native_posix_result(waste_host_posix_open(
+        (const char *)path, length, args[1].i32, args[2].i32), results,
+        result_count);
 }
 
 static exec_status native_posix_close(void *data, const wasm_value *args,
@@ -263,6 +266,9 @@ static exec_status native_posix_read(void *data, const wasm_value *args,
             error->yield_reason = EXEC_YIELD_READ;
             return EXEC_YIELD;
         }
+    } else if (store->kernel) {
+        read_result = posix_kernel_read(store->kernel, args[0].i32,
+                                        buffer, (int)count);
     } else {
         /* Noninteractive WAST sandboxes retain the narrow host capability. */
         read_result = waste_host_posix_read(args[0].i32, buffer, count);
@@ -278,7 +284,7 @@ static exec_status native_posix_write(void *data, const wasm_value *args,
                                       int arg_count, wasm_value *results,
                                       int *result_count, exec_error *error,
                                       const waste_exec_engine *caller) {
-    (void)data;
+    native_store *store = (native_store *)data;
     exec_memory *memory = (void *)0;
     uint8_t *buffer;
     uint32_t count;
@@ -291,9 +297,34 @@ static exec_status native_posix_write(void *data, const wasm_value *args,
                  "POSIX write buffer is outside guest memory");
         return error->status;
     }
-    return native_posix_result(
-        waste_host_posix_write(args[0].i32, buffer, count), results,
-        result_count);
+    if (store && store->kernel_terminal &&
+        posix_kernel_isatty(store->kernel, args[0].i32)) {
+        uint8_t translated[512];
+        uint32_t offset = 0;
+        while (offset < count) {
+            uint32_t chunk = count - offset;
+            if (chunk > 256) chunk = 256;
+            int translated_count = posix_kernel_terminal_process_output(
+                store->kernel, args[0].i32, buffer + offset, (int)chunk,
+                translated, (int)sizeof(translated));
+            if (translated_count < 0)
+                return native_posix_result(translated_count, results, result_count);
+            int32_t written = waste_host_posix_write(
+                args[0].i32, translated, (uint32_t)translated_count);
+            if (written < 0)
+                return native_posix_result(written, results, result_count);
+            if (written != translated_count)
+                return native_posix_result((int32_t)offset, results, result_count);
+            offset += chunk;
+        }
+        return native_posix_result((int32_t)count, results, result_count);
+    }
+    if (store && store->kernel)
+        return native_posix_result(posix_kernel_write(store->kernel, args[0].i32,
+                                                      buffer, (int)count),
+                                   results, result_count);
+    return native_posix_result(waste_host_posix_write(args[0].i32, buffer, count),
+                               results, result_count);
 }
 
 static exec_status native_posix_i32_zero(void *data, const wasm_value *args,
@@ -312,6 +343,115 @@ static exec_status native_posix_i32_one(void *data, const wasm_value *args,
                                         const waste_exec_engine *caller) {
     (void)data; (void)args; (void)arg_count; (void)error; (void)caller;
     return native_posix_result(1, results, result_count);
+}
+
+static exec_status native_posix_getpgrp(void *data, const wasm_value *args,
+                                        int arg_count, wasm_value *results,
+                                        int *result_count, exec_error *error,
+                                        const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    (void)caller; (void)error;
+    if (!store || arg_count != 0)
+        return native_posix_result(-POSIX_EINVAL, results, result_count);
+    return native_posix_result(posix_kernel_getpgid(store->kernel), results,
+                               result_count);
+}
+
+static exec_status native_posix_setpgid(void *data, const wasm_value *args,
+                                        int arg_count, wasm_value *results,
+                                        int *result_count, exec_error *error,
+                                        const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    int target_pid;
+    (void)caller; (void)error;
+    if (!store || arg_count != 2 || args[0].i32 < 0 || args[1].i32 <= 0)
+        return native_posix_result(-POSIX_EINVAL, results, result_count);
+    target_pid = args[0].i32 == 0 ? native_store_getpid(store) : args[0].i32;
+    for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
+        if (store->processes[i].used && store->processes[i].pid == target_pid)
+            return native_posix_result(posix_kernel_setpgid(
+                                           store->processes[i].kernel,
+                                           args[1].i32), results, result_count);
+    }
+    return native_posix_result(-POSIX_EINVAL, results, result_count);
+}
+
+static exec_status native_posix_tcgetpgrp(void *data, const wasm_value *args,
+                                          int arg_count, wasm_value *results,
+                                          int *result_count, exec_error *error,
+                                          const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    (void)caller; (void)error;
+    if (!store || arg_count != 1)
+        return native_posix_result(-POSIX_EINVAL, results, result_count);
+    return native_posix_result(posix_kernel_terminal_get_foreground_pgid(
+                                   store->kernel, args[0].i32),
+                               results, result_count);
+}
+
+static exec_status native_posix_tcsetpgrp(void *data, const wasm_value *args,
+                                          int arg_count, wasm_value *results,
+                                          int *result_count, exec_error *error,
+                                          const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    (void)caller; (void)error;
+    if (!store || arg_count != 2)
+        return native_posix_result(-POSIX_EINVAL, results, result_count);
+    return native_posix_result(posix_kernel_terminal_set_foreground_pgid(
+                                   store->kernel, args[0].i32, args[1].i32),
+                               results, result_count);
+}
+
+/* Stable guest sigaction prefix: handler pointer at offset zero, followed by
+ * a fixed-width 128-bit mask. Flags remain outside this ABI prefix. */
+static exec_status native_posix_sigaction(void *data, const wasm_value *args,
+                                          int arg_count, wasm_value *results,
+                                          int *result_count, exec_error *error,
+                                          const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    if (!store || !store->kernel || arg_count != 3)
+        return native_posix_result(-POSIX_EINVAL, results, result_count);
+    int signal = args[0].i32;
+    uint32_t action_ptr = (uint32_t)args[1].i32;
+    uint32_t old_ptr = (uint32_t)args[2].i32;
+    uint32_t old_handler = POSIX_SIG_DFL;
+    posix_sigset old_mask = {{0, 0, 0, 0}};
+    if (posix_kernel_signal_get_handler(store->kernel, signal, &old_handler) < 0)
+        return native_posix_result(-POSIX_EINVAL, results, result_count);
+    if (posix_kernel_signal_get_action_mask(store->kernel, signal, &old_mask) < 0)
+        return native_posix_result(-POSIX_EINVAL, results, result_count);
+    if (old_ptr) {
+        exec_memory *memory;
+        uint8_t *bytes;
+        if (native_posix_memory(caller, &memory, error) != EXEC_OK ||
+            !native_posix_range(memory, old_ptr,
+                                sizeof(uint32_t) + POSIX_SIGSET_BYTES, &bytes))
+            return native_posix_result(-POSIX_EFAULT, results, result_count);
+        memcpy(bytes, &old_handler, sizeof(old_handler));
+        memcpy(bytes + sizeof(old_handler), &old_mask, POSIX_SIGSET_BYTES);
+    }
+    if (action_ptr) {
+        exec_memory *memory;
+        uint8_t *bytes;
+        uint32_t handler;
+        posix_sigset action_mask;
+        if (native_posix_memory(caller, &memory, error) != EXEC_OK ||
+            !native_posix_range(memory, action_ptr,
+                                sizeof(uint32_t) + POSIX_SIGSET_BYTES, &bytes))
+            return native_posix_result(-POSIX_EFAULT, results, result_count);
+        memcpy(&handler, bytes, sizeof(handler));
+        memcpy(&action_mask, bytes + sizeof(handler), POSIX_SIGSET_BYTES);
+        posix_signal_disposition disposition = POSIX_SIGNAL_HANDLER;
+        if (handler == POSIX_SIG_DFL) disposition = POSIX_SIGNAL_DEFAULT;
+        else if (handler == POSIX_SIG_IGN || handler == UINT32_C(1))
+            disposition = POSIX_SIGNAL_IGNORE;
+        if (posix_kernel_signal_set_disposition(store->kernel, signal,
+                                                disposition) < 0)
+            return native_posix_result(-POSIX_EINVAL, results, result_count);
+        posix_kernel_signal_set_handler(store->kernel, signal, handler);
+        posix_kernel_signal_set_action_mask(store->kernel, signal, &action_mask);
+    }
+    return native_posix_result(0, results, result_count);
 }
 
 static exec_status native_posix_isatty(void *data, const wasm_value *args,
@@ -458,6 +598,107 @@ static exec_status native_posix_void(void *data, const wasm_value *args,
     return EXEC_OK;
 }
 
+static exec_status native_posix_exit(void *data, const wasm_value *args,
+                                     int arg_count, wasm_value *results,
+                                     int *result_count, exec_error *error,
+                                     const waste_exec_engine *caller) {
+    (void)data; (void)results; (void)caller;
+    if (arg_count != 1) return native_posix_result(-POSIX_EINVAL, results,
+                                                   result_count);
+    if (error) {
+        error->status = EXEC_ERROR_EXIT;
+        error->exit_code = args[0].i32 & 0xff;
+    }
+    *result_count = 0;
+    return EXEC_ERROR_EXIT;
+}
+
+static exec_status native_posix_raise(void *data, const wasm_value *args,
+                                      int arg_count, wasm_value *results,
+                                      int *result_count, exec_error *error,
+                                      const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    int status;
+    posix_signal_disposition disposition;
+    (void)caller; (void)error;
+    if (!store || arg_count != 1)
+        return native_posix_result(-POSIX_EINVAL, results, result_count);
+    status = posix_kernel_signal_raise(store->kernel, args[0].i32);
+    if (status == 0 && posix_kernel_signal_get_disposition(
+            store->kernel, args[0].i32, &disposition) == 0 &&
+        disposition == POSIX_SIGNAL_DEFAULT && args[0].i32 != POSIX_SIGSTOP) {
+        if (error) {
+            error->status = EXEC_ERROR_EXIT;
+            error->exit_code = 128 + args[0].i32;
+        }
+        return EXEC_ERROR_EXIT;
+    }
+    return native_posix_result(status, results, result_count);
+}
+
+static exec_status native_posix_kill(void *data, const wasm_value *args,
+                                     int arg_count, wasm_value *results,
+                                     int *result_count, exec_error *error,
+                                     const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    int pid;
+    (void)caller; (void)error;
+    if (!store || arg_count != 2 || args[0].i32 < 0)
+        return native_posix_result(-POSIX_EINVAL, results, result_count);
+    pid = args[0].i32 == 0 ? native_store_getpid(store) : args[0].i32;
+    for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
+        if (store->processes[i].used && store->processes[i].pid == pid)
+            return native_posix_result(native_store_signal_process(
+                                           store, pid, args[1].i32), results,
+                                       result_count);
+    }
+    return native_posix_result(-POSIX_EINVAL, results, result_count);
+}
+
+static exec_status native_posix_killpg(void *data, const wasm_value *args,
+                                       int arg_count, wasm_value *results,
+                                       int *result_count, exec_error *error,
+                                       const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    int pgid, delivered = 0;
+    (void)caller; (void)error;
+    if (!store || arg_count != 2 || args[0].i32 < 0)
+        return native_posix_result(-POSIX_EINVAL, results, result_count);
+    pgid = args[0].i32 == 0 ? posix_kernel_getpgid(store->kernel) : args[0].i32;
+    for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
+        if (store->processes[i].used &&
+            posix_kernel_getpgid(store->processes[i].kernel) == pgid) {
+            (void)native_store_signal_process(store,
+                                               store->processes[i].pid,
+                                               args[1].i32);
+            delivered = 1;
+        }
+    }
+    return native_posix_result(delivered ? 0 : -POSIX_EINVAL, results,
+                               result_count);
+}
+
+static exec_status native_posix_fcntl(void *data, const wasm_value *args,
+                                      int arg_count, wasm_value *results,
+                                      int *result_count, exec_error *error,
+                                      const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    int fd, command;
+    (void)error; (void)caller;
+    if (!store || arg_count < 2) return native_posix_result(-POSIX_EINVAL,
+                                                             results, result_count);
+    fd = args[0].i32;
+    command = args[1].i32;
+    if (command == POSIX_F_GETFD)
+        return native_posix_result(posix_kernel_get_cloexec(store->kernel, fd),
+                                   results, result_count);
+    if (command == POSIX_F_SETFD && arg_count >= 3)
+        return native_posix_result(posix_kernel_set_cloexec(
+                                       store->kernel, fd, args[2].i32),
+                                   results, result_count);
+    return native_posix_result(-POSIX_EINVAL, results, result_count);
+}
+
 static exec_status native_posix_getcwd(void *data, const wasm_value *args,
                                        int arg_count, wasm_value *results,
                                        int *result_count,
@@ -493,17 +734,169 @@ static exec_status native_posix_getcwd(void *data, const wasm_value *args,
     }
     if (capacity < 2)
         return native_posix_result(0, results, result_count);
-    if (!native_posix_range(memory, offset, 2, &buffer))
+    if (!native_posix_range(memory, offset, capacity, &buffer))
         return native_posix_result(0, results, result_count);
-    buffer[0] = '/';
-    buffer[1] = '\0';
+    if (!store->kernel || posix_kernel_getcwd(store->kernel, (char *)buffer,
+                                               capacity) < 0)
+        return native_posix_result(0, results, result_count);
     return native_posix_result((int32_t)offset, results, result_count);
 }
 
-static exec_status native_posix_stat(void *data, const wasm_value *args,
-                                     int arg_count, wasm_value *results,
-                                     int *result_count, exec_error *error,
-                                     const waste_exec_engine *caller) {
+static exec_status native_posix_chdir(void *data, const wasm_value *args,
+                                      int arg_count, wasm_value *results,
+                                      int *result_count, exec_error *error,
+                                      const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    const uint8_t *path;
+    size_t length;
+    int errno_value = 0;
+    if (arg_count != 1 || !native_posix_guest_path(caller, (uint32_t)args[0].i32,
+                                                   &path, &length, &errno_value))
+        return native_posix_result(-1, results, result_count);
+    int result = store->kernel ? posix_kernel_path_set_cwd(
+        store->kernel, (const char *)path) : -POSIX_ENOSYS;
+    if (result < 0) native_posix_set_errno(store, caller, -result);
+    (void)error;
+    return native_posix_result(result < 0 ? -1 : 0, results, result_count);
+}
+
+static exec_status native_posix_mkdir(void *data, const wasm_value *args,
+                                      int arg_count, wasm_value *results,
+                                      int *result_count, exec_error *error,
+                                      const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    const uint8_t *path; size_t length; int errno_value = 0;
+    if (arg_count != 2 || !native_posix_guest_path(caller, (uint32_t)args[0].i32,
+                                                   &path, &length, &errno_value))
+        return native_posix_result(-1, results, result_count);
+    int result = store->kernel ? posix_kernel_path_mkdir(
+        store->kernel, path, length, args[1].i32) : -POSIX_ENOSYS;
+    if (result < 0) native_posix_set_errno(store, caller, -result);
+    (void)error;
+    return native_posix_result(result < 0 ? -1 : 0, results, result_count);
+}
+
+static exec_status native_posix_unlink(void *data, const wasm_value *args,
+                                       int arg_count, wasm_value *results,
+                                       int *result_count, exec_error *error,
+                                       const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    const uint8_t *path; size_t length; int errno_value = 0;
+    if (arg_count != 1 || !native_posix_guest_path(caller, (uint32_t)args[0].i32,
+                                                   &path, &length, &errno_value))
+        return native_posix_result(-1, results, result_count);
+    int result = store->kernel ? posix_kernel_path_unlink(
+        store->kernel, path, length, 0) : -POSIX_ENOSYS;
+    if (result < 0) native_posix_set_errno(store, caller, -result);
+    (void)error;
+    return native_posix_result(result < 0 ? -1 : 0, results, result_count);
+}
+
+static exec_status native_posix_rename(void *data, const wasm_value *args,
+                                       int arg_count, wasm_value *results,
+                                       int *result_count, exec_error *error,
+                                       const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    const uint8_t *source, *destination; size_t source_length, destination_length;
+    int errno_value = 0;
+    if (arg_count != 2 || !native_posix_guest_path(caller, (uint32_t)args[0].i32,
+                                                   &source, &source_length, &errno_value) ||
+        !native_posix_guest_path(caller, (uint32_t)args[1].i32,
+                                 &destination, &destination_length, &errno_value))
+        return native_posix_result(-1, results, result_count);
+    int result = store->kernel ? posix_kernel_path_rename(
+        store->kernel, source, source_length, destination, destination_length)
+        : -POSIX_ENOSYS;
+    if (result < 0) native_posix_set_errno(store, caller, -result);
+    (void)error;
+    return native_posix_result(result < 0 ? -1 : 0, results, result_count);
+}
+
+static exec_status native_posix_readdir(void *data, const wasm_value *args,
+                                        int arg_count, wasm_value *results,
+                                        int *result_count, exec_error *error,
+                                        const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    exec_memory *memory = (void *)0;
+    uint8_t *name_buffer;
+    uint8_t *metadata_buffer;
+    posix_path_metadata metadata;
+    if (arg_count != 4 || native_posix_memory(caller, &memory, error) != EXEC_OK ||
+        !native_posix_range(memory, (uint32_t)args[1].i32,
+                            (uint32_t)args[2].i32, &name_buffer) ||
+        !native_posix_range(memory, (uint32_t)args[3].i32,
+                            POSIX_PATH_METADATA_BYTES, &metadata_buffer))
+        return native_posix_result(-POSIX_EFAULT, results, result_count);
+    int result = store->kernel ? posix_kernel_readdir(
+        store->kernel, args[0].i32, (char *)name_buffer, (size_t)args[2].i32,
+        &metadata) : -POSIX_ENOSYS;
+    if (result > 0) posix_path_metadata_encode(metadata_buffer, &metadata);
+    if (result < 0) native_posix_set_errno(store, caller, -result);
+    return native_posix_result(result, results, result_count);
+}
+
+static exec_status native_posix_readlink(void *data, const wasm_value *args,
+                                         int arg_count, wasm_value *results,
+                                         int *result_count, exec_error *error,
+                                         const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    exec_memory *memory = (void *)0;
+    const uint8_t *path; size_t path_length; uint8_t *buffer;
+    int errno_value = 0;
+    if (arg_count != 3 || native_posix_memory(caller, &memory, error) != EXEC_OK ||
+        !native_posix_guest_path(caller, (uint32_t)args[0].i32, &path,
+                                 &path_length, &errno_value) ||
+        !native_posix_range(memory, (uint32_t)args[1].i32,
+                            (uint32_t)args[2].i32, &buffer))
+        return native_posix_result(-POSIX_EFAULT, results, result_count);
+    int result = store->kernel ? posix_kernel_path_readlink(
+        store->kernel, path, path_length, (char *)buffer, (size_t)args[2].i32)
+        : -POSIX_ENOSYS;
+    if (result < 0) native_posix_set_errno(store, caller, -result);
+    return native_posix_result(result, results, result_count);
+}
+
+static exec_status native_posix_rmdir(void *data, const wasm_value *args,
+                                      int arg_count, wasm_value *results,
+                                      int *result_count, exec_error *error,
+                                      const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    const uint8_t *path; size_t length; int errno_value = 0;
+    if (arg_count != 1 || !native_posix_guest_path(caller, (uint32_t)args[0].i32,
+                                                   &path, &length, &errno_value))
+        return native_posix_result(-1, results, result_count);
+    int result = store->kernel ? posix_kernel_path_unlink(
+        store->kernel, path, length, 1) : -POSIX_ENOSYS;
+    if (result < 0) native_posix_set_errno(store, caller, -result);
+    (void)error;
+    return native_posix_result(result < 0 ? -1 : 0, results, result_count);
+}
+
+static exec_status native_posix_lseek(void *data, const wasm_value *args,
+                                      int arg_count, wasm_value *results,
+                                      int *result_count, exec_error *error,
+                                      const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    int64_t result_value = -1;
+    int result = arg_count == 3 && store->kernel ? posix_kernel_lseek(
+        store->kernel, args[0].i32, args[1].i64, args[2].i32, &result_value)
+        : -POSIX_EINVAL;
+    if (result < 0) {
+        native_posix_set_errno(store, caller, -result);
+        result_value = -1;
+    }
+    results[0].type = WASM_VALTYPE_I64;
+    results[0].i64 = result_value;
+    *result_count = 1;
+    (void)error;
+    return EXEC_OK;
+}
+
+static exec_status native_posix_stat_common(void *data, const wasm_value *args,
+                                            int arg_count, wasm_value *results,
+                                            int *result_count, exec_error *error,
+                                            int follow,
+                                            const waste_exec_engine *caller) {
     native_store *store = (native_store *)data;
     exec_memory *memory = (void *)0;
     const uint8_t *path;
@@ -522,7 +915,7 @@ static exec_status native_posix_stat(void *data, const wasm_value *args,
         return native_posix_result(-1, results, result_count);
     }
     int result = store->kernel ? posix_kernel_path_stat(
-        store->kernel, path, path_length, 1, &metadata) : -POSIX_ENOSYS;
+        store->kernel, path, path_length, follow, &metadata) : -POSIX_ENOSYS;
     if (result < 0) {
         native_posix_set_errno(store, caller, -result);
         return native_posix_result(-1, results, result_count);
@@ -530,6 +923,22 @@ static exec_status native_posix_stat(void *data, const wasm_value *args,
     native_posix_metadata_stat(&metadata, &guest_stat);
     posix_guest_stat_encode(status, &guest_stat);
     return native_posix_result(0, results, result_count);
+}
+
+static exec_status native_posix_stat(void *data, const wasm_value *args,
+                                     int arg_count, wasm_value *results,
+                                     int *result_count, exec_error *error,
+                                     const waste_exec_engine *caller) {
+    return native_posix_stat_common(data, args, arg_count, results,
+                                    result_count, error, 1, caller);
+}
+
+static exec_status native_posix_lstat(void *data, const wasm_value *args,
+                                      int arg_count, wasm_value *results,
+                                      int *result_count, exec_error *error,
+                                      const waste_exec_engine *caller) {
+    return native_posix_stat_common(data, args, arg_count, results,
+                                    result_count, error, 0, caller);
 }
 
 static exec_status native_posix_access(void *data, const wasm_value *args,
@@ -895,6 +1304,37 @@ static exec_status native_posix_pselect(void *data, const wasm_value *args,
     int32_t ret = posix_kernel_pselect(store->kernel, nfds, rp, wp, ep,
                                        tsp, mask_ptr);
 
+    /* A caught signal is delivered at the engine boundary, rather than via a
+     * JavaScript callback.  The sigaction ABI stores a wasm function index in
+     * its handler slot; invoke it with the POSIX signal number before the
+     * interrupted pselect returns EINTR. */
+    if (ret == -POSIX_EINTR) {
+        int signal = posix_kernel_signal_last_delivered(store->kernel);
+        posix_signal_disposition disposition;
+        uint32_t handler = POSIX_SIG_DFL;
+        if (signal > 0 &&
+            posix_kernel_signal_get_disposition(store->kernel, signal,
+                                                &disposition) == 0 &&
+            disposition == POSIX_SIGNAL_HANDLER &&
+            posix_kernel_signal_get_handler(store->kernel, signal, &handler) == 0 &&
+            handler != POSIX_SIG_DFL && handler != POSIX_SIG_IGN) {
+            wasm_value handler_arg;
+            int handler_results = 0;
+            exec_error handler_error;
+            posix_sigset saved_mask;
+            memset(&handler_error, 0, sizeof(handler_error));
+            handler_arg.type = WASM_VALTYPE_I32;
+            handler_arg.i32 = signal;
+            if (posix_kernel_signal_enter_handler(store->kernel, signal,
+                                                  &saved_mask) == 0) {
+                (void)exec_invoke((waste_exec_engine *)caller, handler,
+                                  &handler_arg, 1, NULL, &handler_results,
+                                  &handler_error);
+                posix_kernel_signal_leave_handler(store->kernel, &saved_mask);
+            }
+        }
+    }
+
     if (ret == -POSIX_EAGAIN) {
         error->yield_reason = EXEC_YIELD_SELECT;
         return EXEC_YIELD;
@@ -910,11 +1350,31 @@ static exec_status native_posix_pselect(void *data, const wasm_value *args,
     return native_posix_result(ret, results, result_count);
 }
 
+/* Return the active image's fixed-width startup block pointer.  This is the
+ * only guest-facing way to discover argv/envp storage; the block itself stays
+ * in the process image and never crosses the host boundary as a pointer. */
+static exec_status native_posix_startup_v1(void *data, const wasm_value *args,
+                                           int arg_count, wasm_value *results,
+                                           int *result_count, exec_error *error,
+                                           const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    native_process_capsule *capsule;
+    (void)caller; (void)error;
+    if (!store || arg_count != 0)
+        return native_posix_result(-POSIX_EINVAL, results, result_count);
+    capsule = native_store_active_capsule(store);
+    if (!capsule || !capsule->image || capsule->image->startup_ptr == 0)
+        return native_posix_result(-POSIX_ENOENT, results, result_count);
+    return native_posix_result((int32_t)capsule->image->startup_ptr, results,
+                               result_count);
+}
+
 /* ---- POSIX function dispatch tables ---- */
 
 static exec_host_func native_posix_function(const char *module,
                                              const char *name) {
     if (strcmp(module, "waste_kernel") == 0) {
+        if (strcmp(name, "startup_v1") == 0) return native_posix_startup_v1;
         if (strcmp(name, "select_v1") == 0) return native_posix_select;
         if (strcmp(name, "pselect_v1") == 0) return native_posix_pselect;
         if (strcmp(name, POSIX_KERNEL_PATH_ACCESS_V1) == 0)
@@ -934,44 +1394,55 @@ static exec_host_func native_posix_function(const char *module,
     if (strcmp(name, "read") == 0) return native_posix_read;
     if (strcmp(name, "write") == 0) return native_posix_write;
     if (strcmp(name, "getcwd") == 0) return native_posix_getcwd;
-    if (strcmp(name, "getpgrp") == 0 || strcmp(name, "tcgetpgrp") == 0)
-        return native_posix_i32_one;
+    if (strcmp(name, "chdir") == 0) return native_posix_chdir;
+    if (strcmp(name, "readdir_v1") == 0) return native_posix_readdir;
+    if (strcmp(name, "getpgrp") == 0) return native_posix_getpgrp;
+    if (strcmp(name, "tcgetpgrp") == 0) return native_posix_tcgetpgrp;
     if (strcmp(name, "isatty") == 0) return native_posix_isatty;
     if (strcmp(name, "tcflow") == 0) return native_posix_tcflow;
     if (strcmp(name, "time") == 0) return native_posix_i64_zero;
-    if (strcmp(name, "lseek") == 0) return native_posix_i64_negative;
-    if (strcmp(name, "abort") == 0 || strcmp(name, "exit") == 0 ||
-        strcmp(name, "siglongjmp") == 0)
+    if (strcmp(name, "exit") == 0) return native_posix_exit;
+    if (strcmp(name, "raise") == 0) return native_posix_raise;
+    if (strcmp(name, "kill") == 0) return native_posix_kill;
+    if (strcmp(name, "killpg") == 0) return native_posix_killpg;
+    if (strcmp(name, "abort") == 0 || strcmp(name, "siglongjmp") == 0)
         return native_posix_void;
     if (strcmp(name, "sigsetjmp") == 0 || strcmp(name, "alarm") == 0 ||
         strcmp(name, "sigemptyset") == 0 || strcmp(name, "sigaddset") == 0 ||
         strcmp(name, "sigdelset") == 0 || strcmp(name, "sigismember") == 0 ||
-        strcmp(name, "sigprocmask") == 0 || strcmp(name, "sigaction") == 0 ||
+        strcmp(name, "sigprocmask") == 0 ||
         strcmp(name, "setitimer") == 0 || strcmp(name, "sleep") == 0 ||
-        strcmp(name, "setpgid") == 0 || strcmp(name, "tcsetpgrp") == 0 ||
         strcmp(name, "gettimeofday") == 0 || strcmp(name, "getrusage") == 0 ||
-        strcmp(name, "fcntl") == 0 || strcmp(name, "dup") == 0 ||
+        strcmp(name, "dup") == 0 ||
         strcmp(name, "dup2") == 0 ||
-        strcmp(name, "kill") == 0 || strcmp(name, "killpg") == 0 ||
         strcmp(name, "umask") == 0)
         return native_posix_i32_zero;
+    if (strcmp(name, "fcntl") == 0) return native_posix_fcntl;
+    if (strcmp(name, "setpgid") == 0) return native_posix_setpgid;
+    if (strcmp(name, "tcsetpgrp") == 0) return native_posix_tcsetpgrp;
     if (strcmp(name, "tcgetattr") == 0) return native_posix_tcgetattr;
     if (strcmp(name, "tcsetattr") == 0) return native_posix_tcsetattr;
     if (strcmp(name, "ioctl") == 0) return native_posix_ioctl;
+    if (strcmp(name, "sigaction") == 0) return native_posix_sigaction;
     if (strcmp(name, "getpid") == 0) return native_posix_getpid;
     if (strcmp(name, "getppid") == 0) return native_posix_getppid;
     if (strcmp(name, "access") == 0 || strcmp(name, "eaccess") == 0)
         return native_posix_access;
     if (strcmp(name, "faccessat") == 0) return native_posix_faccessat;
-    if (strcmp(name, "stat") == 0 || strcmp(name, "lstat") == 0)
-        return native_posix_stat;
+    if (strcmp(name, "stat") == 0) return native_posix_stat;
+    if (strcmp(name, "lstat") == 0) return native_posix_lstat;
     if (strcmp(name, "fstat") == 0) return native_posix_fstat;
+    if (strcmp(name, "mkdir") == 0) return native_posix_mkdir;
+    if (strcmp(name, "unlink") == 0) return native_posix_unlink;
+    if (strcmp(name, "rename") == 0) return native_posix_rename;
+    if (strcmp(name, "rmdir") == 0) return native_posix_rmdir;
+    if (strcmp(name, "readlink") == 0) return native_posix_readlink;
+    if (strcmp(name, "lseek") == 0) return native_posix_lseek;
     if (strcmp(name, "fork") == 0) return native_posix_fork;
     if (strcmp(name, "pipe") == 0 ||
         strcmp(name, "getgroups") == 0 ||
         strcmp(name, "confstr") == 0 || strcmp(name, "fchmod") == 0 ||
-        strcmp(name, "unlink") == 0 || strcmp(name, "rename") == 0 ||
-        strcmp(name, "chdir") == 0)
+        strcmp(name, "rmdir") == 0)
         return native_posix_i32_negative;
     if (strcmp(name, "waitpid") == 0) return native_posix_waitpid;
     if (strcmp(name, "execve") == 0) return native_posix_execve;

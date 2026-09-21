@@ -10,6 +10,7 @@ const root = path.resolve(__dirname, "..");
 const stagingDir = path.join(root, "src/html-rt/src/bash");
 const baselineMissingCommand = process.argv.includes("--missing-command");
 const executableProbe = process.argv.includes("--exec-probe");
+const executableExitProbe = process.argv.includes("--exec-exit");
 const genericMissingCommand = "waste-definitely-missing-command";
 
 /* Keep the acceptance probe tied to the pathname/process imports in the Bash
@@ -31,8 +32,10 @@ if (!fs.existsSync(wasmPath)) {
 }
 const wasmBytes = fs.readFileSync(wasmPath);
 let probePath = path.join(stagingDir, "waste-probe.wasm");
-if (!fs.existsSync(probePath)) probePath = path.join(root, "build/cli-rt/waste-probe.wasm");
-const probeBytes = executableProbe && fs.existsSync(probePath) ? fs.readFileSync(probePath) : null;
+const builtProbePath = path.join(root, "build/cli-rt/waste-probe.wasm");
+if (fs.existsSync(builtProbePath)) probePath = builtProbePath;
+const probeBytes = (executableProbe || executableExitProbe) && fs.existsSync(probePath)
+  ? fs.readFileSync(probePath) : null;
 const asArrayBuffer = bytes => bytes && bytes.buffer.slice(
   bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 
@@ -59,18 +62,26 @@ let genericMissingSent = false;
 let genericMissingSeen = false;
 let probeSent = false;
 let probeSeen = false;
+let probeFdsSeen = false;
 let probeAfterSeen = false;
 let probeStatus0Seen = false;
 let probeMissingSeen = false;
 let probeStatus127Seen = false;
 let probeSecondSeen = false;
 let probeFinalStatusSeen = false;
+let probeStatus7Seen = false;
+let exitProbeStatusRequested = false;
+let vfsSeen = false;
 let finish;
 const completion = new Promise(resolve => { finish = resolve; });
 
 const self = {
   postMessage(message) {
-    if (message.type === "output") {
+    if (message.type === "vfs") {
+      if (message.paths?.includes("/tmp") &&
+          message.paths?.includes("/usr/bin") &&
+          message.paths?.includes("/usr/share/waste/launch.wast")) vfsSeen = true;
+    } else if (message.type === "output") {
       output += message.text;
       process.stdout.write(message.text);
       if (baselineMissingCommand) {
@@ -114,13 +125,39 @@ const self = {
             bytes: Array.from(new TextEncoder().encode("exit\n")),
           }}), 10);
         }
+      } else if (executableExitProbe) {
+        /* The probe exits before it can print its success marker.  Ask Bash
+         * for `$?` at the next prompt, then prove that the shell remains
+         * usable after observing the nonzero status. */
+        const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
+        if (commandSent && messageHasPrompt && !exitProbeStatusRequested) {
+          exitProbeStatusRequested = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode(
+              "printf '__C_ENGINE_EXEC_STATUS_%s__\\n' \"$?\"\n",
+            ))}}), 10);
+        }
+        if (output.includes("__C_ENGINE_EXEC_STATUS_7__") && !probeStatus7Seen) {
+          probeStatus7Seen = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode(
+              "echo __C_ENGINE_EXEC_EXIT_AFTER__\n",
+            ))}}), 10);
+        }
+        if (output.includes("__C_ENGINE_EXEC_EXIT_AFTER__") && !exitSent) {
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        }
       } else if (executableProbe) {
+        if (output.includes("WASTE_PROBE_FDS_OK") && !probeFdsSeen)
+          probeFdsSeen = true;
         if (output.includes("WASTE_PROBE_OK") && !probeSeen) {
           probeSeen = true;
           setTimeout(() => self.onmessage({data: {type: "input",
             bytes: Array.from(new TextEncoder().encode(
               "printf '__C_ENGINE_EXEC_STATUS_%s__\\n' \"$?\"\n",
-            ))}}), 10);
+            ))}}), 100);
         }
         if (output.includes("__C_ENGINE_EXEC_STATUS_0__") && !probeStatus0Seen) {
           probeStatus0Seen = true;
@@ -171,6 +208,8 @@ const self = {
             bytes: Array.from(new TextEncoder().encode(
               baselineMissingCommand
                 ? "HOME_DIR=/home/a\n"
+                : executableExitProbe
+                  ? "WASTE_PROBE_EXIT=7 /bin/waste-probe\n"
                 : executableProbe
                   ? "/bin/waste-probe one two\n"
                   : "echo __C_ENGINE_BASH_OK__\n",
@@ -228,8 +267,21 @@ self.onmessage({data: {
   type: "start",
   wasmBytes: asArrayBuffer(wasmBytes),
   probeBytes: asArrayBuffer(probeBytes),
+  vfsFiles: [{
+    path: "/usr/share/waste/launch.wast",
+    bytes: asArrayBuffer(Buffer.from(launchSource, "utf8")),
+    mode: 0o644,
+  }, {
+    path: "/bin/waste-probe",
+    bytes: asArrayBuffer(probeBytes),
+    mode: 0o755,
+  }],
   source: launchSource,
 }});
+/* The page sends its initial dimensions immediately after start.  Keep this
+ * race in the fixture so the worker must queue resize until the engine-owned
+ * terminal exists. */
+self.onmessage({data: {type: "resize", columns: 80, rows: 24}});
 
 let timeoutId;
 const timeout = new Promise(resolve => {
@@ -241,17 +293,21 @@ const timeout = new Promise(resolve => {
 Promise.race([completion, timeout]).then(result => {
   clearTimeout(timeoutId);
   const passed = baselineMissingCommand
-    ? promptSeen && commandSent && environmentEchoSent && environmentEchoSeen &&
+    ? promptSeen && commandSent && vfsSeen && environmentEchoSent && environmentEchoSeen &&
       missingLsSent && commandNotFoundSeen && statusSeen &&
       builtinSeen && genericMissingSeen && exitSent && !doneBeforeExit &&
       output.includes("__C_ENGINE_STATUS_127__") &&
       output.includes("__C_ENGINE_AFTER__") && result.ok
+    : executableExitProbe
+      ? promptSeen && commandSent && vfsSeen && exitProbeStatusRequested &&
+        probeStatus7Seen && output.includes("__C_ENGINE_EXEC_EXIT_AFTER__") &&
+        exitSent && !doneBeforeExit && result.ok
     : executableProbe
-      ? promptSeen && commandSent && probeSeen && probeStatus0Seen &&
+      ? promptSeen && commandSent && vfsSeen && probeFdsSeen && probeSeen && probeStatus0Seen &&
         probeMissingSeen && probeStatus127Seen && probeSecondSeen &&
         probeFinalStatusSeen && probeAfterSeen && exitSent && !doneBeforeExit &&
         result.ok
-      : promptSeen && commandSent && exitSent && !doneBeforeExit &&
+      : promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&
         output.includes("__C_ENGINE_BASH_OK__") && result.ok;
   if (!passed) {
     console.error("\nC-engine Bash browser test failed:", result);

@@ -20,22 +20,39 @@ JavaScript re-entry.
 
 The versioned `waste_kernel` boundary is the only process/environment ABI.
 Guest libc may provide its own ordinary functions, but unresolved imports must
-be one of the documented kernel calls. The first probe deliberately imports
-only `env.write` so that the image format can be validated independently of
-the full libc port; production images use the versioned kernel names.
+be one of the documented kernel calls. The probe uses the small `env.write`,
+`env.exit`, and `env.fcntl` surface so image startup, status, and descriptor
+inheritance can be validated independently of the full libc port; production
+images use the versioned kernel names.
 
 The kernel boundary uses wasm32 integer handles and `(ptr, length)` byte spans.
 Pointers are validated against the calling image before the engine accesses
 memory. Errors return `-1` and set the image-local `errno`; successful calls
 return a nonnegative result appropriate to the operation.
 
+`waste_kernel.startup_v1() -> i32` returns the active image's startup-block
+pointer. It returns `-1` with `ENOENT` when the image has no startup block. The
+guest libc startup shim can use this import to construct its conventional
+`main(argc, argv, envp)` call without a JavaScript callback or host pointer.
+
+The libc helper `__waste_startup_call(entry)` performs that decoding and calls
+the supplied guest `main` function pointer. Application-specific `_start`
+shims can use it while retaining normal Wasm table/call-indirect semantics.
+
+The external-image descriptor subset exposes `env.fcntl(fd, command, argument)`
+for `F_GETFD` and `F_SETFD` with `FD_CLOEXEC`. Descriptor numbers are engine
+owned; only integer results cross the boundary.
+
 ## Process startup
 
-The eventual libc startup shim owns `argc`, `argv`, and `envp` storage inside
-the new image. Strings and pointer vectors are copied from the caller before
-`execve` replaces the old image. The initial environment is inherited unless
-the caller supplies a non-null `envp`; the current probe does not yet exercise
-this path.
+The engine copies `argc`, `argv`, and `envp` strings into the new image before
+`execve` replaces the old image. An optional exported
+`__waste_startup(i32 block)` hook receives a pointer to a fixed-width startup
+block at the top of linear memory. The block contains, at offsets 0, 4, 8, and
+12, `argc`, `argv`, `envc`, and `envp`; offsets 16 and 20 contain the process
+PID and a pointer to the NUL-terminated cwd string. The argv/envp vectors are
+32-bit guest pointers terminated by zero. Images without this hook retain the
+minimal `_start` ABI, allowing the original probe to remain valid.
 
 ## Validation requirements
 
@@ -44,4 +61,3 @@ module bytes/template, and entry metadata. Loading rejects malformed Wasm,
 unsupported ABI versions, unknown imports, and missing entry points before a
 process image is changed. This validation is the prerequisite for implementing
 successful `execve` without returning to the old image.
-

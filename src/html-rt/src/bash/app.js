@@ -57,6 +57,15 @@ async function startShell(event) {
     const wasmBytes = await loadBinary("waste-wast.wasm");
     let probeBytes = null;
     try { probeBytes = await loadBinary("waste-probe.wasm"); } catch (_) { /* optional during development */ }
+    const vfsFiles = [];
+    if (typeof g !== "undefined" && g.tar_hash && Object.keys(g.tar_hash).length) {
+      for (const name of Object.keys(g.tar_hash)) {
+        const bytes = await g.tar_hash[name].arrayBuffer();
+        const path = name === "waste-probe.wasm" ? "/bin/waste-probe" :
+          "/usr/share/waste/" + name;
+        vfsFiles.push({path, bytes, kind: 1, mode: name === "waste-probe.wasm" ? 0o755 : 0o644});
+      }
+    }
 
     /* Remove loading overlay — everything is inflated and ready */
     var overlay = document.getElementById("loading-overlay");
@@ -92,8 +101,10 @@ async function startShell(event) {
           terminal.focus();
         }
       }
-      else if (data.type === "started" && starting) {
-        status.textContent = `C engine loaded; running Bash (${((Date.now() - startedEpoch) / 1000).toFixed(1)} s by Date)`;
+      else if (data.type === "started") {
+        if (starting)
+          status.textContent = `C engine loaded; running Bash (${((Date.now() - startedEpoch) / 1000).toFixed(1)} s by Date)`;
+        sendTerminalResize();
       }
       else if (data.type === "done") {
         if (data.error) append(data.error);
@@ -101,8 +112,7 @@ async function startShell(event) {
       }
     };
     worker.onerror = event => { append(event.message || "worker error"); finish("failed"); };
-    worker.postMessage({type: "start", wasmBytes, source, probeBytes});
-    sendTerminalResize();
+    worker.postMessage({type: "start", wasmBytes, source, probeBytes, vfsFiles});
   } catch (error) { status.textContent = error.message || String(error); }
 }
 document.querySelector("#start-form").addEventListener("submit", startShell);

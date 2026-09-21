@@ -8,6 +8,7 @@ var g = {
    * This will be extended for the Bash VFS (writable overlay, directory
    * listing, path resolution) once execve and coreutils land. */
   tar_hash: {},
+  tar_meta: {},
   manifest_chunks: [],
 };
 
@@ -137,6 +138,7 @@ async function boot(callback, onProgress) {
     var name = entries[j].name.replace(/^\.\//, "");
     if (!name) continue;
     g.tar_hash[name] = tar.getFileBlob(entries[j].name);
+    g.tar_meta[name] = {type: entries[j].type, size: entries[j].size};
     fileCount++;
   }
   progress("Loaded " + fileCount + " files", (decompressedSize / 1024) | 0);

@@ -1,7 +1,54 @@
-/* dirent.c — Directory traversal stubs for the WASTE guest libc. */
+/* dirent.c — Engine-owned directory traversal. */
 
 #include "include/helper.h"
 
-void *opendir(const char*p){(void)p;unsupported();return 0;}
-i32 closedir(void*d){(void)d;return unsupported();}
-void *readdir(void*d){(void)d;unsupported();return 0;}
+extern i32 open(const char *path, i32 flags, i32 mode);
+extern i32 close(i32 descriptor);
+extern i32 waste_env_readdir(i32 descriptor, char *name, i32 capacity,
+                             waste_path_metadata *metadata)
+  __attribute__((import_module("env"), import_name("readdir_v1")));
+
+typedef struct WasteDirent {
+  u64 d_ino;
+  i64 d_off;
+  unsigned short d_reclen;
+  unsigned char d_type;
+  char d_name[256];
+} WasteDirent;
+
+typedef struct WasteDIR {
+  i32 descriptor;
+  WasteDirent entry;
+} WasteDIR;
+
+void *opendir(const char *path) {
+  i32 descriptor = open(path, 0, 0);
+  if (descriptor < 0) return 0;
+  WasteDIR *directory = malloc((u32)sizeof(WasteDIR));
+  if (!directory) { close(descriptor); *__errno_location() = 12; return 0; }
+  directory->descriptor = descriptor;
+  return directory;
+}
+
+i32 closedir(void *value) {
+  WasteDIR *directory = value;
+  if (!directory) { *__errno_location() = 14; return -1; }
+  i32 result = close(directory->descriptor);
+  free(directory);
+  return result;
+}
+
+WasteDirent *readdir(void *value) {
+  WasteDIR *directory = value;
+  waste_path_metadata metadata;
+  if (!directory) { *__errno_location() = 14; return 0; }
+  i32 result = waste_env_readdir(directory->descriptor, directory->entry.d_name,
+                                 (i32)sizeof(directory->entry.d_name), &metadata);
+  if (result <= 0) return 0;
+  directory->entry.d_ino = metadata.inode;
+  directory->entry.d_off++;
+  directory->entry.d_reclen = (unsigned short)(sizeof(directory->entry));
+  directory->entry.d_type = metadata.kind == 2 ? 4 :
+                            metadata.kind == 3 ? 10 : 8;
+  return &directory->entry;
+}

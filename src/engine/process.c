@@ -146,6 +146,7 @@ int native_store_commit_process_image(native_store *store,
                                       native_process_image *image) {
     native_process *process = active_process(store);
     if (!process || !image) return -POSIX_EINVAL;
+    posix_kernel_close_on_exec(process->kernel);
     release_image(process->capsule.image);
     process->capsule.image = image;
     process->capsule.engine = image->engine;
@@ -337,6 +338,22 @@ int native_store_exit_process(native_store *store, int status) {
     if (process->pid == 1) return -POSIX_EINVAL;
     if (process->zombie) return 0;
     process->exit_status = (status & 0xff) << 8;
+    process->zombie = 1;
+    process->capsule.state = NATIVE_PROCESS_EXITED;
+    process->capsule.pending_transition = NATIVE_PROCESS_TRANSITION_EXIT;
+    return 0;
+}
+
+int native_store_signal_process(native_store *store, int pid, int signal) {
+    native_process *process = find_process(store, pid);
+    posix_signal_disposition disposition;
+    if (!process || process->zombie || signal <= 0) return -POSIX_EINVAL;
+    if (posix_kernel_signal_raise(process->kernel, signal) != 0) return -POSIX_EINVAL;
+    if (posix_kernel_signal_get_disposition(process->kernel, signal,
+                                             &disposition) != 0 ||
+        disposition != POSIX_SIGNAL_DEFAULT || signal == POSIX_SIGSTOP)
+        return 0;
+    process->exit_status = ((128 + signal) & 0xff) << 8;
     process->zombie = 1;
     process->capsule.state = NATIVE_PROCESS_EXITED;
     process->capsule.pending_transition = NATIVE_PROCESS_TRANSITION_EXIT;

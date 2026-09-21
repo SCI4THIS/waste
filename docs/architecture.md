@@ -324,6 +324,14 @@ mount backend rather than a replacement namespace in JavaScript.  The terminal
 retains controlling-session, foreground-process-group, termios, and job-control
 state in the kernel; JavaScript renders output and delivers input events.
 
+The offline Bash page follows the non-persistent default: each worker start
+creates a new sandbox kernel, imports a read-only copy of the embedded package
+manifest, and owns a fresh writable overlay (including `/tmp`). Restarting the
+shell therefore discards guest-created files and descriptor state while
+leaving the page's packaged blobs unchanged. A future persistence backend must
+be an explicit mount capability; it must not be implemented by retaining VFS
+state in the page or worker protocol implicitly.
+
 `fork` clones the address-space object graph while preserving identity.  If two
 module instances alias one imported memory or table before the fork, their
 clones must still alias one corresponding child object.  Open-file descriptions
