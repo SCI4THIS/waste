@@ -170,10 +170,12 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
     };
     checkVfs("/tmp", 0);
     checkVfs("/usr/bin", 0);
+    checkVfs("/bin/wat", 1);
+    checkVfs("/bin/wast", 1);
     if (probeBuf) checkVfs("/bin/waste-probe", 1);
     const packagedPaths = (packagedFiles || []).map(file => file.path);
     for (const path of packagedPaths) checkVfs(path, 0);
-    self.postMessage({type: "vfs", paths: ["/tmp", "/usr/bin",
+    self.postMessage({type: "vfs", paths: ["/tmp", "/usr/bin", "/bin/wat", "/bin/wast",
       ...(probeBuf ? ["/bin/waste-probe"] : []), ...packagedPaths]});
   }
   engineReady = true;
@@ -183,6 +185,17 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
     await waitForIO();
     if (terminated) break;
     yielded = exp.waste_wast_resume();
+    if (yielded) self.postMessage({type: "io-ready"});
+  }
+
+  if (exp.waste_wast_transition_evidence_ptr &&
+      exp.waste_wast_transition_evidence_len) {
+    const evidencePtr = exp.waste_wast_transition_evidence_ptr();
+    const evidenceLength = exp.waste_wast_transition_evidence_len();
+    const evidence = decoder.decode(new Uint8Array(
+      engineMemory.buffer, evidencePtr, evidenceLength));
+    self.postMessage({type: "output",
+      text: `WASTE_TRANSITION_EVIDENCE=${evidence}\n`});
   }
 
   const total = exp.waste_wast_results_total();
@@ -202,8 +215,11 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
       error: decoder.decode(resultBytes.subarray(base + 64, base + errorEnd)),
     });
   }
-  self.postMessage({type: "done", ok: total === 0 || passed === total,
-    total, passed, results});
+  const ok = total === 0 || passed === total;
+  if (!ok)
+    self.postMessage({type: "output",
+      text: `WASTE_DONE_RESULTS=${JSON.stringify(results)}\n`});
+  self.postMessage({type: "done", ok, total, passed, results});
 }
 
 self.onmessage = function(e) {

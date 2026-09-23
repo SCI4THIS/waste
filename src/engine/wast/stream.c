@@ -2,9 +2,11 @@
 #include "wat/context.h"
 #include "wat/builder.h"
 #include "wast/runner.h"
+#include "source.h"
 #include "wast.tab.h"
 
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -23,9 +25,24 @@ extern void wast_lexer_begin_command_scan(yyscan_t scanner);
 void wast_stream_init(wast_stream *stream, const char *source, size_t length) {
     if (!stream) return;
     memset(stream, 0, sizeof(*stream));
-    stream->source = source;
-    stream->length = length;
-    stream->line = 1;
+    waste_source_view view;
+    waste_source_result source_result =
+        waste_source_view_init(source, length, &view);
+    if (source_result == WASTE_SOURCE_OK ||
+        source_result == WASTE_SOURCE_NO_SHEBANG) {
+        stream->source = view.body;
+        stream->length = view.body_length;
+        stream->source_offset = view.source_offset;
+        stream->line_offset = view.line_offset;
+    } else {
+        stream->source = source;
+        stream->length = length;
+        snprintf(stream->error, sizeof(stream->error), "%s",
+                 source_result == WASTE_SOURCE_SHEBANG_TOO_LONG ?
+                 "shebang line exceeds loader limit" :
+                 "invalid shebang line");
+    }
+    stream->line = 1 + stream->line_offset;
     stream->column = 1;
 }
 
@@ -43,8 +60,19 @@ void wast_stream_destroy(wast_stream *stream) {
     stream->initialized = 0;
 }
 
+int wast_stream_position(const wast_stream *stream, size_t *offset_out,
+                         unsigned *line_out) {
+    if (!stream || !offset_out || !line_out ||
+        stream->offset > SIZE_MAX - stream->source_offset)
+        return -1;
+    *offset_out = stream->source_offset + stream->offset;
+    *line_out = stream->line;
+    return 0;
+}
+
 static int initialize_scanner(wast_stream *stream) {
     if (stream->initialized) return 1;
+    if (stream->error[0]) return 0;
     if (!stream->source || stream->length > (size_t)INT_MAX) {
         snprintf(stream->error, sizeof(stream->error), "%s",
                  !stream->source ? "missing WAST source" :
@@ -97,9 +125,12 @@ int wast_stream_next(wast_stream *stream, wast_stream_callback callback,
     memset(&location, 0, sizeof(location));
     int token = yylex(&value, &location, context,
                       (yyscan_t)stream->scanner);
-    stream->line = (unsigned)context->lex.line;
+    stream->line = (unsigned)context->lex.line + stream->line_offset;
     stream->column = (unsigned)context->lex.column;
     if (token == 0) {
+        /* offset is scanner-relative until wast_stream_position adds the
+         * stripped shebang prefix.  Keeping EOF in that same coordinate
+         * space avoids adding source_offset twice on the final resume. */
         stream->offset = stream->length;
         stream->finished = 1;
         wast_stream_destroy(stream);
@@ -116,7 +147,7 @@ int wast_stream_next(wast_stream *stream, wast_stream_callback callback,
 
     size_t start = context->command_start_offset;
     size_t end = context->command_end_offset;
-    unsigned line = context->command_start_line;
+    unsigned line = context->command_start_line + stream->line_offset;
     if (start > end || end > stream->length) {
         snprintf(stream->error, sizeof(stream->error), "%s",
                  "invalid command boundary");
@@ -133,7 +164,8 @@ int wast_stream_next(wast_stream *stream, wast_stream_callback callback,
     int callback_result = callback(
         context->command_scan_inline ? WAST_STREAM_MODULE :
         wast_command_classify(stream->source + start, end - start),
-        stream->source + start, end - start, start, line, &parsed, opaque);
+        stream->source + start, end - start,
+        stream->source_offset + start, line, &parsed, opaque);
     wast_script_free(&parsed);
     return callback_result < 0 ? -1 : 1;
 }

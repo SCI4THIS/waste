@@ -37,9 +37,15 @@ def main() -> int:
     index_html = page_dir / "index.html"
     style_css = page_dir / "style.css"
     app_js = page_dir / "app.js"
-    terminal_model_js = page_dir / "terminal" / "model.js"
-    terminal_glf_js = page_dir / "terminal" / "glf.js"
-    terminal_renderer_js = page_dir / "terminal" / "renderer.js"
+    # The Bash page owns the canonical terminal sources.  The browser test
+    # page reuses them, but does not keep a second generated copy in its
+    # staging directory.
+    terminal_dir = page_dir / "terminal"
+    if not (terminal_dir / "model.js").is_file():
+        terminal_dir = page_dir.parent / "bash" / "terminal"
+    terminal_model_js = terminal_dir / "model.js"
+    terminal_glf_js = terminal_dir / "glf.js"
+    terminal_renderer_js = terminal_dir / "renderer.js"
 
     for f in [index_html, style_css, app_js, args.tarball_js,
               terminal_model_js, terminal_glf_js, terminal_renderer_js,

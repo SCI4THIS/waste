@@ -27,6 +27,325 @@ static void release_image(native_process_image *image) {
         native_process_image_release(image);
 }
 
+void native_process_capsule_clear_handler(native_process_capsule *capsule) {
+    if (!capsule) return;
+    free(capsule->handler.source);
+    if (capsule->handler.destroy_context && capsule->handler.context)
+        capsule->handler.destroy_context(capsule->handler.context);
+    memset(&capsule->handler, 0, sizeof(capsule->handler));
+    capsule->handler.status = EXEC_OK;
+}
+
+static native_process *active_process(native_store *store);
+static native_process *find_process(native_store *store, int pid);
+
+int native_store_complete_process_handler(native_store *store,
+                                          exec_status status, int exit_code) {
+    native_process *process = active_process(store);
+    native_process_capsule *capsule;
+    if (!process || process->pid == 1 || process->zombie ||
+        exit_code < 0 || exit_code > 255 ||
+        process->capsule.pending_result_valid)
+        return -POSIX_EINVAL;
+    capsule = &process->capsule;
+    if (capsule->handler.kind == NATIVE_PROCESS_HANDLER_NONE)
+        return -POSIX_EINVAL;
+    if (capsule->state != NATIVE_PROCESS_RUNNABLE)
+        return -POSIX_EBUSY;
+    capsule->handler.status = status;
+    capsule->handler.exit_code = exit_code;
+    capsule->pending_error = (int)status;
+    capsule->pending_result = exit_code;
+    capsule->pending_result_valid = 1;
+    native_process_capsule_clear_handler(capsule);
+    return native_store_exit_process(store, exit_code);
+}
+
+int native_store_complete_process_handler_default(native_store *store,
+                                                  exec_status status) {
+    native_process *process = active_process(store);
+    if (!process || process->capsule.handler.kind == NATIVE_PROCESS_HANDLER_NONE)
+        return -POSIX_EINVAL;
+    return native_store_complete_process_handler(
+        store, status,
+        native_process_handler_default_exit_code(
+            status, process->capsule.handler.exit_code));
+}
+
+int native_store_complete_process_handler_result_and_wake(
+        native_store *store) {
+    native_process *process = active_process(store);
+    exec_status status;
+    int exit_code;
+    if (!process || process->capsule.handler.kind == NATIVE_PROCESS_HANDLER_NONE)
+        return -POSIX_EINVAL;
+    status = process->capsule.handler.status;
+    exit_code = native_process_handler_default_exit_code(
+        status, process->capsule.handler.exit_code);
+    return native_store_complete_process_handler_and_wake(
+        store, status, exit_code);
+}
+
+int native_store_complete_process_handler_and_wake(
+        native_store *store, exec_status status, int exit_code) {
+    native_process *child = active_process(store);
+    native_process *parent;
+    int child_pid;
+    if (!child || child->pid == 1 || child->ppid <= 0)
+        return -POSIX_EINVAL;
+    parent = find_process(store, child->ppid);
+    if (!parent || parent->zombie || parent->capsule.pending_result_valid ||
+        parent->capsule.pending_transition != NATIVE_PROCESS_TRANSITION_NONE)
+        return -POSIX_EBUSY;
+    child_pid = child->pid;
+    if (native_store_complete_process_handler(store, status, exit_code) != 0)
+        return -POSIX_EINVAL;
+    return native_store_wake_process(store, parent->pid, child_pid);
+}
+
+int native_store_complete_process_handler_and_wake_default(
+        native_store *store, exec_status status) {
+    native_process *process = active_process(store);
+    if (!process || process->capsule.handler.kind == NATIVE_PROCESS_HANDLER_NONE)
+        return -POSIX_EINVAL;
+    return native_store_complete_process_handler_and_wake(
+        store, status,
+        native_process_handler_default_exit_code(
+            status, process->capsule.handler.exit_code));
+}
+
+int native_process_handler_default_exit_code(exec_status status,
+                                             int explicit_exit_code) {
+    if (status == EXEC_OK) return 0;
+    if (status == EXEC_ERROR_EXIT) return explicit_exit_code;
+    if (status == EXEC_ERROR_FORMAT || status == EXEC_ERROR_UNSUPPORTED ||
+        status == EXEC_ERROR_NOT_FOUND)
+        return 126;
+    return 127;
+}
+
+int native_process_capsule_install_handler(
+        native_process_capsule *capsule, native_process_handler_kind kind,
+        uint8_t *source, size_t source_size, void *context,
+        native_process_handler_context_destroy destroy_context) {
+    if (!capsule || kind != NATIVE_PROCESS_HANDLER_WAST || !source ||
+        source_size == 0 || source_size > NATIVE_EXEC_BYTES_MAX ||
+        capsule->handler.kind != NATIVE_PROCESS_HANDLER_NONE)
+        return -POSIX_EINVAL;
+    capsule->handler.kind = kind;
+    capsule->handler.source = source;
+    capsule->handler.source_size = source_size;
+    capsule->handler.stream_offset = 0;
+    capsule->handler.stream_line = 1;
+    capsule->handler.context = context;
+    capsule->handler.destroy_context = destroy_context;
+    capsule->handler.status = EXEC_OK;
+    capsule->handler.exit_code = 0;
+    return 0;
+}
+
+int native_process_capsule_attach_handler_context(
+        native_process_capsule *capsule, void *context,
+        native_process_handler_context_destroy destroy_context) {
+    if (!capsule || capsule->handler.kind == NATIVE_PROCESS_HANDLER_NONE ||
+        !context || capsule->handler.context)
+        return -POSIX_EINVAL;
+    capsule->handler.context = context;
+    capsule->handler.destroy_context = destroy_context;
+    return 0;
+}
+
+int native_process_capsule_handler_cursor(
+        const native_process_capsule *capsule, const uint8_t **source_out,
+        size_t *size_out, size_t *offset_out, unsigned *line_out) {
+    if (!capsule || capsule->handler.kind == NATIVE_PROCESS_HANDLER_NONE ||
+        !source_out || !size_out || !offset_out || !line_out)
+        return -POSIX_EINVAL;
+    *source_out = capsule->handler.source;
+    *size_out = capsule->handler.source_size;
+    *offset_out = capsule->handler.stream_offset;
+    *line_out = capsule->handler.stream_line;
+    return 0;
+}
+
+int native_process_capsule_advance_handler(native_process_capsule *capsule,
+                                           size_t offset, unsigned line) {
+    if (!capsule || capsule->handler.kind == NATIVE_PROCESS_HANDLER_NONE ||
+        offset < capsule->handler.stream_offset ||
+        offset > capsule->handler.source_size || line == 0 ||
+        line < capsule->handler.stream_line)
+        return -POSIX_EINVAL;
+    capsule->handler.stream_offset = offset;
+    capsule->handler.stream_line = line;
+    return 0;
+}
+
+int native_process_capsule_suspend_handler(native_process_capsule *capsule,
+                                           native_process_run_state state) {
+    if (!capsule || capsule->handler.kind == NATIVE_PROCESS_HANDLER_NONE ||
+        capsule->state != NATIVE_PROCESS_RUNNABLE ||
+        (state != NATIVE_PROCESS_BROWSER_BLOCKED &&
+         state != NATIVE_PROCESS_WAIT_BLOCKED))
+        return -POSIX_EINVAL;
+    capsule->state = state;
+    return 0;
+}
+
+int native_process_capsule_resume_handler(native_process_capsule *capsule) {
+    if (!capsule || capsule->handler.kind == NATIVE_PROCESS_HANDLER_NONE ||
+        ((capsule->state != NATIVE_PROCESS_BROWSER_BLOCKED &&
+          capsule->state != NATIVE_PROCESS_WAIT_BLOCKED) &&
+         capsule->handler.wait_reason == EXEC_YIELD_NONE))
+        return -POSIX_EINVAL;
+    capsule->state = NATIVE_PROCESS_RUNNABLE;
+    return 0;
+}
+
+int native_process_capsule_set_handler_exit_code(native_process_capsule *capsule,
+                                                 int exit_code) {
+    if (!capsule || capsule->handler.kind == NATIVE_PROCESS_HANDLER_NONE ||
+        exit_code < 0 || exit_code > 255)
+        return -POSIX_EINVAL;
+    capsule->handler.exit_code = exit_code;
+    return 0;
+}
+
+exec_status native_process_capsule_run_handler_step(
+        native_process_capsule *capsule, native_process_handler_step callback,
+        void *context) {
+    size_t next_offset;
+    unsigned next_line;
+    exec_status status;
+    if (!capsule || capsule->handler.kind == NATIVE_PROCESS_HANDLER_NONE ||
+        !callback || capsule->state != NATIVE_PROCESS_RUNNABLE)
+        return EXEC_ERROR_FORMAT;
+    next_offset = capsule->handler.stream_offset;
+    next_line = capsule->handler.stream_line;
+    status = callback(capsule->handler.source, capsule->handler.source_size,
+                      capsule->handler.stream_offset,
+                      capsule->handler.stream_line, &next_offset, &next_line,
+                      context);
+    if (status != EXEC_OK && status != EXEC_YIELD) {
+        capsule->handler.status = status;
+        return status;
+    }
+    if (native_process_capsule_advance_handler(
+            capsule, next_offset, next_line) != 0) {
+        capsule->handler.status = EXEC_ERROR_FORMAT;
+        return EXEC_ERROR_FORMAT;
+    }
+    capsule->handler.status = status;
+    return status;
+}
+
+exec_status native_process_capsule_run_attached_handler_step(
+        native_process_capsule *capsule, native_process_handler_step callback) {
+    if (!capsule || !capsule->handler.context)
+        return EXEC_ERROR_FORMAT;
+    return native_process_capsule_run_handler_step(
+        capsule, callback, capsule->handler.context);
+}
+
+exec_status native_store_run_process_handler_step(
+        native_store *store, native_process_handler_step callback) {
+    native_process_capsule *capsule;
+    if (!store) return EXEC_ERROR_FORMAT;
+    capsule = native_store_active_capsule(store);
+    if (!capsule) return EXEC_ERROR_FORMAT;
+    return native_process_capsule_run_attached_handler_step(capsule, callback);
+}
+
+int native_store_process_handler_cursor(
+        const native_store *store, const uint8_t **source_out,
+        size_t *size_out, size_t *offset_out, unsigned *line_out) {
+    const native_process_capsule *capsule;
+    if (!store) return -POSIX_EINVAL;
+    capsule = native_store_active_capsule((native_store *)store);
+    if (!capsule) return -POSIX_EINVAL;
+    return native_process_capsule_handler_cursor(
+        capsule, source_out, size_out, offset_out, line_out);
+}
+
+int native_store_process_handler_context(const native_store *store,
+                                         void **context_out) {
+    const native_process_capsule *capsule;
+    if (!store || !context_out) return -POSIX_EINVAL;
+    capsule = native_store_active_capsule((native_store *)store);
+    if (!capsule || capsule->handler.kind == NATIVE_PROCESS_HANDLER_NONE)
+        return -POSIX_EINVAL;
+    *context_out = capsule->handler.context;
+    return 0;
+}
+
+int native_store_process_handler_result(const native_store *store,
+                                        exec_status *status_out,
+                                        int *exit_code_out) {
+    const native_process_capsule *capsule;
+    if (!store || !status_out || !exit_code_out) return -POSIX_EINVAL;
+    capsule = native_store_active_capsule((native_store *)store);
+    if (!capsule || capsule->handler.kind == NATIVE_PROCESS_HANDLER_NONE)
+        return -POSIX_EINVAL;
+    *status_out = capsule->handler.status;
+    *exit_code_out = capsule->handler.exit_code;
+    return 0;
+}
+
+int native_store_advance_process_handler(native_store *store,
+                                          size_t offset, unsigned line) {
+    native_process_capsule *capsule;
+    if (!store) return -POSIX_EINVAL;
+    capsule = native_store_active_capsule(store);
+    if (!capsule) return -POSIX_EINVAL;
+    return native_process_capsule_advance_handler(capsule, offset, line);
+}
+
+int native_store_suspend_process_handler(native_store *store,
+                                         native_process_run_state state) {
+    native_process_capsule *capsule;
+    int result;
+    if (!store) return -POSIX_EINVAL;
+    capsule = native_store_active_capsule(store);
+    if (!capsule) return -POSIX_EINVAL;
+    result = native_process_capsule_suspend_handler(capsule, state);
+    if (result == 0) capsule->handler.wait_reason = EXEC_YIELD_NONE;
+    return result;
+}
+
+int native_store_suspend_process_handler_for_yield(
+        native_store *store, exec_yield_reason reason) {
+    native_process_capsule *capsule;
+    if (reason != EXEC_YIELD_READ && reason != EXEC_YIELD_SELECT)
+        return -POSIX_EINVAL;
+    if (native_store_suspend_process_handler(
+            store, NATIVE_PROCESS_BROWSER_BLOCKED) != 0)
+        return -POSIX_EINVAL;
+    capsule = native_store_active_capsule(store);
+    capsule->handler.wait_reason = reason;
+    return 0;
+}
+
+int native_store_process_handler_wait_reason(
+        const native_store *store, exec_yield_reason *reason_out) {
+    const native_process_capsule *capsule;
+    if (!store || !reason_out) return -POSIX_EINVAL;
+    capsule = native_store_active_capsule((native_store *)store);
+    if (!capsule || capsule->handler.kind == NATIVE_PROCESS_HANDLER_NONE)
+        return -POSIX_EINVAL;
+    *reason_out = capsule->handler.wait_reason;
+    return 0;
+}
+
+int native_store_resume_process_handler(native_store *store) {
+    native_process_capsule *capsule;
+    if (!store) return -POSIX_EINVAL;
+    capsule = native_store_active_capsule(store);
+    if (!capsule) return -POSIX_EINVAL;
+    if (native_process_capsule_resume_handler(capsule) != 0)
+        return -POSIX_EINVAL;
+    capsule->handler.wait_reason = EXEC_YIELD_NONE;
+    return 0;
+}
+
 static native_process *find_process(native_store *store, int pid) {
     if (!store || pid <= 0) return NULL;
     for (int i = 0; i < NATIVE_PROCESS_MAX; i++)
@@ -47,6 +366,28 @@ void native_process_capsule_init(native_process_capsule *capsule) {
     if (!capsule) return;
     memset(capsule, 0, sizeof(*capsule));
     capsule->state = NATIVE_PROCESS_RUNNABLE;
+}
+
+int native_process_capsule_select_entry(native_process_capsule *capsule,
+                                         waste_exec_engine *engine,
+                                         uint32_t func_idx,
+                                         const wasm_value *args,
+                                         int arg_count) {
+    if (!capsule || !engine || arg_count < 0 || arg_count > WAST_MAX_ARGS ||
+        (arg_count > 0 && !args) ||
+        capsule->handler.kind != NATIVE_PROCESS_HANDLER_NONE ||
+        (uint64_t)func_idx >= (uint64_t)engine->import_func_count +
+            (uint64_t)engine->func_count)
+        return -POSIX_EINVAL;
+    capsule->engine = engine;
+    capsule->root_func_idx = func_idx;
+    capsule->root_arg_count = arg_count;
+    memset(capsule->root_args, 0, sizeof(capsule->root_args));
+    if (arg_count)
+        memcpy(capsule->root_args, args,
+               (size_t)arg_count * sizeof(capsule->root_args[0]));
+    capsule->state = NATIVE_PROCESS_RUNNABLE;
+    return 0;
 }
 
 int native_process_capsule_clone(native_process_capsule *destination,
@@ -75,6 +416,29 @@ int native_process_capsule_clone(native_process_capsule *destination,
     destination->pending_result = source->pending_result;
     destination->pending_error = source->pending_error;
     destination->pending_result_valid = source->pending_result_valid;
+    if (source->handler.kind != NATIVE_PROCESS_HANDLER_NONE) {
+        if (source->handler.context || !source->handler.source ||
+            source->handler.source_size == 0) {
+            native_process_capsule_destroy(destination);
+            return 0;
+        }
+        destination->handler.source = malloc(source->handler.source_size);
+        if (!destination->handler.source) {
+            native_process_capsule_destroy(destination);
+            return 0;
+        }
+        memcpy(destination->handler.source, source->handler.source,
+               source->handler.source_size);
+        destination->handler.kind = source->handler.kind;
+        destination->handler.source_size = source->handler.source_size;
+        destination->handler.stream_offset = source->handler.stream_offset;
+        destination->handler.stream_line = source->handler.stream_line;
+        destination->handler.status = source->handler.status;
+        destination->handler.exit_code = source->handler.exit_code;
+        /* A forked child starts runnable; never carry the parent's external
+         * wait marker into that fresh scheduling state. */
+        destination->handler.wait_reason = EXEC_YIELD_NONE;
+    }
     /* An image is immutable and may be retained by both capsules until the
      * later execution-capsule stage gives each process a private image. */
     /* A cloned engine is the child image for this bounded fork model; do not
@@ -86,6 +450,7 @@ int native_process_capsule_clone(native_process_capsule *destination,
 
 void native_process_capsule_destroy(native_process_capsule *capsule) {
     if (!capsule) return;
+    native_process_capsule_clear_handler(capsule);
     if (capsule->continuation) {
         if (exec_continuation_destroy)
             exec_continuation_destroy(capsule->continuation);
@@ -145,7 +510,14 @@ int native_store_set_active_process(native_store *store, int pid) {
 int native_store_commit_process_image(native_store *store,
                                       native_process_image *image) {
     native_process *process = active_process(store);
-    if (!process || !image) return -POSIX_EINVAL;
+    if (!process || !image || !image->engine ||
+        (uint64_t)image->entry_func >=
+            (uint64_t)image->engine->import_func_count +
+            (uint64_t)image->engine->func_count ||
+        process->capsule.handler.kind != NATIVE_PROCESS_HANDLER_NONE ||
+        process->capsule.pending_result_valid ||
+        process->capsule.pending_transition != NATIVE_PROCESS_TRANSITION_EXEC)
+        return -POSIX_EINVAL;
     posix_kernel_close_on_exec(process->kernel);
     release_image(process->capsule.image);
     process->capsule.image = image;
@@ -164,6 +536,9 @@ int native_store_prepare_process_exec(native_store *store,
         return -POSIX_EINVAL;
     if (request->pid > 0 && request->pid != process->pid)
         return -POSIX_EINVAL;
+    if (process->capsule.pending_result_valid ||
+        process->capsule.pending_transition != NATIVE_PROCESS_TRANSITION_NONE)
+        return -POSIX_EBUSY;
     process->capsule.pending_transition = NATIVE_PROCESS_TRANSITION_EXEC;
     return 0;
 }
@@ -194,6 +569,17 @@ void native_store_complete_process_wake(native_store *store) {
     if (!process) return;
     if (process->capsule.pending_transition == NATIVE_PROCESS_TRANSITION_WAKE)
         process->capsule.pending_transition = NATIVE_PROCESS_TRANSITION_NONE;
+}
+
+int native_store_take_process_wake(native_store *store, int *result_out) {
+    native_process *process = active_process(store);
+    if (!process || !result_out || !process->capsule.pending_result_valid)
+        return -POSIX_EINVAL;
+    *result_out = process->capsule.pending_result;
+    process->capsule.pending_result_valid = 0;
+    if (process->capsule.pending_transition == NATIVE_PROCESS_TRANSITION_WAKE)
+        process->capsule.pending_transition = NATIVE_PROCESS_TRANSITION_NONE;
+    return 0;
 }
 
 int native_store_fork_process(native_store *store, int *pid_out) {

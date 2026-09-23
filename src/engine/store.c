@@ -2,6 +2,7 @@
 #include "runtime_internal.h"
 #include "wasm/encode.h"
 #include "wast/runner.h"
+#include "source.h"
 #include "wasm/decode.h"
 #include "instantiate.h"
 #include "lib/include/kernel.h"
@@ -18,7 +19,69 @@ void native_exec_request_destroy(native_exec_request *request) {
     if (!request) return;
     for (uint32_t i = 0; i < request->argc; i++) free(request->argv[i]);
     for (uint32_t i = 0; i < request->envc; i++) free(request->envp[i]);
+    free(request->handler_bytes);
     memset(request, 0, sizeof(*request));
+}
+
+int native_exec_request_take_handler(native_exec_request *request,
+                                     native_exec_handler_kind kind,
+                                     uint8_t **bytes_out, size_t *size_out) {
+    if (!request || !bytes_out || !size_out || request->handler_kind != kind ||
+        request->handler_size == 0 ||
+        request->handler_size > NATIVE_EXEC_BYTES_MAX)
+        return -POSIX_EINVAL;
+    *bytes_out = request->handler_bytes;
+    *size_out = request->handler_size;
+    request->handler_bytes = NULL;
+    request->handler_size = 0;
+    request->handler_kind = NATIVE_EXEC_HANDLER_NONE;
+    return 0;
+}
+
+int native_store_commit_process_handler_with_context(
+        native_store *store, native_exec_request *request,
+        native_process_handler_kind kind, void *context,
+        native_process_handler_context_destroy destroy_context) {
+    native_process_capsule *capsule = native_store_active_capsule(store);
+    native_process_image *old_image;
+    uint8_t *source = NULL;
+    size_t source_size = 0;
+    if (!store || !capsule || !request || !request->active ||
+        capsule->pending_transition != NATIVE_PROCESS_TRANSITION_EXEC ||
+        kind != NATIVE_PROCESS_HANDLER_WAST ||
+        request->handler_kind != NATIVE_EXEC_HANDLER_WAST ||
+        !request->handler_bytes || request->handler_size == 0 ||
+        request->handler_size > NATIVE_EXEC_BYTES_MAX ||
+        capsule->handler.kind != NATIVE_PROCESS_HANDLER_NONE ||
+        capsule->pending_result_valid)
+        return -POSIX_EINVAL;
+    if (native_exec_request_take_handler(
+            request, NATIVE_EXEC_HANDLER_WAST, &source, &source_size) != 0)
+        return -POSIX_EINVAL;
+    if (native_process_capsule_install_handler(
+            capsule, kind, source, source_size, context, destroy_context) != 0) {
+        free(source);
+        return -POSIX_EBUSY;
+    }
+    posix_kernel_close_on_exec(store->kernel);
+    old_image = capsule->image;
+    native_process_image_release(old_image);
+    capsule->image = NULL;
+    capsule->engine = NULL;
+    capsule->root_func_idx = 0;
+    capsule->root_arg_count = 0;
+    memset(capsule->root_args, 0, sizeof(capsule->root_args));
+    capsule->generation++;
+    capsule->state = NATIVE_PROCESS_RUNNABLE;
+    capsule->pending_transition = NATIVE_PROCESS_TRANSITION_NONE;
+    return 0;
+}
+
+int native_store_commit_process_handler(native_store *store,
+                                        native_exec_request *request,
+                                        native_process_handler_kind kind) {
+    return native_store_commit_process_handler_with_context(
+        store, request, kind, NULL, NULL);
 }
 
 void native_process_image_init(native_process_image *image) {
@@ -48,6 +111,26 @@ static void native_store_u32(uint8_t *bytes, uint32_t value) {
     bytes[1] = (uint8_t)(value >> 8);
     bytes[2] = (uint8_t)(value >> 16);
     bytes[3] = (uint8_t)(value >> 24);
+}
+
+static char *native_store_strdup(const char *value) {
+    size_t length;
+    char *copy;
+    if (!value) return NULL;
+    length = strlen(value) + 1u;
+    copy = (char *)malloc(length);
+    if (copy) memcpy(copy, value, length);
+    return copy;
+}
+
+static int native_path_has_suffix(const char *path, const char *suffix) {
+    size_t path_length;
+    size_t suffix_length;
+    if (!path || !suffix) return 0;
+    path_length = strlen(path);
+    suffix_length = strlen(suffix);
+    return path_length >= suffix_length &&
+           strcmp(path + path_length - suffix_length, suffix) == 0;
 }
 
 /* Materialize the optional __waste_startup(i32) block at the top of the
@@ -209,11 +292,24 @@ int native_store_bind_executable_paths(native_store *store) {
             POSIX_NODE_REGULAR, executable->mode, 0, 0,
             (int64_t)executable->size, (uint64_t)(3u + i)
         };
-        int status = posix_kernel_path_add(store->kernel, executable->path,
-                                            &metadata);
+        int status = posix_kernel_path_add_data(
+            store->kernel, executable->path, &metadata, executable->bytes,
+            executable->size);
         if (status != 0) return status;
     }
     return 0;
+}
+
+int native_store_bind_interpreter_paths(native_store *store) {
+    if (!store || !store->kernel) return -POSIX_EINVAL;
+    const posix_path_metadata metadata = {
+        POSIX_NODE_REGULAR, 0755u, 0, 0, 0, 0
+    };
+    int status = posix_kernel_path_add_data(
+        store->kernel, "/bin/wat", &metadata, NULL, 0);
+    if (status != 0) return status;
+    return posix_kernel_path_add_data(
+        store->kernel, "/bin/wast", &metadata, NULL, 0);
 }
 
 int native_store_register_executable(native_store *store, const char *path,
@@ -286,13 +382,30 @@ int native_store_register_executable(native_store *store, const char *path,
 }
 
 exec_status native_store_instantiate_executable(
-        native_store *store, const native_exec_request *request,
+        native_store *store, native_exec_request *request,
         native_process_image **image_out, exec_error *error) {
     const native_executable *executable;
+    native_executable vfs_executable;
+    posix_path_metadata vfs_metadata;
+    uint8_t *vfs_bytes = NULL;
+    size_t vfs_size = 0;
+    int vfs_status = -POSIX_ENOENT;
     native_process_image *image;
     waste_exec_engine *engine = NULL;
     uint32_t entry_func = 0;
     exec_status status;
+    const uint8_t *image_bytes = NULL;
+    size_t image_size = 0;
+    uint8_t *compiled_bytes = NULL;
+    waste_source_view source_view;
+    waste_source_result source_result;
+    char text_error[256] = {0};
+    native_exec_request effective_request;
+    int effective_request_owned = 0;
+    uint32_t effective_owned_count = 0;
+    const char *load_path = request ? request->path : NULL;
+    int wat_handler = request && strcmp(request->path, "/bin/wat") == 0;
+    int wast_handler = request && strcmp(request->path, "/bin/wast") == 0;
     if (!store || !request || !image_out || !request->active) {
         if (error) {
             error->status = EXEC_ERROR_FORMAT;
@@ -302,20 +415,192 @@ exec_status native_store_instantiate_executable(
         return EXEC_ERROR_FORMAT;
     }
     *image_out = NULL;
-    executable = native_store_find_executable(store, request->path);
+    if (wat_handler || wast_handler) {
+        if (request->argc < 2 || !request->argv[1] ||
+            strlen(request->argv[1]) >= NATIVE_EXEC_PATH_MAX)
+            return exec_fail(error, EXEC_ERROR_FORMAT,
+                             "/bin/wat requires a source path");
+        load_path = request->argv[1];
+    }
+    memset(&vfs_executable, 0, sizeof(vfs_executable));
+    if (store->kernel) {
+        vfs_status = posix_kernel_path_snapshot(
+            store->kernel, (const uint8_t *)load_path,
+            strlen(load_path), NATIVE_EXEC_BYTES_MAX, &vfs_bytes,
+            &vfs_size, &vfs_metadata);
+    }
+    if (vfs_status == 0) {
+        snprintf(vfs_executable.path, sizeof(vfs_executable.path), "%s",
+                 load_path);
+        vfs_executable.bytes = vfs_bytes;
+        vfs_executable.size = vfs_size;
+        vfs_executable.mode = vfs_metadata.mode;
+        vfs_executable.abi_version = 1;
+        snprintf(vfs_executable.entry, sizeof(vfs_executable.entry), "%s",
+                 "_start");
+        vfs_executable.validated = 1;
+        executable = &vfs_executable;
+    } else if (vfs_status == -POSIX_ENOENT) {
+        /* Compatibility path for focused lifecycle fixtures that register an
+         * image without constructing a VFS namespace. Production browser
+         * images are always loaded from the VFS snapshot above. */
+        executable = (wat_handler || wast_handler) ? NULL :
+            native_store_find_executable(store, request->path);
+    } else if (vfs_status == -POSIX_EISDIR ||
+               vfs_status == -POSIX_EACCES ||
+               vfs_status == -POSIX_ELOOP ||
+               vfs_status == -POSIX_ENOTDIR) {
+        return exec_fail(error, EXEC_ERROR_NOT_FOUND,
+                         "VFS path is not an executable image");
+    } else {
+        return exec_fail(error, EXEC_ERROR_FORMAT,
+                         "VFS executable snapshot failed");
+    }
     if (!executable || !executable->validated)
         return exec_fail(error, EXEC_ERROR_NOT_FOUND,
-                         "executable is not registered");
-    status = native_load_module(store, NULL, executable->bytes,
-                                executable->size, &engine, error);
+                         "executable is not present in the VFS");
+
+    image_bytes = executable->bytes;
+    image_size = executable->size;
+    source_result = waste_source_view_init((const char *)image_bytes,
+                                           image_size, &source_view);
+    int is_wat = wat_handler || native_path_has_suffix(executable->path, ".wat");
+    int is_wast = wast_handler || native_path_has_suffix(executable->path, ".wast");
+    if (source_result == WASTE_SOURCE_OK && !wat_handler && !wast_handler) {
+        is_wat = strcmp(source_view.interpreter, "/bin/wat") == 0;
+        is_wast = strcmp(source_view.interpreter, "/bin/wast") == 0;
+    }
+    if (source_result == WASTE_SOURCE_INVALID_SHEBANG ||
+        source_result == WASTE_SOURCE_SHEBANG_TOO_LONG) {
+        free(vfs_bytes);
+        return exec_fail(error, EXEC_ERROR_FORMAT,
+                         source_result == WASTE_SOURCE_SHEBANG_TOO_LONG ?
+                         "shebang line exceeds loader limit" :
+                         "invalid shebang line");
+    }
+    if (source_result == WASTE_SOURCE_OK &&
+        strcmp(source_view.interpreter, "/bin/wat") == 0) {
+        if (request->interpreter_depth >= NATIVE_EXEC_INTERPRETER_MAX) {
+            free(vfs_bytes);
+            return exec_fail(error, EXEC_ERROR_FORMAT,
+                             "interpreter recursion limit exceeded");
+        }
+        if (store->kernel && posix_kernel_path_access(
+                store->kernel, (const uint8_t *)"/bin/wat", 8,
+                POSIX_X_OK, 0) != 0) {
+            free(vfs_bytes);
+            return exec_fail(error, EXEC_ERROR_NOT_FOUND,
+                             "WAT interpreter is not executable");
+        }
+    }
+    if (is_wast && (image_size < 4 || memcmp(image_bytes, "\0asm", 4) != 0)) {
+        wast_script script;
+        int parse_status = wast_parse_bytes((const char *)image_bytes,
+                                             image_size, &script);
+        if (parse_status != 0) {
+            snprintf(text_error, sizeof(text_error), "%s",
+                     script.error[0] ? script.error : "WAST parse failed");
+            wast_script_free(&script);
+            free(vfs_bytes);
+            return exec_fail(error, EXEC_ERROR_FORMAT, text_error);
+        }
+        wast_script_free(&script);
+        free(request->handler_bytes);
+        request->handler_bytes = vfs_bytes;
+        request->handler_size = vfs_size;
+        request->handler_kind = NATIVE_EXEC_HANDLER_WAST;
+        vfs_bytes = NULL;
+        return exec_fail(error, EXEC_ERROR_UNSUPPORTED,
+                         "WAST process handler is not installed");
+    }
+    if (is_wat && (image_size < 4 || memcmp(image_bytes, "\0asm", 4) != 0)) {
+        if (waste_wat_compile((const char *)image_bytes, image_size,
+                              &compiled_bytes, &image_size, text_error,
+                              sizeof(text_error)) != 0) {
+            free(vfs_bytes);
+            return exec_fail(error, EXEC_ERROR_FORMAT,
+                             text_error[0] ? text_error : "WAT compilation failed");
+        }
+        image_bytes = compiled_bytes;
+    } else if (image_size < 4 || memcmp(image_bytes, "\0asm", 4) != 0) {
+        free(vfs_bytes);
+        return exec_fail(error, EXEC_ERROR_FORMAT,
+                         "executable is neither Wasm nor WAT");
+    }
+    status = native_load_module(store, NULL, image_bytes, image_size,
+                                &engine, error);
+    free(compiled_bytes);
+    free(vfs_bytes);
+    vfs_bytes = NULL;
     if (status != EXEC_OK) return status;
+
+    native_exec_request_init(&effective_request);
+    effective_request = *request;
+    if (source_result == WASTE_SOURCE_OK &&
+        strcmp(source_view.interpreter, "/bin/wat") == 0) {
+        uint32_t argument_count = request->argc;
+        uint32_t shebang_argument = source_view.argument[0] ? 1u : 0u;
+        if (argument_count + 1u + shebang_argument >= NATIVE_EXEC_ARG_MAX) {
+            exec_free(engine);
+            return exec_fail(error, EXEC_ERROR_FORMAT,
+                             "WAT interpreter argument vector is too large");
+        }
+        if (wat_handler) {
+            effective_request.argv[0] = native_store_strdup(load_path);
+            if (!effective_request.argv[0]) {
+                exec_free(engine);
+                return exec_fail(error, EXEC_ERROR_TRAP,
+                                 "WAT interpreter argv allocation failed");
+            }
+            for (uint32_t i = 2; i < argument_count; i++)
+                effective_request.argv[i - 1u] = request->argv[i];
+            effective_request.argc = argument_count > 1u ? argument_count - 1u : 1u;
+            effective_owned_count = 1;
+        } else {
+            effective_request.argv[0] = native_store_strdup("/bin/wat");
+            if (shebang_argument)
+                effective_request.argv[1] =
+                    native_store_strdup(source_view.argument);
+            effective_request.argv[1u + shebang_argument] =
+                native_store_strdup(request->path);
+            if (!effective_request.argv[0] ||
+                !effective_request.argv[1u + shebang_argument] ||
+                (shebang_argument && !effective_request.argv[1])) {
+                free(effective_request.argv[0]);
+                free(effective_request.argv[1]);
+                if (shebang_argument) free(effective_request.argv[2]);
+                exec_free(engine);
+                return exec_fail(error, EXEC_ERROR_TRAP,
+                                 "WAT interpreter argv allocation failed");
+            }
+            for (uint32_t i = 1; i < argument_count; i++)
+                effective_request.argv[i + 1u + shebang_argument] =
+                    request->argv[i];
+            effective_request.argc = argument_count ?
+                argument_count + 1u + shebang_argument :
+                2u + shebang_argument;
+            effective_owned_count = 2u + shebang_argument;
+        }
+        effective_request.interpreter_depth = request->interpreter_depth + 1u;
+        effective_request_owned = 1;
+    }
+    const native_exec_request *startup_request =
+        effective_request_owned ? &effective_request : request;
     status = exec_find_export(engine, executable->entry, &entry_func, error);
     if (status != EXEC_OK) {
+        if (effective_request_owned) {
+            for (uint32_t i = 0; i < effective_owned_count; i++)
+                free(effective_request.argv[i]);
+        }
         exec_free(engine);
         return status;
     }
     image = (native_process_image *)calloc(1, sizeof(*image));
     if (!image) {
+        if (effective_request_owned) {
+            for (uint32_t i = 0; i < effective_owned_count; i++)
+                free(effective_request.argv[i]);
+        }
         exec_free(engine);
         return exec_fail(error, EXEC_ERROR_TRAP,
                          "executable image allocation failed");
@@ -324,7 +609,7 @@ exec_status native_store_instantiate_executable(
     image->entry_func = entry_func;
     image->references = 1;
     snprintf(image->path, sizeof(image->path), "%s", executable->path);
-    image->pid = request->pid;
+    image->pid = startup_request->pid;
     if (store->kernel) {
         posix_path_metadata cwd_metadata;
         if (posix_kernel_path_stat(store->kernel,
@@ -335,9 +620,13 @@ exec_status native_store_instantiate_executable(
             (void)posix_kernel_path_set_cwd(store->kernel, "/");
         snprintf(image->cwd, sizeof(image->cwd), "%s", store->kernel->cwd);
     }
-    for (uint32_t i = 0; i < request->argc; i++) {
-        image->argv[i] = native_process_image_strdup(request->argv[i]);
+    for (uint32_t i = 0; i < startup_request->argc; i++) {
+        image->argv[i] = native_process_image_strdup(startup_request->argv[i]);
         if (!image->argv[i]) {
+            if (effective_request_owned) {
+                for (uint32_t j = 0; j < effective_owned_count; j++)
+                    free(effective_request.argv[j]);
+            }
             native_process_image_dispose_startup(image);
             exec_free(image->engine);
             free(image);
@@ -346,9 +635,13 @@ exec_status native_store_instantiate_executable(
         }
         image->argc++;
     }
-    for (uint32_t i = 0; i < request->envc; i++) {
-        image->envp[i] = native_process_image_strdup(request->envp[i]);
+    for (uint32_t i = 0; i < startup_request->envc; i++) {
+        image->envp[i] = native_process_image_strdup(startup_request->envp[i]);
         if (!image->envp[i]) {
+            if (effective_request_owned) {
+                for (uint32_t j = 0; j < effective_owned_count; j++)
+                    free(effective_request.argv[j]);
+            }
             native_process_image_dispose_startup(image);
             exec_free(image->engine);
             free(image);
@@ -357,7 +650,11 @@ exec_status native_store_instantiate_executable(
         }
         image->envc++;
     }
-    status = native_process_image_startup_block(image, request, store, error);
+    status = native_process_image_startup_block(image, startup_request, store, error);
+    if (effective_request_owned) {
+        for (uint32_t i = 0; i < effective_owned_count; i++)
+            free(effective_request.argv[i]);
+    }
     if (status != EXEC_OK) {
         native_process_image_dispose_startup(image);
         exec_free(image->engine);
@@ -435,6 +732,7 @@ void native_store_init(native_store *store) {
     store->spectest_f64.value.f64 = 666.6;
     store->kernel = posix_kernel_create(0); /* noninteractive by default */
     if (store->kernel) {
+        (void)native_store_bind_interpreter_paths(store);
         store->processes[0].used = 1;
         store->processes[0].pid = 1;
         store->processes[0].ppid = 0;
@@ -494,6 +792,7 @@ void native_store_enable_terminal(native_store *store) {
             (void)posix_kernel_tcsetattr(store->kernel, 0, &termios);
         }
         (void)native_store_bind_executable_paths(store);
+        (void)native_store_bind_interpreter_paths(store);
     }
     for (int i = 0; i < NATIVE_PROCESS_MAX; i++)
         if (store->processes[i].used && store->processes[i].pid == store->active_pid)

@@ -11,6 +11,19 @@ const stagingDir = path.join(root, "src/html-rt/src/bash");
 const baselineMissingCommand = process.argv.includes("--missing-command");
 const executableProbe = process.argv.includes("--exec-probe");
 const executableExitProbe = process.argv.includes("--exec-exit");
+const watProbe = process.argv.includes("--wat-probe");
+const watShebangProbe = process.argv.includes("--wat-shebang-probe");
+const watFailureProbe = process.argv.includes("--wat-failure-probe");
+const watDirectProbe = process.argv.includes("--wat-direct-probe");
+const wastProbe = process.argv.includes("--wast-probe");
+const wastShebangProbe = process.argv.includes("--wast-shebang-probe");
+const wastFailureProbe = process.argv.includes("--wast-failure-probe");
+const wastDirectProbe = process.argv.includes("--wast-direct-probe");
+const wastRepeatProbe = process.argv.includes("--wast-repeat-probe");
+const runWatProbe = watProbe || watShebangProbe || watFailureProbe || watDirectProbe;
+const runTextProbe = runWatProbe || wastProbe || wastShebangProbe ||
+  wastFailureProbe || wastDirectProbe || wastRepeatProbe;
+const watExpectedStatus = watFailureProbe || wastFailureProbe ? 126 : 0;
 const genericMissingCommand = "waste-definitely-missing-command";
 
 /* Keep the acceptance probe tied to the pathname/process imports in the Bash
@@ -71,6 +84,9 @@ let probeSecondSeen = false;
 let probeFinalStatusSeen = false;
 let probeStatus7Seen = false;
 let exitProbeStatusRequested = false;
+let watStatusRequested = false;
+let watAfterSeen = false;
+let wastRepeatStage = 0;
 let vfsSeen = false;
 let finish;
 const completion = new Promise(resolve => { finish = resolve; });
@@ -197,17 +213,73 @@ const self = {
           setTimeout(() => self.onmessage({data: {type: "input",
             bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
         }
+      } else if (wastRepeatProbe) {
+        const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
+        if (commandSent && messageHasPrompt) {
+          const commands = [
+            "printf '__C_ENGINE_WAT_REPEAT_1_%s__\\n' \"$?\"\n",
+            "/bin/wat /tmp/checks.wast\n",
+            "printf '__C_ENGINE_WAT_REPEAT_2_%s__\\n' \"$?\"\n",
+            "/bin/wat /tmp/checks.wast\n",
+            "printf '__C_ENGINE_WAT_REPEAT_3_%s__\\n' \"$?\"\n",
+            "/bin/wast /tmp/checks.wast\n",
+            "printf '__C_ENGINE_WAST_REPEAT_1_%s__\\n' \"$?\"\n",
+            "/tmp/checks-direct.wast\n",
+            "printf '__C_ENGINE_WAST_REPEAT_2_%s__\\n' \"$?\"\n",
+            "/tmp/wast-shebang.wast\n",
+            "printf '__C_ENGINE_WAST_REPEAT_3_%s__\\n' \"$?\"\n",
+            "echo __C_ENGINE_WAST_REPEAT_AFTER__\n",
+            "exit\n",
+          ];
+          if (wastRepeatStage >= 1 && wastRepeatStage <= commands.length) {
+            const command = commands[wastRepeatStage - 1];
+            if (wastRepeatStage === commands.length) exitSent = true;
+            wastRepeatStage++;
+            setTimeout(() => self.onmessage({data: {type: "input",
+              bytes: Array.from(new TextEncoder().encode(command))}}), 10);
+          }
+        }
+      } else if (runTextProbe) {
+        const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
+        if (commandSent && messageHasPrompt && !watStatusRequested) {
+          watStatusRequested = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode(
+              `printf '__C_ENGINE_WAT_STATUS_%s__\\n' "$?"\n`,
+            ))}}), 10);
+        }
+        if (output.includes(`__C_ENGINE_WAT_STATUS_${watExpectedStatus}__`) &&
+            !watAfterSeen) {
+          watAfterSeen = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode(
+              "echo __C_ENGINE_WAT_AFTER__\n",
+            ))}}), 10);
+        }
       }
       const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
       if (!promptSeen && messageHasPrompt) {
         promptSeen = true;
         setTimeout(() => {
           commandSent = true;
+          if (wastRepeatProbe) wastRepeatStage = 1;
           self.onmessage({data: {
             type: "input",
             bytes: Array.from(new TextEncoder().encode(
               baselineMissingCommand
                 ? "HOME_DIR=/home/a\n"
+                : runTextProbe
+                  ? (wastRepeatProbe ? "/bin/wat /tmp/checks.wast\n" :
+                     watShebangProbe ? "/tmp/wat-shebang.wat\n" :
+                     watFailureProbe ? "wat /tmp/wat-bad.wat\n" :
+                     watDirectProbe ? "/tmp/wat-direct.wat\n" :
+                     (wastProbe || wastShebangProbe || wastFailureProbe ||
+                      wastDirectProbe || wastRepeatProbe) ?
+                       (wastShebangProbe ? "/tmp/wast-shebang.wast\n" :
+                         wastFailureProbe ? "/bin/wast /tmp/bad.wast\n" :
+                         wastDirectProbe ? "/tmp/checks-direct.wast\n" :
+                                           "/bin/wast /tmp/checks.wast\n") :
+                     "wat /tmp/wat-probe.wat\n")
                 : executableExitProbe
                   ? "WASTE_PROBE_EXIT=7 /bin/waste-probe\n"
                 : executableProbe
@@ -232,7 +304,8 @@ const self = {
         }}), 10);
       }
       if (!baselineMissingCommand && commandSent && !exitSent &&
-          output.includes("__C_ENGINE_BASH_OK__")) {
+          (runTextProbe ? output.includes("__C_ENGINE_WAT_AFTER__") :
+                      output.includes("__C_ENGINE_BASH_OK__"))) {
         exitSent = true;
         setTimeout(() => self.onmessage({data: {
           type: "input",
@@ -275,7 +348,36 @@ self.onmessage({data: {
     path: "/bin/waste-probe",
     bytes: asArrayBuffer(probeBytes),
     mode: 0o755,
-  }],
+  }, {
+    path: watShebangProbe ? "/tmp/wat-shebang.wat" :
+      watFailureProbe ? "/tmp/wat-bad.wat" :
+      watDirectProbe ? "/tmp/wat-direct.wat" :
+      wastFailureProbe ? "/tmp/bad.wast" :
+      wastShebangProbe ? "/tmp/wast-shebang.wast" :
+      wastDirectProbe ? "/tmp/checks-direct.wast" :
+      (wastProbe || wastRepeatProbe) ? "/tmp/checks.wast" : "/tmp/wat-probe.wat",
+    bytes: asArrayBuffer(Buffer.from(
+      (watShebangProbe
+        ? '#!/bin/wat --probe\n(module (memory 1) (func (export "_start")))'
+        : watFailureProbe
+          ? '(module'
+        : wastShebangProbe
+          ? '#!/bin/wast\n(module)\n'
+        : wastFailureProbe
+          ? '(module'
+        : (wastProbe || wastRepeatProbe)
+          ? '(module)\n'
+          : '(module (memory 1) (func (export "_start")))'), "utf8")),
+    mode: 0o755,
+  }, ...(wastRepeatProbe ? [{
+    path: "/tmp/checks-direct.wast",
+    bytes: asArrayBuffer(Buffer.from('(module)\n', "utf8")),
+    mode: 0o755,
+  }, {
+    path: "/tmp/wast-shebang.wast",
+    bytes: asArrayBuffer(Buffer.from('#!/bin/wast\n(module)\n', "utf8")),
+    mode: 0o755,
+  }] : [])],
   source: launchSource,
 }});
 /* The page sends its initial dimensions immediately after start.  Keep this
@@ -307,10 +409,22 @@ Promise.race([completion, timeout]).then(result => {
         probeMissingSeen && probeStatus127Seen && probeSecondSeen &&
         probeFinalStatusSeen && probeAfterSeen && exitSent && !doneBeforeExit &&
         result.ok
+    : wastRepeatProbe
+      ? promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&
+        output.includes("__C_ENGINE_WAST_REPEAT_1_0__") &&
+        output.includes("__C_ENGINE_WAST_REPEAT_2_0__") &&
+        output.includes("__C_ENGINE_WAST_REPEAT_3_0__") &&
+        output.includes("__C_ENGINE_WAST_REPEAT_AFTER__") && result.ok
+    : runTextProbe
+      ? promptSeen && commandSent && vfsSeen && watStatusRequested &&
+        output.includes(`__C_ENGINE_WAT_STATUS_${watExpectedStatus}__`) &&
+        output.includes("__C_ENGINE_WAT_AFTER__") && watAfterSeen &&
+        exitSent && !doneBeforeExit && result.ok
       : promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&
         output.includes("__C_ENGINE_BASH_OK__") && result.ok;
   if (!passed) {
     console.error("\nC-engine Bash browser test failed:", result);
+    console.error("Captured output:\n" + output);
     process.exitCode = 1;
     return;
   }

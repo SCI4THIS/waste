@@ -9,6 +9,8 @@
 #include <string.h>
 #include <stdio.h>
 
+extern void waste_browser_record_transition(const char *event);
+
 /* Host imports for POSIX operations delegated to JavaScript */
 
 __attribute__((import_module("waste_host"), import_name("posix_open")))
@@ -263,9 +265,14 @@ static exec_status native_posix_read(void *data, const wasm_value *args,
         read_result = posix_kernel_read(store->kernel, args[0].i32,
                                         buffer, (int)count);
         if (read_result == -POSIX_EAGAIN) {
+            waste_browser_record_transition("read-eagain");
             error->yield_reason = EXEC_YIELD_READ;
             return EXEC_YIELD;
         }
+        if (read_result >= 0)
+            waste_browser_record_transition("read-data");
+        else
+            waste_browser_record_transition("read-error");
     } else if (store->kernel) {
         read_result = posix_kernel_read(store->kernel, args[0].i32,
                                         buffer, (int)count);
@@ -311,6 +318,18 @@ static exec_status native_posix_write(void *data, const wasm_value *args,
                 return native_posix_result(translated_count, results, result_count);
             int32_t written = waste_host_posix_write(
                 args[0].i32, translated, (uint32_t)translated_count);
+            char write_event[32];
+            int has_bash_prompt = 0;
+            for (int i = 0; i + 4 < translated_count; i++)
+                if (translated[i] == 'b' && translated[i + 1] == 'a' &&
+                    translated[i + 2] == 's' && translated[i + 3] == 'h' &&
+                    translated[i + 4] == '-') {
+                    has_bash_prompt = 1;
+                    break;
+                }
+            snprintf(write_event, sizeof(write_event), "term-write-n%d%s",
+                     translated_count, has_bash_prompt ? "-bash" : "");
+            waste_browser_record_transition(write_event);
             if (written < 0)
                 return native_posix_result(written, results, result_count);
             if (written != translated_count)
@@ -1012,10 +1031,9 @@ static exec_status native_posix_fork(void *data, const wasm_value *args,
     native_store *store = (native_store *)data;
     native_process_capsule *capsule = native_store_active_capsule(store);
     if (capsule && capsule->pending_result_valid) {
-        int result = capsule->pending_result;
-        capsule->pending_result_valid = 0;
-        native_store_complete_process_wake(store);
-        return native_posix_result(result, results, result_count);
+        int result = 0;
+        if (native_store_take_process_wake(store, &result) == 0)
+            return native_posix_result(result, results, result_count);
     }
     if (store->fork_child_resume) {
         store->fork_child_resume = 0;
@@ -1097,7 +1115,16 @@ static exec_status native_posix_execve(void *data, const wasm_value *args,
         native_posix_set_errno(store, caller, POSIX_E2BIG);
         return native_posix_result(-1, results, result_count);
     }
-    if (!native_store_find_executable(store, (const char *)path)) {
+    if (store->kernel) {
+        int access = posix_kernel_path_access(
+            store->kernel, path, path_length, POSIX_X_OK, 0);
+        if (access != 0 &&
+            !(access == -POSIX_ENOENT &&
+              native_store_find_executable(store, (const char *)path))) {
+            native_posix_set_errno(store, caller, -access);
+            return native_posix_result(-1, results, result_count);
+        }
+    } else if (!native_store_find_executable(store, (const char *)path)) {
         native_posix_set_errno(store, caller, POSIX_ENOENT);
         return native_posix_result(-1, results, result_count);
     }

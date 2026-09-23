@@ -9,6 +9,8 @@
 typedef struct {
     const char *source;
     size_t length;
+    size_t source_offset;
+    unsigned line_offset;
     size_t offset;
     unsigned line;
     unsigned column;
@@ -27,6 +29,11 @@ typedef int (*wast_stream_callback)(wast_stream_command_kind kind,
 
 void wast_stream_init(wast_stream *stream, const char *source, size_t length);
 void wast_stream_destroy(wast_stream *stream);
+
+/* Return the current cursor in the original source coordinate space. The
+ * scanner's internal offset is relative to the shebang-stripped body. */
+int wast_stream_position(const wast_stream *stream, size_t *offset_out,
+                         unsigned *line_out);
 
 /* Consume one balanced top-level WAST command. Returns 1 when a command was
  * delivered, 0 at end of input, and -1 for an unterminated command. */

@@ -77,6 +77,28 @@ static exec_status checkpoint_error(exec_error *error, const char *message) {
     return EXEC_ERROR_FORMAT;
 }
 
+static exec_status checkpoint_unsupported(exec_error *error, const char *message) {
+    if (error) {
+        error->status = EXEC_ERROR_UNSUPPORTED;
+        snprintf(error->message, sizeof(error->message), "%s", message);
+    }
+    return EXEC_ERROR_UNSUPPORTED;
+}
+
+static exec_status reject_live_process_handlers(const native_store *store,
+                                                exec_error *error) {
+    if (!store) return checkpoint_error(error, "null store argument");
+    for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
+        const native_process *process = &store->processes[i];
+        if (process->used &&
+            process->capsule.handler.kind != NATIVE_PROCESS_HANDLER_NONE)
+            return checkpoint_unsupported(
+                error,
+                "checkpointing a live process handler is unsupported");
+    }
+    return EXEC_OK;
+}
+
 static int grow_array(void **array, size_t *capacity, size_t count,
                       size_t element_size) {
     if (count <= *capacity) return 1;
@@ -274,6 +296,8 @@ exec_status native_store_checkpoint_capture(native_store *store,
                                             native_store_checkpoint *checkpoint,
                                             exec_error *error) {
     if (!store || !checkpoint) return checkpoint_error(error, "null checkpoint argument");
+    exec_status handler_status = reject_live_process_handlers(store, error);
+    if (handler_status != EXEC_OK) return handler_status;
     native_store_checkpoint_destroy(checkpoint);
     checkpoint_impl *impl = calloc(1, sizeof(*impl));
     if (!impl) return checkpoint_error(error, "checkpoint allocation failed");

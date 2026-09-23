@@ -12,6 +12,16 @@ int waste_wat_compile(const char *bytes, size_t length, uint8_t **wasm_out,
     return -1;
 }
 
+int wast_parse_bytes(const char *bytes, size_t length, wast_script *script) {
+    (void)bytes; (void)length;
+    if (script) memset(script, 0, sizeof(*script));
+    return -1;
+}
+
+void wast_script_free(wast_script *script) {
+    (void)script;
+}
+
 uint8_t *wast_encode_module(const wast_module *module, size_t *size,
                             char *error) {
     (void)module; (void)size; (void)error;
@@ -20,6 +30,12 @@ uint8_t *wast_encode_module(const wast_module *module, size_t *size,
 
 static int checks;
 static int failures;
+static int rejected_context_destroyed;
+
+static void destroy_rejected_context(void *context) {
+    rejected_context_destroyed++;
+    free(context);
+}
 #define CHECK(c, ...) do { checks++; if (!(c)) { fprintf(stderr, "FAIL: "); \
     fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); failures++; } } while (0)
 
@@ -180,6 +196,283 @@ int main(int argc, char **argv) {
                   (uint8_t)image->startup_ptr,
               "startup hook received block pointer");
     if (image) native_process_image_release(image);
+
+    {
+        native_process_image *pinned_image = calloc(1, sizeof(*pinned_image));
+        CHECK(pinned_image != NULL, "continuation image pin allocates");
+        if (pinned_image) {
+            pinned_image->references = 2;
+            native_process_image_pin(pinned_image);
+            native_process_image_release(pinned_image);
+            CHECK(pinned_image->references == 1 &&
+                  pinned_image->checkpoint_pins == 1,
+                  "continuation pin survives one image release");
+            native_process_image_release(pinned_image);
+            CHECK(pinned_image->references == 0 &&
+                  pinned_image->checkpoint_pins == 1,
+                  "continuation pin keeps released image alive");
+            native_process_image_unpin(pinned_image);
+        }
+    }
+
+    {
+        waste_exec_engine continuation_engine;
+        exec_continuation continuation;
+        exec_error continuation_error;
+        memset(&continuation_engine, 0, sizeof(continuation_engine));
+        continuation_engine.func_count = 7;
+        continuation_engine.import_func_count = 3;
+        exec_continuation_init(&continuation);
+        memset(&continuation_error, 0, sizeof(continuation_error));
+        CHECK(exec_continuation_capture(&continuation_engine, &continuation,
+                                        &continuation_error) == EXEC_OK &&
+              exec_continuation_resume(&continuation, &continuation_engine,
+                                       0, EXEC_YIELD_NONE,
+                                       &continuation_error) == EXEC_OK &&
+              continuation_engine.func_count == 7 &&
+              continuation_engine.import_func_count == 3,
+              "continuation restore preserves engine function tables");
+        exec_continuation_destroy(&continuation);
+    }
+
+    {
+        waste_exec_engine fake_engine;
+        native_process_image invalid_image;
+        memset(&fake_engine, 0, sizeof(fake_engine));
+        fake_engine.func_count = 1;
+        memset(&invalid_image, 0, sizeof(invalid_image));
+        invalid_image.engine = &fake_engine;
+        invalid_image.entry_func = 1;
+        invalid_image.references = 1;
+        CHECK(native_store_commit_process_image(&store, &invalid_image) ==
+                  -POSIX_EINVAL &&
+              native_store_active_capsule(&store)->image == NULL,
+              "image commit rejects an out-of-range entry atomically");
+        invalid_image.references = 0;
+
+        native_process_image direct_image;
+        memset(&direct_image, 0, sizeof(direct_image));
+        direct_image.engine = &fake_engine;
+        direct_image.references = 1;
+        CHECK(native_store_commit_process_image(&store, &direct_image) ==
+                  -POSIX_EINVAL &&
+              native_store_active_capsule(&store)->image == NULL,
+              "image commit requires an explicit exec transition");
+        direct_image.references = 0;
+    }
+
+    {
+        native_exec_request handler_request;
+        uint8_t *handler_bytes = NULL;
+        size_t handler_size = 0;
+        native_exec_request_init(&handler_request);
+        handler_request.handler_kind = NATIVE_EXEC_HANDLER_WAST;
+        handler_request.handler_size = 3;
+        handler_request.handler_bytes = (uint8_t *)malloc(3);
+        if (handler_request.handler_bytes)
+            memcpy(handler_request.handler_bytes, "wat", 3);
+        CHECK(native_exec_request_take_handler(
+                  &handler_request, NATIVE_EXEC_HANDLER_WAST,
+                  &handler_bytes, &handler_size) == 0 &&
+              handler_bytes && handler_size == 3 &&
+              memcmp(handler_bytes, "wat", 3) == 0 &&
+              handler_request.handler_kind == NATIVE_EXEC_HANDLER_NONE &&
+              handler_request.handler_bytes == NULL &&
+              handler_request.handler_size == 0,
+              "WAST handler payload transfers ownership exactly once");
+        free(handler_bytes);
+        CHECK(native_exec_request_take_handler(
+                  &handler_request, NATIVE_EXEC_HANDLER_WAST,
+                  &handler_bytes, &handler_size) == -POSIX_EINVAL,
+              "consumed WAST handler cannot be taken twice");
+        native_exec_request_destroy(&handler_request);
+        native_exec_request oversized_request;
+        native_exec_request_init(&oversized_request);
+        oversized_request.handler_kind = NATIVE_EXEC_HANDLER_WAST;
+        oversized_request.handler_size = NATIVE_EXEC_BYTES_MAX + 1u;
+        oversized_request.handler_bytes = (uint8_t *)malloc(1);
+        CHECK(native_exec_request_take_handler(
+                  &oversized_request, NATIVE_EXEC_HANDLER_WAST,
+                  &handler_bytes, &handler_size) == -POSIX_EINVAL &&
+              oversized_request.handler_bytes != NULL,
+              "oversized WAST handler transfer preserves ownership");
+        native_exec_request_destroy(&oversized_request);
+    }
+
+    {
+        native_exec_request handler_request;
+        native_exec_request invalid_request;
+        native_process_capsule *capsule;
+        native_process_image *prior_image = (native_process_image *)calloc(
+            1, sizeof(*prior_image));
+        if (prior_image) prior_image->references = 1;
+        native_store_active_capsule(&store)->image = prior_image;
+        native_exec_request_init(&invalid_request);
+        invalid_request.active = 1;
+        invalid_request.pid = 1;
+        invalid_request.handler_kind = NATIVE_EXEC_HANDLER_WAST;
+        CHECK(native_store_prepare_process_exec(&store, &invalid_request) == 0 &&
+              native_store_commit_process_handler(
+                  &store, &invalid_request, NATIVE_PROCESS_HANDLER_WAST) ==
+                  -POSIX_EINVAL &&
+              invalid_request.handler_kind == NATIVE_EXEC_HANDLER_WAST &&
+              invalid_request.handler_bytes == NULL &&
+              native_store_active_capsule(&store)->pending_transition ==
+                  NATIVE_PROCESS_TRANSITION_EXEC,
+              "missing WAST payload is rejected without consuming request");
+        native_store_abort_process_exec(&store);
+        native_exec_request_destroy(&invalid_request);
+
+        {
+            native_exec_request oversized_request;
+            native_exec_request_init(&oversized_request);
+            oversized_request.active = 1;
+            oversized_request.pid = 1;
+            oversized_request.handler_kind = NATIVE_EXEC_HANDLER_WAST;
+            oversized_request.handler_size = NATIVE_EXEC_BYTES_MAX + 1u;
+            oversized_request.handler_bytes = (uint8_t *)malloc(1);
+            CHECK(native_store_prepare_process_exec(&store,
+                                                     &oversized_request) == 0 &&
+                  native_store_commit_process_handler(
+                      &store, &oversized_request,
+                      NATIVE_PROCESS_HANDLER_WAST) == -POSIX_EINVAL &&
+                  oversized_request.handler_bytes != NULL &&
+                  oversized_request.handler_size == NATIVE_EXEC_BYTES_MAX + 1u,
+                  "oversized WAST handler is rejected without consuming request");
+            native_store_abort_process_exec(&store);
+            native_exec_request_destroy(&oversized_request);
+        }
+
+        {
+            native_exec_request queued_request;
+            native_exec_request_init(&queued_request);
+            queued_request.active = 1;
+            queued_request.pid = 1;
+            queued_request.handler_kind = NATIVE_EXEC_HANDLER_WAST;
+            queued_request.handler_size = 3;
+            queued_request.handler_bytes = (uint8_t *)malloc(3);
+            if (queued_request.handler_bytes)
+                memcpy(queued_request.handler_bytes, "wst", 3);
+            native_store_active_capsule(&store)->pending_result = 42;
+            native_store_active_capsule(&store)->pending_result_valid = 1;
+            CHECK(native_store_prepare_process_exec(&store, &queued_request) ==
+                      -POSIX_EBUSY &&
+                  queued_request.handler_bytes != NULL &&
+                  native_store_active_capsule(&store)->pending_result == 42 &&
+                  native_store_active_capsule(&store)->image == prior_image,
+                  "queued wake blocks handler preparation atomically");
+            native_store_active_capsule(&store)->pending_result_valid = 0;
+            native_exec_request_destroy(&queued_request);
+        }
+
+        native_exec_request_init(&handler_request);
+        int handler_context_marker = 7;
+        handler_request.active = 1;
+        handler_request.pid = 1;
+        handler_request.handler_kind = NATIVE_EXEC_HANDLER_WAST;
+        handler_request.handler_size = 6;
+        handler_request.handler_bytes = (uint8_t *)malloc(6);
+        if (handler_request.handler_bytes)
+            memcpy(handler_request.handler_bytes, "(wast)", 6);
+        CHECK(native_store_prepare_process_exec(&store, &handler_request) == 0 &&
+              native_store_commit_process_handler_with_context(
+                  &store, &handler_request, NATIVE_PROCESS_HANDLER_WAST,
+                  &handler_context_marker, NULL) == 0,
+              "WAST exec payload commits into active handler state");
+        capsule = native_store_active_capsule(&store);
+        CHECK(capsule && capsule->image == NULL &&
+              capsule->handler.kind == NATIVE_PROCESS_HANDLER_WAST &&
+              capsule->handler.source_size == 6 &&
+              memcmp(capsule->handler.source, "(wast)", 6) == 0 &&
+              capsule->handler.context == &handler_context_marker &&
+              capsule->pending_transition == NATIVE_PROCESS_TRANSITION_NONE,
+              "handler commit replaces image and context state atomically");
+        native_exec_request_destroy(&handler_request);
+
+        {
+            waste_exec_engine fake_engine;
+            native_process_image blocked_image;
+            memset(&fake_engine, 0, sizeof(fake_engine));
+            fake_engine.func_count = 1;
+            memset(&blocked_image, 0, sizeof(blocked_image));
+            blocked_image.engine = &fake_engine;
+            blocked_image.references = 1;
+            CHECK(native_store_commit_process_image(&store, &blocked_image) ==
+                      -POSIX_EINVAL &&
+                  capsule->handler.kind == NATIVE_PROCESS_HANDLER_WAST &&
+                  capsule->handler.source_size == 6,
+                  "image commit cannot replace an active handler");
+            blocked_image.references = 0;
+        }
+
+        {
+            native_exec_request duplicate_request;
+            uint8_t *duplicate_context = (uint8_t *)malloc(1);
+            native_exec_request_init(&duplicate_request);
+            duplicate_request.active = 1;
+            duplicate_request.pid = 1;
+            duplicate_request.handler_kind = NATIVE_EXEC_HANDLER_WAST;
+            duplicate_request.handler_size = 3;
+            duplicate_request.handler_bytes = (uint8_t *)malloc(3);
+            if (duplicate_request.handler_bytes)
+                memcpy(duplicate_request.handler_bytes, "new", 3);
+            CHECK(native_store_prepare_process_exec(
+                      &store, &duplicate_request) == 0 &&
+                  native_store_commit_process_handler_with_context(
+                      &store, &duplicate_request,
+                      NATIVE_PROCESS_HANDLER_WAST, duplicate_context,
+                      destroy_rejected_context) == -POSIX_EINVAL &&
+                  duplicate_request.handler_kind == NATIVE_EXEC_HANDLER_WAST &&
+                  duplicate_request.handler_bytes != NULL &&
+                  duplicate_request.handler_size == 3 &&
+                  memcmp(capsule->handler.source, "(wast)", 6) == 0 &&
+                  capsule->handler.context == &handler_context_marker &&
+                  rejected_context_destroyed == 0,
+                  "duplicate handler commit preserves request, context, and active handler");
+            native_store_abort_process_exec(&store);
+            native_exec_request_destroy(&duplicate_request);
+            destroy_rejected_context(duplicate_context);
+        }
+
+        CHECK(native_store_complete_process_handler(&store, EXEC_OK, 0) ==
+                  -POSIX_EINVAL &&
+              capsule->handler.kind == NATIVE_PROCESS_HANDLER_WAST,
+              "handler completion rejects an init process without consuming state");
+        native_process_capsule_clear_handler(capsule);
+    }
+
+    {
+        waste_exec_engine parent_engine;
+        native_process_capsule *parent_capsule =
+            native_store_active_capsule(&store);
+        native_process_capsule *child_capsule;
+        waste_exec_engine *child_engine;
+        int graph_child = 0;
+        memset(&parent_engine, 0, sizeof(parent_engine));
+        parent_engine.func_count = 7;
+        parent_engine.import_func_count = 3;
+        parent_capsule->engine = &parent_engine;
+        parent_capsule->root_func_idx = 0;
+        CHECK(native_store_fork_process(&store, &graph_child) == 0 &&
+              native_store_set_active_process(&store, graph_child) == 0,
+              "fork creates an executable process graph child");
+        child_capsule = native_store_active_capsule(&store);
+        child_engine = child_capsule ? child_capsule->engine : NULL;
+        CHECK(child_engine && child_engine != &parent_engine &&
+              child_engine->func_count == 7 &&
+              child_engine->import_func_count == 3,
+              "fork child starts with an independent engine table");
+        CHECK(native_store_clone_process_graph(&store, 1, graph_child) == 0 &&
+              parent_engine.func_count == 7 &&
+              parent_engine.import_func_count == 3 && child_engine &&
+              child_engine->func_count == 7 &&
+              child_engine->import_func_count == 3,
+              "process graph binding preserves parent and child tables");
+        parent_capsule->engine = NULL;
+        if (child_capsule) child_capsule->engine = NULL;
+        if (child_engine) exec_free(child_engine);
+        store.active_pid = 1;
+    }
 
     CHECK(native_store_fork_process(&store, &child) == 0,
           "fork for termination matrix");

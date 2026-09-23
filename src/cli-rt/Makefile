@@ -12,6 +12,7 @@ WASM_LD_LIB ?= $(abspath $(ENGINE_BUILD_DIR)/toolchain/usr/lib)
 
 # Engine core sources (platform-independent)
 ENGINE_SOURCES := $(ENGINE_DIR)/wasm/load.c \
+	$(ENGINE_DIR)/source.c \
 	$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/encode.c \
 	$(ENGINE_DIR)/wast/stream.c $(ENGINE_DIR)/wast/command.c \
 	$(ENGINE_DIR)/store.c $(ENGINE_DIR)/checkpoint.c $(ENGINE_DIR)/process.c $(ENGINE_DIR)/lib/kernel.c \
@@ -31,6 +32,7 @@ ENGINE_SOURCES := $(ENGINE_DIR)/wasm/load.c \
 	$(ENGINE_DIR)/api.c
 
 ENGINE_HEADERS := $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
+	$(ENGINE_DIR)/source.h \
 	$(ENGINE_DIR)/wasm/encode.h $(ENGINE_DIR)/engine_internal.h \
 	$(ENGINE_DIR)/wast/runner.h $(ENGINE_DIR)/wast/stream.h \
 	$(ENGINE_DIR)/wast/assert.h $(ENGINE_DIR)/wast/command.h \
@@ -74,6 +76,7 @@ WASM_BINARY_TEST_TARGET := $(BUILD_DIR)/wasm-binary-primitives-sanitize
 WASM_IMPORT_TEST_TARGET := $(BUILD_DIR)/wasm-import-decode-sanitize
 WASM_VALIDATION_TEST_TARGET := $(BUILD_DIR)/wasm-validation-sanitize
 PARSER_REENTRANT_TEST_TARGET := $(BUILD_DIR)/wast-parser-reentrant-sanitize
+SOURCE_LOADER_TEST_TARGET := $(BUILD_DIR)/source-loader-sanitize
 POSIX_SELECT_ABI_TEST_TARGET := $(BUILD_DIR)/posix-select-abi-sanitize
 POSIX_PATH_ABI_TEST_TARGET := $(BUILD_DIR)/posix-path-abi-sanitize
 POSIX_PATH_VFS_TEST_TARGET := $(BUILD_DIR)/posix-path-vfs-sanitize
@@ -104,7 +107,7 @@ CONTINUATION_CONSUMER_WASM := $(BUILD_DIR)/continuation-consumer.wasm
 WASTE_PROBE_WASM := $(BUILD_DIR)/waste-probe.wasm
 
 .PHONY: wast-native i32-smoke wasm-binary-primitives wasm-import-decode \
-	wasm-validation parser-reentrant posix-select-abi posix-path-abi posix-path-vfs posix-kernel waste-probe \
+	wasm-validation parser-reentrant source-loader posix-select-abi posix-path-abi posix-path-vfs posix-kernel waste-probe \
 	posix-select posix-wait posix-signal caller-instance process-continuation two-wait exec-lifecycle exec-matrix continuation store-checkpoint process-lifecycle gen lint clean
 
 # ---- Parser generation (delegate to engine) ----
@@ -162,7 +165,10 @@ $(WAST_TAB_SAN_O): $(WAST_TAB_C) $(WAST_TAB_H) $(ENGINE_HEADERS)
 
 $(WAST_LEX_SAN_O): $(WAST_LEX_C) $(WAST_TAB_H) $(ENGINE_HEADERS)
 	mkdir -p $(BUILD_DIR)
-	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wno-unused-function \
+	# The generated Flex scanner is large; sanitizer coverage matters here,
+	# while optimization makes this test-only translation unit disproportionately
+	# expensive to compile.
+	$(CC) -O0 -g -std=c11 -Wall -Wextra -Wno-unused-function \
 		-Wno-unused-parameter -Wno-sign-compare \
 		-D_POSIX_C_SOURCE=200809L \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
@@ -238,7 +244,7 @@ $(I32_SMOKE_TARGET): ../../tests/c-engine-i32-smoke.c $(ENGINE_DIR)/wasm/load.c 
 		$(ENGINE_DIR)/instantiate.h $(ENGINE_DIR)/runtime_internal.h \
 		$(ENGINE_DIR)/include/waste.h
 	mkdir -p $(BUILD_DIR)
-	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
+	$(CC) -O0 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-Wno-nonnull-compare \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
 		../../tests/c-engine-i32-smoke.c $(ENGINE_DIR)/wasm/load.c \
@@ -300,6 +306,17 @@ wasm-validation: $(WASM_VALIDATION_TEST_TARGET)
 
 parser-reentrant: gen $(PARSER_REENTRANT_TEST_TARGET)
 	ASAN_OPTIONS=detect_leaks=0 $(PARSER_REENTRANT_TEST_TARGET)
+
+source-loader: $(SOURCE_LOADER_TEST_TARGET)
+	ASAN_OPTIONS=detect_leaks=0 $(SOURCE_LOADER_TEST_TARGET)
+
+$(SOURCE_LOADER_TEST_TARGET): ../../tests/source-loader.c \
+		$(ENGINE_DIR)/source.c $(ENGINE_DIR)/source.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		-I$(ENGINE_DIR) ../../tests/source-loader.c \
+		$(ENGINE_DIR)/source.c -o $@
 
 $(PARSER_REENTRANT_TEST_TARGET): ../../tests/wast-parser-reentrant.c \
 		$(ENGINE_SOURCES) $(ENGINE_HEADERS) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
@@ -573,7 +590,7 @@ $(TWO_WAIT_TEST_TARGET): ../../tests/c-engine-two-wait.c \
 		$(ENGINE_DIR)/instance.c $(ENGINE_DIR)/api.c -lm -o $@
 
 $(EXEC_MATRIX_TEST_TARGET): ../../tests/c-engine-exec-matrix.c \
-		$(ENGINE_DIR)/store.c $(ENGINE_DIR)/process.c \
+		$(ENGINE_DIR)/store.c $(ENGINE_DIR)/source.c $(ENGINE_DIR)/process.c \
 		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/path.c $(ENGINE_DIR)/lib/select.c \
 		$(ENGINE_DIR)/checkpoint.c $(ENGINE_DIR)/wasm/load.c \
 		$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/leb.c \
@@ -586,11 +603,12 @@ $(EXEC_MATRIX_TEST_TARGET): ../../tests/c-engine-exec-matrix.c \
 		$(WAST_GEN_DIR)/dispatch_gen.c $(WAST_GEN_DIR)/wast.tab.c \
 		$(WAST_GEN_DIR)/wast.lex.c $(ENGINE_DIR)/instance.c $(ENGINE_DIR)/api.c
 	mkdir -p $(BUILD_DIR)
-	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
+	$(CC) -O0 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-Wno-nonnull-compare \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
 		-I$(ENGINE_DIR) -I$(ENGINE_DIR)/lib/include -I$(WAST_GEN_DIR) \
 		../../tests/c-engine-exec-matrix.c $(ENGINE_DIR)/store.c \
+		$(ENGINE_DIR)/source.c \
 		$(ENGINE_DIR)/process.c $(ENGINE_DIR)/lib/kernel.c \
 		$(ENGINE_DIR)/lib/path.c $(ENGINE_DIR)/lib/select.c \
 		$(ENGINE_DIR)/checkpoint.c $(ENGINE_DIR)/wasm/load.c \
@@ -721,6 +739,7 @@ clean:
 	rm -f $(WAST_TARGET) $(I32_SMOKE_TARGET) $(WASM_BINARY_TEST_TARGET) \
 		$(WASM_IMPORT_TEST_TARGET) $(WASM_VALIDATION_TEST_TARGET) \
 		$(PARSER_REENTRANT_TEST_TARGET) $(POSIX_SELECT_ABI_TEST_TARGET) \
+		$(SOURCE_LOADER_TEST_TARGET) \
 		$(POSIX_KERNEL_TEST_TARGET) $(CALLER_INSTANCE_TEST_TARGET) \
 		$(PROCESS_CONTINUATION_TEST_TARGET) $(PROCESS_CONTINUATION_WASM) \
 		$(CONTINUATION_TEST_TARGET) $(CONTINUATION_WASM) \

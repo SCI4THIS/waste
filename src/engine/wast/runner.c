@@ -5,6 +5,7 @@
 #include "engine_internal.h"
 #include "wasm/encode.h"
 #include "wasm/decode.h"
+#include "source.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -711,6 +712,22 @@ static int wast_parse_bytes_mode(const char *bytes, size_t length,
     memset(script, 0, sizeof(*script));
     script->strict_wat_mode = strict_wat_mode;
 
+    waste_source_view source_view;
+    waste_source_result source_result =
+        waste_source_view_init(bytes, length, &source_view);
+    if (source_result == WASTE_SOURCE_INVALID_SHEBANG ||
+        source_result == WASTE_SOURCE_SHEBANG_TOO_LONG) {
+        snprintf(script->error, sizeof(script->error), "%s",
+                 source_result == WASTE_SOURCE_SHEBANG_TOO_LONG ?
+                 "shebang line exceeds loader limit" :
+                 "invalid shebang line");
+        return -1;
+    }
+    if (source_result == WASTE_SOURCE_OK) {
+        bytes = source_view.body;
+        length = source_view.body_length;
+    }
+
     if (!queue_custom_assertion_errors(bytes, length, script)) {
         snprintf(script->error, sizeof(script->error),
                  "out of memory retaining custom assertion metadata");
@@ -734,6 +751,7 @@ static int wast_parse_bytes_mode(const char *bytes, size_t length,
     }
     context->inline_module = inline_mod;
     context->strict_wat_mode = strict_wat_mode;
+    context->lex.line = 1 + (int)source_view.line_offset;
     script->parse_context = context;
     yyscan_t scanner = NULL;
     if (yylex_init_extra(context, &scanner) != 0) {

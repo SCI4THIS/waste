@@ -1,5 +1,6 @@
 #include "include/kernel.h"
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -82,6 +83,28 @@ int main(void) {
     CHECK(posix_kernel_path_stat(first, (const uint8_t *)"/bin/tool", 9, 1, &actual) == 0);
     CHECK(actual.size == 12 && actual.kind == POSIX_NODE_REGULAR);
     CHECK(posix_kernel_path_access(first, (const uint8_t *)"/bin/tool", 9, POSIX_X_OK, 0) == 0);
+    uint8_t *snapshot = NULL;
+    size_t snapshot_size = 0;
+    CHECK(posix_kernel_path_snapshot(first, (const uint8_t *)"/data/readme",
+                                     12, 64, &snapshot, &snapshot_size,
+                                     &actual) == -POSIX_EACCES);
+    CHECK(posix_kernel_path_add_data(first, "/bin/tool", &regular,
+                                     hello, sizeof(hello) - 1) == 0);
+    CHECK(posix_kernel_path_snapshot(first, (const uint8_t *)"/bin/tool", 9,
+                                     64, &snapshot, &snapshot_size,
+                                     &actual) == 0 && snapshot_size == 5 &&
+          memcmp(snapshot, "hello", 5) == 0 && actual.inode == 3);
+    free(snapshot);
+    snapshot = NULL;
+    CHECK(posix_kernel_path_snapshot(first, (const uint8_t *)"/bin/tool", 9,
+                                     3, &snapshot, &snapshot_size,
+                                     &actual) == -POSIX_E2BIG);
+    CHECK(posix_kernel_path_snapshot(first, (const uint8_t *)"/data", 5,
+                                     64, &snapshot, &snapshot_size,
+                                     &actual) == -POSIX_EISDIR);
+    CHECK(posix_kernel_path_snapshot(first, (const uint8_t *)"/missing", 8,
+                                     64, &snapshot, &snapshot_size,
+                                     &actual) == -POSIX_ENOENT);
     CHECK(posix_kernel_path_access(first, (const uint8_t *)"/data/readme", 12, POSIX_W_OK, 0) == -POSIX_EACCES);
     CHECK(posix_kernel_path_access(first, (const uint8_t *)"/data/secret", 12, POSIX_F_OK, 0) == 0);
     CHECK(posix_kernel_path_access(first, (const uint8_t *)"/missing", 8, POSIX_F_OK, 0) == -POSIX_ENOENT);

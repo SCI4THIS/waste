@@ -14,6 +14,7 @@ WASM_CC_FLAGS := --target=wasm32 -O2 -std=c11 -Wall -Wextra \
 
 # Engine core sources (platform-independent)
 ENGINE_SOURCES := $(ENGINE_DIR)/wasm/load.c \
+	$(ENGINE_DIR)/source.c \
 	$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/encode.c \
 	$(ENGINE_DIR)/wast/stream.c $(ENGINE_DIR)/wast/command.c \
 	$(ENGINE_DIR)/store.c $(ENGINE_DIR)/checkpoint.c $(ENGINE_DIR)/process.c $(ENGINE_DIR)/lib/path.c \
@@ -32,6 +33,7 @@ ENGINE_SOURCES := $(ENGINE_DIR)/wasm/load.c \
 	$(ENGINE_DIR)/api.c
 
 ENGINE_HEADERS := $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
+	$(ENGINE_DIR)/source.h \
 	$(ENGINE_DIR)/wasm/encode.h $(ENGINE_DIR)/engine_internal.h \
 	$(ENGINE_DIR)/wast/runner.h $(ENGINE_DIR)/wast/stream.h \
 	$(ENGINE_DIR)/wast/assert.h $(ENGINE_DIR)/wast/command.h \
@@ -57,6 +59,7 @@ LIB_WASM_SRC := lib/stdlib.c lib/stdio.c lib/unistd.c
 
 # Object files
 ENGINE_OBJS := $(BUILD_DIR)/store.o $(BUILD_DIR)/checkpoint.o $(BUILD_DIR)/process.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/select.o $(BUILD_DIR)/path.o \
+	$(BUILD_DIR)/source.o \
 	$(BUILD_DIR)/wasm_load.o \
 	$(BUILD_DIR)/wast_runner.o $(BUILD_DIR)/wasm_encode.o \
 	$(BUILD_DIR)/wast_stream.o $(BUILD_DIR)/wast_command.o \
@@ -102,7 +105,11 @@ LIBC_FIXTURES := $(patsubst $(REPO_ROOT)/tests/libc-test/%-client.wast.inc,\
 	$(BUILD_DIR)/waste-libc/tests/%.wast,$(LIBC_CLIENTS))
 LIBC_OUTPUTS := $(LIBC_OUTPUT) $(LIBC_FIXTURES)
 
-.PHONY: wast-browser waste-libc gen clean
+COREUTILS_STAGER := tools/stage-coreutils.py
+COREUTILS_BUILD_DIR := $(BUILD_DIR)/coreutils
+
+.PHONY: wast-browser waste-libc coreutils-patch-status \
+	coreutils-provenance coreutils-stage gen clean
 
 # ---- Parser generation (delegate to engine) ----
 
@@ -139,6 +146,9 @@ $(BUILD_DIR)/path.o: $(ENGINE_DIR)/lib/path.c \
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
 $(BUILD_DIR)/wasm_load.o: $(ENGINE_DIR)/wasm/load.c $(ENGINE_HEADERS)
+	clang $(WASM_CC_FLAGS) -c $< -o $@
+
+$(BUILD_DIR)/source.o: $(ENGINE_DIR)/source.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
 $(BUILD_DIR)/wast_runner.o: $(ENGINE_DIR)/wast/runner.c $(ENGINE_HEADERS)
@@ -266,6 +276,20 @@ waste-libc: $(LIBC_OUTPUTS)
 
 $(LIBC_OUTPUTS) &: $(LIBC_SOURCES)
 	$(PYTHON) $(LIBC_BUILDER) --repo-root $(abspath $(REPO_ROOT))
+
+# Stage 8A: inspect and stage the pinned coreutils source. The stager applies
+# the repository-owned patch only in the submodule, copies the patched source
+# into build/, and restores the submodule before it exits.
+coreutils-patch-status:
+	$(PYTHON) $(COREUTILS_STAGER) --repo-root $(abspath $(REPO_ROOT)) --action status
+
+coreutils-provenance:
+	$(PYTHON) $(COREUTILS_STAGER) --repo-root $(abspath $(REPO_ROOT)) \
+		--action provenance --output $(COREUTILS_BUILD_DIR)/provenance.json
+
+coreutils-stage:
+	$(PYTHON) $(COREUTILS_STAGER) --repo-root $(abspath $(REPO_ROOT)) \
+		--action stage --output $(COREUTILS_BUILD_DIR)
 
 clean:
 	rm -f $(WAST_WASM_TARGET) $(ENGINE_OBJS) $(RT_OBJS) \

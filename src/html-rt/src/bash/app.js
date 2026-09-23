@@ -12,6 +12,46 @@ const controls = ["#pause","#resume","#signal","#send-signal","#stop"];
 const model = new WasteTerminalModel(80, 24);
 const renderer = new WasteTerminalRenderer(terminal, model);
 const transcriptLimit = 65536;
+const evidenceStatus = document.querySelector("#evidence-status");
+const evidenceMarkers = [
+  ["WAT explicit", "__WASTE_EVIDENCE_WAT_EXPLICIT_0__"],
+  ["WAT direct", "__WASTE_EVIDENCE_WAT_DIRECT_0__"],
+  ["WAT shebang", "__WASTE_EVIDENCE_WAT_SHEBANG_0__"],
+  ["WAST explicit", "__WASTE_EVIDENCE_WAST_EXPLICIT_0__"],
+  ["WAST direct", "__WASTE_EVIDENCE_WAST_DIRECT_0__"],
+  ["WAST shebang", "__WASTE_EVIDENCE_WAST_SHEBANG_0__"],
+];
+let evidenceStartedAt = null;
+let evidenceFinishedAt = null;
+let evidenceOutput = "";
+let evidenceStep = 0;
+let evidenceWaitOffset = 0;
+let evidenceWorkerReady = false;
+const evidenceSteps = [
+  {marker: "__WASTE_EVIDENCE_BEGIN__", command: "/bin/wat /tmp/waste-evidence.wat; printf '__WASTE_EVIDENCE_WAT_EXPLICIT_%s__\\n' \"$?\""},
+  {marker: "__WASTE_EVIDENCE_WAT_EXPLICIT_0__", command: "/tmp/waste-evidence.wat; printf '__WASTE_EVIDENCE_WAT_DIRECT_%s__\\n' \"$?\""},
+  {marker: "__WASTE_EVIDENCE_WAT_DIRECT_0__", command: "/tmp/waste-evidence-shebang.wat; printf '__WASTE_EVIDENCE_WAT_SHEBANG_%s__\\n' \"$?\""},
+  {marker: "__WASTE_EVIDENCE_WAT_SHEBANG_0__", command: "/bin/wast /tmp/waste-evidence.wast"},
+  {prompt: true, command: "printf '__WASTE_EVIDENCE_WAST_EXPLICIT_%s__\\n' \"$?\""},
+  {marker: "__WASTE_EVIDENCE_WAST_EXPLICIT_0__", command: "/tmp/waste-evidence.wast"},
+  {prompt: true, command: "printf '__WASTE_EVIDENCE_WAST_DIRECT_%s__\\n' \"$?\""},
+  {marker: "__WASTE_EVIDENCE_WAST_DIRECT_0__", command: "/tmp/waste-evidence-shebang.wast"},
+  {prompt: true, command: "printf '__WASTE_EVIDENCE_WAST_SHEBANG_%s__\\n' \"$?\""},
+  {marker: "__WASTE_EVIDENCE_WAST_SHEBANG_0__", command: "printf '__WASTE_EVIDENCE_END__\\n'"}
+];
+
+function evidenceFiles() {
+  const wat = new TextEncoder().encode('(module (memory 1) (func (export "_start")))\n');
+  const watShebang = new TextEncoder().encode('#!/bin/wat\n(module (memory 1) (func (export "_start")))\n');
+  const wast = new TextEncoder().encode('(module)\n');
+  const wastShebang = new TextEncoder().encode('#!/bin/wast\n(module)\n');
+  return [
+    {path: "/tmp/waste-evidence.wat", bytes: wat, kind: 1, mode: 0o755},
+    {path: "/tmp/waste-evidence-shebang.wat", bytes: watShebang, kind: 1, mode: 0o755},
+    {path: "/tmp/waste-evidence.wast", bytes: wast, kind: 1, mode: 0o755},
+    {path: "/tmp/waste-evidence-shebang.wast", bytes: wastShebang, kind: 1, mode: 0o755},
+  ];
+}
 
 function sendTerminalResize() {
   if (worker) worker.postMessage({type: "resize", columns: model.columns, rows: model.rows});
@@ -19,6 +59,7 @@ function sendTerminalResize() {
 
 function setRunning(running) {
   for (const selector of controls) document.querySelector(selector).disabled = !running;
+  document.querySelector("#run-evidence").disabled = !running;
   if (!running) {
     document.querySelector("#terminal-input").disabled = true;
     document.querySelector("#send-input").disabled = true;
@@ -29,11 +70,48 @@ function append(line) {
   appendRaw(line + "\n");
 }
 
+function evidencePassed() {
+  return evidenceOutput.includes("__WASTE_EVIDENCE_END__") &&
+    evidenceMarkers.every(([, marker]) => evidenceOutput.includes(marker));
+}
+
+function completeEvidence() {
+  if (evidenceFinishedAt || !evidencePassed()) return;
+  evidenceFinishedAt = new Date().toISOString();
+  evidenceStatus.textContent = "Loader evidence complete: all expected markers observed.";
+  evidenceStatus.style.color = "#9de6a8";
+}
+
 function appendRaw(text) {
   model.write(text);
   renderer.markDirty();
   transcript.textContent = (transcript.textContent + text).slice(-transcriptLimit);
   transcript.scrollTop = transcript.scrollHeight;
+  if (evidenceStartedAt) {
+    evidenceOutput += text;
+    if (evidenceStep < evidenceSteps.length) {
+      const step = evidenceSteps[evidenceStep];
+      const outputAfterSend = evidenceOutput.slice(evidenceWaitOffset);
+      const markerIndex = step.marker ?
+        outputAfterSend.indexOf(step.marker) : -1;
+      const ready = step.prompt
+        ? /bash-[^\r\n]*[#$] ?/.test(outputAfterSend)
+        : markerIndex >= 0 &&
+          /bash-[^\r\n]*[#$] ?/.test(outputAfterSend.slice(
+            markerIndex + step.marker.length));
+      if (ready && evidenceWorkerReady) {
+        evidenceStep++;
+        evidenceWaitOffset = evidenceOutput.length;
+        evidenceWorkerReady = false;
+        setTimeout(() => sendInputBytes(
+          new TextEncoder().encode(step.command + "\n")), 10);
+      }
+    }
+    /* A worker message may contain output assembled across several terminal
+       writes.  Test the accumulated transcript so completion cannot be lost
+       when the END marker shares a message with the final prompt. */
+    completeEvidence();
+  }
 }
 
 function finish(message) {
@@ -66,6 +144,7 @@ async function startShell(event) {
         vfsFiles.push({path, bytes, kind: 1, mode: name === "waste-probe.wasm" ? 0o755 : 0o644});
       }
     }
+    vfsFiles.push(...evidenceFiles());
 
     /* Remove loading overlay — everything is inflated and ready */
     var overlay = document.getElementById("loading-overlay");
@@ -102,9 +181,14 @@ async function startShell(event) {
         }
       }
       else if (data.type === "started") {
+        evidenceWorkerReady = true;
         if (starting)
           status.textContent = `C engine loaded; running Bash (${((Date.now() - startedEpoch) / 1000).toFixed(1)} s by Date)`;
         sendTerminalResize();
+      }
+      else if (data.type === "io-ready") {
+        evidenceWorkerReady = true;
+        if (evidenceStartedAt) appendRaw("");
       }
       else if (data.type === "done") {
         if (data.error) append(data.error);
@@ -115,6 +199,55 @@ async function startShell(event) {
     worker.postMessage({type: "start", wasmBytes, source, probeBytes, vfsFiles});
   } catch (error) { status.textContent = error.message || String(error); }
 }
+
+function runLoaderEvidence() {
+  if (!worker) return;
+  evidenceStartedAt = new Date().toISOString();
+  evidenceFinishedAt = null;
+  evidenceOutput = "";
+  evidenceStep = 0;
+  evidenceWaitOffset = 0;
+  evidenceWorkerReady = true;
+  evidenceStatus.textContent = "Running loader evidence in the browser VFS...";
+  evidenceStatus.style.color = "";
+  /* Consume the current ready token just like every subsequent evidence
+     command.  Otherwise each command is released by the previous resume's
+     io-ready message and the sequence runs one handshake ahead. */
+  evidenceWorkerReady = false;
+  sendInputBytes(new TextEncoder().encode(
+    "printf '__WASTE_EVIDENCE_BEGIN__\\n'\n"));
+}
+
+function downloadEvidence() {
+  completeEvidence();
+  const lines = [
+    "WASTE browser loader evidence",
+    `generated_at=${new Date().toISOString()}`,
+    `page_url=${location.href}`,
+    `user_agent=${navigator.userAgent}`,
+    `evidence_started_at=${evidenceStartedAt || "not-run"}`,
+    `evidence_finished_at=${evidenceFinishedAt || "not-finished"}`,
+    `evidence_complete=${evidenceFinishedAt && evidencePassed() ? "yes" : "no"}`,
+    "expected_markers:",
+    ...evidenceMarkers.map(([label, marker]) => `${label}: ${marker}`),
+    "observed_markers:",
+    ...evidenceMarkers.map(([label, marker]) => `${label}: ${evidenceOutput.includes(marker) ? "yes" : "no"}`),
+    "--- terminal transcript ---",
+    transcript.textContent,
+  ];
+  const blob = new Blob([lines.join("\n") + "\n"], {type: "text/plain;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `waste-browser-loader-evidence-${new Date().toISOString().replace(/[:.]/g, "-")}.log`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+document.querySelector("#run-evidence").addEventListener("click", runLoaderEvidence);
+document.querySelector("#download-evidence").addEventListener("click", downloadEvidence);
 document.querySelector("#start-form").addEventListener("submit", startShell);
 
 document.querySelector("#terminal-form").addEventListener("submit", event => {
@@ -162,3 +295,14 @@ terminal.addEventListener("paste", event => {
 });
 
 window.addEventListener("resize", sendTerminalResize);
+
+/* Headless/offline browser acceptance hook.  It is inert unless explicitly
+   requested by the page URL and uses the same button path as manual evidence. */
+if (new URLSearchParams(location.search).has("auto-evidence")) {
+  const autoEvidenceTimer = setInterval(() => {
+    if (worker && !starting && !evidenceStartedAt) {
+      clearInterval(autoEvidenceTimer);
+      runLoaderEvidence();
+    }
+  }, 25);
+}

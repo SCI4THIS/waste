@@ -31,8 +31,11 @@
         </select>
         <button id="send-signal" type="button" disabled>Send signal</button>
         <button id="stop" type="button" disabled>Stop worker</button>
+        <button id="run-evidence" type="button" disabled>Run loader evidence</button>
+        <button id="download-evidence" type="button">Download evidence log</button>
         <span id="status">idle</span>
       </div>
+      <p id="evidence-status" class="subtitle">The evidence action runs WAT and WAST direct/shebang probes in the browser VFS.</p>
       <canvas id="terminal-canvas" tabindex="0" aria-label="WASTE Bash terminal"></canvas>
       <pre id="terminal-transcript" aria-live="polite"></pre>
       <form id="terminal-form" style="margin-top:10px">

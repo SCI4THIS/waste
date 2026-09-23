@@ -28,6 +28,12 @@ typedef struct {
 #define NATIVE_EXEC_ARG_MAX 128
 #define NATIVE_EXEC_ENV_MAX 256
 #define NATIVE_EXEC_BYTES_MAX (16u * 1024u * 1024u)
+#define NATIVE_EXEC_INTERPRETER_MAX 4u
+
+typedef enum {
+    NATIVE_EXEC_HANDLER_NONE = 0,
+    NATIVE_EXEC_HANDLER_WAST = 1
+} native_exec_handler_kind;
 
 typedef struct native_process_image native_process_image;
 
@@ -54,6 +60,10 @@ typedef struct {
     int pid;
     int failure_errno;
     uint8_t active;
+    uint8_t interpreter_depth;
+    uint8_t handler_kind;
+    uint8_t *handler_bytes;
+    size_t handler_size;
 } native_exec_request;
 
 struct native_process_image {
@@ -86,6 +96,32 @@ typedef enum {
     NATIVE_PROCESS_TRANSITION_WAKE
 } native_process_transition;
 
+typedef enum {
+    NATIVE_PROCESS_HANDLER_NONE = 0,
+    NATIVE_PROCESS_HANDLER_WAST = 1
+} native_process_handler_kind;
+
+typedef void (*native_process_handler_context_destroy)(void *context);
+typedef exec_status (*native_process_handler_step)(
+    const uint8_t *source, size_t source_size, size_t offset, unsigned line,
+    size_t *next_offset, unsigned *next_line, void *context);
+
+/* Process-owned non-Wasm execution state. The source buffer and cursor are
+ * deliberately separate from native_process_image: a WAST handler may load
+ * several modules and resume between commands. */
+typedef struct {
+    native_process_handler_kind kind;
+    uint8_t *source;
+    size_t source_size;
+    size_t stream_offset;
+    unsigned stream_line;
+    void *context;
+    native_process_handler_context_destroy destroy_context;
+    exec_status status;
+    int exit_code;
+    exec_yield_reason wait_reason;
+} native_process_handler;
+
 typedef struct native_store_checkpoint native_store_checkpoint;
 
 /* Process-owned execution identity.  The browser driver may cache a pointer
@@ -111,6 +147,7 @@ typedef struct {
     waste_exec_engine **continuation_engines;
     exec_continuation *continuations;
     uint32_t continuation_count;
+    native_process_handler handler;
 } native_process_capsule;
 
 typedef struct {
@@ -178,6 +215,9 @@ typedef struct native_store {
 
 void native_exec_request_init(native_exec_request *request);
 void native_exec_request_destroy(native_exec_request *request);
+int native_exec_request_take_handler(native_exec_request *request,
+                                     native_exec_handler_kind kind,
+                                     uint8_t **bytes_out, size_t *size_out);
 void native_process_image_init(native_process_image *image);
 void native_process_image_retain(native_process_image *image);
 void native_process_image_pin(native_process_image *image);
@@ -187,6 +227,78 @@ void native_process_capsule_init(native_process_capsule *capsule);
 int native_process_capsule_clone(native_process_capsule *destination,
                                  const native_process_capsule *source);
 void native_process_capsule_destroy(native_process_capsule *capsule);
+int native_process_capsule_select_entry(native_process_capsule *capsule,
+                                         waste_exec_engine *engine,
+                                         uint32_t func_idx,
+                                         const wasm_value *args,
+                                         int arg_count);
+int native_process_capsule_install_handler(
+    native_process_capsule *capsule, native_process_handler_kind kind,
+    uint8_t *source, size_t source_size, void *context,
+    native_process_handler_context_destroy destroy_context);
+int native_process_capsule_attach_handler_context(
+    native_process_capsule *capsule, void *context,
+    native_process_handler_context_destroy destroy_context);
+/* Borrow the handler source and current cursor for one command-driver step. */
+int native_process_capsule_handler_cursor(
+    const native_process_capsule *capsule, const uint8_t **source_out,
+    size_t *size_out, size_t *offset_out, unsigned *line_out);
+/* Commit a monotonically advancing source cursor after a resumable command. */
+int native_process_capsule_advance_handler(native_process_capsule *capsule,
+                                           size_t offset, unsigned line);
+/* Mark a handler blocked at an ordinary host wait and resume it later. */
+int native_process_capsule_suspend_handler(native_process_capsule *capsule,
+                                           native_process_run_state state);
+int native_process_capsule_resume_handler(native_process_capsule *capsule);
+int native_process_capsule_set_handler_exit_code(native_process_capsule *capsule,
+                                                 int exit_code);
+/* Run one parser/command-driver step. A yielded step may leave the cursor at
+ * the same command; failed steps never commit their proposed cursor. */
+exec_status native_process_capsule_run_handler_step(
+    native_process_capsule *capsule, native_process_handler_step callback,
+    void *context);
+/* Run a handler step with the context owned by the capsule.  Browser drivers
+ * use this form so a later resume cannot accidentally depend on stack state. */
+exec_status native_process_capsule_run_attached_handler_step(
+    native_process_capsule *capsule, native_process_handler_step callback);
+/* Dispatch one step through the store's currently selected process. */
+exec_status native_store_run_process_handler_step(
+    native_store *store, native_process_handler_step callback);
+int native_store_process_handler_cursor(
+    const native_store *store, const uint8_t **source_out,
+    size_t *size_out, size_t *offset_out, unsigned *line_out);
+int native_store_process_handler_context(const native_store *store,
+                                         void **context_out);
+int native_store_process_handler_result(const native_store *store,
+                                        exec_status *status_out,
+                                        int *exit_code_out);
+int native_store_advance_process_handler(native_store *store,
+                                          size_t offset, unsigned line);
+int native_store_suspend_process_handler(native_store *store,
+                                         native_process_run_state state);
+int native_store_suspend_process_handler_for_yield(
+    native_store *store, exec_yield_reason reason);
+int native_store_process_handler_wait_reason(
+    const native_store *store, exec_yield_reason *reason_out);
+int native_store_resume_process_handler(native_store *store);
+void native_process_capsule_clear_handler(native_process_capsule *capsule);
+/* Finish the active handler and enter the ordinary process-exit path. The
+ * handler payload/context are released before the process becomes a zombie. */
+int native_store_complete_process_handler(native_store *store,
+                                           exec_status status, int exit_code);
+/* Complete a handler using the shell-visible default status for its result. */
+int native_store_complete_process_handler_default(native_store *store,
+                                                  exec_status status);
+/* Browser/process-driver handoff: validate the live parent and its transition
+ * slot, publish child completion, then queue exactly one parent wake. */
+int native_store_complete_process_handler_and_wake(
+        native_store *store, exec_status status, int exit_code);
+/* Complete and wake using the handler result recorded by its last step. */
+int native_store_complete_process_handler_result_and_wake(native_store *store);
+int native_store_complete_process_handler_and_wake_default(
+        native_store *store, exec_status status);
+int native_process_handler_default_exit_code(exec_status status,
+                                             int explicit_exit_code);
 native_process_capsule *native_store_active_capsule(native_store *store);
 native_process_capsule *native_store_process_capsule(native_store *store,
                                                      int pid);
@@ -198,18 +310,30 @@ int native_store_register_executable(native_store *store, const char *path,
 /* Mirror registered executable manifests into the active kernel namespace so
  * path metadata and exec lookup cannot disagree. */
 int native_store_bind_executable_paths(native_store *store);
+/* Install the immutable interpreter handler nodes used by loader-owned
+ * shebang dispatch. Their contents are intentionally empty until the handler
+ * image implementation is installed. */
+int native_store_bind_interpreter_paths(native_store *store);
 const native_executable *native_store_find_executable(
     const native_store *store, const char *path);
 exec_status native_store_instantiate_executable(
-    native_store *store, const native_exec_request *request,
+    native_store *store, native_exec_request *request,
     native_process_image **image_out, exec_error *error);
 int native_store_commit_process_image(native_store *store,
                                       native_process_image *image);
+int native_store_commit_process_handler(native_store *store,
+                                        native_exec_request *request,
+                                        native_process_handler_kind kind);
+int native_store_commit_process_handler_with_context(
+    native_store *store, native_exec_request *request,
+    native_process_handler_kind kind, void *context,
+    native_process_handler_context_destroy destroy_context);
 int native_store_prepare_process_exec(native_store *store,
                                       const native_exec_request *request);
 void native_store_abort_process_exec(native_store *store);
 int native_store_wake_process(native_store *store, int pid, int result);
 void native_store_complete_process_wake(native_store *store);
+int native_store_take_process_wake(native_store *store, int *result_out);
 
 /* A reversible snapshot of mutable store and evaluator state. The snapshot
  * retains pointers to the live store objects, but owns copied bytes and

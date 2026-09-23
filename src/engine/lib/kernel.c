@@ -376,6 +376,53 @@ int posix_kernel_path_access(posix_kernel *kernel, const uint8_t *path,
     return (permissions & mode) == mode ? 0 : -POSIX_EACCES;
 }
 
+int posix_kernel_path_snapshot(posix_kernel *kernel, const uint8_t *path,
+                               size_t length, size_t maximum_size,
+                               uint8_t **data_out, size_t *length_out,
+                               posix_path_metadata *metadata_out) {
+    char normalized[POSIX_PATH_NODE_NAME_MAX];
+    posix_kernel_path_node *node;
+    uint8_t *copy = NULL;
+    int depth = 0;
+    int result;
+    if (!kernel || !path || !data_out || !length_out || !metadata_out)
+        return -POSIX_EFAULT;
+    *data_out = NULL;
+    *length_out = 0;
+    result = path_normalize(kernel, path, length, normalized);
+    if (result < 0) return result;
+    node = path_find(kernel, normalized);
+    if (!node)
+        return path_prefix_is_file(kernel, normalized) ?
+            -POSIX_ENOTDIR : -POSIX_ENOENT;
+    while (node && node->metadata.kind == POSIX_NODE_SYMLINK &&
+           node->link_target && depth++ < 8) {
+        result = path_normalize(kernel, (const uint8_t *)node->link_target,
+                                strlen(node->link_target), normalized);
+        if (result < 0) return result;
+        node = path_find(kernel, normalized);
+    }
+    if (!node) return -POSIX_ENOENT;
+    if (node->metadata.kind == POSIX_NODE_SYMLINK)
+        return -POSIX_ELOOP;
+    if (node->metadata.kind == POSIX_NODE_DIRECTORY)
+        return -POSIX_EISDIR;
+    if (node->metadata.kind != POSIX_NODE_REGULAR)
+        return -POSIX_ENOENT;
+    if (!(node->metadata.mode & 0111u)) return -POSIX_EACCES;
+    if (maximum_size != 0 && node->data_capacity > maximum_size)
+        return -POSIX_E2BIG;
+    if (node->data_capacity > 0) {
+        copy = (uint8_t *)malloc(node->data_capacity);
+        if (!copy) return -POSIX_ENOMEM;
+        memcpy(copy, node->data, node->data_capacity);
+    }
+    *data_out = copy;
+    *length_out = node->data_capacity;
+    *metadata_out = node->metadata;
+    return 0;
+}
+
 /* --- Lifecycle --- */
 
 posix_kernel *posix_kernel_create(int interactive) {

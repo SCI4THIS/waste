@@ -72,6 +72,22 @@ int main(void) {
     native_store_checkpoint_init(&checkpoint);
     exec_error error;
     memset(&error, 0, sizeof(error));
+
+    store.processes[0].used = 1;
+    store.processes[0].capsule.handler.kind = NATIVE_PROCESS_HANDLER_WAST;
+    store.processes[0].capsule.handler.source = malloc(1);
+    store.processes[0].capsule.handler.source_size = 1;
+    check(store.processes[0].capsule.handler.source != NULL,
+          "handler checkpoint fixture allocates");
+    check(native_store_checkpoint_capture(&store, &checkpoint, &error) ==
+              EXEC_ERROR_UNSUPPORTED &&
+              error.status == EXEC_ERROR_UNSUPPORTED,
+          "live handler checkpoint is rejected");
+    check(checkpoint.impl == NULL,
+          "rejected handler checkpoint does not publish a snapshot");
+    free(store.processes[0].capsule.handler.source);
+    memset(&store.processes[0], 0, sizeof(store.processes[0]));
+    memset(&error, 0, sizeof(error));
     check(native_store_checkpoint_capture(&store, &checkpoint, &error) == EXEC_OK,
           "capture succeeds");
 

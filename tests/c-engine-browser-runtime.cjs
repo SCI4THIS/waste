@@ -20,9 +20,19 @@ if (payloadPath.endsWith(".json")) {
   const html = fs.readFileSync(payloadPath, "utf8");
   const payloadMatch = html.match(/^  const PAYLOAD = (.*);$/m);
   const workerMatch = html.match(/  const WORKER_SRC = String\.raw`([\s\S]*?)`;\n\n  \/\* ---- DOM helpers/);
-  if (!payloadMatch || !workerMatch) throw new Error("cannot extract generated dashboard payload");
-  payload = JSON.parse(payloadMatch[1]);
-  engineBytes = Uint8Array.from(Buffer.from(payload.wasmB64, "base64"));
+  if (payloadMatch && workerMatch) {
+    payload = JSON.parse(payloadMatch[1]);
+    engineBytes = Uint8Array.from(Buffer.from(payload.wasmB64, "base64"));
+  } else {
+    /* Current production dashboards embed a compressed VFS manifest and
+     * load payload.json/worker.js from that archive.  The Node harness uses
+     * the staging copies to exercise the same worker and test specifications
+     * without pretending to implement browser fetch/decompression here. */
+    payload = JSON.parse(fs.readFileSync(
+      path.join(stagingDir, "payload.json"), "utf8"));
+    const wasmPath = path.join(root, "build/html-rt/waste-wast.wasm");
+    engineBytes = new Uint8Array(fs.readFileSync(wasmPath));
+  }
 }
 
 /* Load worker source */

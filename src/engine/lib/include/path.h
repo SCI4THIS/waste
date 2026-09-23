@@ -137,5 +137,13 @@ int posix_kernel_path_stat(struct posix_kernel *kernel, const uint8_t *path,
                            posix_path_metadata *metadata);
 int posix_kernel_path_access(struct posix_kernel *kernel, const uint8_t *path,
                              size_t length, int mode, int flags);
+/* Copy one resolved executable regular file into an owned snapshot. The
+ * caller owns *data_out and must free it. A zero-length regular file returns
+ * success with a NULL data pointer. */
+int posix_kernel_path_snapshot(struct posix_kernel *kernel,
+                               const uint8_t *path, size_t length,
+                               size_t maximum_size, uint8_t **data_out,
+                               size_t *length_out,
+                               posix_path_metadata *metadata_out);
 
 #endif /* WASTE_POSIX_PATH_H */
