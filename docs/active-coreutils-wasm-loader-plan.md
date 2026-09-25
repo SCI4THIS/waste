@@ -1413,13 +1413,14 @@ Implementation update (2026-09-21, parser-side shebang boundary):
 
 ## Stage 8D: Build a WASTE target sysroot and CRT
 
-Status: pending
+Status: in progress (sysroot, CRT, and cross-configure probe complete;
+selected utility compilation remains)
 
 Work:
 
 - Generate a target sysroot under `build/html-rt/coreutils/sysroot` from the
   selected headers; no generated sysroot file is a repository source of truth.
-- Define the target tuple and compiler wrapper for `wasm32-unknown-unknown`
+- Define the target tuple and compiler wrapper for wasm32 freestanding code
   with explicit include paths, freestanding flags, feature macros, and no host
   headers.
 - Provide a small CRT object exporting `_start`, running constructors, calling
@@ -1443,9 +1444,274 @@ Gate:
   modules or a documented, normalized source of nondeterminism.
 - The generated sysroot and configure report contain no accidental host paths.
 
+Implementation update (2026-09-23, target sysroot and CRT seam):
+
+- Added `src/html-rt/tools/build-waste-sysroot.py`, which copies the selected
+  guest headers into `build/html-rt/coreutils/sysroot/include`, records
+  repository-relative source paths and SHA-256 hashes in `manifest.json`, and
+  emits a freestanding `waste-wasm-clang` wrapper for the
+  wasm32 freestanding target. The generated wrapper uses the Clang
+  resource headers explicitly and does not inherit host include directories.
+- Added `src/html-rt/lib/waste-crt.c`. Its `_start` export runs weak Wasm
+  constructors, obtains the engine-owned `startup_v1` block, calls the normal
+  `main(argc, argv, envp)` entry, and maps the return value through the
+  versioned `env.exit` boundary. It does not create a second kernel or libc.
+- Added `tests/coreutils-sysroot-hello.c` and the
+  `coreutils-sysroot`/`coreutils-crt-fixture` Make targets. The fixture builds
+  through the generated wrapper, links with `wasm-ld`, emits import/disassembly
+  reports, and passes the explicit WASTE import audit with no Asyncify symbols
+  or unknown imports.
+- The fixture module rebuild is byte-for-byte deterministic
+  (`39c7d73e4e62b05e229515294f628ae8d8d93bff6cb5d322637047e74a4ac45a` in the
+  current toolchain), and generated manifest/module reports contain no host
+  paths. Python bytecode, shell syntax, and `git diff --check` gates pass.
+
+The next 8D increment is the reviewed out-of-tree coreutils configure probe;
+it must consume this sysroot and record every forced answer before any utility
+is treated as buildable.
+
+Implementation update (2026-09-23, configure probe boundary):
+
+- Added `src/html-rt/tools/coreutils-waste.config.site` with only the two
+  target facts that are safe to force (`ac_cv_prog_cc_cross=yes` and
+  `ac_cv_c_cross=yes`); each is documented with its reason and verification
+  method. No function, header, library, or semantic result is being guessed.
+- Added `src/html-rt/tools/configure-coreutils.py` and the
+  `coreutils-configure-probe` Make target. It stages coreutils out of tree,
+  copies the reviewed site file, records the target/compiler/sysroot,
+  prerequisites, forced-answer ledger, configure command, and blockers in
+  `build/html-rt/coreutils/configure/configure-report.json`, and runs
+  configure only when the generated script and all required bootstrap tools
+  are present.
+- The current pinned source initially lacked generated `configure`; its local
+  bootstrap probe recorded the missing `gperf` and `wget` as an honest blocked
+  result. It did not download dependencies, modify the coreutils submodule, or
+  claim that configure answers succeeded.
+- Fixed `stage-coreutils.py` to replace only the staged `source/` tree and
+  provenance report, preserving sibling generated outputs such as `sysroot/`
+  and `configure/` across repeated staging. Sysroot regeneration, configure
+  reporting, Python/shell syntax, and `git diff --check` pass.
+
+The subsequent bootstrap-helper increment provisions those tools and enables
+the real cross-configure attempt described below.
+
+Implementation update (2026-09-23, idempotent coreutils bootstrap helper):
+
+- Added `submodules/bootstrap-coreutils.sh`. Its default action detects and
+  installs only missing upstream bootstrap prerequisites using pacman,
+  apt-get, dnf, or zypper; stages the pinned coreutils source under
+  `build/html-rt/coreutils/source`; and runs `bootstrap --gen` against the
+  checked-in Gnulib copy to generate `configure` without a network pull.
+- The helper records the coreutils commit and managed-patch hash in the staged
+  tree. Repeated runs skip both restaging and bootstrap when that identity and
+  generated `configure` are current; `--force` deliberately regenerates them.
+  `--check`, `--no-install`, and `--install-only` provide non-mutating and
+  controlled installation modes. The pinned coreutils submodule is checked
+  clean after generation.
+- Expanded the machine-readable configure probe to check the complete command
+  set declared by coreutils bootstrap rather than only Autoconf, Automake,
+  Gperf, and Wget. On the current machine, the read-only helper check reports
+  only `gperf` and `wget` missing. Shell syntax and `git diff --check` pass;
+  package installation was not invoked automatically.
+
+The helper has now been run with permission to install those system packages;
+the first real cross-configure attempt is recorded below.
+
+Implementation update (2026-09-23, first cross-configure pass):
+
+- After the bootstrap helper installed the missing `gperf` and `wget`, the
+  staged source generated `configure`, `aclocal.m4`, `lib/config.hin`, and
+  the Gnulib-generated make fragments successfully. The pinned submodule
+  remains clean; all generated files stay under `build/`.
+- Fixed the generated compiler wrapper to locate the repository's bundled
+  `wasm-ld`, export its `liblld*.so` directory, pass `-nostdlib`, and use
+  `--no-entry` for Autoconf's link-only test programs. This prevents host
+  libc, host compiler-rt, and an implicit `_start` requirement from entering
+  the target probe.
+- Changed the GNU configure host tuple to the accepted freestanding value
+  `wasm32-unknown-none`; the wrapper still compiles for wasm32. The configure
+  probe now passes with no unknown imports involved.
+- The reviewed configuration ledger records five explicit constraints:
+  cross compilation, the `wasm32-unknown-none` target, configured-out
+  post-2038 timestamps pending Stage 8E, WebAssembly little-endian order, and
+  the temporary 32-bit `socklen_t` socket ABI assumption pending Stage 8E.
+  These are emitted in `configure-report.json` with reasons and validation
+  requirements rather than hidden cache answers.
+- `make -B -C src/html-rt BUILD_DIR=../../build/html-rt
+  coreutils-configure-probe` completes with `status=passed`; the next
+  increment is compiling a deliberately small coreutils utility and auditing
+  its imports against the guest libc/POSIX boundary.
+
+Implementation update (2026-09-23, first utility compile boundary):
+
+- Added `src/html-rt/tools/probe-coreutils-utility.py` and the
+  `coreutils-utility-probe` Make target. It compiles staged `src/true` with
+  `make -j1 V=1`, captures the complete build log, and writes a relative-path
+  JSON report containing missing headers, undefined symbols, unknown imports,
+  and Asyncify symbols. Expected ABI gaps are reported as `blocked` so the
+  diagnostic target remains usable while unexpected compiler/linker failures
+  return failure.
+- The first probe reaches upstream coreutils compilation and is blocked at the
+  guest boundary because the current sysroot has no public `stdio.h`. The
+  captured report is `build/html-rt/coreutils/utility-probe/true-report.json`
+  and the log is `true.build.log`; this is a Stage 8E libc/header task, not a
+  loader or configure failure. The probe also exposed and fixed its own output
+  path handling, and its report now points to the sibling staged `source/` and
+  `sysroot/` trees correctly.
+- No browser test is needed for this increment: it changes only build-time
+  diagnostics and does not alter the browser runtime or packaged VFS. The
+  next implementation work is to add the truthful public headers and libc
+  declarations needed by `true`, then rerun this same probe before attempting
+  linking or import auditing.
+
+Implementation update (2026-09-23, Stage 8E public-header seam):
+
+- Added the first WASTE-owned application headers to the generated sysroot:
+  `stdio.h`, `stdlib.h`, `string.h`, `stdint.h`, `inttypes.h`, `ctype.h`,
+  `uchar.h`, `locale.h`, `time.h`, `sys/types.h`, `sys/time.h`, `sys/stat.h`,
+  `dirent.h`, `fcntl.h`, `unistd.h`, `errno.h`, `error.h`, and `alloca.h`.
+  Their ABI uses Wasm32 widths and the engine-owned structures from
+  `helper.h`; no host headers are copied into the target sysroot.
+- Added allocator-side `posix_memalign` with an explicit 16-byte alignment
+  contract. Requests outside that contract return `EINVAL` instead of
+  pretending that a stronger alignment guarantee exists.
+- The probe now compiles `src/true.c` and its startup objects, then advances
+  through coreutils/gnulib support compilation. The latest captured failure
+  is a missing `getdelim` declaration in `argv-iter.c`; the public `stdio.h`
+  declaration has now been added. This demonstrates that the blocker is no
+  longer the loader or configure path, but the ordinary libc and POSIX ABI
+  surface required by upstream support code.
+- These headers are compile-seam declarations, not an acceptance claim:
+  Stage 8E still must provide or deliberately reject every linked symbol, run
+  the import audit, and verify the corresponding VFS/errno semantics. Browser
+  testing is not required for this increment because no packaged Wasm module
+  or browser runtime changed.
+
+Implementation update (2026-09-23, stream and recursive-header increment):
+
+- Implemented guest `fread`, `fgetc`, `getc`, `feof`, `getdelim`, and
+  `getline` in `src/html-rt/lib/stdio.c`. The implementation preserves the
+  delimiter contract, grows the caller-owned buffer, marks EOF/error state,
+  and uses the existing descriptor-backed `read` path when POSIX I/O is
+  enabled.
+- Added the `arpa/inet.h` application header and fixed the sysroot Make
+  dependency to discover headers recursively. This prevents nested headers
+  such as `arpa/inet.h` from silently being omitted from a regenerated
+  sysroot manifest.
+- After regeneration, `true` compiles its main source and the preceding
+  support objects; the probe advanced into `openat-proc.c`, where the next
+  missing ABI constant was `O_CLOEXEC`. That constant has now been added to
+  the WASTE `fcntl.h` surface. The next run must continue until compilation
+  completes, then link and audit every referenced libc/POSIX symbol.
+
+Implementation update (2026-09-23, allocator and character-I/O increment):
+
+- Added overflow-checked `reallocarray` to both the freestanding compiler
+  support and guest libc surfaces. The `true` probe now compiles through the
+  allocator, path, directory, and binary-I/O support objects.
+- Added the minimal WASTE `wchar.h` surface and guest `btowc` implementation,
+  including `WEOF`; this is backed by the existing ASCII/UTF-8 character
+  handling in `wchar.c`, not host locale state.
+- The latest probe reaches coreutils' `btowc.c` and is currently stopped at
+  the next source-level ABI declaration/constant boundary. The utility is
+  still not linkable or import-audited, so Stage 8E remains in progress.
+- The rebuilt guest libc Wasm module and generated fixtures pass, as do
+  Python bytecode, shell syntax, and `git diff --check`. Browser testing is
+  still not required until a linked utility module is packaged into the VFS.
+
+Implementation update (2026-09-23, file-type and locale-header increment):
+
+- Added WASTE-owned `byteswap.h` and `langinfo.h`, with byte-order helpers
+  matching WebAssembly little-endian memory and the existing compact `C.UTF-8`
+  locale implementation. The duplicate byte-swap helper names were avoided
+  between `arpa/inet.h` and `byteswap.h` so both headers can coexist.
+- Completed the file-type macro surface in `sys/stat.h`, including regular,
+  directory, link, device, FIFO, and socket predicates plus explicit false
+  results for unsupported host-only object types. These macros describe the
+  WASTE VFS model; they do not claim unsupported object kinds exist.
+- The latest probe advances through the coreutils file-type support and stops
+  at the missing `langinfo.h` boundary, which has now been added. The next
+  run continues the compile ledger; linking and import auditing remain
+  pending.
+
+Implementation update (2026-09-23, numeric and wide-character increment):
+
+- Added the standard `long double strtold` declaration and guest implementation
+  backed by the existing WASTE floating-point conversion path. The previous
+  internal quad-word helper was not exposed as a mismatched C ABI.
+- Added `wctype.h`, `c32_type_test_t`, `c32is*` ASCII predicates, and the
+  missing wide-character declarations needed by Gnulib's type-test helpers.
+  The predicates intentionally implement the documented compact ASCII/
+  `C.UTF-8` model rather than host locale behavior.
+- The probe now compiles through the long-double and wide-character conversion
+  objects and currently reaches the remaining `c32` type-test support. It has
+  not yet reached utility linking; import auditing and semantic POSIX tests
+  remain subsequent work.
+
+Implementation update (2026-09-23, generated Unicode support increment):
+
+- Extended the utility probe to generate coreutils' staged headers
+  (`configmake.h`, `version.h`, `unitypes.h`, and `unictype.h`) before compiling
+  the utility. This keeps generated-source prerequisites in the out-of-tree
+  build instead of copying them into the WASTE sysroot.
+- Added the WASTE-facing `c32` declarations and wide-character graph,
+  punctuation, and hexadecimal predicates required by Gnulib's generated
+  Unicode classification objects.
+- The probe now compiles through the initial `c32` classification objects and
+  stops at the next missing wide-character predicate boundary. Linking and
+  import auditing remain pending; the guest libc build must be rerun after
+  this source increment.
+
+Implementation update (2026-09-23, C32 conversion ABI increment):
+
+- Removed inline `c32is*` and `c32isspace` definitions from the public
+  `uchar.h` header where they conflicted with Gnulib's generated translation
+  units; the header now exposes declarations and the staged sources provide
+  the implementations.
+- Corrected the `c16rtomb`, `c32rtomb`, `mbrtoc16`, and `mbrtoc32` prototypes
+  to use the public `mbstate_t *` type. The probe had reached all C32
+  classification objects and stopped on that exact signature mismatch.
+- The next compile pass proceeds into the C32 conversion objects. The module
+  is still pre-link, so browser testing and import evidence remain deferred.
+
+Implementation update (2026-09-23, standard C32 return-width correction):
+
+- Corrected the public `uchar.h` conversion prototypes to return `size_t`,
+  matching the C standard and the staged Gnulib definitions for
+  `c16rtomb`, `c32rtomb`, `mbrtoc16`, and `mbrtoc32`. The prior `int` return
+  type was detected by the compiler before any link step.
+- The next required work is to provide the corresponding guest-libc C32
+  conversion implementations (or explicitly configure the unsupported
+  variants out) before a utility can reach linking. Browser testing remains
+  deferred because no coreutils Wasm binary exists yet.
+
+Implementation update (2026-09-23, guest C32 conversion implementation):
+
+- Implemented `c32rtomb`, `mbrtoc32`, `c16rtomb`, and `mbrtoc16` in the guest
+  `wchar.c` using the existing checked UTF-8 encoder/decoder. Invalid
+  surrogate and unsupported wide-codepoint cases return the WASTE encoding
+  error instead of silently truncating.
+- The guest libc Wasm module rebuild passes after these additions, along with
+  Python bytecode, shell syntax, and `git diff --check`. The coreutils probe
+  is ready to resume at the C32 conversion compilation boundary; it remains
+  pre-link and therefore needs no browser test yet.
+
+Implementation update (2026-09-23, generated Unicode and width increment):
+
+- Added generated-header preflight for `unicase.h`, `uninorm.h`, and
+  `uniwidth.h`, keeping these Gnulib products in the out-of-tree configure
+  tree rather than treating them as WASTE-owned source headers.
+- Added guest `wcwidth` and `wcswidth` with the compact character model:
+  controls are non-printable, ordinary supported characters occupy one
+  column, and no host terminal database is consulted.
+- The probe now reaches C32 width support and stops at the missing `wcwidth`
+  boundary, which has now been implemented. It remains pre-link; no browser
+  test is required yet.
+
 ## Stage 8E: Close the utility-facing libc and POSIX ABI
 
-Status: pending
+Status: in progress (public header seam is being filled from the `true`
+compile trace; implementation and link audit remain)
 
 Use real build failures and per-utility import reports to extend the ABI. Keep
 shared POSIX semantics in `src/engine/`, browser capability adapters in
@@ -1476,9 +1742,520 @@ Gate:
 - The existing libc fixtures, Wasm conformance tests, Bash probe, and
   command-not-found behavior remain green.
 
+Implementation update (2026-09-23, public-header and generated-source seam):
+
+- Added the guest `netdb.h`, `endian.h`, `assert.h`, `fnmatch.h`, `math.h`,
+  `stdio_ext.h`, and Gnulib compatibility headers required by the real
+  out-of-tree `true` build. The network declarations now match the existing
+  guest implementation rather than relying on pointer-compatible `void *`
+  prototypes.
+- Added the corresponding Wasm32 declarations and small guest implementations
+  for `faccessat`, `fstatat`, `fchmodat`, `fchown`, `fchdir`, `lchown`,
+  `utimensat`, `posix_fadvise`, `fseeko`, `_exit`, `rawmemchr`, `mempcpy`,
+  `stpcpy`, `strnul`, and `mbscasecmp`; unsupported filesystem operations keep
+  returning the engine's explicit unsupported result.
+- Extended generated-header preflight to build and consume
+  `lib/malloc/scratch_buffer.gl.h` and `lib/crc-sliceby8.h`. The sysroot
+  manifest now includes nested headers and the compiler wrapper pre-includes
+  only syntax-level Gnulib annotations.
+- The probe advanced from missing `netdb.h` through the generated allocator,
+  CRC, Unicode, stdio, file-operation, and fcntl boundaries. It currently
+  remains pre-link at the next file-creation declaration boundary (`creat`)
+  after the fcntl constants were added; 8E is not closed and no browser test
+  is requested yet.
+
+Implementation update (2026-09-23, timestamp and file-mode increment):
+
+- Added the guest timestamp ABI declarations/stubs for `utimensat` and
+  `futimens`, large-file `ftello`, directory type conversion macros, and the
+  standard set-id/sticky mode bits used by Gnulib file-mode formatting.
+- The real `true` probe now compiles past `fdutimensat`, `fflush`, and
+  `file-has-acl`; its current pre-link boundary is the mode-bit declaration
+  seam (`S_ISUID`, `S_ISGID`, and `S_ISVTX`). The utility remains neither
+  linkable nor import-audited, so browser testing is still deferred.
+- Rebuilt the guest libc successfully after completing the timestamp type
+  definition boundary; Python bytecode checks, bootstrap shell syntax, and
+  `git diff --check` also pass.
+
+Implementation update (2026-09-23, Gnulib fpending and time-zone seam):
+
+- Added the repository-owned `submodules/coreutils-waste.patch` change for
+  Gnulib `fpending.c`. WASTE uses an opaque guest `FILE`, so the patch selects
+  a truthful zero-pending-byte path instead of inspecting a host `FILE`
+  layout. The sysroot compiler defines `WASTE_WASM` for this target only.
+- Forced configure to recognize the guest `stdio_ext.h` and `__fpending`
+  declarations, and added the opaque `timezone_t`, `off64_t`, and related
+  time-zone declarations needed by Gnulib's formatting code.
+- The patch applies cleanly and configure completes successfully. The next
+  probe boundary is the remaining `mktime_z`/`localtime_rz` time-zone ABI;
+  the utility is still pre-link and browser testing remains deferred.
+
+Implementation update (2026-09-23, stdio extension continuation):
+
+- Added the guest `__fpurge` declaration/stub and the standard `freopen`
+  declaration as the compile trace moved beyond Gnulib's `fpending.c` and
+  into the remaining stdio portability objects.
+- The latest `true` probe compiles through `fpending.c` and currently stops at
+  the `freopen` declaration boundary. It remains pre-link; no browser test is
+  required.
+
+Implementation update (2026-09-23, stream and directory ABI increment):
+
+- Added the Wasm32 `_POSIX_VERSION` declarations so Gnulib can select its
+  portable `fseeko` path, plus guest `strtof`, generated `fts_.h` preflight,
+  `dirfd`, and the existing guest `qsort` declaration.
+- The probe now compiles through `fseeko`, `ftoastr`, and the generated FTS
+  header; its current boundary is the FTS directory-descriptor/qsort seam.
+  The utility is still pre-link and browser testing remains deferred.
+
+Implementation update (2026-09-23, socket and resource header boundary):
+
+- Added the freestanding `sys/socket.h` and `sys/resource.h` seams with the
+  current WASTE socket/resource constants and ABI-shaped declarations. These
+  declarations intentionally preserve unsupported operations as explicit
+  runtime failures rather than pretending to provide host networking.
+- The probe advanced through FTS and now reports the next missing public
+  header, `sys/resource.h`, which has been added. The utility remains
+  pre-link and browser testing is still deferred.
+
+Implementation update (2026-09-23, gnulib compatibility and identity headers):
+
+- Added the freestanding `stdbit.h`, `locale.h`, `getopt.h`, `sys/random.h`,
+  and `pwd.h` seams, including the GNU getopt ABI annotations, the guest
+  locale-category representation, C23 bit helpers used by gnulib, and the
+  existing WASTE identity-record layout. Added the corresponding time
+  resolution and locale-null declarations needed by generated support code.
+- The probe now compiles through getopt, locale-name, random, time, hard-locale,
+  hash, and the `pwd.h` identity seam. Its current boundary is the next public
+  identity header, `grp.h`. This is still a native pre-link probe, so no browser
+  test is requested yet.
+
+Implementation update (2026-09-23, group and locale support boundary):
+
+- Added `grp.h` and completed the matching `getgrgid`/`getgrnam` wrappers over
+  the existing guest group record. Added explicit `linkat`/`AT_SYMLINK_FOLLOW`
+  declarations and an unsupported-operation result for the guest ABI, then
+  filled the locale-conversion, collation, multibyte, and C23 compatibility
+  declarations needed by the next gnulib objects.
+- The probe passed the group, linkat, localeconv, localeinfo, and btoc32
+  compilation boundaries. Its current boundary is the locale-name support's
+  `uselocale` declaration, which is now represented in the guest header. The
+  utility remains pre-link; browser testing is still deferred.
+
+Implementation update (2026-09-23, stdio and multibyte continuation):
+
+- Added the guest `__fseterr` stdio extension and connected it to the existing
+  stream error state in both the engine and guest-libc builds. Added the
+  existing `mbsinit` implementation to the public multibyte header so gnulib's
+  `mbrtoc32` support can use it.
+- The probe advanced through locale-name support, mbbuf, and the stdio error
+  seam. Its current boundary is the `mbsinit` declaration in the multibyte
+  conversion sources; the declaration is now in place for the next probe.
+  The utility remains pre-link and browser testing is still deferred.
+
+Implementation update (2026-09-23, multibyte width and group-list boundary):
+
+- Added the gnulib string declarations for `str_endswith` and `mbslen`, the
+  guest `c32width` declaration, and the identity ABI's `getgrouplist` plus
+  public `getgroups` declaration. The group-list implementation reports the
+  configured primary group and preserves the existing bounded failure model.
+- The probe advanced through multibyte conversion, string-suffix/length,
+  multibyte-width, and now reaches the `mgetgroups` group-list seam. The
+  utility remains pre-link; browser testing is still deferred.
+
+Implementation update (2026-09-23, group ABI and file-mode macros):
+
+- Matched gnulib's configured `GETGROUPS_T` ABI (`int *`) for the guest
+  `getgroups` declaration and identity implementation, while retaining the
+  existing bounded group-list behavior. Added the standard `S_IRWX*` and
+  `S_IXUGO` mode masks plus an explicit unsupported `lchmod` operation.
+- The probe advanced through `getgroups` and now reaches the directory
+  ownership/mode support object's file-mode macro boundary. The utility remains
+  pre-link; browser testing is still deferred.
+
+Implementation update (2026-09-23, mode-mask and FIFO ABI boundary):
+
+- Added the aggregate `S_IRWXUGO` mode mask and explicit unsupported guest
+  `mkfifo`/`mkfifoat` declarations and wrappers. This keeps FIFO creation
+  visible as a deliberate capability boundary while allowing gnulib's normal
+  replacement objects to compile.
+- The probe advanced through the directory mode-mask object and now reaches the
+  `mkfifoat` replacement. The utility remains pre-link; browser testing is
+  still deferred.
+
+Implementation update (2026-09-23, mount portability and select ABI):
+
+- Added a WASTE-specific hunk to `submodules/coreutils-waste.patch` so gnulib's
+  unported `mountlist.c` produces an empty mount list on the freestanding guest
+  instead of aborting compilation. The patch is applied only while staging and
+  the coreutils submodule remains clean.
+- Added the engine-owned `sys/select.h` fd-set/timeval ABI and public select
+  declarations. Configure was regenerated with the guest config site,
+  including the explicit absence of the MSVC invalid-parameter runtime.
+- The probe advanced past mountlist, mknodat, and the MSVC runtime seam and now
+  reports the next missing public header, `sys/select.h`, which has been added.
+  The utility remains pre-link; browser testing is still deferred.
+
+Implementation update (2026-09-23, signal and mount-entry headers):
+
+- Added the guest `signal.h` surface over the existing fixed-size signal-set
+  representation, including action, mask, and common signal constants needed
+  by coreutils. Added the minimal `mntent.h` structure and declarations so the
+  mount-list portability code can compile even though guest mount enumeration
+  is intentionally empty.
+- The probe advanced past the select and signal header boundaries and now
+  reports the next missing public header, `mntent.h`, which has been added. The
+  utility remains pre-link; browser testing is still deferred.
+
+Implementation update (2026-09-23, scheduler header boundary):
+
+- Added the freestanding `sched.h` ABI with scheduler parameter and priority
+  declarations. The current coreutils wave does not yet require a scheduler
+  implementation; the header keeps this capability explicit for later process
+  and timeout utilities.
+- The probe advanced through select, signal, and mount-entry header discovery
+  and now reports `sched.h` as the next missing public header. The header is
+  now present; the utility remains pre-link and browser testing is still
+  deferred.
+
+Implementation update (2026-09-23, scheduler detection and generated obstack):
+
+- Corrected cross-configure false positives for CPU-affinity and HP-UX `pstat`
+  APIs by forcing those host-only probes off in the WASTE config site. Added
+  the upstream gnulib `obstack.in.h` template to the deterministic sysroot
+  when the staged coreutils source is available, preserving it as generated
+  support rather than copying a host libc header.
+- The probe advanced through `nproc` and obstack support and now reaches the
+  `O_ACCMODE` open-flag boundary, which is being added to the guest fcntl ABI.
+  The utility remains pre-link; browser testing is still deferred.
+
+Implementation update (2026-09-23, integer-format and time declarations):
+
+- Added the missing `intmax_t`/`INTMAX_*` definitions and `PRIdMAX`/`PRIuMAX`
+  format macros required by generated date parsing. Added the ordinary
+  `strftime`, `gmtime_r`, and `localtime_r` declarations alongside the existing
+  timezone-aware guest interfaces.
+- The probe advanced through open flags, obstack, and integer formatting and
+  now reaches the date/time conversion declaration seam. The utility remains
+  pre-link; browser testing is still deferred.
+
+Implementation update (2026-09-23, process-spawn and pthread compatibility seam):
+
+- Added the guest `spawn.h` and `pthread.h` declarations needed to compile
+  gnulib's broad support set, including the fixed-size attribute/action ABI,
+  mutex/condition/once types, and signal-mask entry points. These declarations
+  are compile-time ABI surfaces only; process spawning remains an engine-owned
+  capability and is not claimed to work yet.
+- Added a WASTE-specific hunk to `submodules/coreutils-waste.patch` that
+  replaces gnulib's host `spawni.c` fork/vfork implementation with an explicit
+  `ENOSYS` stub. This keeps host process mechanics out of the Wasm guest while
+  preserving a clean, reviewable patch boundary.
+- Filled the next small freestanding seams exposed by the probe: pipe/open
+  flags, `timespec` declaration ordering, environment/rename declarations,
+  secure string clearing, stdio buffering constants, and Unicode regex type
+  predicates. The probe has advanced through the `WEOF` regex boundary and
+  currently needs the next `renameat`/path-support compilation pass.
+- The staged source patch passes `git apply --check`, configure still passes,
+  and the utility remains pre-link. Browser testing is still deferred until a
+  real coreutils Wasm module is linkable and import-audited.
+
+Implementation update (2026-09-23, path, process-status, and optional-host ABI seam):
+
+- Added the guest `renameat`, GNU `qsort_r`, and `sys/wait.h` surfaces,
+  including status macros needed by the process-oriented coreutils support
+  files. Added the minimal `fork`/`vfork` declarations while keeping their
+  implementation outside the browser ABI.
+- Added explicit unavailable SELinux include shims for `selinux/selinux.h`,
+  `selinux/context.h`, and `selinux/label.h`; the configure result continues
+  to report SELinux as unavailable, so these headers do not import host
+  labeling behavior. Added the `settimeofday` declaration for the guest time
+  boundary.
+- The probe advanced through `renameat`, `qsort_r`, wait status, and SELinux
+  header discovery and currently reaches the `settimeofday` declaration seam.
+  The utility remains pre-link; browser testing is still deferred.
+
+Implementation update (2026-09-23, temporary-file and symlink ABI seam):
+
+- Added `mkstemp`/`mkostemp`, `symlink`/`symlinkat`, and corrected the guest
+  `strerror` declaration to match gnulib's const-qualified interface.
+- The probe advanced through temporary-file helpers and now reaches the
+  symlink declaration seam. The utility remains pre-link; browser testing is
+  still deferred.
+
+Implementation update (2026-09-23, generated Unicode and unlink-at ABI seam):
+
+- Added the guest `clock` and `secure_getenv` declarations and staged the
+  pinned gnulib `unistr.in.h` template as generated `unistr.h`, supplying the
+  complete declaration surface for the Unicode objects compiled by gnulib.
+- Added `AT_REMOVEDIR` and `unlinkat` to the guest filesystem ABI. The probe
+  advanced through temporary-name generation, Unicode support, and now
+  reaches the unlink-at declaration seam. The utility remains pre-link;
+  browser testing is still deferred.
+
+Implementation update (2026-09-23, identity and timestamp ABI seam):
+
+- Added guest UID queries (`getuid`/`geteuid`) and the `utime.h` surface.
+- Added `UTIME_NOW`/`UTIME_OMIT`, `futimesat`, `utimens`, and `lutimens`
+  declarations to complete the timestamp compatibility boundary used by
+  gnulib.
+- The probe advanced through unlink-directory identity handling and now
+  reaches the `lutimens` declaration seam. The utility remains pre-link;
+  browser testing is still deferred.
+
+Implementation update (2026-09-23, formatted I/O and host-name ABI seam):
+
+- Added the formatted-allocation/output declarations `vaszprintf`,
+  `aszprintf`, `vfzprintf`, and `vzprintf`, and made the shared `off64_t`
+  definition available from `sys/types.h`.
+- Added the guest `gethostname` declaration for gnulib’s bounded host-name
+  wrapper. The probe advanced through timestamp and formatted-I/O support and
+  now reaches the host-name declaration seam. The utility remains pre-link;
+  browser testing is still deferred.
+
+Implementation update (2026-09-23, sleep, input, and wide-character ABI seam):
+
+- Added `pause` and `getchar`, expanded the guest wide-character interface
+  with `wmemchr`, `wmempcpy`, `wcscat`, and `mbsrtowcs`, and completed the
+  fnmatch flag aliases used by gnulib.
+- Added the `tzset` declaration for the timezone-independent guest time
+  implementation. The probe advanced through host-name, sleep, input, and
+  wide-character support and now reaches the timezone declaration seam. The
+  utility remains pre-link; browser testing is still deferred.
+
+Implementation update (2026-09-23, first complete coreutils compile gate):
+
+- Added the bounded formatted-output declarations `vsnzprintf` and
+  `vszprintf`, plus the long-double `frexpl` math declaration required by
+  gnulib's `vasnprintf` implementation.
+- The `true` utility probe now passes compilation across all selected
+  generated headers and gnulib support objects: no missing headers, compiler
+  errors, or asyncify symbols remain. This closes the current compile-only
+  substage of 8E.
+- The next 8E substage is linking `src/true` with the guest CRT/libc and then
+  auditing its imports. Browser testing remains deferred until that linked
+  Wasm artifact exists.
+
+Implementation update (2026-09-23, executable-link probe and ABI audit wiring):
+
+- Extended `probe-coreutils-utility.py` so a utility probe compiles the WASTE
+  CRT, relinks the exact generated target with `_start`, exported memory, and
+  explicitly allowed unresolved imports, and records the Wasm artifact plus an
+  import-audit report. The probe removes only the selected generated target;
+  it does not force a rebuild of the configure tree.
+- The first audit attempt showed that the earlier link success was a false
+  milestone: without the CRT and `_start` root, `src/true` was a valid but
+  empty Wasm module containing only memory. This is a loader/link integration
+  issue, not a browser failure.
+- Added the next guest pthread and SELinux declarations exposed by the real
+  gnulib object set. The current probe now advances into the remaining
+  pthread TLS ABI (`pthread_key_t`) seam and is still pre-link. Browser
+  testing is not requested yet; it becomes useful only after the report has a
+  non-empty linked artifact and a completed import audit.
+
+Implementation update (2026-09-23, first non-empty linked utility and import gate):
+
+- Completed the remaining compile-only pthread TLS declarations needed by the
+  selected gnulib object set, including `pthread_key_t` and its accessor
+  functions. The `true` target now compiles and links with the WASTE CRT,
+  exports `_start` and `memory`, and contains the expected startup imports
+  `waste_kernel:startup_v1` and `env:exit`.
+- Added those two versioned startup imports to the explicit audit allowlist.
+  The captured report now passes with no unknown imports and no Asyncify
+  symbols: `build/html-rt/coreutils/utility-probe/true-report.json`.
+- This closes the 8E compile/link/import-audit gate for `true`; it does not yet
+  prove runtime behavior. Stage 8F must package the linked artifact as a VFS
+  executable and exercise its `_start` path before browser evidence is useful.
+
 ## Stage 8F: Bring up coreutils in waves
 
-Status: pending
+Status: in progress (true handoff validated; awaiting VM-plan closure pass)
+
+Dependency clarification (2026-09-24):
+
+- The engine virtual-memory plan is a prerequisite handoff, not a plan that
+  must close at the same time as Stage 8F.
+- `true` has already passed the first handoff gate: compile/link/import audit,
+  VFS packaging, Bash PATH execution, and status 0 in the offline browser.
+- `false` has passed compile/link/import audit but remains downstream packaging
+  and browser behavior work.
+- Once the VM plan's documented closure gates pass, implementation ownership
+  returns here for the remaining utility waves. No VM-plan work should be
+  duplicated in this plan.
+
+Implementation update (2026-09-23, first coreutils VFS packaging gate):
+
+- Extended the C-engine Bash packaging path to carry `true.wasm` into the
+  offline manifest and stage it as executable `/bin/true`. The worker now
+  advertises the packaged path through the existing VFS metadata/data plane;
+  the startup script and browser page remain self-contained.
+- Added a focused `--coreutils-true` browser-runtime probe. It reaches Bash,
+  invokes `/bin/true`, and observes the following current result:
+  `__C_ENGINE_COREUTILS_TRUE_STATUS_127__`. The transition trace shows the
+  fork/exec handoff and child wake completing, so packaging and VFS lookup are
+  working; the remaining failure is child startup/exit-status propagation.
+- Rebuilt the C engine after adding the diagnostic transition detail and
+  fixed two engine-build declaration seams (`realloc` and engine-local
+  `off_t`). The ordinary C-engine Bash smoke test still passes. The focused
+  coreutils test is intentionally recorded as failing until `/bin/true`
+  returns status 0.
+
+The next 8F increment is to identify whether the 127 is produced by the WASTE
+CRT startup import, the coreutils `_start`/`exit` path, or parent wait-status
+translation. Browser testing is already automated for this gate; no manual
+browser evidence is requested until that status becomes 0.
+
+Implementation update (2026-09-23, indirect-call table and guest-libc boundary):
+
+- The child trace identified the 127 precisely: the linked `true` module had a
+  `call_indirect` but its element segment was discarded by the link, producing
+  `uninitialized element` at `_start`. The utility link probe now preserves
+  the indirect-function table and its element segment with
+  `--export-table`.
+- With the table retained, the loader reaches the next intended ABI check
+  instead of trapping. The browser probe now reports `errno 8`/status 126 and
+  the transition evidence identifies the first unresolved import as
+  `env.getenv`. The import audit lists the remaining guest-libc surface
+  (`malloc`, string, stdio, locale, wide-character, errno, and compiler
+  runtime functions); these must be linked into the utility or provided by a
+  versioned WASTE guest-libc module. They must not be hidden by broadening the
+  allowlist.
+- This supersedes the earlier claim that 8E was fully closed for `true`: the
+  compile gate is complete, but the executable-link gate remains open until
+  the table and guest-libc import closure are both reproducible. The focused
+  browser test is now exercising the correct preflight rejection path.
+
+Implementation update (2026-09-23, relocatable guest allocator increment):
+
+- The existing `stdlib.wat` allocator was confirmed to be a standalone merged
+  guest-libc module, not a relocatable object suitable for a coreutils link.
+  The utility probe therefore now compiles the reusable C allocator portion of
+  `src/html-rt/lib/stdlib.c` as `coreutils-allocator.o` and links it with the
+  WASTE CRT. `--gc-sections` keeps unused host-facing allocator helpers out of
+  the image, while `--export-table` retains indirect-call element segments.
+- Added the `WASTE_ALLOCATOR_ONLY` build guard around the allocator's optional
+  `posix_memalign` and `reallocarray` wrappers. Coreutils/gnulib already
+  provides those symbols, so linking them twice was a real duplicate-symbol
+  failure rather than an import-resolution problem.
+- The reproducible `true` link now succeeds with the allocator object. The
+  remaining audit is narrower but still open: 46 unresolved `env:*` imports,
+  chiefly stdio, string/wide-character, locale, errno, floating-point helper,
+  and process-exit APIs. The probe report now correctly points to 8F while
+  this ABI closure is in progress; the previous 8E label was a reporting bug.
+
+This increment is not browser-ready for a success claim. It proves the
+allocator/link boundary and prevents the browser loader from seeing the old
+uninitialized-table failure, but `/bin/true` must not be packaged as accepted
+until its remaining imports are either linked from the guest libc or mapped to
+versioned WASTE kernel/host adapters with behavior tests.
+
+The shared browser C engine rebuilt successfully, and the ordinary Bash browser
+smoke remains green (5/5). No new manual browser run is needed yet: the
+coreutils-focused browser check should be rerun only after the import audit is
+closed, at which point it must verify `/bin/true` returns status 0 rather than
+merely reaching the diagnostic status marker.
+
+Implementation update (2026-09-23, reproducible coreutils build entry point):
+
+- Added `make -C src/html-rt build-coreutils` as the normal Stage 8F build
+  path. Its staged source, sysroot, configure tree, objects, reports, and
+  linked utility now live under `build/coreutils/`; the browser engine remains
+  under `build/html-rt/`.
+- The public target now rejects a `blocked` import audit. The lower-level
+  `coreutils-utility-probe` remains useful for collecting the next ABI report,
+  but the normal build and Bash packaging path cannot ship an unresolved
+  executable.
+- A clean-build dependency gap was closed: configure probing now depends on
+  `coreutils-stage`, so a fresh `build/coreutils/` creates the staged source
+  before bootstrap/configure rather than failing with missing generated
+  headers or an absent source tree.
+- The bootstrap helper now accepts the Make-selected coreutils build root, so
+  staging and bootstrap operate on the same `build/coreutils/source` tree.
+  Its legacy `build/html-rt/coreutils` default remains available for direct
+  callers that have not selected the new public target.
+- The fresh sysroot probe found and fixed a relative toolchain lookup bug: the
+  generated compiler wrapper now resolves `build/engine/toolchain` correctly
+  from `build/coreutils/sysroot/bin`, and generated gnulib headers are read
+  from the selected coreutils build root rather than a hard-coded HTML path.
+- The wrapper now passes its direct `--version` smoke check (`clang 22.1.8`,
+  target `wasm32`). The fresh build emitted `build/coreutils/source/configure`
+  and reached the long configure probe using that wrapper. The configure run
+  was interrupted during late feature checks, so its report is not an accepted
+  result and the utility gate remains unverified; the next run can reuse the
+  staged source and generated configure tree instead of rebuilding bootstrap.
+- Coreutils staging is now guarded by an out-of-tree source stamp. Bootstrap
+  can resume against the generated source tree without recopying it, avoiding
+  the prior `Directory not empty` failure when a long bootstrap/configure run
+  is interrupted.
+- Removed the remaining phony classification from `coreutils-stage`; otherwise
+  Make would correctly preserve the source tree but still rerun the expensive
+  configure probe on every utility request. The stamp now provides the normal
+  incremental dependency behavior.
+- The configure report now depends directly on the stamp file rather than the
+  convenience alias target. This prevents GNU Make from treating the alias as
+  perpetually newer and rerunning configure during every import-audit request.
+- The utility preflight leaves `lib/config.h` to the completed configure pass;
+  trying to regenerate it through Make re-enters the staged source's
+  `--recheck` path, which is not valid for the intentionally out-of-tree
+  configure layout. A completed configure pass must therefore be treated as a
+  prerequisite before linking the utility.
+- The probe now skips the Make preflight when all required generated headers
+  already exist, which is the normal incremental case. Make is only attempted
+  to fill genuinely missing generated headers.
+- The utility compile target also marks `config.status` as preserved; otherwise
+  Make can re-enter configure while resolving an object dependency even after
+  the header preflight was skipped.
+- After regenerating the staged source tree, compilation advanced to gnulib's
+  `btowc.c`. The guest implementation already supplied `mbtowc` and `mblen`,
+  but the public `wchar.h` omitted their declarations; those declarations are
+  now part of the sysroot ABI.
+- With the completed configure output reused, the `true` probe now compiles
+  and links reproducibly at `build/coreutils/configure/src/true` with no
+  undefined linker symbols. Its import audit remains blocked on the guest
+  libc/compiler-runtime closure: the current report records 55 unresolved
+  `env:*` imports, including stdio, string, wide-character, locale, errno,
+  floating-point helper, and process-exit functions. This is an import/link
+  integration task, not another Coreutils source or loader architecture
+  blocker; the existing standalone `waste-libc.wasm` cannot simply be merged
+  yet because both modules currently define their own linear memory.
+- The next 8F increment is therefore to produce a shared-memory guest-libc
+  link/merge artifact (or an equivalent relocatable guest-libc object set),
+  then rerun the import audit before packaging `/bin/true`. The current
+  browser test should not be rerun for acceptance yet: the executable is not
+  import-closed, so browser evidence would only reproduce the expected
+  unresolved-import failure.
+- A direct experiment confirmed why this cannot be solved by simply merging
+  the existing `build/html-rt/waste-libc/waste-libc.wasm`: that module exports
+  its own linear memory, while a Coreutils executable also owns or imports a
+  memory. `wasm-merge` rejects the two-memory result unless multi-memory is
+  enabled, which would give the libc and utility different pointer spaces.
+  The required implementation is therefore a one-memory link boundary: make
+  libc relocatable before the final link, or teach the merge step to rewrite
+  the libc memory definition/import and relocate its data and globals. This
+  is an implementation seam in the build/link layer, not a reason to broaden
+  the loader's import allowlist.
+- Added `./start.sh --build-coreutils` and made the Bash-page build pass the
+  resulting `build/coreutils/configure/src/true` explicitly to the generator.
+  This separates the coreutils product build from the browser runtime build
+  while preserving the offline packaging flow.
+- The intended runtime result is an executable VFS file `/usr/bin/true`, with
+  `/bin/true` retained as a compatibility alias. Typing `true` in Bash should
+  resolve `/usr/bin/true` through PATH and invoke `execve`.
+
+Implementation update (2026-09-23, virtual-memory dependency):
+
+- Coreutils and guest libc must share one process address space, while future
+  POSIX mappings need selected backing pages to remain shareable across
+  otherwise isolated processes. Continuing with standalone module memories or
+  a second allocator would create an ABI that must be removed in later waves.
+- Stage 8F is therefore paused on
+  `docs/active-engine-virtual-memory-plan.md`. That plan first centralizes all
+  guest-memory accesses, then introduces reference-counted virtual pages,
+  copy-on-write process cloning, process-local module aliasing, and POSIX
+  anonymous/file/shared mappings.
+- The existing `true` compile and link result remains useful build evidence,
+  but browser acceptance resumes only after the VM plan reaches its
+  process-shared module stage. No manual browser test is requested while this
+  dependency is open.
 
 Build and accept utilities in dependency order. Do not enable the next wave by
 silently disabling failures in the current one.

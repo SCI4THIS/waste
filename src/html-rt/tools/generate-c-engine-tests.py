@@ -159,6 +159,30 @@ def run_wasm_as(module, wasm_as: str) -> str:
 
 def build_diy_spec(wast_file: Path, wasm_as: str) -> dict:
     """Compile complete DIY scripts; browser-native Wasm supplies the guest tier."""
+    # Keep the VM ABI fixture on the C-engine stream path.  Unlike the older
+    # compatibility fixtures below, this test must resolve env.mmap/munmap/
+    # mprotect through browser_host_resolver so the dashboard exercises the
+    # engine-owned process capsule rather than a JavaScript substitute.
+    if wast_file.name == "mmap.wast":
+        wast_text = wast_file.read_text(encoding="utf-8")
+        wast_bytes = wast_text.encode("utf-8")
+        file_bytes = bytes((109, 97, 112, 33)) + bytes(65536 - 4)
+        return {
+            "file": wast_file.name,
+            "mode": "wast-stream",
+            "wastText": wast_text,
+            "sourceBytes": len(wast_bytes),
+            "assertionCount": wast_bytes.count(b"(assert_return"),
+            "vfsFiles": [{
+                "path": "/mmap-file",
+                "mode": 0o666,
+                "dataB64": base64.b64encode(file_bytes).decode("ascii"),
+            }, {
+                "path": "/mmap-short",
+                "mode": 0o666,
+                "dataB64": base64.b64encode(b"tail").decode("ascii"),
+            }],
+        }
     forms = parse_wast_forms(wast_file.read_text(encoding="utf-8"))
     modules = []
     steps = []
@@ -561,7 +585,9 @@ function watFloat(text, asF32) {
 }
 
 async function runWastScript(wasmBytes, testSpec) {
-  const wastBytes = decodeB64(testSpec.wastB64);
+  const wastBytes = testSpec.wastText !== undefined
+    ? new TextEncoder().encode(testSpec.wastText)
+    : decodeB64(testSpec.wastB64);
   if (wastBytes.length !== testSpec.sourceBytes) {
     throw new Error("embedded WAST length mismatch: " + wastBytes.length +
                     " != " + testSpec.sourceBytes);
@@ -586,6 +612,18 @@ async function runWastScript(wasmBytes, testSpec) {
 
   const ptr = exp.waste_wast_alloc(wastBytes.length);
   new Uint8Array(exp.memory.buffer).set(wastBytes, ptr);
+
+  for (const file of (testSpec.vfsFiles || [])) {
+    const pathBytes = new TextEncoder().encode(file.path);
+    const pathPtr = exp.waste_wast_alloc(pathBytes.length);
+    new Uint8Array(exp.memory.buffer).set(pathBytes, pathPtr);
+    const dataBytes = decodeB64(file.dataB64 || "");
+    const dataPtr = dataBytes.length ? exp.waste_wast_alloc(dataBytes.length) : 0;
+    if (dataBytes.length) new Uint8Array(exp.memory.buffer).set(dataBytes, dataPtr);
+    const staged = exp.waste_wast_stage_file(
+      pathPtr, pathBytes.length, dataPtr, dataBytes.length, file.mode || 0o666);
+    if (staged !== 0) throw new Error("VFS file staging failed: " + staged);
+  }
 
   try {
     exp.waste_wast_run_script(ptr, wastBytes.length);

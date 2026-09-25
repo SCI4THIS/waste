@@ -1,0 +1,50 @@
+diff --git a/gnulib/lib/fpending.c b/gnulib/lib/fpending.c
+index 0000000..0000000 100644
+--- a/gnulib/lib/fpending.c
++++ b/gnulib/lib/fpending.c
+@@ -55,4 +55,7 @@ __fpending (FILE *fp)
+ #elif defined EPLAN9                 /* Plan9 */
+   return fp->wp - fp->buf;
++#elif defined WASTE_WASM             /* WASTE guest FILE has no host layout */
++  (void) fp;
++  return 0;
+ #else
+ # error "Please port gnulib fpending.c to your platform!"
+
+diff --git a/gnulib/lib/mountlist.c b/gnulib/lib/mountlist.c
+index 0000000..0000000 100644
+--- a/gnulib/lib/mountlist.c
++++ b/gnulib/lib/mountlist.c
+@@ -1245,5 +1245,5 @@ read_file_system_list (bool need_fs_type)
+ #endif
+
+-#if MOUNTED_NOT_PORTED
++#if MOUNTED_NOT_PORTED && !defined WASTE_WASM
+ # error "Please port gnulib mountlist.c to your platform!"
+ #endif
+
+diff --git a/gnulib/lib/spawni.c b/gnulib/lib/spawni.c
+index 0000000..0000000 100644
+--- a/gnulib/lib/spawni.c
++++ b/gnulib/lib/spawni.c
+@@ -24,3 +24,15 @@
+-/* Specification.  */
++#ifdef WASTE_WASM
++# include <errno.h>
++# include <spawn.h>
++int
++__spawni (pid_t *pid, const char *path,
++          const posix_spawn_file_actions_t *actions,
++          const posix_spawnattr_t *attr, const char *const argv[],
++          const char *const envp[], int use_path)
++{ (void) pid; (void) path; (void) actions; (void) attr;
++  (void) argv; (void) envp; (void) use_path; return ENOSYS; }
++#else
++
++/* Specification.  */
+ #include <spawn.h>
+ #include "spawn_int.h"
+@@ -1106,1 +1116,3 @@
+ #endif
++
++#endif /* WASTE_WASM */

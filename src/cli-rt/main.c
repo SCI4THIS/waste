@@ -31,14 +31,6 @@ static exec_status cli_result(int32_t value, wasm_value *results,
     return EXEC_OK;
 }
 
-static int cli_range(exec_memory *memory, uint32_t offset, uint32_t length,
-                     uint8_t **out) {
-    uint64_t size = memory->pages * UINT64_C(65536);
-    if ((uint64_t)offset + length > size) return 0;
-    if (out) *out = memory->data + offset;
-    return 1;
-}
-
 static exec_status cli_select_host(void *data, const wasm_value *args,
                                    int arg_count, wasm_value *results,
                                    int *result_count, exec_error *error,
@@ -48,14 +40,14 @@ static exec_status cli_select_host(void *data, const wasm_value *args,
     exec_memory *memory = caller->memory;
     posix_fd_set rds, wrs, exs;
     posix_fd_set *rp = NULL, *wp = NULL, *ep = NULL;
-    uint8_t *bytes;
+    uint8_t bytes[POSIX_FD_SET_BYTES];
     uint32_t pointers[3] = {(uint32_t)args[1].i32,
                             (uint32_t)args[2].i32,
                             (uint32_t)args[3].i32};
     posix_fd_set *sets[3] = {&rds, &wrs, &exs};
     for (int i = 0; i < 3; i++) {
         if (!pointers[i]) continue;
-        if (!cli_range(memory, pointers[i], POSIX_FD_SET_BYTES, &bytes))
+        if (exec_memory_read(memory, pointers[i], bytes, sizeof(bytes), error) != EXEC_OK)
             return cli_result(-POSIX_EINVAL, results, result_count);
         posix_fd_set_decode(sets[i], bytes);
         if (i == 0) rp = sets[i];
@@ -66,7 +58,7 @@ static exec_status cli_select_host(void *data, const wasm_value *args,
     const posix_timeval *tvp = NULL;
     uint32_t timeout = (uint32_t)args[4].i32;
     if (timeout) {
-        if (!cli_range(memory, timeout, POSIX_TIMEVAL_BYTES, &bytes))
+        if (exec_memory_read(memory, timeout, bytes, POSIX_TIMEVAL_BYTES, error) != EXEC_OK)
             return cli_result(-POSIX_EINVAL, results, result_count);
         posix_timeval_decode(&tv, bytes);
         tvp = &tv;
@@ -75,9 +67,9 @@ static exec_status cli_select_host(void *data, const wasm_value *args,
                                         rp, wp, ep, tvp);
     if (value == -POSIX_EAGAIN) return EXEC_YIELD;
     if (value >= 0) {
-        if (rp) posix_fd_set_encode(memory->data + pointers[0], rp);
-        if (wp) posix_fd_set_encode(memory->data + pointers[1], wp);
-        if (ep) posix_fd_set_encode(memory->data + pointers[2], ep);
+        if (rp) { posix_fd_set_encode(bytes, rp); exec_memory_write(memory, pointers[0], bytes, POSIX_FD_SET_BYTES, error); }
+        if (wp) { posix_fd_set_encode(bytes, wp); exec_memory_write(memory, pointers[1], bytes, POSIX_FD_SET_BYTES, error); }
+        if (ep) { posix_fd_set_encode(bytes, ep); exec_memory_write(memory, pointers[2], bytes, POSIX_FD_SET_BYTES, error); }
     }
     (void)error;
     return cli_result(value, results, result_count);
@@ -92,14 +84,14 @@ static exec_status cli_pselect_host(void *data, const wasm_value *args,
     exec_memory *memory = caller->memory;
     posix_fd_set rds, wrs, exs;
     posix_fd_set *rp = NULL, *wp = NULL, *ep = NULL;
-    uint8_t *bytes;
+    uint8_t bytes[POSIX_FD_SET_BYTES];
     uint32_t pointers[3] = {(uint32_t)args[1].i32,
                             (uint32_t)args[2].i32,
                             (uint32_t)args[3].i32};
     posix_fd_set *sets[3] = {&rds, &wrs, &exs};
     for (int i = 0; i < 3; i++) {
         if (!pointers[i]) continue;
-        if (!cli_range(memory, pointers[i], POSIX_FD_SET_BYTES, &bytes))
+        if (exec_memory_read(memory, pointers[i], bytes, sizeof(bytes), error) != EXEC_OK)
             return cli_result(-POSIX_EINVAL, results, result_count);
         posix_fd_set_decode(sets[i], bytes);
         if (i == 0) rp = sets[i];
@@ -110,7 +102,7 @@ static exec_status cli_pselect_host(void *data, const wasm_value *args,
     const posix_timespec *tsp = NULL;
     uint32_t timeout = (uint32_t)args[4].i32;
     if (timeout) {
-        if (!cli_range(memory, timeout, POSIX_TIMESPEC_BYTES, &bytes))
+        if (exec_memory_read(memory, timeout, bytes, POSIX_TIMESPEC_BYTES, error) != EXEC_OK)
             return cli_result(-POSIX_EINVAL, results, result_count);
         posix_timespec_decode(&ts, bytes);
         tsp = &ts;
@@ -119,7 +111,7 @@ static exec_status cli_pselect_host(void *data, const wasm_value *args,
     const posix_sigset *maskp = NULL;
     uint32_t mask_ptr = (uint32_t)args[5].i32;
     if (mask_ptr) {
-        if (!cli_range(memory, mask_ptr, POSIX_SIGSET_BYTES, &bytes))
+        if (exec_memory_read(memory, mask_ptr, bytes, POSIX_SIGSET_BYTES, error) != EXEC_OK)
             return cli_result(-POSIX_EINVAL, results, result_count);
         posix_sigset_decode(&mask, bytes);
         maskp = &mask;
@@ -128,9 +120,9 @@ static exec_status cli_pselect_host(void *data, const wasm_value *args,
                                          rp, wp, ep, tsp, maskp);
     if (value == -POSIX_EAGAIN) return EXEC_YIELD;
     if (value >= 0) {
-        if (rp) posix_fd_set_encode(memory->data + pointers[0], rp);
-        if (wp) posix_fd_set_encode(memory->data + pointers[1], wp);
-        if (ep) posix_fd_set_encode(memory->data + pointers[2], ep);
+        if (rp) { posix_fd_set_encode(bytes, rp); exec_memory_write(memory, pointers[0], bytes, POSIX_FD_SET_BYTES, error); }
+        if (wp) { posix_fd_set_encode(bytes, wp); exec_memory_write(memory, pointers[1], bytes, POSIX_FD_SET_BYTES, error); }
+        if (ep) { posix_fd_set_encode(bytes, ep); exec_memory_write(memory, pointers[2], bytes, POSIX_FD_SET_BYTES, error); }
     }
     (void)error;
     return cli_result(value, results, result_count);
@@ -144,10 +136,15 @@ static exec_status cli_path_access_host(void *data, const wasm_value *args,
     if (arg_count != 4 || !caller->memory) return cli_result(-POSIX_EFAULT, results, result_count);
     uint32_t offset = (uint32_t)args[0].i32;
     uint32_t length = (uint32_t)args[1].i32;
-    if (!cli_range(caller->memory, offset, length, NULL))
+    uint8_t *path = length ? malloc(length) : NULL;
+    if ((length && !path) || exec_memory_read(caller->memory, offset, path,
+                                               length, error) != EXEC_OK) {
+        free(path);
         return cli_result(-POSIX_EFAULT, results, result_count);
-    int result = posix_kernel_path_access(store->kernel,
-        caller->memory->data + offset, length, args[2].i32, args[3].i32);
+    }
+    int result = posix_kernel_path_access(store->kernel, path, length,
+                                          args[2].i32, args[3].i32);
+    free(path);
     (void)error;
     return cli_result(result, results, result_count);
 }
@@ -157,18 +154,29 @@ static exec_status cli_path_stat_host(void *data, const wasm_value *args,
                                       int *result_count, exec_error *error,
                                       const waste_exec_engine *caller) {
     native_store *store = data;
-    uint8_t *output;
+    uint8_t output[POSIX_PATH_METADATA_BYTES];
     if (arg_count != 4 || !caller->memory) return cli_result(-POSIX_EFAULT, results, result_count);
     uint32_t offset = (uint32_t)args[0].i32;
     uint32_t length = (uint32_t)args[1].i32;
     uint32_t output_offset = (uint32_t)args[3].i32;
-    if (!cli_range(caller->memory, offset, length, NULL) ||
-        !cli_range(caller->memory, output_offset, POSIX_PATH_METADATA_BYTES, &output))
+    uint8_t *path = length ? malloc(length) : NULL;
+    if ((length && !path) || exec_memory_read(caller->memory, offset, path,
+                                               length, error) != EXEC_OK ||
+        exec_memory_read(caller->memory, output_offset, output,
+                         sizeof(output), error) != EXEC_OK) {
+        free(path);
         return cli_result(-POSIX_EFAULT, results, result_count);
+    }
     posix_path_metadata metadata;
     int result = posix_kernel_path_stat(store->kernel,
-        caller->memory->data + offset, length, args[2].i32, &metadata);
-    if (result == 0) posix_path_metadata_encode(output, &metadata);
+        path, length, args[2].i32, &metadata);
+    if (result == 0) {
+        posix_path_metadata_encode(output, &metadata);
+        if (exec_memory_write(caller->memory, output_offset, output,
+                              sizeof(output), error) != EXEC_OK)
+            result = -POSIX_EFAULT;
+    }
+    free(path);
     (void)error;
     return cli_result(result, results, result_count);
 }

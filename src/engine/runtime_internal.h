@@ -19,6 +19,11 @@ enum {
     EXEC_MAX_TABLES = 16,
     EXEC_PAGE_SIZE = 65536,
     EXEC_MAX_GC_OBJECT_BYTES = 64 * 1024 * 1024,
+    EXEC_MEMORY_PROT_READ = 1u << 0,
+    EXEC_MEMORY_PROT_WRITE = 1u << 1,
+    EXEC_MEMORY_PROT_EXEC = 1u << 2,
+    EXEC_MEMORY_MAPPING_SHARED = 1u << 0,
+    EXEC_MEMORY_MAPPING_FIXED_NOREPLACE = 1u << 1,
 };
 
 /* Maximum page counts for memory32 and memory64 */
@@ -308,6 +313,57 @@ int address_value(const wasm_value *value, int is_64, uint64_t *out);
 uint64_t load_le(const uint8_t *memory, size_t address, uint32_t width);
 void store_le(uint8_t *memory, size_t address, uint64_t value,
               uint32_t width);
+exec_status exec_memory_read(const exec_memory *memory, uint64_t offset,
+                             void *destination, size_t length,
+                             exec_error *error);
+exec_status exec_memory_read_backing(const exec_memory *memory,
+                                     uint64_t offset, void *destination,
+                                     size_t length, exec_error *error);
+exec_status exec_memory_write(exec_memory *memory, uint64_t offset,
+                              const void *source, size_t length,
+                              exec_error *error);
+exec_status exec_memory_copy(exec_memory *destination, uint64_t destination_offset,
+                             const exec_memory *source, uint64_t source_offset,
+                             size_t length, exec_error *error);
+exec_status exec_memory_fill(exec_memory *memory, uint64_t offset,
+                              uint8_t value, size_t length, exec_error *error);
+void exec_memory_release(exec_memory *memory);
+void exec_memory_page_retain(exec_memory_page *page);
+void exec_memory_page_release(exec_memory_page *page);
+exec_status exec_memory_resize_pages(exec_memory *memory, uint64_t pages,
+                                     exec_error *error);
+exec_status exec_memory_reserve_virtual_pages(exec_memory *memory,
+                                              uint64_t pages,
+                                              exec_error *error);
+exec_status exec_memory_promote_linear_pages(exec_memory *memory,
+                                             uint64_t pages,
+                                             exec_error *error);
+exec_status exec_memory_share_pages(exec_memory *destination,
+                                    uint64_t destination_first,
+                                    exec_memory *source, uint64_t source_first,
+                                    uint64_t page_count, exec_error *error);
+exec_status exec_memory_bind_shared_page(exec_memory *memory,
+                                         uint64_t page_index,
+                                         exec_memory_page *page,
+                                         exec_error *error);
+exec_status exec_memory_mark_shared_pages(exec_memory *memory,
+                                          uint64_t first_page,
+                                          uint64_t page_count,
+                                          exec_error *error);
+int exec_memory_page_is_dirty(const exec_memory *memory, uint64_t page);
+exec_status exec_memory_clear_dirty_pages(exec_memory *memory,
+                                          uint64_t first_page,
+                                          uint64_t page_count,
+                                          exec_error *error);
+exec_status exec_memory_unmap_pages(exec_memory *memory, uint64_t first_page,
+                                    uint64_t page_count, exec_error *error);
+exec_status exec_memory_map_pages(exec_memory *memory, uint64_t first_page,
+                                  uint64_t page_count, uint8_t protection,
+                                  uint8_t flags, exec_error *error);
+int exec_memory_page_is_mapped(const exec_memory *memory, uint64_t page);
+exec_status exec_memory_set_protection(exec_memory *memory, uint64_t first_page,
+                                       uint64_t page_count, uint8_t protection,
+                                       exec_error *error);
 exec_status memory_address(exec_memory *memory, uint64_t base,
                            uint64_t offset, uint32_t width,
                            size_t *address, exec_error *error);

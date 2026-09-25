@@ -31,6 +31,14 @@ typedef enum {
 } exec_status;
 
 typedef enum {
+    EXEC_MEMORY_FAULT_NONE = 0,
+    EXEC_MEMORY_FAULT_OUT_OF_RANGE,
+    EXEC_MEMORY_FAULT_UNMAPPED,
+    EXEC_MEMORY_FAULT_PROTECTION,
+    EXEC_MEMORY_FAULT_FILE_TRUNCATED
+} exec_memory_fault_kind;
+
+typedef enum {
     EXEC_YIELD_NONE = 0,
     EXEC_YIELD_READ,
     EXEC_YIELD_SELECT,
@@ -58,6 +66,11 @@ typedef struct {
     uint32_t jump_environment;
     int32_t jump_value;
     int32_t exit_code;
+    int signal;
+    exec_memory_fault_kind memory_fault;
+    uint64_t memory_fault_address;
+    size_t memory_fault_length;
+    uint8_t memory_fault_access;
     exec_yield_reason yield_reason;
 } exec_error;
 
@@ -91,13 +104,42 @@ typedef struct {
     const waste_exec_engine *type_owner; /* engine owning the value type (for TYPE_REF) */
 } exec_global;
 
+typedef struct exec_memory_page {
+    uint8_t *bytes;
+    uint32_t refs;
+    uint8_t shared;
+    uint8_t dirty;
+} exec_memory_page;
+
+typedef struct exec_memory exec_memory;
+typedef int (*exec_memory_access_check)(
+    const exec_memory *memory, uint64_t offset, size_t length,
+    uint8_t access, void *context, void *error);
+
 typedef struct {
-    uint8_t *data;
+    uint64_t first_page;
+    uint64_t page_count;
+    uint8_t protection;
+    uint8_t flags;
+} exec_memory_mapping;
+
+struct exec_memory {
+    /* A NULL page is an in-bounds, zero-filled page until first write. */
+    exec_memory_page **page_data;
+    uint8_t *page_protection;
+    exec_memory_mapping *mappings;
+    uint32_t mapping_count;
+    uint32_t mapping_capacity;
     uint64_t pages;
+    uint64_t linear_pages;
     uint64_t max_pages;
+    uint64_t virtual_max_pages;
     uint8_t has_max;
     uint8_t is_64;
-} exec_memory;
+    uint8_t process_virtual_memory;
+    exec_memory_access_check access_check;
+    void *access_check_context;
+};
 
 /* A single slot in a table: tracks the owning engine and its local function index.
  * owner==NULL means the slot is uninitialized (null reference). */

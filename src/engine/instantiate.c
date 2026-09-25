@@ -22,20 +22,47 @@ exec_status wasm_instance_allocate_memory(exec_memory *memory,
                                           uint64_t maximum,
                                           uint32_t flags,
                                           exec_error *error) {
-    size_t bytes;
     if (!memory || initial > SIZE_MAX / EXEC_PAGE_SIZE)
         return exec_fail(error, EXEC_ERROR_FORMAT,
                                "memory allocation failed");
-    bytes = (size_t)initial * EXEC_PAGE_SIZE;
     memset(memory, 0, sizeof(*memory));
-    memory->data = calloc(bytes ? bytes : 1, 1);
-    if (!memory->data)
+    if (initial > SIZE_MAX / sizeof(*memory->page_data))
         return exec_fail(error, EXEC_ERROR_FORMAT,
                                "memory allocation failed");
+    memory->page_data = initial ? calloc((size_t)initial,
+                                         sizeof(*memory->page_data)) : NULL;
+    memory->page_protection = initial ? malloc((size_t)initial) : NULL;
+    memory->mappings = initial ? calloc(1, sizeof(*memory->mappings)) : NULL;
+    if (initial && (!memory->page_data || !memory->page_protection ||
+                    !memory->mappings))
+    {
+        free(memory->page_data);
+        free(memory->page_protection);
+        free(memory->mappings);
+        memory->page_data = NULL;
+        memory->page_protection = NULL;
+        memory->mappings = NULL;
+        return exec_fail(error, EXEC_ERROR_FORMAT,
+                         "memory allocation failed");
+    }
+    if (initial)
+        memset(memory->page_protection, EXEC_MEMORY_PROT_READ |
+               EXEC_MEMORY_PROT_WRITE, (size_t)initial);
+    if (initial) {
+        memory->mappings[0].first_page = 0;
+        memory->mappings[0].page_count = initial;
+        memory->mappings[0].protection = EXEC_MEMORY_PROT_READ |
+                                          EXEC_MEMORY_PROT_WRITE;
+        memory->mapping_count = 1;
+        memory->mapping_capacity = 1;
+    }
     memory->pages = initial;
+    memory->linear_pages = initial;
     memory->max_pages = maximum;
     memory->has_max = (uint8_t)(flags & 1u);
     memory->is_64 = (uint8_t)((flags & 4u) != 0);
+    memory->virtual_max_pages = memory->has_max ? maximum :
+        (memory->is_64 ? EXEC_MEM64_MAX_PAGES : EXEC_MEM32_MAX_PAGES);
     return EXEC_OK;
 }
 

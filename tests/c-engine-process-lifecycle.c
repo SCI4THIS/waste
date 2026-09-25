@@ -77,6 +77,44 @@ int main(void) {
     store.active_pid = 1;
     store.next_pid = 2;
 
+    {
+        native_process_capsule regions;
+        native_process_capsule region_clone;
+        native_process_region_kind region_kind = 0;
+        uint64_t allocated_region = 0;
+        native_process_capsule_init(&regions);
+        native_process_capsule_init(&region_clone);
+        regions.virtual_page_limit = 32;
+        check(native_process_capsule_reserve_region(
+                  &regions, 0, 4, NATIVE_PROCESS_REGION_MODULE) == 0 &&
+              native_process_capsule_reserve_region(
+                  &regions, 8, 2, NATIVE_PROCESS_REGION_STARTUP) == 0 &&
+              native_process_capsule_region_is_reserved(
+                  &regions, 8, 1, &region_kind) &&
+              region_kind == NATIVE_PROCESS_REGION_STARTUP,
+              "process address-space regions record module and startup ranges");
+        check(native_process_capsule_reserve_region(
+                  &regions, 3, 2, NATIVE_PROCESS_REGION_BRK) ==
+                  -POSIX_EINVAL &&
+              native_process_capsule_region_is_reserved(
+                  &regions, 4, 4, NULL) == 0,
+              "process regions reject overlap without merging adjacent ranges");
+        check(native_process_capsule_allocate_region(
+                  &regions, 2, NATIVE_PROCESS_REGION_STACK, 1,
+                  &allocated_region) == 0 && allocated_region == 30 &&
+              native_process_capsule_allocate_region(
+                  &regions, 2, NATIVE_PROCESS_REGION_MAPPING, 0,
+                  &allocated_region) == 0 && allocated_region == 4,
+              "process layout allocator places top-down and low regions");
+        check(native_process_capsule_clone(&region_clone, &regions) == 1 &&
+              native_process_capsule_region_is_reserved(
+                  &region_clone, 0, 1, &region_kind) &&
+              region_kind == NATIVE_PROCESS_REGION_MODULE,
+              "forked process capsules preserve region metadata");
+        native_process_capsule_destroy(&regions);
+        native_process_capsule_destroy(&region_clone);
+    }
+
     int fds[2];
     check(posix_kernel_pipe(store.kernel, fds) == 0, "parent pipe creates");
     uint8_t *handler_source = (uint8_t *)malloc(5);
@@ -646,6 +684,203 @@ int main(void) {
     check(native_store_wait_process(&store, group_child, 0, &status) == group_child &&
           status == ((128 + 15) << 8),
           "group signal status is reapable");
+
+    {
+        waste_exec_engine parent_engine;
+        native_process_capsule *parent_capsule =
+            native_store_active_capsule(&store);
+        native_process_capsule *child_capsule;
+        waste_exec_engine *child_engine;
+        exec_memory *parent_private;
+        exec_memory *parent_shared;
+        uint8_t value = 0x31;
+        uint8_t observed = 0;
+        uint64_t mapped_address = 0;
+        posix_file_object *mapping_object = NULL;
+        int mapping_fd = -1;
+        int mapping_writable = 0;
+        int shared_child = 0;
+        memset(&parent_engine, 0, sizeof(parent_engine));
+        parent_private = &parent_engine.owned_memories[0];
+        parent_shared = &parent_engine.owned_memories[1];
+        parent_private->max_pages = 2;
+        parent_shared->max_pages = 2;
+        check(exec_memory_resize_pages(parent_private, 2, NULL) == EXEC_OK &&
+              exec_memory_resize_pages(parent_shared, 1, NULL) == EXEC_OK &&
+              exec_memory_write(parent_private, 13, &value, 1, NULL) ==
+                  EXEC_OK &&
+              exec_memory_share_pages(parent_shared, 0, parent_private, 0, 1,
+                                      NULL) == EXEC_OK,
+              "process fixture creates an explicit shared page");
+        check(exec_memory_page_is_dirty(parent_private, 0) &&
+              exec_memory_clear_dirty_pages(parent_private, 0, 1, NULL) ==
+                  EXEC_OK &&
+              !exec_memory_page_is_dirty(parent_shared, 0),
+              "shared backing exposes and clears one dirty-page identity");
+        parent_engine.memories[0] = parent_private;
+        parent_engine.memories[1] = parent_shared;
+        parent_engine.memory_count = 2;
+        parent_engine.memory = parent_private;
+        parent_engine.owns_memories[0] = 1;
+        parent_engine.owns_memories[1] = 1;
+        parent_engine.func_count = 1;
+        parent_capsule->engine = &parent_engine;
+        check(native_process_capsule_munmap_range(
+                  parent_capsule, EXEC_PAGE_SIZE, 16) == 0 &&
+              native_process_capsule_mmap_range(
+                  parent_capsule, 0, 1,
+                  EXEC_MEMORY_PROT_READ | EXEC_MEMORY_PROT_WRITE,
+                  EXEC_MEMORY_MAPPING_SHARED,
+                  &mapped_address) == 0 &&
+              mapped_address == EXEC_PAGE_SIZE,
+              "process capsule translates byte ranges to virtual pages");
+        {
+            uint32_t region_count = parent_capsule->region_count;
+            uint64_t rejected_address = 0;
+            check(native_process_capsule_mmap_range(
+                      parent_capsule, mapped_address, 1,
+                      EXEC_MEMORY_PROT_READ | EXEC_MEMORY_PROT_WRITE,
+                      EXEC_MEMORY_MAPPING_FIXED_NOREPLACE,
+                      &rejected_address) == -POSIX_EEXIST &&
+                  parent_capsule->region_count == region_count &&
+                  rejected_address == 0,
+                  "failed fixed mapping leaves process region metadata unchanged");
+        }
+        check(native_process_capsule_mprotect_range(
+                  parent_capsule, mapped_address, 1,
+                  EXEC_MEMORY_PROT_READ) == 0 &&
+              exec_memory_write(parent_private, mapped_address, &value, 1,
+                                NULL) == EXEC_ERROR_TRAP &&
+              native_process_capsule_mprotect_range(
+                  parent_capsule, mapped_address, EXEC_PAGE_SIZE * 2,
+                  EXEC_MEMORY_PROT_READ | EXEC_MEMORY_PROT_WRITE) ==
+                  -POSIX_EINVAL &&
+              exec_memory_write(parent_private, mapped_address, &value, 1,
+                                NULL) == EXEC_ERROR_TRAP &&
+              native_process_capsule_mprotect_range(
+                  parent_capsule, mapped_address, EXEC_PAGE_SIZE,
+                  EXEC_MEMORY_PROT_READ | EXEC_MEMORY_PROT_WRITE) == 0 &&
+                  exec_memory_write(parent_private, mapped_address, &value, 1,
+                                NULL) == EXEC_OK,
+              "process capsule translates protection ranges");
+        check(exec_memory_mark_shared_pages(parent_private, 1, 1, NULL) ==
+                  EXEC_OK,
+              "file-style shared mapping marks materialized pages shared");
+        {
+            const uint8_t mapping_byte = 0x5a;
+            posix_path_metadata mapping_metadata = {
+                POSIX_NODE_REGULAR, 0666, 0, 0, 1, 7007
+            };
+            check(posix_kernel_path_add_data(
+                      store.kernel, "/mapping-record", &mapping_metadata,
+                      &mapping_byte, 1) == 0 &&
+                  (mapping_fd = posix_kernel_open(
+                       store.kernel, (const uint8_t *)"/mapping-record", 15,
+                       POSIX_O_RDWR, 0)) >= 0 &&
+                  posix_kernel_file_retain(
+                      store.kernel, mapping_fd, &mapping_object,
+                      &mapping_writable) == 0 && mapping_writable,
+                  "process fixture obtains a retained file object");
+            check(posix_kernel_close(store.kernel, mapping_fd) == 0,
+                  "process fixture can close the source descriptor");
+            check(posix_kernel_path_unlink(
+                      store.kernel, (const uint8_t *)"/mapping-record", 15, 0) == 0,
+                  "file mapping object survives descriptor close and unlink");
+        }
+        check(native_process_capsule_record_file_mapping(
+                  parent_capsule, EXEC_PAGE_SIZE * 3, EXEC_PAGE_SIZE * 2,
+                  mapping_object, 0, 1, mapping_writable) == 0 &&
+              native_process_capsule_forget_file_mapping(
+                  parent_capsule, EXEC_PAGE_SIZE * 3, EXEC_PAGE_SIZE) == 0 &&
+              parent_capsule->file_mapping_count == 1 &&
+              parent_capsule->file_mappings[0].address == EXEC_PAGE_SIZE * 4 &&
+              parent_capsule->file_mappings[0].length == EXEC_PAGE_SIZE &&
+              parent_capsule->file_mappings[0].file_offset == EXEC_PAGE_SIZE,
+              "file mapping ownership records split on partial unmap");
+        {
+            exec_memory independent_memory;
+            exec_memory_page *cached_page = NULL;
+            uint8_t independent_value = 0;
+            int cache_status;
+            exec_status parent_bind_status;
+            exec_status independent_bind_status;
+            memset(&independent_memory, 0, sizeof(independent_memory));
+            independent_memory.max_pages = 2;
+            check(exec_memory_resize_pages(&independent_memory, 1, NULL) ==
+                      EXEC_OK,
+                  "independent process memory is mapped");
+            cache_status = native_store_shared_file_page(
+                &store, mapping_object, 0, &cached_page);
+            check(cache_status == 0 && cached_page != NULL,
+                  "store creates a shared file page");
+            parent_bind_status = exec_memory_bind_shared_page(
+                parent_private, 1, cached_page, NULL);
+            independent_bind_status = exec_memory_bind_shared_page(
+                &independent_memory, 0, cached_page, NULL);
+            check(parent_bind_status == EXEC_OK &&
+                  independent_bind_status == EXEC_OK,
+                  "independent process memories bind one cached file page");
+            value = 0x94;
+            check(exec_memory_write(parent_private, EXEC_PAGE_SIZE, &value, 1,
+                                    NULL) == EXEC_OK &&
+                  exec_memory_read(&independent_memory, 0,
+                                   &independent_value, 1, NULL) == EXEC_OK &&
+                  independent_value == value,
+                  "independent MAP_SHARED pages observe one another");
+            exec_memory_release(&independent_memory);
+        }
+        check(native_store_fork_process(&store, &shared_child) == 0 &&
+              native_store_set_active_process(&store, shared_child) == 0,
+              "process fork clones the shared-page image");
+        child_capsule = native_store_active_capsule(&store);
+        child_engine = child_capsule ? child_capsule->engine : NULL;
+        check(child_capsule && child_capsule->file_mapping_count == 1 &&
+              child_capsule->file_mappings[0].address == EXEC_PAGE_SIZE * 4 &&
+              child_capsule->file_mappings[0].file_offset == EXEC_PAGE_SIZE &&
+              child_capsule->file_mappings[0].file_object == mapping_object &&
+              child_capsule->file_mappings[0].writable,
+              "fork clones file mapping ownership records");
+        check(child_engine &&
+              child_engine->owned_memories[0].page_data[0] ==
+                  child_engine->owned_memories[1].page_data[0] &&
+              child_engine->owned_memories[0].page_data[0] ==
+              parent_private->page_data[0] &&
+              child_engine->owned_memories[0].page_data[1] ==
+              parent_private->page_data[1] &&
+              parent_private->mapping_count == 2 &&
+              (parent_private->mappings[0].flags &
+               EXEC_MEMORY_MAPPING_SHARED) &&
+              child_engine->owned_memories[1].mapping_count == 1 &&
+              (child_engine->owned_memories[1].mappings[0].flags &
+               EXEC_MEMORY_MAPPING_SHARED),
+              "fork preserves shared backing and VMA identity");
+        value = 0x72;
+        check(child_engine &&
+              exec_memory_write(&child_engine->owned_memories[0], 13, &value,
+                                1, NULL) == EXEC_OK &&
+              exec_memory_read(parent_shared, 13, &observed, 1, NULL) ==
+                  EXEC_OK && observed == value &&
+              exec_memory_page_is_dirty(parent_shared, 0),
+              "forked shared-page writes reach the parent");
+        value = 0x83;
+        check(child_engine &&
+              exec_memory_write(&child_engine->owned_memories[0],
+                                EXEC_PAGE_SIZE, &value, 1, NULL) == EXEC_OK &&
+              exec_memory_read(parent_private, EXEC_PAGE_SIZE, &observed, 1,
+                               NULL) == EXEC_OK && observed == value,
+              "forked MAP_SHARED page writes reach the parent");
+        parent_capsule->engine = NULL;
+        if (child_capsule) child_capsule->engine = NULL;
+        if (child_engine) exec_free(child_engine);
+        exec_memory_release(parent_private);
+        exec_memory_release(parent_shared);
+        check(native_store_set_active_process(&store, shared_child) == 0 &&
+              native_store_exit_process(&store, 0) == 0 &&
+              native_store_set_active_process(&store, 1) == 0 &&
+              native_store_wait_process(&store, shared_child, 0, &status) ==
+                  shared_child,
+              "shared-page child can exit and be reaped");
+    }
 
     posix_kernel_destroy(store.kernel);
     printf("C-engine process lifecycle: %d checks, %d failures\n", checks, failures);

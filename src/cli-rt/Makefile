@@ -664,17 +664,37 @@ process-lifecycle: $(PROCESS_LIFECYCLE_TEST_TARGET)
 $(PROCESS_LIFECYCLE_TEST_TARGET): ../../tests/c-engine-process-lifecycle.c \
 		$(ENGINE_DIR)/process.c $(ENGINE_DIR)/lib/kernel.c \
 		$(ENGINE_DIR)/lib/path.c $(ENGINE_DIR)/lib/select.c $(ENGINE_DIR)/store.h \
-		$(ENGINE_DIR)/lib/include/kernel.h
+		$(ENGINE_DIR)/lib/include/kernel.h $(ENGINE_DIR)/wasm/load.c \
+		$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/leb.c \
+		$(ENGINE_DIR)/wasm/reader.c $(ENGINE_DIR)/wasm/module.c \
+		$(ENGINE_DIR)/wasm/decode.c $(ENGINE_DIR)/op/validate.c \
+		$(ENGINE_DIR)/instantiate.c $(ENGINE_DIR)/op/execute.c \
+		$(ENGINE_DIR)/op/execute_memory.c $(ENGINE_DIR)/op/execute_numeric.c \
+		$(ENGINE_DIR)/op/execute_simd.c $(ENGINE_DIR)/op/execute_gc.c \
+		$(ENGINE_DIR)/op/execute_exception.c $(ENGINE_DIR)/op/execute_table.c \
+		$(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_DIR)/instance.c \
+		$(ENGINE_DIR)/api.c
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
-		-I$(ENGINE_DIR) -I$(ENGINE_DIR)/include \
+		-I$(ENGINE_DIR) -I$(ENGINE_DIR)/include -I$(WAST_GEN_DIR) \
 		../../tests/c-engine-process-lifecycle.c $(ENGINE_DIR)/process.c \
 		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/path.c \
-		$(ENGINE_DIR)/lib/select.c -o $@
+		$(ENGINE_DIR)/lib/select.c $(ENGINE_DIR)/wasm/load.c \
+		$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/leb.c \
+		$(ENGINE_DIR)/wasm/reader.c $(ENGINE_DIR)/wasm/module.c \
+		$(ENGINE_DIR)/wasm/decode.c $(ENGINE_DIR)/op/validate.c \
+		$(ENGINE_DIR)/instantiate.c $(ENGINE_DIR)/op/execute.c \
+		$(ENGINE_DIR)/op/execute_memory.c $(ENGINE_DIR)/op/execute_numeric.c \
+		$(ENGINE_DIR)/op/execute_simd.c $(ENGINE_DIR)/op/execute_gc.c \
+		$(ENGINE_DIR)/op/execute_exception.c $(ENGINE_DIR)/op/execute_table.c \
+		$(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_DIR)/instance.c \
+		$(ENGINE_DIR)/api.c -lm -o $@
 
 $(STORE_CHECKPOINT_TEST_TARGET): ../../tests/c-engine-store-checkpoint.c \
-		$(ENGINE_DIR)/checkpoint.c $(ENGINE_DIR)/wasm/load.c \
+		$(ENGINE_DIR)/checkpoint.c $(ENGINE_DIR)/lib/kernel.c \
+		$(ENGINE_DIR)/lib/select.c \
+		$(ENGINE_DIR)/wasm/load.c \
 		$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/leb.c \
 		$(ENGINE_DIR)/wasm/reader.c $(ENGINE_DIR)/wasm/module.c \
 		$(ENGINE_DIR)/wasm/decode.c $(ENGINE_DIR)/op/validate.c \
@@ -691,6 +711,8 @@ $(STORE_CHECKPOINT_TEST_TARGET): ../../tests/c-engine-store-checkpoint.c \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
 		-I$(ENGINE_DIR) -I$(ENGINE_DIR)/include -I$(WAST_GEN_DIR) \
 		../../tests/c-engine-store-checkpoint.c $(ENGINE_DIR)/checkpoint.c \
+		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/path.c \
+		$(ENGINE_DIR)/lib/select.c \
 		$(ENGINE_DIR)/wasm/load.c $(ENGINE_DIR)/wasm/opcode.c \
 		$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
 		$(ENGINE_DIR)/wasm/module.c $(ENGINE_DIR)/wasm/decode.c \

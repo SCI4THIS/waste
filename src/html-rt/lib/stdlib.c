@@ -9,6 +9,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+void *realloc(void *, size_t);
+
 /* Declarations from freestanding_lib.c used by strtod/strtof */
 const char *scan_float_end(const char *s);
 
@@ -78,6 +80,9 @@ float strtof(const char *s, char **endptr) {
 char *getenv(const char *name) { (void)name; return (void *)0; }
 
 _Noreturn void exit(int status) { (void)status; __builtin_trap(); }
+_Noreturn void _exit(int status) { exit(status); }
+_Noreturn void abort(void) { __builtin_trap(); }
+int atexit(void (*callback)(void)) { (void)callback; return 0; }
 
 /* ---- Freestanding heap allocator ---- */
 extern unsigned char __heap_base;
@@ -164,6 +169,23 @@ void *calloc(size_t count, size_t size) {
     return result;
 }
 
+#ifndef WASTE_ALLOCATOR_ONLY
+int posix_memalign(void **result, size_t alignment, size_t size) {
+    if (!result || alignment < sizeof(void *) ||
+        (alignment & (alignment - 1)) != 0 || alignment > 16)
+        return 22; /* EINVAL: this allocator guarantees 16-byte alignment. */
+    void *memory = malloc(size);
+    if (!memory) return 12; /* ENOMEM */
+    *result = memory;
+    return 0;
+}
+
+void *reallocarray(void *pointer, size_t count, size_t size) {
+    if (count && size > (size_t)-1 / count) return (void *)0;
+    return realloc(pointer, count * size);
+}
+#endif /* WASTE_ALLOCATOR_ONLY */
+
 void free(void *ptr) {
     if (!ptr) return;
     const size_t header_size = heap_align(sizeof(heap_block));
@@ -214,6 +236,21 @@ void *realloc(void *ptr, size_t size) {
  * random numbers, and temporary files ---- */
 #include "include/helper.h"
 
+int posix_memalign(void **result, size_t alignment, size_t size) {
+  if (!result || alignment < sizeof(void *) ||
+      (alignment & (alignment - 1)) != 0 || alignment > 16)
+    return 22;
+  void *memory = malloc((u32)size);
+  if (!memory) return 12;
+  *result = memory;
+  return 0;
+}
+
+void *reallocarray(void *pointer, size_t count, size_t size) {
+  if (count && size > (size_t)-1 / count) return 0;
+  return realloc(pointer, (u32)(count * size));
+}
+
 /* ---- Random numbers ---- */
 
 u32 random_state=0x6d2b79f5U;
@@ -239,9 +276,13 @@ i32 atoi(const char*s){return strtol(s,0,10);}
 
 static double power10(i32 exponent){double value=1.0;if(exponent>0)while(exponent--)value*=10.0;else while(exponent++)value/=10.0;return value;}
 double strtod(const char*s,char**end){while(*s==' '||*s=='\t')s++;i32 neg=0;if(*s=='+'||*s=='-'){neg=*s=='-';s++;}const char*start=s;double value=0;while(*s>='0'&&*s<='9')value=value*10+(*s++-'0');if(*s=='.'){s++;double place=.1;while(*s>='0'&&*s<='9'){value+=(*s++-'0')*place;place*=.1;}}if(*s=='e'||*s=='E'){const char*mark=s++;i32 eneg=0;if(*s=='+'||*s=='-'){eneg=*s=='-';s++;}i32 e=0,any=0;while(*s>='0'&&*s<='9'){any=1;e=e*10+(*s++-'0');}if(any)value*=power10(eneg?-e:e);else s=mark;}if(end)*end=(char*)(s==start?start:s);return neg?-value:value;}
+float strtof(const char*s,char**end){return (float)strtod(s,end);}
 
 static void double_to_quad(u64*out,double value){union{double d;u64 u;}bits;bits.d=value;u64 sign=bits.u>>63,exp=(bits.u>>52)&0x7ff,frac=bits.u&0xfffffffffffffULL;if(exp==0){out[0]=0;out[1]=sign<<63;return;}if(exp==0x7ff){out[0]=0;out[1]=(sign<<63)|(0x7fffULL<<48)|(frac?1ULL<<47:0);return;}u64 qexp=exp-1023+16383;out[0]=frac<<60;out[1]=(sign<<63)|(qexp<<48)|(frac>>4);}
-void strtold(u64*out,const char*s,char**end){double_to_quad(out,strtod(s,end));}
+void __extenddftf2(u64*out,double value){double_to_quad(out,value);}
+long double strtold(const char *text, char **end) {
+  return (long double)strtod(text, end);
+}
 void __floatditf(u64*out,i64 value){u64 sign=value<0,magnitude=sign?(u64)(-(value+1))+1:(u64)value;if(!magnitude){out[0]=out[1]=0;return;}u32 top=0;for(u64 scan=magnitude;scan>>=1;)top++;u64 fraction=magnitude-(1ULL<<top),shift=112-top,low=0,high=0;if(shift>=64)high=fraction<<(shift-64);else{low=fraction<<shift;high=fraction>>(64-shift);}out[0]=low;out[1]=(sign<<63)|((u64)(16383+top)<<48)|high;}
 /* Keep this as explicit word arithmetic.  Clang otherwise recognizes the
    usual 32-bit decomposition and lowers it back to a call to __multi3. */

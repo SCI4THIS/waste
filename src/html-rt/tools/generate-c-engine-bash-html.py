@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Generate a self-contained C-engine Bash page.
 
-Embeds the compiled C engine (waste-wast.wasm) and the bash-runtime.wast
-launch script into a single offline HTML file.  The C engine processes the
-WAST script in a Web Worker.
+Embeds the compiled C engine (waste-wast.wasm), the bash-runtime.wast launch
+script, and the first linked GNU coreutils utility into a single offline HTML
+file.  The C engine processes the WAST script in a Web Worker.
 
 Terminal output is captured through the posix_write host import.  Interactive
 input is copied into the engine-owned terminal kernel; a blocked read yields
@@ -135,7 +135,7 @@ HTML = r'''<!doctype html>
         return count;
       }
 
-      async function run(wasmB64, source) {
+      async function run(wasmB64, source, coreutilsTrueB64, coreutilsFalseB64) {
         const wasmBytes = decodeB64(wasmB64);
         const hostFloat = (ptr, length, asF32) => {
           const bytes = new Uint8Array(engineMemory.buffer, ptr, length);
@@ -153,6 +153,20 @@ HTML = r'''<!doctype html>
         exp = instance.exports;
         engineMemory = exp.memory;
         exp.waste_wast_enable_terminal();
+
+        for (const [name, encoded] of [["true", coreutilsTrueB64],
+                                       ["false", coreutilsFalseB64]]) {
+          const utilityBytes = decodeB64(encoded);
+          const utilityPath = new TextEncoder().encode(`/bin/${name}`);
+          const pathPtr = exp.waste_wast_alloc(utilityPath.length);
+          const utilityPtr = exp.waste_wast_alloc(utilityBytes.length);
+          if (!pathPtr || !utilityPtr) throw new Error("coreutils VFS staging allocation failed");
+          new Uint8Array(engineMemory.buffer, pathPtr, utilityPath.length).set(utilityPath);
+          new Uint8Array(engineMemory.buffer, utilityPtr, utilityBytes.length).set(utilityBytes);
+          const staged = exp.waste_wast_stage_file(pathPtr, utilityPath.length,
+            utilityPtr, utilityBytes.length, 0o755);
+          if (staged !== 0) throw new Error(`staging /bin/${name} failed: ${staged}`);
+        }
 
         const sourceBytes = new TextEncoder().encode(source);
         const scriptPtr = exp.waste_wast_alloc(sourceBytes.length);
@@ -192,7 +206,8 @@ HTML = r'''<!doctype html>
       self.onmessage = function(e) {
         const msg = e.data;
         if (msg.type === "start") {
-          run(msg.wasmB64, msg.source).catch(error => {
+          run(msg.wasmB64, msg.source, msg.coreutilsTrueB64,
+              msg.coreutilsFalseB64).catch(error => {
             self.postMessage({type: "done", ok: false,
               error: error && (error.stack || error.message) || String(error)});
           });
@@ -287,7 +302,9 @@ HTML = r'''<!doctype html>
           }
         };
         worker.onerror = event => { append(event.message || "worker error"); finish("failed"); };
-        worker.postMessage({type: "start", wasmB64: PAYLOAD.wasmB64, source});
+        worker.postMessage({type: "start", wasmB64: PAYLOAD.wasmB64, source,
+          coreutilsTrueB64: PAYLOAD.coreutilsTrueB64,
+          coreutilsFalseB64: PAYLOAD.coreutilsFalseB64});
       } catch (error) { status.textContent = error.message || String(error); }
     }
     document.querySelector("#start-form").addEventListener("submit", startShell);
@@ -328,6 +345,10 @@ def main() -> None:
                         help="Path to waste-wast.wasm (C engine)")
     parser.add_argument("--launch", type=Path, required=True,
                         help="Path to bash-runtime.wast (interactive mode)")
+    parser.add_argument("--coreutils-true", type=Path, default=None,
+                        help="Path to linked coreutils true Wasm")
+    parser.add_argument("--coreutils-false", type=Path, default=None,
+                        help="Path to linked coreutils false Wasm")
     parser.add_argument("--output", type=Path, default=None,
                         help="Output HTML file path (monolithic mode)")
     parser.add_argument("--output-dir", type=Path, default=None,
@@ -341,6 +362,14 @@ def main() -> None:
         raise SystemExit(f"C engine Wasm not found: {args.wasm}")
     if not args.launch.is_file():
         raise SystemExit(f"Bash launch script not found: {args.launch}")
+    coreutils_true = args.coreutils_true or (
+        args.repo_root / "build/coreutils/utility-probe/true-linked.wasm")
+    if not coreutils_true.is_file():
+        raise SystemExit(f"coreutils true Wasm not found: {coreutils_true}")
+    coreutils_false = args.coreutils_false or (
+        args.repo_root / "build/coreutils/utility-probe/false-linked.wasm")
+    if not coreutils_false.is_file():
+        raise SystemExit(f"coreutils false Wasm not found: {coreutils_false}")
 
     if args.output_dir:
         import os
@@ -359,12 +388,16 @@ def main() -> None:
 
         safe_copy(args.wasm, out_dir / "waste-wast.wasm")
         safe_copy(args.launch, out_dir / "launch.wast")
+        safe_copy(coreutils_true, out_dir / "true.wasm")
+        safe_copy(coreutils_false, out_dir / "false.wasm")
 
         wasm_size = args.wasm.stat().st_size
         launch_size = args.launch.stat().st_size
         print(f"Copied staging files to {out_dir}")
         print(f"  waste-wast.wasm: {wasm_size:,} bytes")
         print(f"  launch.wast: {launch_size:,} bytes")
+        print(f"  true.wasm: {coreutils_true.stat().st_size:,} bytes")
+        print(f"  false.wasm: {coreutils_false.stat().st_size:,} bytes")
     else:
         launch_text = args.launch.read_text(encoding="utf-8")
         wasm_bytes = args.wasm.read_bytes()
@@ -373,6 +406,10 @@ def main() -> None:
         payload = {
             "wasmB64": wasm_b64,
             "launch": launch_text,
+            "coreutilsTrueB64": base64.b64encode(
+                coreutils_true.read_bytes()).decode("ascii"),
+            "coreutilsFalseB64": base64.b64encode(
+                coreutils_false.read_bytes()).decode("ascii"),
         }
 
         document = HTML.replace("__PAYLOAD__", script_json(payload))

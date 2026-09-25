@@ -11,6 +11,26 @@ System ownership and runtime boundaries are defined in
 [architecture.md](architecture.md).  Unfinished staged work belongs in the
 active plans rather than this document.
 
+## Virtual-Memory Ownership and Commit Boundaries
+
+Keep virtual-memory metadata in the engine-owned process capsule, not in a
+browser adapter or a host pointer. A mapping operation should validate its
+address, length, overflow, protection, file range, and collision behavior
+before publishing any region or acquiring a backing-page reference. On a
+failure path, release references acquired during preparation and leave the
+previous mapping topology unchanged.
+
+Treat these states separately: a virtual page reserved but not mapped; a
+mapped page protected by `PROT_NONE`; an unmapped address; and a mapped file
+page whose backing file has since been truncated. The last case is a
+structured engine memory fault annotated for the process signal boundary; it
+is not a host signal and must not be converted into an ordinary out-of-range
+error. `fork` and checkpoints retain backing-page and alias identity, while
+`execve` builds a replacement graph transactionally.
+
+Use the native lifecycle/checkpoint fixtures and the offline browser harness
+after changing any of these ownership or commit rules.
+
 ## Deterministic WAST Command Framing
 
 A WAST file is a sequence of independently observable commands.  Before

@@ -51,7 +51,7 @@ void exec_free(waste_exec_engine *engine) {
         free(engine->exports);
     }
     for (uint32_t i = 0; i < engine->memory_count; i++)
-        if (engine->owns_memories[i]) free(engine->memories[i]->data);
+        if (engine->owns_memories[i]) exec_memory_release(engine->memories[i]);
     for (uint32_t i = engine->import_table_count; i < engine->table_count; i++)
         free(engine->owned_tables[i].elements);
     free(engine);
@@ -88,13 +88,45 @@ exec_status exec_clone_engine(const waste_exec_engine *source,
         clone->owned_memories[i] = source->owned_memories[i];
         clone->memories[i] = &clone->owned_memories[i];
         clone->owns_memories[i] = 1;
-        clone->owned_memories[i].data = NULL;
-        if (source->owned_memories[i].pages) {
-            size_t bytes = (size_t)source->owned_memories[i].pages * EXEC_PAGE_SIZE;
-            clone->owned_memories[i].data = malloc(bytes);
-            if (!clone->owned_memories[i].data) goto failure;
-            memcpy(clone->owned_memories[i].data,
-                   source->owned_memories[i].data, bytes);
+        clone->owned_memories[i].virtual_max_pages =
+            source->owned_memories[i].virtual_max_pages;
+        clone->owned_memories[i].process_virtual_memory =
+            source->owned_memories[i].process_virtual_memory;
+        clone->owned_memories[i].page_protection = NULL;
+        clone->owned_memories[i].mappings = NULL;
+        clone->owned_memories[i].page_data = source->owned_memories[i].pages ?
+            calloc((size_t)source->owned_memories[i].pages,
+                   sizeof(*clone->owned_memories[i].page_data)) : NULL;
+        clone->owned_memories[i].page_protection = source->owned_memories[i].pages ?
+            malloc((size_t)source->owned_memories[i].pages) : NULL;
+        if (source->owned_memories[i].pages &&
+            (!clone->owned_memories[i].page_data ||
+             !clone->owned_memories[i].page_protection)) goto failure;
+        if (source->owned_memories[i].pages)
+            memcpy(clone->owned_memories[i].page_protection,
+                   source->owned_memories[i].page_protection,
+                   (size_t)source->owned_memories[i].pages);
+        clone->owned_memories[i].mapping_count =
+            source->owned_memories[i].mapping_count;
+        clone->owned_memories[i].mapping_capacity =
+            source->owned_memories[i].mapping_count;
+        if (clone->owned_memories[i].mapping_count) {
+            clone->owned_memories[i].mappings = malloc(
+                (size_t)clone->owned_memories[i].mapping_count *
+                sizeof(*clone->owned_memories[i].mappings));
+            if (!clone->owned_memories[i].mappings) goto failure;
+            memcpy(clone->owned_memories[i].mappings,
+                   source->owned_memories[i].mappings,
+                   (size_t)clone->owned_memories[i].mapping_count *
+                   sizeof(*clone->owned_memories[i].mappings));
+        } else {
+            clone->owned_memories[i].mappings = NULL;
+        }
+        for (uint64_t page = 0; page < source->owned_memories[i].pages; page++) {
+            if (!source->owned_memories[i].page_data[page]) continue;
+            clone->owned_memories[i].page_data[page] =
+                source->owned_memories[i].page_data[page];
+            exec_memory_page_retain(clone->owned_memories[i].page_data[page]);
         }
     }
     for (uint32_t i = source->import_table_count; i < source->table_count; i++) {
@@ -108,6 +140,10 @@ exec_status exec_clone_engine(const waste_exec_engine *source,
             if (!clone->owned_tables[i].elements) goto failure;
             memcpy(clone->owned_tables[i].elements,
                    source->owned_tables[i].elements, bytes);
+            for (uint64_t element = 0;
+                 element < clone->owned_tables[i].size; element++)
+                if (clone->owned_tables[i].elements[element].owner == source)
+                    clone->owned_tables[i].elements[element].owner = clone;
         }
     }
     for (uint32_t i = 0; i < source->elem_count; i++) {
@@ -117,6 +153,9 @@ exec_status exec_clone_engine(const waste_exec_engine *source,
         clone->elem_values[i] = malloc(bytes);
         if (!clone->elem_values[i]) goto failure;
         memcpy(clone->elem_values[i], source->elem_values[i], bytes);
+        for (uint32_t element = 0; element < source->elem_lengths[i]; element++)
+            if (clone->elem_values[i][element].owner == source)
+                clone->elem_values[i][element].owner = clone;
     }
     for (uint32_t i = 0; i < source->data_count; i++) {
         if (!source->data_seg_lengths[i]) continue;

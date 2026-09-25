@@ -54,6 +54,26 @@ PID and a pointer to the NUL-terminated cwd string. The argv/envp vectors are
 32-bit guest pointers terminated by zero. Images without this hook retain the
 minimal `_start` ABI, allowing the original probe to remain valid.
 
+## Process memory contract
+
+The image's process memory is an engine-owned virtual address space exposed to
+all modules in that process through one imported `exec_memory`. Guest pointers
+are wasm32 offsets in that process and are valid only after bounded range and
+protection checks. They are never host pointers and must not be shared
+directly between independent processes.
+
+The engine may map anonymous pages, file-backed pages, or named shared-memory
+pages at process virtual addresses. `fork` preserves explicit shared-page
+aliases and applies copy-on-write to private writable pages. `execve` creates
+and validates a replacement image before committing it. A process checkpoint
+preserves page mappings, protections, backing identity, and aliases rather
+than assuming that memory is one contiguous host allocation.
+
+An access into a mapped `PROT_NONE` page, an unmapped address, or a truncated
+file mapping is reported through the engine memory-fault record. The record is
+an internal input to process signal translation; it does not expose host
+signals or host addresses through the ABI.
+
 ## Validation requirements
 
 An executable manifest records the absolute path, mode bits, ABI version,

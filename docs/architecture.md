@@ -349,6 +349,30 @@ scheduling; that remains a separate migration.  Do not describe OCaml kernel
 behavior as already owned by the C runtime.  The `select`/`pselect` migration
 is specified in the active plan rather than duplicated here.
 
+### Engine-owned virtual memory
+
+The C engine owns each process's virtual address-space graph. A process
+capsule records its virtual regions, page mappings, protections, file-backed
+ownership, and virtual-page limit; threads in that process share the capsule.
+Independent processes have separate address-space graphs. A shared mapping or
+named shared-memory object is the explicit exception and points at
+reference-counted backing pages owned by the kernel/VFS layer.
+
+Module instances that belong to one process may import the process's single
+`exec_memory`, so application code, guest libc, allocator state, errno, and
+stdio use one guest pointer space. `fork` preserves shared-page identity and
+private-page copy-on-write state; `execve` validates and constructs a new
+image graph before replacing the old one. Checkpoints preserve page,
+protection, mapping, and alias topology rather than flattening memory into a
+host buffer.
+
+All engine and runtime accesses use bounded memory operations. A missing page
+is not the same as an unmapped region, and a mapped `PROT_NONE` page is
+reserved but inaccessible. Mapping, unmapping, protection changes, and
+process-image replacement commit metadata only after validation succeeds. The
+browser runtime follows these same rules and does not use host `mmap`,
+`SharedArrayBuffer`, or a JavaScript-owned process address space.
+
 ## Guest Libc
 
 `waste-libc.wasm` is built from `src/html-rt/lib/stdlib.wat` and the focused C

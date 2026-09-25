@@ -45,7 +45,8 @@ def main() -> None:
         merged_path = temporary / "waste-libc.wasm"
         wat_path = temporary / "waste-libc.wat"
         subprocess.run(
-            [args.wasm_as, str(source_path), "-o", str(core_path), "--enable-bulk-memory"],
+            [args.wasm_as, str(source_path), "-o", str(core_path),
+             "--enable-bulk-memory", "--enable-nontrapping-float-to-int"],
             check=True,
         )
         subprocess.run(
@@ -61,7 +62,8 @@ def main() -> None:
         )
         subprocess.run(
             ["wasm-merge", str(core_path), "env", str(helpers_path), "helpers",
-             "-o", str(merged_path), "--enable-bulk-memory"],
+             "-o", str(merged_path), "--enable-bulk-memory",
+             "--enable-nontrapping-float-to-int"],
             check=True,
         )
         subprocess.run(["wasm-dis", str(merged_path), "-o", str(wat_path)], check=True)

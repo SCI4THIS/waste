@@ -15,8 +15,8 @@ typedef unsigned long long u64;
 typedef signed long long i64;
 typedef unsigned char u8;
 
-extern void *malloc(u32 size);
-extern void *realloc(void *pointer, u32 size);
+extern void *malloc(size_t size);
+extern void *realloc(void *pointer, size_t size);
 extern void free(void *pointer);
 extern i32 *__errno_location(void);
 

@@ -1,4 +1,5 @@
 #include "engine_internal.h"
+#include "runtime_internal.h"
 #include "instantiate.h"
 #include "wasm/decode.h"
 #include "include/waste.h"
@@ -6,6 +7,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static int run(waste_exec_engine *engine, const char *name, int32_t a, int32_t b,
                int32_t expected, exec_status expected_status) {
@@ -148,6 +150,34 @@ static int test_decoded_module_instances(const uint8_t *bytes, size_t size) {
     }
     /* Instances retain fully decoded state, not the module's owned bytes. */
     wasm_module_dispose(&module);
+    waste_exec_engine *clone = NULL;
+    int clone_ok = exec_clone_engine(first, &clone, &error) == EXEC_OK;
+    if (clone_ok) {
+        exec_memory *source_memory = first->memories[0];
+        exec_memory *clone_memory = clone->memories[0];
+        uint8_t source_value = 0;
+        uint8_t clone_value = 0x7b;
+        clone_ok = source_memory != clone_memory &&
+                   source_memory->page_data[0] != NULL &&
+                   clone_memory->page_data[0] == source_memory->page_data[0] &&
+                   source_memory->pages == 1 && clone_memory->pages == 1 &&
+                   exec_memory_write(clone_memory, 128, &clone_value, 1,
+                                     &error) == EXEC_OK &&
+                   clone_memory->page_data[0] != source_memory->page_data[0] &&
+                   exec_memory_read(source_memory, 128, &source_value, 1,
+                                    &error) == EXEC_OK && source_value == 0;
+        clone_ok = clone_ok &&
+                   exec_memory_share_pages(clone_memory, 0, source_memory, 0,
+                                           1, &error) == EXEC_OK;
+        clone_value = 0x4d;
+        clone_ok = clone_ok &&
+                   exec_memory_write(clone_memory, 128, &clone_value, 1,
+                                     &error) == EXEC_OK &&
+                   exec_memory_read(source_memory, 128, &source_value, 1,
+                                    &error) == EXEC_OK &&
+                   source_value == clone_value;
+    }
+    exec_free(clone);
     ok = run(first, "store-load", 16, 0x12345678, 0x12345678, EXEC_OK) &&
          run(second, "load-data", 16, 0, 0, EXEC_OK) &&
          run(first, "global", 91, 0, 91, EXEC_OK) &&
@@ -157,6 +187,7 @@ static int test_decoded_module_instances(const uint8_t *bytes, size_t size) {
          run(second, "size", 0, 0, 1, EXEC_OK) &&
          run(first, "load-data", 8, 0, 0x12345678, EXEC_OK) &&
          run(second, "load-data", 8, 0, 0x12345678, EXEC_OK);
+    ok = clone_ok && ok;
     if (!ok) fprintf(stderr, "decoded module instance isolation failed\n");
     exec_free(first);
     exec_free(second);
@@ -189,6 +220,182 @@ static int test_public_api(const uint8_t *bytes, size_t size) {
     return ok;
 }
 
+static int test_memory_access_contract(void) {
+    exec_memory memory = {0};
+    exec_error error = {0};
+    uint8_t source[32];
+    uint8_t result[32];
+    memory.page_data = calloc(2, sizeof(*memory.page_data));
+    memory.page_protection = malloc(2);
+    if (!memory.page_data || !memory.page_protection) {
+        free(memory.page_data);
+        free(memory.page_protection);
+        return 0;
+    }
+    memory.page_protection[0] = EXEC_MEMORY_PROT_READ | EXEC_MEMORY_PROT_WRITE;
+    memory.page_protection[1] = EXEC_MEMORY_PROT_READ | EXEC_MEMORY_PROT_WRITE;
+    memory.mappings = calloc(1, sizeof(*memory.mappings));
+    if (!memory.mappings) {
+        exec_memory_release(&memory);
+        return 0;
+    }
+    memory.mappings[0].page_count = 2;
+    memory.mappings[0].protection = EXEC_MEMORY_PROT_READ |
+                                     EXEC_MEMORY_PROT_WRITE;
+    memory.mapping_count = 1;
+    memory.mapping_capacity = 1;
+    memory.pages = 2;
+    memory.linear_pages = 2;
+    memory.max_pages = 4;
+    for (size_t i = 0; i < sizeof(source); i++) source[i] = (uint8_t)(i + 1);
+
+    memset(result, 0xa5, sizeof(result));
+    int ok = exec_memory_read(&memory, EXEC_PAGE_SIZE - 16, result,
+                              sizeof(result), &error) == EXEC_OK;
+    for (size_t i = 0; ok && i < sizeof(result); i++) ok = result[i] == 0;
+    ok = ok && memory.page_data[0] == NULL && memory.page_data[1] == NULL &&
+         exec_memory_write(&memory, EXEC_PAGE_SIZE - 16, source,
+                               sizeof(source), &error) == EXEC_OK &&
+             exec_memory_read(&memory, EXEC_PAGE_SIZE - 16, result,
+                              sizeof(result), &error) == EXEC_OK &&
+             memcmp(source, result, sizeof(source)) == 0;
+    ok = ok && memory.page_data[0] != NULL && memory.page_data[1] != NULL;
+    memset(result, 0, sizeof(result));
+    ok = ok && exec_memory_fill(&memory, EXEC_PAGE_SIZE - 8, 0xa5, 16,
+                                &error) == EXEC_OK &&
+         exec_memory_read(&memory, EXEC_PAGE_SIZE - 8, result, 16,
+                          &error) == EXEC_OK;
+    for (size_t i = 0; ok && i < 16; i++) ok = result[i] == 0xa5;
+
+    ok = ok && exec_memory_copy(&memory, EXEC_PAGE_SIZE - 4, &memory,
+                                EXEC_PAGE_SIZE - 16, 16, &error) == EXEC_OK &&
+         exec_memory_read(&memory, EXEC_PAGE_SIZE - 4, result, 16,
+                          &error) == EXEC_OK;
+    for (size_t i = 0; ok && i < 16; i++)
+        ok = result[i] == (i < 8 ? (uint8_t)(i + 1) : 0xa5);
+
+    ok = ok && exec_memory_resize_pages(&memory, 3, &error) == EXEC_OK &&
+         memory.pages == 3 && memory.page_data[2] == NULL &&
+         exec_memory_fill(&memory, 2 * EXEC_PAGE_SIZE, 0, EXEC_PAGE_SIZE,
+                          &error) == EXEC_OK && memory.page_data[2] == NULL &&
+         exec_memory_fill(&memory, 2 * EXEC_PAGE_SIZE, 0x5a, 1,
+                          &error) == EXEC_OK && memory.page_data[2] != NULL;
+
+    ok = ok && exec_memory_set_protection(&memory, 1, 1,
+                                          EXEC_MEMORY_PROT_READ, &error) ==
+             EXEC_OK && memory.mapping_count == 3 &&
+         exec_memory_read(&memory, EXEC_PAGE_SIZE, result, 1, &error) ==
+             EXEC_OK &&
+         exec_memory_write(&memory, EXEC_PAGE_SIZE, source, 1, &error) ==
+             EXEC_ERROR_TRAP &&
+         exec_memory_set_protection(&memory, 1, 1,
+                                    EXEC_MEMORY_PROT_READ |
+                                    EXEC_MEMORY_PROT_WRITE, &error) == EXEC_OK;
+
+    ok = ok && exec_memory_set_protection(&memory, 1, 2,
+                                          EXEC_MEMORY_PROT_READ, &error) ==
+             EXEC_OK && memory.mapping_count == 3 &&
+         exec_memory_write(&memory, EXEC_PAGE_SIZE, source, 1, &error) ==
+             EXEC_ERROR_TRAP &&
+         exec_memory_write(&memory, 2 * EXEC_PAGE_SIZE, source, 1,
+                           &error) == EXEC_ERROR_TRAP &&
+         exec_memory_set_protection(&memory, 2, 1,
+                                    EXEC_MEMORY_PROT_READ |
+                                    EXEC_MEMORY_PROT_WRITE, &error) == EXEC_OK &&
+         exec_memory_set_protection(&memory, 2, 2,
+                                    EXEC_MEMORY_PROT_READ, &error) ==
+             EXEC_ERROR_TRAP &&
+         exec_memory_write(&memory, 2 * EXEC_PAGE_SIZE, source, 1,
+                           &error) == EXEC_OK &&
+         exec_memory_set_protection(&memory, 3, 1, 0x80, &error) ==
+             EXEC_ERROR_TRAP &&
+         exec_memory_write(&memory, 2 * EXEC_PAGE_SIZE, source, 1, &error) ==
+             EXEC_OK;
+
+    error.status = EXEC_OK;
+    ok = ok && exec_memory_read(&memory, 3 * EXEC_PAGE_SIZE - 4,
+                                result, 8, &error) == EXEC_ERROR_TRAP &&
+         exec_memory_write(&memory, UINT64_MAX, source, 1, &error) ==
+             EXEC_ERROR_TRAP &&
+         exec_memory_fill(&memory, 0, 0, 0, &error) == EXEC_OK;
+    exec_memory_release(&memory);
+    exec_memory unmapped = {0};
+    ok = ok && exec_memory_resize_pages(&unmapped, 3, &error) == EXEC_OK;
+    uint8_t mapped_value = 0x6a;
+    ok = ok && exec_memory_write(&unmapped, EXEC_PAGE_SIZE, &mapped_value, 1,
+                                 &error) == EXEC_OK;
+    ok = ok && exec_memory_unmap_pages(&unmapped, 1, 1, &error) == EXEC_OK &&
+         unmapped.page_data[1] == NULL && unmapped.page_protection[1] == 0 &&
+         unmapped.mapping_count == 2 &&
+         memset(&error, 0, sizeof(error)) == &error &&
+         exec_memory_read(&unmapped, EXEC_PAGE_SIZE, result, 1, &error) ==
+             EXEC_ERROR_TRAP &&
+         error.memory_fault == EXEC_MEMORY_FAULT_UNMAPPED &&
+         error.memory_fault_address == EXEC_PAGE_SIZE &&
+         exec_memory_write(&unmapped, EXEC_PAGE_SIZE, &mapped_value, 1,
+                           &error) == EXEC_ERROR_TRAP;
+    ok = ok && exec_memory_map_pages(&unmapped, 1, 1,
+                                     EXEC_MEMORY_PROT_READ |
+                                     EXEC_MEMORY_PROT_WRITE, 0, &error) ==
+             EXEC_OK && unmapped.mapping_count == 3 &&
+         exec_memory_write(&unmapped, EXEC_PAGE_SIZE, &mapped_value, 1,
+                           &error) == EXEC_OK &&
+         exec_memory_read(&unmapped, EXEC_PAGE_SIZE, result, 1, &error) ==
+             EXEC_OK && result[0] == mapped_value;
+    ok = ok && exec_memory_map_pages(&unmapped, 1, 1,
+                                     EXEC_MEMORY_PROT_READ, 0, &error) ==
+             EXEC_ERROR_TRAP && unmapped.mapping_count == 3 &&
+         exec_memory_map_pages(&unmapped, 0, 1,
+                               EXEC_MEMORY_PROT_READ |
+                               EXEC_MEMORY_PROT_WRITE, 0x80, &error) ==
+             EXEC_ERROR_TRAP && unmapped.page_protection[0] ==
+             (EXEC_MEMORY_PROT_READ | EXEC_MEMORY_PROT_WRITE) &&
+         exec_memory_unmap_pages(&unmapped, 0, 1, &error) == EXEC_OK &&
+         exec_memory_map_pages(&unmapped, 0, 1, 0, 0, &error) == EXEC_OK &&
+         exec_memory_page_is_mapped(&unmapped, 0) &&
+         exec_memory_read(&unmapped, 0, result, 1, &error) == EXEC_ERROR_TRAP &&
+         exec_memory_set_protection(&unmapped, 0, 1,
+                                    EXEC_MEMORY_PROT_READ |
+                                    EXEC_MEMORY_PROT_WRITE, &error) == EXEC_OK &&
+         exec_memory_write(&unmapped, 0, &mapped_value, 1, &error) == EXEC_OK &&
+         exec_memory_unmap_pages(&unmapped, 3, 1, &error) == EXEC_ERROR_TRAP &&
+         unmapped.mapping_count == 3 && unmapped.page_protection[1] ==
+             (EXEC_MEMORY_PROT_READ | EXEC_MEMORY_PROT_WRITE) &&
+         exec_memory_reserve_virtual_pages(&unmapped, 5, &error) == EXEC_OK &&
+         unmapped.pages == 5 && !exec_memory_page_is_mapped(&unmapped, 3) &&
+         exec_memory_map_pages(&unmapped, 3, 2,
+                               EXEC_MEMORY_PROT_READ |
+                               EXEC_MEMORY_PROT_WRITE, 0, &error) == EXEC_OK &&
+         exec_memory_page_is_mapped(&unmapped, 4) &&
+         exec_memory_promote_linear_pages(&unmapped, 5, &error) == EXEC_OK &&
+         exec_memory_resize_pages(&unmapped, 6, &error) == EXEC_OK &&
+         unmapped.linear_pages == 6 &&
+         exec_memory_page_is_mapped(&unmapped, 4) &&
+         exec_memory_page_is_mapped(&unmapped, 5);
+    exec_memory limited = {0};
+    ok = ok && exec_memory_resize_pages(&limited, 3, &error) == EXEC_OK;
+    limited.has_max = 1;
+    limited.max_pages = 4;
+    ok = ok && exec_memory_reserve_virtual_pages(&limited, 5, &error) ==
+             EXEC_ERROR_TRAP && limited.pages == 3;
+    limited.virtual_max_pages = 8;
+    ok = ok && exec_memory_reserve_virtual_pages(&limited, 6, &error) ==
+             EXEC_OK && limited.pages == 6 && limited.linear_pages == 3;
+    ok = ok && exec_memory_map_pages(
+             &limited, 5, 1, EXEC_MEMORY_PROT_READ |
+             EXEC_MEMORY_PROT_WRITE, 0, &error) == EXEC_OK;
+    limited.process_virtual_memory = 1;
+    ok = ok && exec_memory_write(&limited, 5 * EXEC_PAGE_SIZE,
+                                 &mapped_value, 1, &error) == EXEC_OK &&
+         exec_memory_read(&limited, 5 * EXEC_PAGE_SIZE, result, 1,
+                          &error) == EXEC_OK && result[0] == mapped_value;
+    exec_memory_release(&limited);
+    exec_memory_release(&unmapped);
+    if (!ok) fprintf(stderr, "memory access contract test failed: %s\n",
+                     error.message);
+    return ok;
+}
+
 int main(int argc, char **argv) {
     if (argc != 5) return 2;
     FILE *file = fopen(argv[1], "rb");
@@ -199,6 +406,7 @@ int main(int argc, char **argv) {
     fclose(file);
     int isolated = test_decoded_module_instances(bytes, (size_t)length);
     int public_api = test_public_api(bytes, (size_t)length);
+    int memory_access = test_memory_access_contract();
     waste_exec_engine *engine = NULL; exec_error error = {0};
     exec_status status = exec_load(bytes, (size_t)length, &engine, &error); free(bytes);
     if (status != EXEC_OK) { fprintf(stderr, "load: %s\n", error.message); return 1; }
@@ -233,6 +441,6 @@ int main(int argc, char **argv) {
              run(engine, "div_s", INT32_MIN, -1, 0, EXEC_ERROR_TRAP) &&
              run(engine, "div_u", 1, 0, 0, EXEC_ERROR_TRAP);
     exec_free(engine);
-    return isolated && public_api && ok && test_imports(argv[2]) &&
+    return isolated && public_api && memory_access && ok && test_imports(argv[2]) &&
            test_extern_aliases(argv[3],argv[4]) ? 0 : 1;
 }

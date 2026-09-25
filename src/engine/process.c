@@ -39,6 +39,89 @@ void native_process_capsule_clear_handler(native_process_capsule *capsule) {
 static native_process *active_process(native_store *store);
 static native_process *find_process(native_store *store, int pid);
 
+int native_store_shared_file_page(native_store *store,
+                                  posix_file_object *file_object,
+                                  uint64_t file_offset,
+                                  exec_memory_page **page_out) {
+    native_shared_file_page *entry;
+    uint32_t capacity;
+    if (!store || !file_object || !page_out ||
+        file_offset % EXEC_PAGE_SIZE != 0)
+        return -POSIX_EINVAL;
+    for (uint32_t i = 0; i < store->shared_file_page_count; i++) {
+        entry = &store->shared_file_pages[i];
+        if (entry->file_object == file_object &&
+            entry->file_offset == file_offset) {
+            *page_out = entry->page;
+            return 0;
+        }
+    }
+    if (store->shared_file_page_count == store->shared_file_page_capacity) {
+        capacity = store->shared_file_page_capacity ?
+            store->shared_file_page_capacity * 2 : 8;
+        if (capacity < store->shared_file_page_count)
+            return -POSIX_ENOMEM;
+        entry = realloc(store->shared_file_pages,
+                        (size_t)capacity * sizeof(*entry));
+        if (!entry) return -POSIX_ENOMEM;
+        store->shared_file_pages = entry;
+        store->shared_file_page_capacity = capacity;
+    }
+    entry = &store->shared_file_pages[store->shared_file_page_count];
+    entry->page = calloc(1, sizeof(*entry->page));
+    if (!entry->page) return -POSIX_ENOMEM;
+    entry->page->bytes = calloc(EXEC_PAGE_SIZE, 1);
+    if (!entry->page->bytes) {
+        free(entry->page);
+        entry->page = NULL;
+        return -POSIX_ENOMEM;
+    }
+    entry->page->refs = 1;
+    if (file_offset < file_object->data_capacity) {
+        size_t length = file_object->data_capacity - (size_t)file_offset;
+        if (length > EXEC_PAGE_SIZE) length = EXEC_PAGE_SIZE;
+        memcpy(entry->page->bytes, file_object->data + file_offset, length);
+    }
+    entry->file_object = file_object;
+    entry->file_offset = file_offset;
+    posix_file_object_retain(file_object);
+    store->shared_file_page_count++;
+    *page_out = entry->page;
+    return 0;
+}
+
+static int native_process_validate_memory_access(
+        const exec_memory *memory, uint64_t offset, size_t length,
+        uint8_t access, void *context, void *error_pointer) {
+    native_process_capsule *capsule = (native_process_capsule *)context;
+    exec_error *error = (exec_error *)error_pointer;
+    (void)memory;
+    if (!capsule || !length) return 0;
+    for (uint32_t i = 0; i < capsule->file_mapping_count; i++) {
+        native_process_file_mapping *mapping = &capsule->file_mappings[i];
+        uint64_t mapping_end = mapping->address + mapping->length;
+        uint64_t access_end = offset > UINT64_MAX - length ?
+            UINT64_MAX : offset + length;
+        if (offset >= mapping_end || access_end <= mapping->address)
+            continue;
+        if (mapping->file_offset > mapping->file_object->data_capacity ||
+            mapping->length > mapping->file_object->data_capacity -
+                               mapping->file_offset) {
+            (void)exec_fail(error, EXEC_ERROR_TRAP,
+                            "access past truncated file mapping");
+            if (error) {
+                error->signal = POSIX_SIGBUS;
+                error->memory_fault = EXEC_MEMORY_FAULT_FILE_TRUNCATED;
+                error->memory_fault_address = offset;
+                error->memory_fault_length = length;
+                error->memory_fault_access = access;
+            }
+            return EXEC_ERROR_TRAP;
+        }
+    }
+    return 0;
+}
+
 int native_store_complete_process_handler(native_store *store,
                                           exec_status status, int exit_code) {
     native_process *process = active_process(store);
@@ -70,6 +153,32 @@ int native_store_complete_process_handler_default(native_store *store,
         store, status,
         native_process_handler_default_exit_code(
             status, process->capsule.handler.exit_code));
+}
+
+int native_store_complete_process_handler_signal(native_store *store,
+                                                 exec_status status,
+                                                 int signal) {
+    native_process *process = active_process(store);
+    native_process_capsule *capsule;
+    if (!process || process->pid == 1 || process->zombie ||
+        signal <= 0 || signal > POSIX_SIGNAL_MAX ||
+        process->capsule.pending_result_valid)
+        return -POSIX_EINVAL;
+    capsule = &process->capsule;
+    if (capsule->handler.kind == NATIVE_PROCESS_HANDLER_NONE ||
+        capsule->state != NATIVE_PROCESS_RUNNABLE)
+        return -POSIX_EBUSY;
+    capsule->handler.status = status;
+    capsule->handler.exit_code = 128 + signal;
+    capsule->pending_error = (int)status;
+    capsule->pending_result = 128 + signal;
+    capsule->pending_result_valid = 1;
+    native_process_capsule_clear_handler(capsule);
+    process->exit_status = ((128 + signal) & 0xff) << 8;
+    process->zombie = 1;
+    capsule->state = NATIVE_PROCESS_EXITED;
+    capsule->pending_transition = NATIVE_PROCESS_TRANSITION_EXIT;
+    return 0;
 }
 
 int native_store_complete_process_handler_result_and_wake(
@@ -368,6 +477,94 @@ void native_process_capsule_init(native_process_capsule *capsule) {
     capsule->state = NATIVE_PROCESS_RUNNABLE;
 }
 
+void native_process_capsule_clear_regions(native_process_capsule *capsule) {
+    if (!capsule) return;
+    free(capsule->regions);
+    capsule->regions = NULL;
+    capsule->region_count = 0;
+    capsule->region_capacity = 0;
+}
+
+int native_process_capsule_region_is_reserved(
+        const native_process_capsule *capsule, uint64_t first_page,
+        uint64_t page_count, native_process_region_kind *kind_out) {
+    uint64_t end;
+    if (kind_out) *kind_out = 0;
+    if (!capsule || !page_count || first_page > UINT64_MAX - page_count)
+        return 0;
+    end = first_page + page_count;
+    for (uint32_t i = 0; i < capsule->region_count; i++) {
+        const native_process_region *region = &capsule->regions[i];
+        uint64_t region_end = region->first_page + region->page_count;
+        if (first_page < region_end && region->first_page < end) {
+            if (kind_out) *kind_out = region->kind;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int native_process_capsule_reserve_region(
+        native_process_capsule *capsule, uint64_t first_page,
+        uint64_t page_count, native_process_region_kind kind) {
+    native_process_region *regions;
+    uint32_t capacity;
+    if (!capsule || !page_count || !kind ||
+        first_page > UINT64_MAX - page_count ||
+        native_process_capsule_region_is_reserved(
+            capsule, first_page, page_count, NULL))
+        return -POSIX_EINVAL;
+    if (capsule->region_count == capsule->region_capacity) {
+        capacity = capsule->region_capacity ? capsule->region_capacity * 2 : 8;
+        if (capacity < capsule->region_count) return -POSIX_ENOMEM;
+        regions = realloc(capsule->regions,
+                          (size_t)capacity * sizeof(*regions));
+        if (!regions) return -POSIX_ENOMEM;
+        capsule->regions = regions;
+        capsule->region_capacity = capacity;
+    }
+    capsule->regions[capsule->region_count++] = (native_process_region){
+        first_page, page_count, kind};
+    return 0;
+}
+
+int native_process_capsule_allocate_region(
+        native_process_capsule *capsule, uint64_t page_count,
+        native_process_region_kind kind, int top_down, uint64_t *first_page_out) {
+    uint64_t limit;
+    if (!capsule || !page_count || !kind || !first_page_out)
+        return -POSIX_EINVAL;
+    limit = capsule->virtual_page_limit;
+    if (!limit) limit = EXEC_MEM32_MAX_PAGES;
+    if (page_count > limit) return -POSIX_ENOMEM;
+    if (top_down) {
+        uint64_t candidate = limit - page_count;
+        for (;;) {
+            if (!native_process_capsule_region_is_reserved(
+                    capsule, candidate, page_count, NULL)) {
+                int result = native_process_capsule_reserve_region(
+                    capsule, candidate, page_count, kind);
+                if (result == 0) *first_page_out = candidate;
+                return result;
+            }
+            if (candidate == 0) break;
+            candidate--;
+        }
+    } else {
+        for (uint64_t candidate = 0;
+             candidate <= limit - page_count; candidate++) {
+            if (!native_process_capsule_region_is_reserved(
+                    capsule, candidate, page_count, NULL)) {
+                int result = native_process_capsule_reserve_region(
+                    capsule, candidate, page_count, kind);
+                if (result == 0) *first_page_out = candidate;
+                return result;
+            }
+        }
+    }
+    return -POSIX_ENOMEM;
+}
+
 int native_process_capsule_select_entry(native_process_capsule *capsule,
                                          waste_exec_engine *engine,
                                          uint32_t func_idx,
@@ -380,6 +577,7 @@ int native_process_capsule_select_entry(native_process_capsule *capsule,
             (uint64_t)engine->func_count)
         return -POSIX_EINVAL;
     capsule->engine = engine;
+    (void)native_process_capsule_bind_memory(capsule);
     capsule->root_func_idx = func_idx;
     capsule->root_arg_count = arg_count;
     memset(capsule->root_args, 0, sizeof(capsule->root_args));
@@ -387,6 +585,389 @@ int native_process_capsule_select_entry(native_process_capsule *capsule,
         memcpy(capsule->root_args, args,
                (size_t)arg_count * sizeof(capsule->root_args[0]));
     capsule->state = NATIVE_PROCESS_RUNNABLE;
+    return 0;
+}
+
+static int native_process_bind_engine_memory(
+        native_process_capsule *capsule, waste_exec_engine *engine) {
+    if (!capsule || !engine || !engine->memory)
+        return -POSIX_EINVAL;
+    engine->memory->access_check =
+        native_process_validate_memory_access;
+    engine->memory->access_check_context = capsule;
+    engine->memory->virtual_max_pages = engine->memory->is_64 ?
+        EXEC_MEM64_MAX_PAGES : EXEC_MEM32_MAX_PAGES;
+    engine->memory->process_virtual_memory = 1;
+    return 0;
+}
+
+int native_process_capsule_bind_memory(native_process_capsule *capsule) {
+    if (!capsule) return -POSIX_EINVAL;
+    return native_process_bind_engine_memory(capsule, capsule->engine);
+}
+
+int native_process_capsule_map_pages(native_process_capsule *capsule,
+                                     uint64_t first_page, uint64_t page_count,
+                                     uint8_t protection, uint8_t flags) {
+    exec_error error;
+    if (!capsule || !capsule->engine || !capsule->engine->memory)
+        return -POSIX_EINVAL;
+    memset(&error, 0, sizeof(error));
+    return exec_memory_map_pages(capsule->engine->memory, first_page,
+                                 page_count, protection, flags, &error) ==
+                   EXEC_OK ? 0 : -POSIX_EINVAL;
+}
+
+int native_process_capsule_unmap_pages(native_process_capsule *capsule,
+                                       uint64_t first_page,
+                                       uint64_t page_count) {
+    exec_error error;
+    if (!capsule || !capsule->engine || !capsule->engine->memory)
+        return -POSIX_EINVAL;
+    memset(&error, 0, sizeof(error));
+    return exec_memory_unmap_pages(capsule->engine->memory, first_page,
+                                   page_count, &error) == EXEC_OK ?
+               0 : -POSIX_EINVAL;
+}
+
+static int native_process_capsule_page_range(uint64_t length,
+                                             uint64_t *page_count) {
+    if (!length || length > UINT64_MAX - (EXEC_PAGE_SIZE - 1)) return 0;
+    *page_count = (length + EXEC_PAGE_SIZE - 1) / EXEC_PAGE_SIZE;
+    return 1;
+}
+
+static int native_process_capsule_build_mapping_release(
+        const native_process_capsule *capsule, uint64_t first_page,
+        uint64_t page_count, native_process_region *replacement,
+        uint32_t *replacement_count_out) {
+    uint32_t replacement_count = 0;
+    uint64_t end = first_page + page_count;
+    if (!capsule || !page_count || end < first_page || !replacement ||
+        !replacement_count_out) return -POSIX_EINVAL;
+    for (uint32_t i = 0; i < capsule->region_count; i++) {
+        native_process_region old = capsule->regions[i];
+        uint64_t old_end = old.first_page + old.page_count;
+        uint64_t overlap_start = old.first_page > first_page ?
+            old.first_page : first_page;
+        uint64_t overlap_end = old_end < end ? old_end : end;
+        if (old.kind != NATIVE_PROCESS_REGION_MAPPING ||
+            overlap_start >= overlap_end) {
+            replacement[replacement_count++] = old;
+            continue;
+        }
+        if (old.first_page < overlap_start)
+            replacement[replacement_count++] = (native_process_region){
+                old.first_page, overlap_start - old.first_page, old.kind};
+        if (overlap_end < old_end)
+            replacement[replacement_count++] = (native_process_region){
+                overlap_end, old_end - overlap_end, old.kind};
+    }
+    *replacement_count_out = replacement_count;
+    return 0;
+}
+
+static void native_process_capsule_remove_last_mapping_region(
+        native_process_capsule *capsule, uint64_t first_page,
+        uint64_t page_count) {
+    native_process_region *region;
+    if (!capsule || !capsule->region_count) return;
+    region = &capsule->regions[capsule->region_count - 1];
+    if (region->kind == NATIVE_PROCESS_REGION_MAPPING &&
+        region->first_page == first_page && region->page_count == page_count)
+        capsule->region_count--;
+}
+
+int native_process_capsule_mmap_range(native_process_capsule *capsule,
+                                      uint64_t address, uint64_t length,
+                                      uint8_t protection, uint8_t flags,
+                                      uint64_t *address_out) {
+    exec_memory *memory;
+    uint64_t page_count;
+    uint64_t first_page = 0;
+    uint64_t memory_limit;
+    uint64_t linear_limit;
+    if (!capsule || !capsule->engine || !capsule->engine->memory ||
+        !address_out || !native_process_capsule_page_range(length,
+                                                           &page_count))
+        return -POSIX_EINVAL;
+    memory = capsule->engine->memory;
+    memory_limit = memory->virtual_max_pages ? memory->virtual_max_pages :
+        (memory->is_64 ? EXEC_MEM64_MAX_PAGES : EXEC_MEM32_MAX_PAGES);
+    linear_limit = memory->has_max ? memory->max_pages :
+        (memory->is_64 ? EXEC_MEM64_MAX_PAGES : EXEC_MEM32_MAX_PAGES);
+    if (address) {
+        if (address % EXEC_PAGE_SIZE ||
+            address / EXEC_PAGE_SIZE > memory_limit)
+            return -POSIX_EINVAL;
+        first_page = address / EXEC_PAGE_SIZE;
+        if (page_count > memory_limit - first_page)
+            return -POSIX_ENOMEM;
+        if (native_process_capsule_region_is_reserved(
+                capsule, first_page, page_count, NULL))
+            return -POSIX_EEXIST;
+        if (first_page > memory->pages ||
+            page_count > memory->pages - first_page) {
+            if (exec_memory_reserve_virtual_pages(
+                    memory, first_page + page_count, NULL) != EXEC_OK)
+                return -POSIX_ENOMEM;
+        }
+    } else {
+        int found = 0;
+        for (uint64_t candidate = 0;
+             candidate <= memory_limit - page_count; candidate++) {
+            if (native_process_capsule_region_is_reserved(
+                    capsule, candidate, page_count, NULL))
+                continue;
+            int free_range = 1;
+            uint64_t checked_end = candidate + page_count;
+            uint64_t checked_limit = checked_end < memory->pages ?
+                checked_end : memory->pages;
+            for (uint64_t page = candidate; page < checked_limit; page++) {
+                if (exec_memory_page_is_mapped(memory, page)) {
+                    free_range = 0;
+                    break;
+                }
+            }
+            if (free_range) {
+                first_page = candidate;
+                found = 1;
+                break;
+            }
+        }
+        if (!found) return -POSIX_ENOMEM;
+        if (first_page > memory->pages ||
+            page_count > memory->pages - first_page) {
+            if (exec_memory_reserve_virtual_pages(
+                    memory, first_page + page_count, NULL) != EXEC_OK)
+                return -POSIX_ENOMEM;
+        }
+    }
+    if (native_process_capsule_reserve_region(
+            capsule, first_page, page_count,
+            NATIVE_PROCESS_REGION_MAPPING) != 0)
+        return -POSIX_ENOMEM;
+    if ((flags & EXEC_MEMORY_MAPPING_FIXED_NOREPLACE) && address) {
+        for (uint64_t page = first_page; page < first_page + page_count; page++)
+            if (exec_memory_page_is_mapped(memory, page)) {
+                native_process_capsule_remove_last_mapping_region(
+                    capsule, first_page, page_count);
+                return -POSIX_EEXIST;
+            }
+    }
+    if (exec_memory_map_pages(memory, first_page, page_count, protection,
+                              flags, NULL) != EXEC_OK) {
+        native_process_capsule_remove_last_mapping_region(
+            capsule, first_page, page_count);
+        return -POSIX_EINVAL;
+    }
+    if (first_page + page_count > memory->linear_pages &&
+        first_page + page_count <= linear_limit &&
+        exec_memory_promote_linear_pages(memory, first_page + page_count,
+                                         NULL) != EXEC_OK) {
+        (void)exec_memory_unmap_pages(memory, first_page, page_count, NULL);
+        native_process_capsule_remove_last_mapping_region(
+            capsule, first_page, page_count);
+        return -POSIX_EINVAL;
+    }
+    *address_out = first_page * EXEC_PAGE_SIZE;
+    return 0;
+}
+
+static int native_process_capsule_build_file_mapping_release(
+        const native_process_capsule *capsule, uint64_t address,
+        uint64_t length, native_process_file_mapping *replacement,
+        uint32_t *replacement_count_out) {
+    uint32_t count = 0;
+    uint64_t end;
+    if (!capsule || !length || address % EXEC_PAGE_SIZE ||
+        length % EXEC_PAGE_SIZE || address > UINT64_MAX - length ||
+        (!replacement && capsule->file_mapping_count) ||
+        !replacement_count_out)
+        return -POSIX_EINVAL;
+    end = address + length;
+    for (uint32_t i = 0; i < capsule->file_mapping_count; i++) {
+        native_process_file_mapping old = capsule->file_mappings[i];
+        uint64_t old_end = old.address + old.length;
+        uint64_t overlap_start = old.address > address ? old.address : address;
+        uint64_t overlap_end = old_end < end ? old_end : end;
+        if (overlap_start >= overlap_end) {
+            replacement[count] = old;
+            posix_file_object_retain(replacement[count].file_object);
+            count++;
+            continue;
+        }
+        if (old.address < overlap_start) {
+            replacement[count] = old;
+            replacement[count].length = overlap_start - old.address;
+            posix_file_object_retain(replacement[count].file_object);
+            count++;
+        }
+        if (overlap_end < old_end) {
+            native_process_file_mapping right = old;
+            right.address = overlap_end;
+            right.length = old_end - overlap_end;
+            right.file_offset += overlap_end - old.address;
+            replacement[count++] = right;
+            posix_file_object_retain(right.file_object);
+        }
+    }
+    *replacement_count_out = count;
+    return 0;
+}
+
+static void native_process_capsule_discard_file_mapping_release(
+        native_process_file_mapping *replacement, uint32_t count) {
+    if (!replacement) return;
+    for (uint32_t i = 0; i < count; i++)
+        posix_kernel_file_release(replacement[i].file_object);
+    free(replacement);
+}
+
+static void native_process_capsule_commit_file_mapping_release(
+        native_process_capsule *capsule,
+        native_process_file_mapping *replacement, uint32_t count) {
+    for (uint32_t i = 0; i < capsule->file_mapping_count; i++)
+        posix_kernel_file_release(capsule->file_mappings[i].file_object);
+    free(capsule->file_mappings);
+    capsule->file_mappings = replacement;
+    capsule->file_mapping_count = count;
+    capsule->file_mapping_capacity = count;
+}
+
+int native_process_capsule_munmap_range(native_process_capsule *capsule,
+                                        uint64_t address, uint64_t length) {
+    uint64_t page_count;
+    uint64_t first_page;
+    uint64_t unmap_length;
+    native_process_region_kind region_kind;
+    if (!capsule || address % EXEC_PAGE_SIZE ||
+        !native_process_capsule_page_range(length, &page_count))
+        return -POSIX_EINVAL;
+    first_page = address / EXEC_PAGE_SIZE;
+    unmap_length = page_count * EXEC_PAGE_SIZE;
+    if (native_process_capsule_region_is_reserved(
+            capsule, first_page, page_count, &region_kind) &&
+        region_kind == NATIVE_PROCESS_REGION_STARTUP)
+        return -POSIX_EINVAL;
+    if (capsule->image && capsule->image->startup_size) {
+        uint64_t end = address + length;
+        uint64_t startup_end = (uint64_t)capsule->image->startup_ptr +
+                               capsule->image->startup_size;
+        if (end < address || startup_end < capsule->image->startup_ptr)
+            return -POSIX_EINVAL;
+        if (address < startup_end && capsule->image->startup_ptr < end)
+            return -POSIX_EINVAL;
+    }
+    native_process_region *replacement = calloc(
+        (size_t)capsule->region_count * 2 + 1, sizeof(*replacement));
+    uint32_t replacement_count = 0;
+    native_process_file_mapping *file_replacement =
+        capsule->file_mapping_count ? calloc(
+            (size_t)capsule->file_mapping_count * 2,
+            sizeof(*file_replacement)) : NULL;
+    uint32_t file_replacement_count = 0;
+    if (!replacement) return -POSIX_ENOMEM;
+    if (native_process_capsule_build_mapping_release(
+            capsule, first_page, page_count, replacement,
+            &replacement_count) != 0) {
+        free(replacement);
+        return -POSIX_EINVAL;
+    }
+    if (capsule->file_mapping_count && !file_replacement) {
+        free(replacement);
+        return -POSIX_ENOMEM;
+    }
+    if (native_process_capsule_build_file_mapping_release(
+            capsule, address, unmap_length, file_replacement,
+            &file_replacement_count) != 0) {
+        free(replacement);
+        free(file_replacement);
+        return -POSIX_EINVAL;
+    }
+    if (native_process_capsule_unmap_pages(capsule, first_page, page_count) != 0)
+    {
+        free(replacement);
+        native_process_capsule_discard_file_mapping_release(
+            file_replacement, file_replacement_count);
+        return -POSIX_EINVAL;
+    }
+    free(capsule->regions);
+    capsule->regions = replacement;
+    capsule->region_count = replacement_count;
+    capsule->region_capacity = replacement_count;
+    native_process_capsule_commit_file_mapping_release(
+        capsule, file_replacement, file_replacement_count);
+    return 0;
+}
+
+int native_process_capsule_mprotect_range(native_process_capsule *capsule,
+                                          uint64_t address, uint64_t length,
+                                          uint8_t protection) {
+    exec_memory *memory;
+    uint64_t page_count;
+    uint64_t first_page;
+    if (!capsule || !capsule->engine || !capsule->engine->memory ||
+        address % EXEC_PAGE_SIZE ||
+        !native_process_capsule_page_range(length, &page_count))
+        return -POSIX_EINVAL;
+    memory = capsule->engine->memory;
+    first_page = address / EXEC_PAGE_SIZE;
+    if (first_page > memory->pages || page_count > memory->pages - first_page)
+        return -POSIX_EINVAL;
+    for (uint64_t page = first_page; page < first_page + page_count; page++)
+        if (!exec_memory_page_is_mapped(memory, page))
+            return -POSIX_EINVAL;
+    return exec_memory_set_protection(memory, first_page, page_count,
+                                      protection, NULL) == EXEC_OK ?
+               0 : -POSIX_EINVAL;
+}
+
+int native_process_capsule_record_file_mapping(
+    native_process_capsule *capsule, uint64_t address, uint64_t length,
+    posix_file_object *file_object, uint64_t file_offset, int shared,
+    int writable) {
+    native_process_file_mapping *grown;
+    if (!capsule || !length || address % EXEC_PAGE_SIZE ||
+        !file_object ||
+        address > UINT64_MAX - length || file_offset > UINT64_MAX - length)
+        return -POSIX_EINVAL;
+    if (capsule->file_mapping_count == capsule->file_mapping_capacity) {
+        uint32_t capacity = capsule->file_mapping_capacity ?
+            capsule->file_mapping_capacity * 2 : 4;
+        if (capacity < capsule->file_mapping_count) return -POSIX_ENOMEM;
+        grown = realloc(capsule->file_mappings,
+                        (size_t)capacity * sizeof(*grown));
+        if (!grown) return -POSIX_ENOMEM;
+        capsule->file_mappings = grown;
+        capsule->file_mapping_capacity = capacity;
+    }
+    capsule->file_mappings[capsule->file_mapping_count++] =
+        (native_process_file_mapping){address, length, file_offset,
+                                      file_object, (uint8_t)(shared != 0),
+                                      (uint8_t)(writable != 0)};
+    /* The caller transfers its retained object reference to this record. */
+    return 0;
+}
+
+int native_process_capsule_forget_file_mapping(
+        native_process_capsule *capsule, uint64_t address, uint64_t length) {
+    native_process_file_mapping *replacement;
+    uint32_t count = 0;
+    if (!capsule || !length || address % EXEC_PAGE_SIZE ||
+        length % EXEC_PAGE_SIZE || address > UINT64_MAX - length)
+        return -POSIX_EINVAL;
+    replacement = capsule->file_mapping_count ?
+        calloc((size_t)capsule->file_mapping_count * 2,
+               sizeof(*replacement)) : NULL;
+    if (capsule->file_mapping_count && !replacement) return -POSIX_ENOMEM;
+    if (native_process_capsule_build_file_mapping_release(
+            capsule, address, length, replacement, &count) != 0) {
+        free(replacement);
+        return -POSIX_EINVAL;
+    }
+    native_process_capsule_commit_file_mapping_release(
+        capsule, replacement, count);
     return 0;
 }
 
@@ -406,16 +987,49 @@ int native_process_capsule_clone(native_process_capsule *destination,
             destination->engine = NULL;
             return 0;
         }
+        if (destination->engine->memory) {
+            destination->engine->memory->access_check =
+                native_process_validate_memory_access;
+            destination->engine->memory->access_check_context = destination;
+        }
     }
     destination->root_func_idx = source->root_func_idx;
     destination->root_arg_count = source->root_arg_count;
     for (int i = 0; i < source->root_arg_count && i < WAST_MAX_ARGS; i++)
         destination->root_args[i] = source->root_args[i];
     destination->generation = source->generation;
+    destination->virtual_page_limit = source->virtual_page_limit;
     destination->state = NATIVE_PROCESS_RUNNABLE;
     destination->pending_result = source->pending_result;
     destination->pending_error = source->pending_error;
     destination->pending_result_valid = source->pending_result_valid;
+    if (source->file_mapping_count) {
+        destination->file_mappings = malloc(
+            (size_t)source->file_mapping_count * sizeof(*destination->file_mappings));
+        if (!destination->file_mappings) {
+            native_process_capsule_destroy(destination);
+            return 0;
+        }
+        memcpy(destination->file_mappings, source->file_mappings,
+               (size_t)source->file_mapping_count *
+                   sizeof(*destination->file_mappings));
+        for (uint32_t i = 0; i < source->file_mapping_count; i++)
+            posix_file_object_retain(destination->file_mappings[i].file_object);
+        destination->file_mapping_count = source->file_mapping_count;
+        destination->file_mapping_capacity = source->file_mapping_count;
+    }
+    if (source->region_count) {
+        destination->regions = malloc((size_t)source->region_count *
+                                      sizeof(*destination->regions));
+        if (!destination->regions) {
+            native_process_capsule_destroy(destination);
+            return 0;
+        }
+        memcpy(destination->regions, source->regions,
+               (size_t)source->region_count * sizeof(*destination->regions));
+        destination->region_count = source->region_count;
+        destination->region_capacity = source->region_count;
+    }
     if (source->handler.kind != NATIVE_PROCESS_HANDLER_NONE) {
         if (source->handler.context || !source->handler.source ||
             source->handler.source_size == 0) {
@@ -473,6 +1087,11 @@ void native_process_capsule_destroy(native_process_capsule *capsule) {
     }
     free(capsule->continuations);
     free(capsule->continuation_engines);
+    if (capsule->file_mappings)
+        for (uint32_t i = 0; i < capsule->file_mapping_count; i++)
+            posix_kernel_file_release(capsule->file_mappings[i].file_object);
+    free(capsule->file_mappings);
+    native_process_capsule_clear_regions(capsule);
     memset(capsule, 0, sizeof(*capsule));
 }
 
@@ -518,6 +1137,46 @@ int native_store_commit_process_image(native_store *store,
         process->capsule.pending_result_valid ||
         process->capsule.pending_transition != NATIVE_PROCESS_TRANSITION_EXEC)
         return -POSIX_EINVAL;
+    if (native_process_bind_engine_memory(&process->capsule, image->engine) != 0)
+        return -POSIX_EINVAL;
+    native_process_capsule_clear_regions(&process->capsule);
+    process->capsule.virtual_page_limit = image->engine->memory &&
+        image->engine->memory->is_64 ? EXEC_MEM64_MAX_PAGES :
+        EXEC_MEM32_MAX_PAGES;
+    if (image->engine->memory && image->engine->memory->linear_pages) {
+        uint64_t module_pages = image->engine->memory->linear_pages;
+        uint64_t startup_first = module_pages;
+        uint64_t startup_last = module_pages;
+        uint64_t stack_first = process->capsule.virtual_page_limit - 17;
+        if (image->startup_size) {
+            uint64_t startup_end = (uint64_t)image->startup_ptr +
+                                   image->startup_size;
+            startup_first = image->startup_ptr / EXEC_PAGE_SIZE;
+            startup_last = (startup_end + EXEC_PAGE_SIZE - 1) /
+                           EXEC_PAGE_SIZE;
+        }
+        if (startup_first > module_pages || startup_last < startup_first ||
+            startup_last > module_pages ||
+            startup_last >= stack_first ||
+            (startup_first && native_process_capsule_reserve_region(
+                &process->capsule, 0, startup_first,
+                NATIVE_PROCESS_REGION_MODULE) != 0) ||
+            (startup_last > startup_first &&
+             native_process_capsule_reserve_region(
+                 &process->capsule, startup_first,
+                 startup_last - startup_first,
+                 NATIVE_PROCESS_REGION_STARTUP) != 0) ||
+            native_process_capsule_reserve_region(
+                &process->capsule, startup_last, 1,
+                NATIVE_PROCESS_REGION_BRK) != 0 ||
+            native_process_capsule_reserve_region(
+                &process->capsule, stack_first, 1,
+                NATIVE_PROCESS_REGION_GUARD) != 0 ||
+            native_process_capsule_reserve_region(
+                &process->capsule, stack_first + 1, 16,
+                NATIVE_PROCESS_REGION_STACK) != 0)
+            return -POSIX_ENOMEM;
+    }
     posix_kernel_close_on_exec(process->kernel);
     release_image(process->capsule.image);
     process->capsule.image = image;
@@ -711,6 +1370,17 @@ int native_store_clone_process_graph(native_store *store, int parent_pid,
             return -POSIX_ENOMEM;
         }
         rebind_imports(bindings[i].clone, bindings[i].source, bindings, used);
+        if (bindings[i].clone->memory &&
+            native_process_bind_engine_memory(&child->capsule,
+                                              bindings[i].clone) != 0) {
+            for (uint32_t j = 0; j < owned_count; j++)
+                if (exec_free) exec_free(owned[j]);
+            free(owned);
+            free(bindings);
+            child->capsule.linked_engines = NULL;
+            child->capsule.linked_engine_count = 0;
+            return -POSIX_EINVAL;
+        }
     }
     child->capsule.linked_engines = owned;
     child->capsule.linked_engine_count = owned_count;

@@ -11,6 +11,8 @@ const stagingDir = path.join(root, "src/html-rt/src/bash");
 const baselineMissingCommand = process.argv.includes("--missing-command");
 const executableProbe = process.argv.includes("--exec-probe");
 const executableExitProbe = process.argv.includes("--exec-exit");
+const coreutilsTrueProbe = process.argv.includes("--coreutils-true");
+const coreutilsFalseProbe = process.argv.includes("--coreutils-false");
 const watProbe = process.argv.includes("--wat-probe");
 const watShebangProbe = process.argv.includes("--wat-shebang-probe");
 const watFailureProbe = process.argv.includes("--wat-failure-probe");
@@ -49,6 +51,12 @@ const builtProbePath = path.join(root, "build/cli-rt/waste-probe.wasm");
 if (fs.existsSync(builtProbePath)) probePath = builtProbePath;
 const probeBytes = (executableProbe || executableExitProbe) && fs.existsSync(probePath)
   ? fs.readFileSync(probePath) : null;
+const coreutilsTruePath = path.join(stagingDir, "true.wasm");
+const coreutilsFalsePath = path.join(stagingDir, "false.wasm");
+const coreutilsTrueBytes = coreutilsTrueProbe && fs.existsSync(coreutilsTruePath)
+  ? fs.readFileSync(coreutilsTruePath) : null;
+const coreutilsFalseBytes = coreutilsFalseProbe && fs.existsSync(coreutilsFalsePath)
+  ? fs.readFileSync(coreutilsFalsePath) : null;
 const asArrayBuffer = bytes => bytes && bytes.buffer.slice(
   bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 
@@ -83,6 +91,10 @@ let probeStatus127Seen = false;
 let probeSecondSeen = false;
 let probeFinalStatusSeen = false;
 let probeStatus7Seen = false;
+let coreutilsTrueStatusRequested = false;
+let coreutilsTrueStatusSeen = false;
+let coreutilsFalseStatusRequested = false;
+let coreutilsFalseStatusSeen = false;
 let exitProbeStatusRequested = false;
 let watStatusRequested = false;
 let watAfterSeen = false;
@@ -96,7 +108,12 @@ const self = {
     if (message.type === "vfs") {
       if (message.paths?.includes("/tmp") &&
           message.paths?.includes("/usr/bin") &&
-          message.paths?.includes("/usr/share/waste/launch.wast")) vfsSeen = true;
+          message.paths?.includes("/usr/share/waste/launch.wast") &&
+          ((!coreutilsTrueProbe && !coreutilsFalseProbe) ||
+            (coreutilsTrueProbe && message.paths?.includes("/usr/bin/true") &&
+             message.paths?.includes("/bin/true")) ||
+            (coreutilsFalseProbe && message.paths?.includes("/usr/bin/false") &&
+             message.paths?.includes("/bin/false")))) vfsSeen = true;
     } else if (message.type === "output") {
       output += message.text;
       process.stdout.write(message.text);
@@ -213,6 +230,34 @@ const self = {
           setTimeout(() => self.onmessage({data: {type: "input",
             bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
         }
+      } else if (coreutilsTrueProbe || coreutilsFalseProbe) {
+        const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
+        const statusRequested = coreutilsTrueProbe
+          ? coreutilsTrueStatusRequested : coreutilsFalseStatusRequested;
+        if (commandSent && messageHasPrompt && !statusRequested) {
+          if (coreutilsTrueProbe) coreutilsTrueStatusRequested = true;
+          else coreutilsFalseStatusRequested = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode(
+              coreutilsTrueProbe
+                ? "printf '__C_ENGINE_COREUTILS_TRUE_STATUS_%s__\\n' \"$?\"\n"
+                : "printf '__C_ENGINE_COREUTILS_FALSE_STATUS_%s__\\n' \"$?\"\n",
+            ))}}), 10);
+        }
+        if (coreutilsTrueProbe && output.includes("__C_ENGINE_COREUTILS_TRUE_STATUS_") &&
+            !coreutilsTrueStatusSeen) {
+          coreutilsTrueStatusSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        }
+        if (coreutilsFalseProbe && output.includes("__C_ENGINE_COREUTILS_FALSE_STATUS_") &&
+            !coreutilsFalseStatusSeen) {
+          coreutilsFalseStatusSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        }
       } else if (wastRepeatProbe) {
         const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
         if (commandSent && messageHasPrompt) {
@@ -284,6 +329,10 @@ const self = {
                   ? "WASTE_PROBE_EXIT=7 /bin/waste-probe\n"
                 : executableProbe
                   ? "/bin/waste-probe one two\n"
+                : coreutilsTrueProbe
+                  ? "/bin/true\n"
+                : coreutilsFalseProbe
+                  ? "/bin/false\n"
                   : "echo __C_ENGINE_BASH_OK__\n",
             )),
           }});
@@ -348,7 +397,23 @@ self.onmessage({data: {
     path: "/bin/waste-probe",
     bytes: asArrayBuffer(probeBytes),
     mode: 0o755,
+  }, ...(coreutilsTrueBytes ? [{
+    path: "/usr/bin/true",
+    bytes: asArrayBuffer(coreutilsTrueBytes),
+    mode: 0o755,
   }, {
+    path: "/bin/true",
+    bytes: asArrayBuffer(coreutilsTrueBytes),
+    mode: 0o755,
+  }] : []), ...(coreutilsFalseBytes ? [{
+    path: "/usr/bin/false",
+    bytes: asArrayBuffer(coreutilsFalseBytes),
+    mode: 0o755,
+  }, {
+    path: "/bin/false",
+    bytes: asArrayBuffer(coreutilsFalseBytes),
+    mode: 0o755,
+  }] : []), {
     path: watShebangProbe ? "/tmp/wat-shebang.wat" :
       watFailureProbe ? "/tmp/wat-bad.wat" :
       watDirectProbe ? "/tmp/wat-direct.wat" :
@@ -409,6 +474,14 @@ Promise.race([completion, timeout]).then(result => {
         probeMissingSeen && probeStatus127Seen && probeSecondSeen &&
         probeFinalStatusSeen && probeAfterSeen && exitSent && !doneBeforeExit &&
         result.ok
+    : coreutilsTrueProbe
+      ? promptSeen && commandSent && vfsSeen && coreutilsTrueStatusSeen &&
+        output.includes("__C_ENGINE_COREUTILS_TRUE_STATUS_0__") &&
+        exitSent && !doneBeforeExit && result.ok
+    : coreutilsFalseProbe
+      ? promptSeen && commandSent && vfsSeen && coreutilsFalseStatusSeen &&
+        output.includes("__C_ENGINE_COREUTILS_FALSE_STATUS_1__") &&
+        exitSent && !doneBeforeExit && result.ok
     : wastRepeatProbe
       ? promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&
         output.includes("__C_ENGINE_WAST_REPEAT_1_0__") &&

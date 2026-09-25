@@ -11,9 +11,16 @@
 #define MAP_SHARED    0x01
 #define MAP_PRIVATE   0x02
 #define MAP_ANONYMOUS 0x20
+#define MAP_FIXED_NOREPLACE 0x100000
 #define MAP_FAILED    ((void *)-1)
+
+#define MS_ASYNC      0x1
+#define MS_INVALIDATE 0x2
+#define MS_SYNC       0x4
 
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, long offset);
 int   munmap(void *addr, size_t length);
+int   mprotect(void *addr, size_t length, int prot);
+int   msync(void *addr, size_t length, int flags);
 
 #endif

@@ -7,5 +7,7 @@ __attribute__((import_module("waste_kernel"), import_name("ioctl_v1")))
 extern i32 waste_kernel_ioctl_v1(i32 descriptor, u32 request, void *argument);
 
 i32 ioctl(i32 fd,u32 request,void*argument){
-  return waste_kernel_ioctl_v1(fd, request, argument);
+  i32 result = waste_kernel_ioctl_v1(fd, request, argument);
+  if (result < -1) { *__errno_location() = -result; return -1; }
+  return result;
 }

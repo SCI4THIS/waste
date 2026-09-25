@@ -7,6 +7,7 @@
 #ifdef WASTE_ENGINE
 /* ---- Engine build: no-op stubs ---- */
 #include <stdio.h>
+typedef long off_t;
 
 FILE __stdin_file  = { .fd = 0, .error = 0, .eof = 0 };
 FILE __stdout_file = { .fd = 1, .error = 0, .eof = 0 };
@@ -19,7 +20,13 @@ int fputs(const char *s, FILE *f) { (void)s; (void)f; return 0; }
 int ferror(FILE *f) { (void)f; return 0; }
 FILE *fopen(const char *path, const char *mode) { (void)path; (void)mode; return (void *)0; }
 int fseek(FILE *f, long off, int whence) { (void)f; (void)off; (void)whence; return 0; }
+int fseeko(FILE *f, off_t off, int whence) {
+  return fseek(f, (long)off, whence);
+}
 long ftell(FILE *f) { (void)f; return 0; }
+off_t ftello(FILE *f) { return (off_t)ftell(f); }
+void __fpurge(FILE *f) { (void)f; }
+void __fseterr(FILE *f) { if (f) f->error = 1; }
 int fclose(FILE *f) { (void)f; return 0; }
 int putchar(int c) { (void)c; return 0; }
 int printf(const char *fmt, ...) { (void)fmt; return 0; }
@@ -184,6 +191,68 @@ u32 fwrite(const void *pointer, u32 size, u32 members, FILE *file) {
   return copied / size;
 }
 
+i32 fread(void *pointer, u32 size, u32 members, FILE *file) {
+  if (!file || !pointer || !size) return 0;
+  u64 wanted64 = (u64)size * members;
+  if (wanted64 > 0xffffffffULL) return 0;
+  u32 wanted = (u32)wanted64;
+  if (file->magic != FILE_MAGIC || !(file->flags & FILE_READ)) return 0;
+  u32 copied = 0;
+  while (copied < wanted) {
+#ifdef WASTE_POSIX_IO
+    if (file->position >= file->length && file->descriptor >= 0) {
+      i32 received = read(file->descriptor, file->data, file->capacity);
+      if (received < 0) { file->error = 1; break; }
+      file->position = 0; file->length = (u32)received;
+    }
+#endif
+    if (file->position >= file->length) {
+      file->end_of_file = 1; break;
+    }
+    ((unsigned char *)pointer)[copied++] = file->data[file->position++];
+  }
+  return copied / size;
+}
+
+i32 fgetc(FILE *file) {
+  unsigned char value;
+  return fread(&value, 1, 1, file) == 1 ? value : EOF_VALUE;
+}
+i32 getc(FILE *file) { return fgetc(file); }
+i32 feof(FILE *file) { return file ? file->end_of_file : 0; }
+
+i32 getdelim(char **line, u32 *capacity, i32 delimiter, FILE *file) {
+  if (!line || !capacity || !file) { *__errno_location() = 22; return -1; }
+  if (!*line || *capacity < 2) {
+    u32 next = *capacity < 2 ? 128 : *capacity;
+    char *replacement = *line ? realloc(*line, next) : malloc(next);
+    if (!replacement) { *__errno_location() = 12; return -1; }
+    *line = replacement; *capacity = next;
+  }
+  u32 length = 0;
+  for (;;) {
+    i32 value = fgetc(file);
+    if (value == EOF_VALUE) {
+      if (!length) return -1;
+      break;
+    }
+    if (length + 1 >= *capacity) {
+      u32 next = *capacity > 0x7fffffffU / 2 ? 0xffffffffU : *capacity * 2;
+      char *replacement = realloc(*line, next);
+      if (!replacement) { *__errno_location() = 12; return -1; }
+      *line = replacement; *capacity = next;
+    }
+    (*line)[length++] = (char)value;
+    if (value == delimiter) break;
+  }
+  (*line)[length] = 0;
+  return length;
+}
+
+i32 getline(char **line, u32 *capacity, FILE *file) {
+  return getdelim(line, capacity, '\n', file);
+}
+
 i32 fputc(i32 character, FILE *file) {
   unsigned char byte = (unsigned char)character;
   return fwrite(&byte, 1, 1, file) == 1 ? byte : EOF_VALUE;
@@ -231,6 +300,7 @@ i32 fpurge(FILE *file) {
   return 0;
 }
 i32 __fpurge(FILE *file) { return fpurge(file); }
+void __fseterr(FILE *file) { if (file) file->error = 1; }
 i32 setvbuf(FILE *file, char *buffer, i32 mode, u32 size) {
   (void)mode;
   if (!file || !buffer || !size) return -1;

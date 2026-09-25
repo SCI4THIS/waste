@@ -32,6 +32,7 @@ static void ofd_release(posix_ofd *ofd) {
         free(ofd->terminal.input);
         break;
     case POSIX_OFD_REGULAR:
+        posix_kernel_file_release(ofd->regular.file);
         break;
     case POSIX_OFD_DIRECTORY:
         break;
@@ -44,6 +45,69 @@ static void ofd_release(posix_ofd *ofd) {
         break;
     }
     free(ofd);
+}
+
+static posix_file_object *file_object_create(const uint8_t *data,
+                                             size_t length, uint64_t inode) {
+    posix_file_object *object = calloc(1, sizeof(*object));
+    if (!object) return NULL;
+    object->refs = 1;
+    object->inode = inode;
+    if (length) {
+        object->data = malloc(length);
+        if (!object->data) { free(object); return NULL; }
+        memcpy(object->data, data, length);
+        object->data_capacity = length;
+    }
+    return object;
+}
+
+void posix_file_object_retain(posix_file_object *object) {
+    if (object && object->refs != UINT32_MAX) object->refs++;
+}
+
+void posix_kernel_file_release(posix_file_object *object) {
+    if (!object || !object->refs || --object->refs > 0) return;
+    free(object->data);
+    free(object);
+}
+
+posix_shm_namespace *posix_shm_namespace_create(void) {
+    posix_shm_namespace *namespace_ = calloc(1, sizeof(*namespace_));
+    if (namespace_) namespace_->refs = 1;
+    return namespace_;
+}
+
+void posix_shm_namespace_retain(posix_shm_namespace *namespace_) {
+    if (namespace_ && namespace_->refs != UINT32_MAX) namespace_->refs++;
+}
+
+void posix_shm_namespace_release(posix_shm_namespace *namespace_) {
+    if (!namespace_ || !namespace_->refs || --namespace_->refs > 0) return;
+    for (uint32_t i = 0; i < namespace_->count; i++)
+        posix_kernel_file_release(namespace_->objects[i].file);
+    free(namespace_);
+}
+
+posix_shm_namespace *posix_shm_namespace_clone(
+        const posix_shm_namespace *source) {
+    posix_shm_namespace *clone;
+    if (!source) return NULL;
+    clone = posix_shm_namespace_create();
+    if (!clone) return NULL;
+    clone->count = source->count;
+    for (uint32_t i = 0; i < source->count; i++) {
+        clone->objects[i] = source->objects[i];
+        clone->objects[i].file = file_object_create(
+            source->objects[i].file->data,
+            source->objects[i].file->data_capacity,
+            source->objects[i].file->inode);
+        if (!clone->objects[i].file) {
+            posix_shm_namespace_release(clone);
+            return NULL;
+        }
+    }
+    return clone;
 }
 
 static int kernel_find_free_fd(posix_kernel *k, int from) {
@@ -178,17 +242,14 @@ int posix_kernel_path_add_data(posix_kernel *kernel, const char *path,
     if (result < 0) return result;
     posix_kernel_path_node *existing = path_find(kernel, normalized);
     if (existing) {
-        uint8_t *copy = NULL;
-        if (data_length > 0) {
-            copy = malloc(data_length);
-            if (!copy) return -POSIX_ENOMEM;
-            memcpy(copy, data, data_length);
-        }
-        free(existing->data);
+        posix_file_object *file = metadata->kind == POSIX_NODE_REGULAR ?
+            file_object_create(data, data_length, metadata->inode) : NULL;
+        if (metadata->kind == POSIX_NODE_REGULAR && !file)
+            return -POSIX_ENOMEM;
+        posix_kernel_file_release(existing->file);
         free(existing->link_target);
         existing->link_target = NULL;
-        existing->data = copy;
-        existing->data_capacity = data_length;
+        existing->file = file;
         existing->metadata = *metadata;
         if (metadata->kind == POSIX_NODE_REGULAR && data_length > 0)
             existing->metadata.size = (int64_t)data_length;
@@ -199,17 +260,16 @@ int posix_kernel_path_add_data(posix_kernel *kernel, const char *path,
     memset(existing, 0, sizeof(*existing));
     memcpy(existing->path, normalized, strlen(normalized) + 1);
     existing->metadata = *metadata;
-    if (metadata->kind == POSIX_NODE_REGULAR && data_length > 0)
-        existing->metadata.size = (int64_t)data_length;
-    if (data_length > 0) {
-        existing->data = malloc(data_length);
-        if (!existing->data) {
+    if (metadata->kind == POSIX_NODE_REGULAR) {
+        existing->file = file_object_create(data, data_length,
+                                            metadata->inode);
+        if (!existing->file) {
             kernel->path_node_count--;
             return -POSIX_ENOMEM;
         }
-        memcpy(existing->data, data, data_length);
-        existing->data_capacity = data_length;
     }
+    if (metadata->kind == POSIX_NODE_REGULAR && data_length > 0)
+        existing->metadata.size = (int64_t)data_length;
     return 0;
 }
 
@@ -273,7 +333,7 @@ int posix_kernel_path_unlink(posix_kernel *kernel, const uint8_t *path,
                 return -POSIX_ENOTEMPTY;
         }
     }
-    free(node->data);
+    posix_kernel_file_release(node->file);
     free(node->link_target);
     int index = (int)(node - kernel->path_nodes);
     for (int i = index; i + 1 < kernel->path_node_count; i++)
@@ -296,9 +356,9 @@ int posix_kernel_path_rename(posix_kernel *kernel,
     if (!from) return -POSIX_ENOENT;
     if (to) {
         if (to->metadata.kind == POSIX_NODE_DIRECTORY) return -POSIX_EISDIR;
-        free(to->data); free(to->link_target);
+        posix_kernel_file_release(to->file); free(to->link_target);
         *to = *from;
-        from->data = NULL; from->link_target = NULL;
+        from->file = NULL; from->link_target = NULL;
         memset(from, 0, sizeof(*from));
         return 0;
     }
@@ -359,6 +419,8 @@ int posix_kernel_path_stat(posix_kernel *kernel, const uint8_t *path,
         if (node->metadata.kind == POSIX_NODE_SYMLINK) return -POSIX_ELOOP;
     }
     *metadata = node->metadata;
+    if (node->metadata.kind == POSIX_NODE_REGULAR && node->file)
+        metadata->size = (int64_t)node->file->data_capacity;
     return 0;
 }
 
@@ -410,16 +472,17 @@ int posix_kernel_path_snapshot(posix_kernel *kernel, const uint8_t *path,
     if (node->metadata.kind != POSIX_NODE_REGULAR)
         return -POSIX_ENOENT;
     if (!(node->metadata.mode & 0111u)) return -POSIX_EACCES;
-    if (maximum_size != 0 && node->data_capacity > maximum_size)
+    if (maximum_size != 0 && node->file->data_capacity > maximum_size)
         return -POSIX_E2BIG;
-    if (node->data_capacity > 0) {
-        copy = (uint8_t *)malloc(node->data_capacity);
+    if (node->file->data_capacity > 0) {
+        copy = (uint8_t *)malloc(node->file->data_capacity);
         if (!copy) return -POSIX_ENOMEM;
-        memcpy(copy, node->data, node->data_capacity);
+        memcpy(copy, node->file->data, node->file->data_capacity);
     }
     *data_out = copy;
-    *length_out = node->data_capacity;
+    *length_out = node->file->data_capacity;
     *metadata_out = node->metadata;
+    metadata_out->size = (int64_t)node->file->data_capacity;
     return 0;
 }
 
@@ -428,6 +491,8 @@ int posix_kernel_path_snapshot(posix_kernel *kernel, const uint8_t *path,
 posix_kernel *posix_kernel_create(int interactive) {
     posix_kernel *k = calloc(1, sizeof(posix_kernel));
     if (!k) return NULL;
+    k->shm_namespace = posix_shm_namespace_create();
+    if (!k->shm_namespace) { free(k); return NULL; }
 
     memcpy(k->cwd, "/", 2);
     const posix_path_metadata root = { POSIX_NODE_DIRECTORY, 0755, 0, 0, 0, 1 };
@@ -436,15 +501,16 @@ posix_kernel *posix_kernel_create(int interactive) {
         posix_kernel_path_add(k, "/bin", &directory) < 0 ||
         posix_kernel_path_add(k, "/usr", &directory) < 0 ||
         posix_kernel_path_add(k, "/usr/bin", &directory) < 0) {
+        posix_shm_namespace_release(k->shm_namespace);
         free(k);
         return NULL;
     }
 
     if (interactive) {
         posix_ofd *tty = ofd_alloc(POSIX_OFD_TERMINAL);
-        if (!tty) { free(k); return NULL; }
+        if (!tty) { posix_shm_namespace_release(k->shm_namespace); free(k); return NULL; }
         tty->terminal.input = malloc(POSIX_TERMINAL_INPUT_CAPACITY);
-        if (!tty->terminal.input) { free(tty); free(k); return NULL; }
+        if (!tty->terminal.input) { free(tty); posix_shm_namespace_release(k->shm_namespace); free(k); return NULL; }
         tty->terminal.input_length = 0;
         tty->terminal.input_capacity = POSIX_TERMINAL_INPUT_CAPACITY;
         tty->terminal.eof = 0;
@@ -481,17 +547,9 @@ posix_kernel *posix_kernel_clone(const posix_kernel *source) {
     posix_kernel *clone = calloc(1, sizeof(*clone));
     if (!clone) return NULL;
     memcpy(clone, source, sizeof(*clone));
+    posix_shm_namespace_retain(clone->shm_namespace);
     for (int i = 0; i < clone->path_node_count; i++) {
-        clone->path_nodes[i].data = NULL;
-        if (source->path_nodes[i].data_capacity) {
-            clone->path_nodes[i].data = malloc(source->path_nodes[i].data_capacity);
-            if (!clone->path_nodes[i].data) {
-                posix_kernel_destroy(clone);
-                return NULL;
-            }
-            memcpy(clone->path_nodes[i].data, source->path_nodes[i].data,
-                   source->path_nodes[i].data_capacity);
-        }
+        posix_file_object_retain(clone->path_nodes[i].file);
         if (source->path_nodes[i].link_target) {
             size_t length = strlen(source->path_nodes[i].link_target);
             clone->path_nodes[i].link_target = malloc(length + 1);
@@ -518,8 +576,8 @@ posix_kernel *posix_kernel_clone(const posix_kernel *source) {
                 posix_kernel_destroy(clone);
                 return NULL;
             }
-            /* Open descriptions are shared by fork; the cloned kernel gets
-             * the corresponding private pathname data. */
+            /* Open descriptions are shared by fork and point at the
+             * corresponding cloned pathname entry and shared file object. */
             posix_ofd *copy = NULL;
             for (int i = 0; i < regular_count; i++)
                 if (regular_sources[i] == source_ofd) copy = regular_clones[i];
@@ -532,6 +590,7 @@ posix_kernel *posix_kernel_clone(const posix_kernel *source) {
                 *copy = *shared;
                 copy->ref_count = 1;
                 copy->regular.node = &clone->path_nodes[index];
+                posix_file_object_retain(copy->regular.file);
                 regular_sources[regular_count] = source_ofd;
                 regular_clones[regular_count++] = copy;
             } else {
@@ -559,8 +618,27 @@ void posix_kernel_destroy(posix_kernel *kernel) {
         }
     }
     for (int i = 0; i < kernel->path_node_count; i++)
-        { free(kernel->path_nodes[i].data); free(kernel->path_nodes[i].link_target); }
+        { posix_kernel_file_release(kernel->path_nodes[i].file);
+          free(kernel->path_nodes[i].link_target); }
+    posix_shm_namespace_release(kernel->shm_namespace);
     free(kernel);
+}
+
+int posix_kernel_set_shm_namespace(posix_kernel *kernel,
+                                    posix_shm_namespace *namespace_) {
+    if (!kernel || !namespace_) return -POSIX_EINVAL;
+    posix_shm_namespace_retain(namespace_);
+    posix_shm_namespace_release(kernel->shm_namespace);
+    kernel->shm_namespace = namespace_;
+    return 0;
+}
+
+int posix_kernel_set_credentials(posix_kernel *kernel, uint32_t uid,
+                                 uint32_t gid) {
+    if (!kernel) return -POSIX_EINVAL;
+    kernel->uid = uid;
+    kernel->gid = gid;
+    return 0;
 }
 
 void posix_kernel_set_clock(posix_kernel *kernel, posix_clock_now_fn clock_now,
@@ -854,7 +932,7 @@ int posix_kernel_query_readiness(posix_kernel *kernel, int fd) {
         break;
     case POSIX_OFD_REGULAR:
         if (ofd->regular.readable &&
-            ofd->regular.offset < ofd->regular.node->data_capacity)
+            ofd->regular.offset < ofd->regular.file->data_capacity)
             mask |= POSIX_POLL_IN;
         if (ofd->regular.writable) mask |= POSIX_POLL_OUT;
         break;
@@ -1048,7 +1126,7 @@ int posix_kernel_close(posix_kernel *kernel, int fd) {
 int posix_kernel_open(posix_kernel *kernel, const uint8_t *path, size_t length,
                       int flags, int mode) {
     if (!kernel || !path || length == 0) return -POSIX_EINVAL;
-    if (flags & ~(POSIX_O_WRONLY | POSIX_O_RDWR | POSIX_O_CREAT |
+    if (flags & ~(POSIX_O_WRONLY | POSIX_O_RDWR | POSIX_O_CREAT | POSIX_O_EXCL |
                   POSIX_O_TRUNC | POSIX_O_APPEND)) return -POSIX_EINVAL;
     if ((flags & POSIX_O_WRONLY) && (flags & POSIX_O_RDWR))
         return -POSIX_EINVAL;
@@ -1085,17 +1163,129 @@ int posix_kernel_open(posix_kernel *kernel, const uint8_t *path, size_t length,
     posix_ofd *ofd = ofd_alloc(POSIX_OFD_REGULAR);
     if (!ofd) return -POSIX_ENOMEM;
     ofd->regular.node = node;
-    ofd->regular.offset = (flags & POSIX_O_APPEND) ? node->data_capacity : 0;
+    ofd->regular.file = node->file;
+    posix_file_object_retain(ofd->regular.file);
+    ofd->regular.offset = (flags & POSIX_O_APPEND) ?
+        ofd->regular.file->data_capacity : 0;
     ofd->regular.readable = !(flags & POSIX_O_WRONLY);
     ofd->regular.writable = (flags & (POSIX_O_WRONLY | POSIX_O_RDWR)) != 0;
     ofd->regular.append = (flags & POSIX_O_APPEND) != 0;
     if ((flags & POSIX_O_TRUNC) && ofd->regular.writable) {
-        free(node->data); node->data = NULL; node->data_capacity = 0;
+        free(ofd->regular.file->data); ofd->regular.file->data = NULL;
+        ofd->regular.file->data_capacity = 0;
         node->metadata.size = 0;
     }
     kernel->fds[fd].ofd = ofd;
     kernel->fds[fd].cloexec = 0;
     return fd;
+}
+
+static int shm_internal_name(const uint8_t *name, size_t length,
+                             char *path, size_t capacity) {
+    static const char prefix[] = "/__waste_shm__";
+    size_t prefix_length = sizeof(prefix) - 1;
+    if (!name || !path || length < 2 || name[0] != '/' ||
+        length >= POSIX_PATH_MAX || prefix_length + length >= capacity)
+        return -POSIX_EINVAL;
+    for (size_t i = 1; i < length; i++)
+        if (name[i] == '/') return -POSIX_EINVAL;
+    memcpy(path, prefix, prefix_length);
+    memcpy(path + prefix_length, name, length);
+    path[prefix_length + length] = 0;
+    return 0;
+}
+
+int posix_kernel_shm_open(posix_kernel *kernel, const uint8_t *name,
+                          size_t length, int flags, int mode) {
+    posix_shm_object *object = NULL;
+    posix_kernel_path_node *node;
+    char path[POSIX_PATH_NODE_NAME_MAX];
+    int created = 0;
+    int status = shm_internal_name(name, length, path, sizeof(path));
+    if (status < 0) return status;
+    if (!kernel->shm_namespace) return -POSIX_ENOSYS;
+    for (uint32_t i = 0; i < kernel->shm_namespace->count; i++)
+        if (strlen(kernel->shm_namespace->objects[i].name) == length &&
+            memcmp(kernel->shm_namespace->objects[i].name, name, length) == 0) {
+            if ((flags & (POSIX_O_CREAT | POSIX_O_EXCL)) ==
+                (POSIX_O_CREAT | POSIX_O_EXCL))
+                return -POSIX_EEXIST;
+            object = &kernel->shm_namespace->objects[i];
+            break;
+        }
+    if (!object) {
+        if (!(flags & POSIX_O_CREAT)) return -POSIX_ENOENT;
+        if (flags & POSIX_O_EXCL) return -POSIX_EEXIST;
+        if (kernel->shm_namespace->count >= POSIX_SHM_OBJECT_MAX)
+            return -POSIX_ENOMEM;
+        object = &kernel->shm_namespace->objects[kernel->shm_namespace->count++];
+        memcpy(object->name, name, length);
+        object->name[length] = 0;
+        object->file = file_object_create(NULL, 0,
+            UINT64_C(0x40000000) + kernel->shm_namespace->count);
+        if (!object->file) {
+            kernel->shm_namespace->count--;
+            return -POSIX_ENOMEM;
+        }
+        object->mode = (uint32_t)(mode ? mode : 0666) & 0777u;
+        object->uid = kernel->uid;
+        object->gid = kernel->gid;
+        created = 1;
+    }
+    if (kernel->uid != 0) {
+        uint32_t permissions = object->uid == kernel->uid ?
+            (object->mode >> 6) & 7u :
+            (object->gid == kernel->gid ? (object->mode >> 3) & 7u :
+                                          object->mode & 7u);
+        uint32_t required = (flags & (POSIX_O_WRONLY | POSIX_O_RDWR)) ? 2u : 4u;
+        if ((permissions & required) != required) {
+            if (created) {
+                posix_kernel_file_release(object->file);
+                memset(object, 0, sizeof(*object));
+                kernel->shm_namespace->count--;
+            }
+            return -POSIX_EACCES;
+        }
+    }
+    node = path_find(kernel, path);
+    if (!node) {
+        posix_path_metadata metadata = { POSIX_NODE_REGULAR, 0666, 0, 0, 0,
+            object->file->inode };
+        status = posix_kernel_path_add_data(kernel, path, &metadata, NULL, 0);
+        if (status < 0) return status;
+        node = path_find(kernel, path);
+    }
+    if (!node) return -POSIX_ENOENT;
+    if (node->file != object->file) {
+        posix_file_object_retain(object->file);
+        posix_kernel_file_release(node->file);
+        node->file = object->file;
+    }
+    node->metadata.size = (int64_t)object->file->data_capacity;
+    return posix_kernel_open(kernel, (const uint8_t *)path, strlen(path),
+                             flags, mode);
+}
+
+int posix_kernel_shm_unlink(posix_kernel *kernel, const uint8_t *name,
+                            size_t length) {
+    char path[POSIX_PATH_NODE_NAME_MAX];
+    int status = shm_internal_name(name, length, path, sizeof(path));
+    if (status < 0) return status;
+    if (!kernel->shm_namespace) return -POSIX_ENOSYS;
+    for (uint32_t i = 0; i < kernel->shm_namespace->count; i++)
+        if (strlen(kernel->shm_namespace->objects[i].name) == length &&
+            memcmp(kernel->shm_namespace->objects[i].name, name, length) == 0) {
+            posix_kernel_file_release(kernel->shm_namespace->objects[i].file);
+            for (; i + 1 < kernel->shm_namespace->count; i++)
+                kernel->shm_namespace->objects[i] =
+                    kernel->shm_namespace->objects[i + 1];
+            memset(&kernel->shm_namespace->objects[
+                       --kernel->shm_namespace->count], 0,
+                   sizeof(kernel->shm_namespace->objects[0]));
+            return 0;
+        }
+    (void)path;
+    return -POSIX_ENOENT;
 }
 
 int posix_kernel_readdir(posix_kernel *kernel, int fd, char *name,
@@ -1134,7 +1324,7 @@ int posix_kernel_lseek(posix_kernel *kernel, int fd, int64_t offset,
     posix_ofd *ofd = kernel->fds[fd].ofd;
     if (!ofd || ofd->kind != POSIX_OFD_REGULAR) return -POSIX_ESPIPE;
     int64_t base = whence == 0 ? 0 : whence == 1 ? (int64_t)ofd->regular.offset :
-        whence == 2 ? (int64_t)ofd->regular.node->data_capacity : INT64_MIN;
+        whence == 2 ? (int64_t)ofd->regular.file->data_capacity : INT64_MIN;
     if (base == INT64_MIN || offset < -base) return -POSIX_EINVAL;
     ofd->regular.offset = (size_t)(base + offset);
     *result = (int64_t)ofd->regular.offset;
@@ -1272,12 +1462,11 @@ int posix_kernel_read(posix_kernel *kernel, int fd, void *buf, int count) {
         return n;
     }
     case POSIX_OFD_REGULAR: {
-        posix_kernel_path_node *node = ofd->regular.node;
         if (!ofd->regular.readable) return -POSIX_EBADF;
-        if (ofd->regular.offset >= node->data_capacity) return 0;
-        size_t available = node->data_capacity - ofd->regular.offset;
+        if (ofd->regular.offset >= ofd->regular.file->data_capacity) return 0;
+        size_t available = ofd->regular.file->data_capacity - ofd->regular.offset;
         int n = available < (size_t)count ? (int)available : count;
-        memcpy(buf, node->data + ofd->regular.offset, (size_t)n);
+        memcpy(buf, ofd->regular.file->data + ofd->regular.offset, (size_t)n);
         ofd->regular.offset += (size_t)n;
         return n;
     }
@@ -1287,6 +1476,119 @@ int posix_kernel_read(posix_kernel *kernel, int fd, void *buf, int count) {
         return -POSIX_EISDIR;
     }
     return -POSIX_EINVAL;
+}
+
+int posix_kernel_file_read_at(posix_kernel *kernel, int fd, uint64_t offset,
+                              void *buf, size_t count) {
+    posix_ofd *ofd;
+    if (!kernel || !fd_valid(fd) || (!buf && count != 0))
+        return -POSIX_EINVAL;
+    ofd = kernel->fds[fd].ofd;
+    if (!ofd) return -POSIX_EBADF;
+    if (ofd->kind != POSIX_OFD_REGULAR || !ofd->regular.readable)
+        return -POSIX_EBADF;
+    if (count > INT_MAX) return -POSIX_EINVAL;
+    if (offset > ofd->regular.file->data_capacity ||
+        count > ofd->regular.file->data_capacity - offset)
+        return -POSIX_EINVAL;
+    if (count) memcpy(buf, ofd->regular.file->data + (size_t)offset, count);
+    return (int)count;
+}
+
+int posix_kernel_file_size(posix_kernel *kernel, int fd, uint64_t *size_out) {
+    posix_ofd *ofd;
+    if (!kernel || !fd_valid(fd) || !size_out) return -POSIX_EINVAL;
+    ofd = kernel->fds[fd].ofd;
+    if (!ofd) return -POSIX_EBADF;
+    if (ofd->kind != POSIX_OFD_REGULAR || !ofd->regular.readable)
+        return -POSIX_EBADF;
+    *size_out = ofd->regular.file->data_capacity;
+    return 0;
+}
+
+int posix_kernel_file_identity(posix_kernel *kernel, int fd,
+                               uint64_t *object_id_out,
+                               int *writable_out) {
+    posix_ofd *ofd;
+    if (!kernel || !fd_valid(fd) || !object_id_out || !writable_out)
+        return -POSIX_EINVAL;
+    ofd = kernel->fds[fd].ofd;
+    if (!ofd || ofd->kind != POSIX_OFD_REGULAR || !ofd->regular.readable)
+        return -POSIX_EBADF;
+    *object_id_out = ofd->regular.file->inode;
+    *writable_out = ofd->regular.writable != 0;
+    return 0;
+}
+
+int posix_kernel_ftruncate(posix_kernel *kernel, int fd, uint64_t size) {
+    posix_ofd *ofd;
+    uint8_t *resized;
+    if (!kernel || !fd_valid(fd) || size > SIZE_MAX)
+        return -POSIX_EINVAL;
+    ofd = kernel->fds[fd].ofd;
+    if (!ofd) return -POSIX_EBADF;
+    if (ofd->kind != POSIX_OFD_REGULAR || !ofd->regular.writable)
+        return -POSIX_EBADF;
+    if ((size_t)size == ofd->regular.file->data_capacity) return 0;
+    resized = (uint8_t *)realloc(ofd->regular.file->data, (size_t)size);
+    if (!resized && size != 0) return -POSIX_ENOMEM;
+    if ((size_t)size > ofd->regular.file->data_capacity)
+        memset(resized + ofd->regular.file->data_capacity, 0,
+               (size_t)size - ofd->regular.file->data_capacity);
+    ofd->regular.file->data = resized;
+    ofd->regular.file->data_capacity = (size_t)size;
+    return 0;
+}
+
+int posix_kernel_file_retain(posix_kernel *kernel, int fd,
+                             posix_file_object **object_out,
+                             int *writable_out) {
+    posix_ofd *ofd;
+    if (!kernel || !fd_valid(fd) || !object_out || !writable_out)
+        return -POSIX_EINVAL;
+    ofd = kernel->fds[fd].ofd;
+    if (!ofd || ofd->kind != POSIX_OFD_REGULAR || !ofd->regular.readable)
+        return -POSIX_EBADF;
+    posix_file_object_retain(ofd->regular.file);
+    *object_out = ofd->regular.file;
+    *writable_out = ofd->regular.writable != 0;
+    return 0;
+}
+
+int posix_kernel_file_write_object(posix_kernel *kernel,
+                                   posix_file_object *object,
+                                   uint64_t offset, const void *buf,
+                                   size_t count) {
+    uint64_t end;
+    if (!kernel || !object || (!buf && count != 0) || count > INT_MAX)
+        return -POSIX_EINVAL;
+    if (offset > UINT64_MAX - count) return -POSIX_EINVAL;
+    end = offset + count;
+    if (end > SIZE_MAX) return -POSIX_EINVAL;
+    if (end > object->data_capacity) {
+        uint8_t *grown = realloc(object->data, (size_t)end);
+        if (!grown) return -POSIX_ENOMEM;
+        if ((size_t)end > object->data_capacity)
+            memset(grown + object->data_capacity, 0,
+                   (size_t)end - object->data_capacity);
+        object->data = grown;
+        object->data_capacity = (size_t)end;
+    }
+    if (count) memcpy(object->data + (size_t)offset, buf, count);
+    return (int)count;
+}
+
+int posix_kernel_file_write_at(posix_kernel *kernel, int fd, uint64_t offset,
+                               const void *buf, size_t count) {
+    posix_ofd *ofd;
+    if (!kernel || !fd_valid(fd) || (!buf && count != 0) || count > INT_MAX)
+        return -POSIX_EINVAL;
+    ofd = kernel->fds[fd].ofd;
+    if (!ofd) return -POSIX_EBADF;
+    if (ofd->kind != POSIX_OFD_REGULAR || !ofd->regular.writable)
+        return -POSIX_EBADF;
+    return posix_kernel_file_write_object(
+        kernel, ofd->regular.file, offset, buf, count);
 }
 
 int posix_kernel_write(posix_kernel *kernel, int fd,
@@ -1317,20 +1619,19 @@ int posix_kernel_write(posix_kernel *kernel, int fd,
     case POSIX_OFD_DIRECTORY:
         return -POSIX_EISDIR;
     case POSIX_OFD_REGULAR: {
-        posix_kernel_path_node *node = ofd->regular.node;
         if (!ofd->regular.writable) return -POSIX_EBADF;
-        size_t offset = ofd->regular.append ? node->data_capacity : ofd->regular.offset;
+        size_t offset = ofd->regular.append ? ofd->regular.file->data_capacity :
+            ofd->regular.offset;
         size_t needed = offset + (size_t)count;
         if (needed < offset) return -POSIX_ENOSPC;
-        if (needed > node->data_capacity) {
-            uint8_t *grown = realloc(node->data, needed);
+        if (needed > ofd->regular.file->data_capacity) {
+            uint8_t *grown = realloc(ofd->regular.file->data, needed);
             if (!grown) return -POSIX_ENOMEM;
-            node->data = grown;
-            node->data_capacity = needed;
+            ofd->regular.file->data = grown;
+            ofd->regular.file->data_capacity = needed;
         }
-        memcpy(node->data + offset, buf, (size_t)count);
+        memcpy(ofd->regular.file->data + offset, buf, (size_t)count);
         ofd->regular.offset = offset + (size_t)count;
-        node->metadata.size = (int64_t)node->data_capacity;
         return count;
     }
     }

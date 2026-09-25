@@ -191,10 +191,13 @@ int main(int argc, char **argv) {
           "startup environment copied");
     CHECK(image && image->startup_ptr != 0 && image->startup_size > 44,
           "startup block materialized");
-    if (image && image->engine && image->engine->memory)
-        CHECK(image->engine->memory->data[100] ==
-                  (uint8_t)image->startup_ptr,
+    if (image && image->engine && image->engine->memory) {
+        uint8_t startup_byte = 0;
+        CHECK(exec_memory_read(image->engine->memory, 100, &startup_byte, 1,
+                               &error) == EXEC_OK &&
+                  startup_byte == (uint8_t)image->startup_ptr,
               "startup hook received block pointer");
+    }
     if (image) native_process_image_release(image);
 
     {

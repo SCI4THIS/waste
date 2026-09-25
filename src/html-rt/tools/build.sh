@@ -109,6 +109,18 @@ elif [ "$TARGET" = "bash" ]; then
   if [ -f "$REPO_ROOT/build/cli-rt/waste-probe.wasm" ]; then
     cp "$REPO_ROOT/build/cli-rt/waste-probe.wasm" "$STAGING/"
   fi
+  if [ -f "$PAGE_DIR/true.wasm" ]; then
+    cp "$PAGE_DIR/true.wasm" "$STAGING/"
+  else
+    echo "error: linked coreutils true.wasm not found" >&2
+    exit 1
+  fi
+  if [ -f "$PAGE_DIR/false.wasm" ]; then
+    cp "$PAGE_DIR/false.wasm" "$STAGING/"
+  else
+    echo "error: linked coreutils false.wasm not found" >&2
+    exit 1
+  fi
 fi
 
 echo "  Staged $(find "$STAGING" -type f | wc -l) files"

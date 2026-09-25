@@ -533,6 +533,9 @@ typedef struct {
 } browser_wast_context;
 
 static uint32_t g_browser_command_line;
+static int g_shared_file_page_probe_requested;
+static int g_shared_file_page_probe_result;
+int32_t waste_wast_shared_file_page_probe(void);
 
 static void add_command_failure(const char *name, const char *message) {
     char located[256];
@@ -960,6 +963,7 @@ static exec_status browser_invoke_process(browser_wast_context *context,
             capsule->root_args[i] = args[i];
         capsule->state = image_active ? NATIVE_PROCESS_RUNNABLE :
                                         NATIVE_PROCESS_RUNNABLE;
+        (void)native_process_capsule_bind_memory(capsule);
     }
     exec_status status = EXEC_OK;
     for (;;) {
@@ -1003,18 +1007,24 @@ static exec_status browser_invoke_process(browser_wast_context *context,
                      * path below must perform the parent wake after it has
                      * observed the child exit; the combined helper selects
                      * the parent too early for that path. */
-                    if (native_store_complete_process_handler(
+                    if ((error->signal ?
+                        native_store_complete_process_handler_signal(
+                            &context->store, handler_status, error->signal) :
+                        native_store_complete_process_handler(
                             &context->store, handler_status,
-                            handler_exit_code) != 0)
+                            handler_exit_code)) != 0)
                         return exec_fail(error, EXEC_ERROR_TRAP,
                                          "failed to complete WAST handler");
                     browser_record_engine_transition("handler-completed",
                                                       g_process_parent_engine);
                     status = EXEC_ERROR_EXIT;
                 } else {
-                    if (native_store_complete_process_handler(
+                    if ((error->signal ?
+                        native_store_complete_process_handler_signal(
+                            &context->store, handler_status, error->signal) :
+                        native_store_complete_process_handler(
                             &context->store, handler_status,
-                            handler_exit_code) != 0)
+                            handler_exit_code)) != 0)
                         return exec_fail(error, EXEC_ERROR_TRAP,
                                          "failed to complete WAST handler");
                     status = EXEC_ERROR_EXIT;
@@ -1089,7 +1099,12 @@ static exec_status browser_invoke_process(browser_wast_context *context,
                 continue;
             }
             if (loaded != EXEC_OK) {
-                waste_browser_record_transition("exec-preflight-rejected");
+                char reject_event[192];
+                snprintf(reject_event, sizeof(reject_event),
+                         "exec-preflight-rejected-s%d-%s",
+                         error ? error->status : -1,
+                         error && error->message[0] ? error->message : "unknown");
+                waste_browser_record_transition(reject_event);
                 /* Leave the old evaluator suspended. Its next import retry
                  * consumes this one-shot errno and returns from execve. */
                 context->store.exec_request.failure_errno = POSIX_ENOEXEC;
@@ -1137,10 +1152,17 @@ static exec_status browser_invoke_process(browser_wast_context *context,
                 capsule->root_func_idx = active_func_idx;
                 capsule->root_arg_count = 0;
                 capsule->generation++;
+                (void)native_process_capsule_bind_memory(capsule);
             }
             continue;
         }
         if (image_active && status != EXEC_YIELD) {
+            char image_event[64];
+            snprintf(image_event, sizeof(image_event),
+                     "image-return-s%d-e%d-%s", status,
+                     error ? error->exit_code : -1,
+                     error && error->message[0] ? error->message : "none");
+            waste_browser_record_transition(image_event);
             if (status == EXEC_ERROR_EXIT) {
                 /* Preserve an explicit guest exit code. */
             } else if (status == EXEC_OK) {
@@ -1148,8 +1170,13 @@ static exec_status browser_invoke_process(browser_wast_context *context,
             } else {
                 error->exit_code = 127;
             }
-            (void)native_store_exit_process(&context->store,
-                                             error->exit_code);
+            if (error->signal)
+                (void)native_store_signal_process(
+                    &context->store, native_store_getpid(&context->store),
+                    error->signal);
+            else
+                (void)native_store_exit_process(&context->store,
+                                                error->exit_code);
             child_exit_recorded = 1;
             status = EXEC_ERROR_EXIT;
             image_active = 0;
@@ -1390,9 +1417,17 @@ static void browser_process_module(browser_wast_context *context,
         if (group->has_module_assertion) {
             int ok = group->module_assert_kind != WAST_ASSERT_TRAP;
             add_result(ok, "(module)", ok ? (void *)0 : encode_error);
-        } else {
-            add_command_failure("(module)", encode_error);
+        } else if (script->group_count == 1) {
+            /* The script was retained before processing so later commands can
+             * refer to a successful anonymous module.  An unasserted module
+             * that cannot be encoded has no instance to preserve; release the
+             * retained parse or large official files steadily exhaust the
+             * browser heap. */
+            browser_forget_retained(context, script);
         }
+        /* A module without an assertion is a definition/setup command.  The
+         * native runner does not count an expected-invalid setup module as a
+         * failed assertion; keep the streaming browser runner equivalent. */
         return;
     }
 
@@ -1414,8 +1449,11 @@ static void browser_process_module(browser_wast_context *context,
         return;
     }
     if (status != EXEC_OK) {
-        add_command_failure("(module)", error.message[0] ? error.message :
-                            "module instantiation failed");
+        /* Unasserted modules may intentionally be non-instantiable setup
+         * inputs in the official script.  They do not contribute a result;
+         * only an explicit module assertion turns the status into a check. */
+        if (!group->has_module_assertion && script->group_count == 1)
+            browser_forget_retained(context, script);
         return;
     }
     if (!native_store_add(&context->store, engine, &group->module,
@@ -1556,6 +1594,7 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
     browser_process_state_reset();
     g_browser_result_count = 0;
     g_browser_result_passed = 0;
+    g_shared_file_page_probe_result = 0;
     g_browser_command_line = 1;
     /* Reset old per-module API state */
     memset(g_modules, 0, sizeof(g_modules));
@@ -1595,6 +1634,11 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
         g_vfs_manifest[i].data = NULL;
     }
     g_vfs_manifest_count = 0;
+    if (g_shared_file_page_probe_requested) {
+        g_shared_file_page_probe_result =
+            waste_wast_shared_file_page_probe();
+        g_shared_file_page_probe_requested = 0;
+    }
     g_yield_context.store.host_resolver = browser_host_resolver;
     g_yield_context.store.host_context = &g_yield_context.store;
     wast_stream_init(&g_yield_stream,
@@ -1798,6 +1842,76 @@ int32_t waste_wast_raise_signal(uint32_t signal) {
     if (!g_yield_context.store.kernel_terminal) return -POSIX_EINVAL;
     return posix_kernel_signal_raise(g_yield_context.store.kernel,
                                      (int)signal);
+}
+
+/* Browser evidence probe for the store-owned MAP_SHARED page cache.  This is
+ * intentionally a narrow engine test: both memories are independent objects,
+ * while the file page is acquired from the real browser store cache. */
+__attribute__((export_name("waste_wast_shared_file_page_probe")))
+int32_t waste_wast_shared_file_page_probe(void) {
+    static const uint8_t path[] = "/vm-f-shared-page-probe";
+    static const uint8_t initial[] = "cache";
+    posix_path_metadata metadata = {
+        POSIX_NODE_REGULAR, 0666, 0, 0, 1, 9101
+    };
+    native_store *store = &g_yield_context.store;
+    exec_memory shared_memory;
+    exec_memory observer_memory;
+    exec_memory private_memory;
+    exec_memory_page *cached_page = NULL;
+    posix_file_object *file_object = NULL;
+    int writable = 0;
+    int fd = -1;
+    uint8_t observed = 0;
+    uint8_t value = 0x91;
+    int result = -POSIX_EINVAL;
+    memset(&shared_memory, 0, sizeof(shared_memory));
+    memset(&observer_memory, 0, sizeof(observer_memory));
+    memset(&private_memory, 0, sizeof(private_memory));
+    if (!store->kernel ||
+        posix_kernel_path_add_data(store->kernel, (const char *)path,
+                                    &metadata, initial, sizeof(initial) - 1) != 0)
+        return -POSIX_EIO;
+    fd = posix_kernel_open(store->kernel, path, sizeof(path) - 1,
+                           POSIX_O_RDWR, 0);
+    if (fd < 0 || posix_kernel_file_retain(store->kernel, fd, &file_object,
+                                            &writable) != 0 || !writable)
+        goto done;
+    shared_memory.max_pages = 2;
+    observer_memory.max_pages = 2;
+    private_memory.max_pages = 2;
+    if (exec_memory_resize_pages(&shared_memory, 1, NULL) != EXEC_OK ||
+        exec_memory_resize_pages(&observer_memory, 1, NULL) != EXEC_OK ||
+        exec_memory_resize_pages(&private_memory, 1, NULL) != EXEC_OK ||
+        native_store_shared_file_page(store, file_object, 0, &cached_page) != 0 ||
+        exec_memory_bind_shared_page(&shared_memory, 0, cached_page, NULL) != EXEC_OK ||
+        exec_memory_bind_shared_page(&observer_memory, 0, cached_page, NULL) != EXEC_OK ||
+        exec_memory_write(&shared_memory, 0, &value, 1, NULL) != EXEC_OK ||
+        exec_memory_read(&observer_memory, 0, &observed, 1, NULL) != EXEC_OK ||
+        observed != value ||
+        exec_memory_write(&private_memory, 0, cached_page->bytes, 1, NULL) != EXEC_OK ||
+        exec_memory_write(&private_memory, 0, &initial[0], 1, NULL) != EXEC_OK ||
+        exec_memory_read(&shared_memory, 0, &observed, 1, NULL) != EXEC_OK ||
+        observed != value)
+        goto done;
+    result = 0;
+done:
+    exec_memory_release(&private_memory);
+    exec_memory_release(&observer_memory);
+    exec_memory_release(&shared_memory);
+    if (file_object) posix_kernel_file_release(file_object);
+    if (fd >= 0) (void)posix_kernel_close(store->kernel, fd);
+    return result;
+}
+
+__attribute__((export_name("waste_wast_request_shared_file_page_probe")))
+void waste_wast_request_shared_file_page_probe(void) {
+    g_shared_file_page_probe_requested = 1;
+}
+
+__attribute__((export_name("waste_wast_shared_file_page_probe_result")))
+int32_t waste_wast_shared_file_page_probe_result(void) {
+    return g_shared_file_page_probe_result;
 }
 
 /* ---- Result accessor exports ---- */

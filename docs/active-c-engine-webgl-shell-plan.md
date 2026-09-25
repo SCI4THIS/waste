@@ -925,6 +925,12 @@ Stage 8 is tracked in
 `submodules/coreutils` gitlink already exists and makes the engine VFS the
 source of executable bytes before bringing up utilities.
 
+The Coreutils utility waves are currently paused at their shared-memory link
+boundary while `docs/active-engine-virtual-memory-plan.md` replaces contiguous
+engine memory with process-owned virtual pages. That prerequisite supplies the
+single application/libc pointer space and the copy-on-write and shared backing
+needed for the long-term POSIX `fork` and `mmap` model.
+
 The stage now includes three related deliverables:
 
 - a WASTE image loader that recognizes binary Wasm by magic and performs

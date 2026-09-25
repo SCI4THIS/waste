@@ -124,6 +124,36 @@ typedef struct {
 
 typedef struct native_store_checkpoint native_store_checkpoint;
 
+typedef struct {
+    uint64_t address;
+    uint64_t length;
+    uint64_t file_offset;
+    posix_file_object *file_object;
+    uint8_t shared;
+    uint8_t writable;
+} native_process_file_mapping;
+
+typedef struct {
+    posix_file_object *file_object;
+    uint64_t file_offset;
+    exec_memory_page *page;
+} native_shared_file_page;
+
+typedef enum {
+    NATIVE_PROCESS_REGION_MODULE = 1,
+    NATIVE_PROCESS_REGION_STACK,
+    NATIVE_PROCESS_REGION_STARTUP,
+    NATIVE_PROCESS_REGION_BRK,
+    NATIVE_PROCESS_REGION_MAPPING,
+    NATIVE_PROCESS_REGION_GUARD
+} native_process_region_kind;
+
+typedef struct {
+    uint64_t first_page;
+    uint64_t page_count;
+    native_process_region_kind kind;
+} native_process_region;
+
 /* Process-owned execution identity.  The browser driver may cache a pointer
  * to this capsule, but it is the store—not browser globals—that owns the
  * image, evaluator descriptor, and suspended continuation. */
@@ -147,6 +177,13 @@ typedef struct {
     waste_exec_engine **continuation_engines;
     exec_continuation *continuations;
     uint32_t continuation_count;
+    native_process_file_mapping *file_mappings;
+    uint32_t file_mapping_count;
+    uint32_t file_mapping_capacity;
+    native_process_region *regions;
+    uint32_t region_count;
+    uint32_t region_capacity;
+    uint64_t virtual_page_limit;
     native_process_handler handler;
 } native_process_capsule;
 
@@ -196,6 +233,7 @@ typedef struct native_store {
     void *host_context;
     /* Per-sandbox POSIX kernel: descriptor table, readiness, and wait state. */
     struct posix_kernel *kernel;
+    posix_shm_namespace *shm_namespace;
     int kernel_terminal;
     native_process processes[NATIVE_PROCESS_MAX];
     native_executable *executables;
@@ -211,6 +249,9 @@ typedef struct native_store {
     int fork_child_pid;
     int last_wait_pid;
     int last_wait_status;
+    native_shared_file_page *shared_file_pages;
+    uint32_t shared_file_page_count;
+    uint32_t shared_file_page_capacity;
 } native_store;
 
 void native_exec_request_init(native_exec_request *request);
@@ -232,6 +273,43 @@ int native_process_capsule_select_entry(native_process_capsule *capsule,
                                          uint32_t func_idx,
                                          const wasm_value *args,
                                          int arg_count);
+int native_process_capsule_bind_memory(native_process_capsule *capsule);
+/* Process-owned region metadata is page-based and independent of Wasm
+ * linear-memory visibility.  It is the address-space allocator's collision
+ * boundary; mappings remain represented by exec_memory VMAs. */
+int native_process_capsule_reserve_region(
+    native_process_capsule *capsule, uint64_t first_page,
+    uint64_t page_count, native_process_region_kind kind);
+int native_process_capsule_region_is_reserved(
+    const native_process_capsule *capsule, uint64_t first_page,
+    uint64_t page_count, native_process_region_kind *kind_out);
+int native_process_capsule_allocate_region(
+    native_process_capsule *capsule, uint64_t page_count,
+    native_process_region_kind kind, int top_down, uint64_t *first_page_out);
+void native_process_capsule_clear_regions(native_process_capsule *capsule);
+/* Process-owned virtual-memory entry points for the future POSIX mmap
+ * adapter. Page numbers are engine virtual pages, not host pointers. */
+int native_process_capsule_map_pages(native_process_capsule *capsule,
+                                     uint64_t first_page, uint64_t page_count,
+                                     uint8_t protection, uint8_t flags);
+int native_process_capsule_unmap_pages(native_process_capsule *capsule,
+                                       uint64_t first_page,
+                                       uint64_t page_count);
+int native_process_capsule_mmap_range(native_process_capsule *capsule,
+                                      uint64_t address, uint64_t length,
+                                      uint8_t protection, uint8_t flags,
+                                      uint64_t *address_out);
+int native_process_capsule_munmap_range(native_process_capsule *capsule,
+                                        uint64_t address, uint64_t length);
+int native_process_capsule_mprotect_range(native_process_capsule *capsule,
+                                          uint64_t address, uint64_t length,
+                                          uint8_t protection);
+int native_process_capsule_record_file_mapping(
+    native_process_capsule *capsule, uint64_t address, uint64_t length,
+    posix_file_object *file_object, uint64_t file_offset, int shared,
+    int writable);
+int native_process_capsule_forget_file_mapping(
+    native_process_capsule *capsule, uint64_t address, uint64_t length);
 int native_process_capsule_install_handler(
     native_process_capsule *capsule, native_process_handler_kind kind,
     uint8_t *source, size_t source_size, void *context,
@@ -289,6 +367,9 @@ int native_store_complete_process_handler(native_store *store,
 /* Complete a handler using the shell-visible default status for its result. */
 int native_store_complete_process_handler_default(native_store *store,
                                                   exec_status status);
+int native_store_complete_process_handler_signal(native_store *store,
+                                                 exec_status status,
+                                                 int signal);
 /* Browser/process-driver handoff: validate the live parent and its transition
  * slot, publish child completion, then queue exactly one parent wake. */
 int native_store_complete_process_handler_and_wake(
@@ -354,6 +435,10 @@ void native_store_checkpoint_destroy(native_store_checkpoint *checkpoint);
 void native_store_init(native_store *store);
 void native_store_free(native_store *store);
 void native_store_enable_terminal(native_store *store);
+int native_store_shared_file_page(native_store *store,
+                                  posix_file_object *file_object,
+                                  uint64_t file_offset,
+                                  exec_memory_page **page_out);
 
 int native_store_getpid(const native_store *store);
 int native_store_getppid(const native_store *store);

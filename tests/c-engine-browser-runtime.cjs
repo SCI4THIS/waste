@@ -7,7 +7,9 @@ const vm = require("node:vm");
 const root = path.resolve(__dirname, "..");
 const stagingDir = path.join(root, "src/html-rt/src/tests");
 const payloadPath = process.argv[2] || path.join(stagingDir, "payload.json");
-const requestedFiles = new Set(process.argv.slice(3));
+const sharedFilePageProbe = process.argv.includes("--shared-file-page");
+const requestedFiles = new Set(process.argv.slice(3).filter(arg =>
+  arg !== "--shared-file-page"));
 
 /* Load payload — accept either payload.json directly or the legacy HTML path */
 let payload, engineBytes;
@@ -59,6 +61,8 @@ const workerSrc = fs.readFileSync(
         wastText: fs.readFileSync(wastPath, "utf8"),
       });
     }
+    if (sharedFilePageProbe && testSpec.mode === "wast-stream")
+      testSpec = Object.assign({}, testSpec, {sharedFilePageProbe: true});
 
     let message;
     const self = {postMessage(value) { message = value; }};

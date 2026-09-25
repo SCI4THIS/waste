@@ -277,7 +277,7 @@ static exec_status instantiate_imports(waste_exec_engine *eng,
             if (!memory) return exec_fail(err,EXEC_ERROR_NOT_FOUND,"unresolved memory import");
             if (memory->is_64 != ((flags & 4u) != 0) || memory->pages<initial ||
                 ((flags&1u) && (!memory->has_max || memory->max_pages>maximum)) ||
-                (memory->pages && !memory->data)) return exec_fail(err,EXEC_ERROR_FORMAT,"memory import type mismatch");
+                (memory->pages && !memory->page_data)) return exec_fail(err,EXEC_ERROR_FORMAT,"memory import type mismatch");
             eng->memories[eng->memory_count++] = memory;
             eng->import_memory_count++;
             if (!eng->memory) eng->memory=memory;
@@ -834,7 +834,15 @@ static exec_status parse_data(waste_exec_engine *eng, wasm_reader *sec, exec_err
                          "out of bounds memory access");
             }
         } else if (!eng->instantiation_trapped) {
-            memcpy(memory->data + (size_t)offset, data, length);
+            exec_error write_error;
+            memset(&write_error, 0, sizeof(write_error));
+            if (exec_memory_write(memory, offset, data, length,
+                                  &write_error) != EXEC_OK) {
+                eng->instantiation_trapped = 1;
+                snprintf(eng->instantiation_error,
+                         sizeof(eng->instantiation_error), "%s",
+                         write_error.message);
+            }
         }
         /* active segments are considered dropped after instantiation */
         eng->data_dropped[i] = 1;

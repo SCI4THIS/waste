@@ -1,0 +1,27 @@
+# WASTE cross-configuration answers.  Keep each answer paired with a reason
+# and a verification command in configure-coreutils.py.
+#
+# The source checkout does not contain generated configure output.  This file
+# is consumed only after a local, reproducible bootstrap has produced it in
+# build/html-rt/coreutils/source; it never changes the coreutils submodule.
+
+# The wrapper targets wasm32 and cannot execute target probes on the host.
+ac_cv_prog_cc_cross=yes
+ac_cv_c_cross=yes
+# WebAssembly linear memory is little-endian by specification.
+ac_cv_c_bigendian=no
+# The current WASTE socket ABI uses 32-bit lengths; validate this declaration
+# when the complete sys/socket.h surface is added in Stage 8E.
+gl_cv_socklen_t_equiv=int
+# The guest libc supplies the stdio_ext entry points; configure must not
+# select the host-struct fallback implementation of gnulib/fpending.c.
+ac_cv_header_stdio_ext_h=yes
+ac_cv_have_decl___fpending=yes
+# The MSVC invalid-parameter runtime is not part of the freestanding guest.
+ac_cv_func__set_invalid_parameter_handler=no
+# CPU affinity and HP-UX pstat APIs are not part of the guest kernel ABI.
+ac_cv_func_sched_getaffinity=no
+ac_cv_func_sched_getaffinity_np=no
+ac_cv_func_pstat_getdynamic=no
+ac_cv_func_pstat_getstatic=no
+ac_cv_func_pstat_getprocvm=no

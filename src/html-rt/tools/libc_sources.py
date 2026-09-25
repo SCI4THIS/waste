@@ -9,6 +9,8 @@ LIBC_C_SOURCES = (
     "locale.c",
     "identity.c",
     "string.c",
+    "math.c",
+    "quad.c",
     "stdlib.c",
     "pattern.c",
     "misc.c",

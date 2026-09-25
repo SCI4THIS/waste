@@ -106,11 +106,19 @@ static char *native_process_image_strdup(const char *value) {
     return copy;
 }
 
-static void native_store_u32(uint8_t *bytes, uint32_t value) {
-    bytes[0] = (uint8_t)value;
-    bytes[1] = (uint8_t)(value >> 8);
-    bytes[2] = (uint8_t)(value >> 16);
-    bytes[3] = (uint8_t)(value >> 24);
+static exec_status native_store_u32(exec_memory *memory, uint32_t offset,
+                                    uint32_t value, exec_error *error) {
+    uint8_t bytes[4] = {
+        (uint8_t)value, (uint8_t)(value >> 8),
+        (uint8_t)(value >> 16), (uint8_t)(value >> 24)
+    };
+    return exec_memory_write(memory, offset, bytes, sizeof(bytes), error);
+}
+
+static exec_status native_store_bytes(exec_memory *memory, uint32_t offset,
+                                      const void *bytes, size_t length,
+                                      exec_error *error) {
+    return exec_memory_write(memory, offset, bytes, length, error);
 }
 
 static char *native_store_strdup(const char *value) {
@@ -134,8 +142,9 @@ static int native_path_has_suffix(const char *path, const char *suffix) {
 }
 
 /* Materialize the optional __waste_startup(i32) block at the top of the
- * process image's memory.  The block is deliberately self-describing through
- * fixed offsets so a libc shim can consume it without host pointers. */
+ * process image's visible linear memory. The process capsule records the
+ * occupied top pages as a startup region, leaving the lower module region
+ * available for the future brk/stack layout without host pointers. */
 static exec_status native_process_image_startup_block(
         native_process_image *image, const native_exec_request *request,
         native_store *store, exec_error *error) {
@@ -169,33 +178,44 @@ static exec_status native_process_image_startup_block(
     for (uint32_t i = 0; i < request->argc; i++) string_bytes += strlen(request->argv[i]) + 1u;
     for (uint32_t i = 0; i < request->envc; i++) string_bytes += strlen(request->envp[i]) + 1u;
     total = 44u + vector_bytes + string_bytes;
-    if (total > memory->pages * (size_t)EXEC_PAGE_SIZE || total > UINT32_MAX)
+    if (total > memory->linear_pages * (size_t)EXEC_PAGE_SIZE ||
+        total > UINT32_MAX)
         return exec_fail(error, EXEC_ERROR_TRAP, "startup block exceeds memory");
-    base = (uint32_t)(memory->pages * (size_t)EXEC_PAGE_SIZE - total);
+    base = (uint32_t)(memory->linear_pages * (size_t)EXEC_PAGE_SIZE - total);
     argv_ptr = base + 44u;
     envp_ptr = argv_ptr + (request->argc + 1u) * 4u;
     cursor = envp_ptr + (request->envc + 1u) * 4u;
-    native_store_u32(memory->data + base + 0, request->argc);
-    native_store_u32(memory->data + base + 4, argv_ptr);
-    native_store_u32(memory->data + base + 8, request->envc);
-    native_store_u32(memory->data + base + 12, envp_ptr);
-    native_store_u32(memory->data + base + 16, (uint32_t)image->pid);
-    native_store_u32(memory->data + base + 20, cursor);
+    if (native_store_u32(memory, base + 0, request->argc, error) != EXEC_OK ||
+        native_store_u32(memory, base + 4, argv_ptr, error) != EXEC_OK ||
+        native_store_u32(memory, base + 8, request->envc, error) != EXEC_OK ||
+        native_store_u32(memory, base + 12, envp_ptr, error) != EXEC_OK ||
+        native_store_u32(memory, base + 16, (uint32_t)image->pid, error) != EXEC_OK ||
+        native_store_u32(memory, base + 20, cursor, error) != EXEC_OK)
+        return error->status;
     for (uint32_t i = 0; i < request->argc; i++) {
-        native_store_u32(memory->data + argv_ptr + i * 4u, cursor);
+        if (native_store_u32(memory, argv_ptr + i * 4u, cursor, error) != EXEC_OK)
+            return error->status;
         size_t length = strlen(request->argv[i]) + 1u;
-        memcpy(memory->data + cursor, request->argv[i], length);
+        if (native_store_bytes(memory, cursor, request->argv[i], length,
+                               error) != EXEC_OK)
+            return error->status;
         cursor += (uint32_t)length;
     }
-    native_store_u32(memory->data + argv_ptr + request->argc * 4u, 0);
+    if (native_store_u32(memory, argv_ptr + request->argc * 4u, 0, error) != EXEC_OK)
+        return error->status;
     for (uint32_t i = 0; i < request->envc; i++) {
-        native_store_u32(memory->data + envp_ptr + i * 4u, cursor);
+        if (native_store_u32(memory, envp_ptr + i * 4u, cursor, error) != EXEC_OK)
+            return error->status;
         size_t length = strlen(request->envp[i]) + 1u;
-        memcpy(memory->data + cursor, request->envp[i], length);
+        if (native_store_bytes(memory, cursor, request->envp[i], length,
+                               error) != EXEC_OK)
+            return error->status;
         cursor += (uint32_t)length;
     }
-    native_store_u32(memory->data + envp_ptr + request->envc * 4u, 0);
-    memcpy(memory->data + cursor, image->cwd, strlen(image->cwd) + 1u);
+    if (native_store_u32(memory, envp_ptr + request->envc * 4u, 0, error) != EXEC_OK ||
+        native_store_bytes(memory, cursor, image->cwd,
+                           strlen(image->cwd) + 1u, error) != EXEC_OK)
+        return error->status;
     image->startup_ptr = base;
     image->startup_size = (uint32_t)total;
     if (has_hook) {
@@ -714,9 +734,34 @@ void native_store_init(native_store *store) {
     memset(store, 0, sizeof(*store));
     native_exec_request_init(&store->exec_request);
     store->spectest_memory.pages = 1;
+    /* Imported memories use the same engine-owned linear-memory bound as
+     * module-owned memories.  Keep the initial page visible to bounds checks
+     * and memory.grow; leaving this at zero makes the shared spectest memory
+     * appear unmapped to the executor. */
+    store->spectest_memory.linear_pages = 1;
     store->spectest_memory.max_pages = 2;
     store->spectest_memory.has_max = 1;
-    store->spectest_memory.data = calloc(EXEC_PAGE_SIZE, 1);
+    store->spectest_memory.page_data = calloc(1,
+                                               sizeof(*store->spectest_memory.page_data));
+    store->spectest_memory.page_protection = malloc(1);
+    store->spectest_memory.mappings = calloc(1,
+                                               sizeof(*store->spectest_memory.mappings));
+    if (store->spectest_memory.page_protection)
+        store->spectest_memory.page_protection[0] = EXEC_MEMORY_PROT_READ |
+                                                    EXEC_MEMORY_PROT_WRITE;
+    if (store->spectest_memory.mappings) {
+        store->spectest_memory.mappings[0].page_count = 1;
+        store->spectest_memory.mappings[0].protection =
+            EXEC_MEMORY_PROT_READ | EXEC_MEMORY_PROT_WRITE;
+        store->spectest_memory.mapping_count = 1;
+        store->spectest_memory.mapping_capacity = 1;
+    }
+    if (store->spectest_memory.page_data) {
+        uint8_t zero = 0;
+        exec_error memory_error = {0};
+        (void)exec_memory_write(&store->spectest_memory, 0, &zero, 1,
+                                &memory_error);
+    }
     store->spectest_table.size = 10;
     store->spectest_table.max_size = 20;
     store->spectest_table.has_max = 1;
@@ -731,6 +776,16 @@ void native_store_init(native_store *store) {
     store->spectest_f64.value.type = WASM_VALTYPE_F64;
     store->spectest_f64.value.f64 = 666.6;
     store->kernel = posix_kernel_create(0); /* noninteractive by default */
+    if (store->kernel) {
+        store->shm_namespace = posix_shm_namespace_create();
+        if (!store->shm_namespace || posix_kernel_set_shm_namespace(
+                store->kernel, store->shm_namespace) != 0) {
+            posix_shm_namespace_release(store->shm_namespace);
+            store->shm_namespace = NULL;
+            posix_kernel_destroy(store->kernel);
+            store->kernel = NULL;
+        }
+    }
     if (store->kernel) {
         (void)native_store_bind_interpreter_paths(store);
         store->processes[0].used = 1;
@@ -749,6 +804,11 @@ void native_store_free(native_store *store) {
     for (uint32_t i = 0; i < store->executable_count; i++)
         free(store->executables[i].bytes);
     free(store->executables);
+    for (uint32_t i = 0; i < store->shared_file_page_count; i++) {
+        exec_memory_page_release(store->shared_file_pages[i].page);
+        posix_kernel_file_release(store->shared_file_pages[i].file_object);
+    }
+    free(store->shared_file_pages);
     for (int i = store->module_count; i > 0; i--)
         exec_free(store->modules[i - 1].engine);
     for (int i = store->orphan_count; i > 0; i--)
@@ -762,7 +822,7 @@ void native_store_free(native_store *store) {
     }
     free(store->modules);
     free(store->orphan_engines);
-    free(store->spectest_memory.data);
+    exec_memory_release(&store->spectest_memory);
     free(store->spectest_table.elements);
     for (int i = 0; i < NATIVE_PROCESS_MAX; i++)
         if (store->processes[i].used) {
@@ -770,6 +830,8 @@ void native_store_free(native_store *store) {
             posix_kernel_destroy(store->processes[i].kernel);
             store->processes[i].kernel = NULL;
         }
+    posix_shm_namespace_release(store->shm_namespace);
+    store->shm_namespace = NULL;
     store->kernel = NULL;
     memset(store, 0, sizeof(*store));
 }
@@ -780,6 +842,9 @@ void native_store_enable_terminal(native_store *store) {
     store->kernel = posix_kernel_create(1);
     store->kernel_terminal = store->kernel != NULL;
     if (store->kernel) {
+        if (store->shm_namespace)
+            (void)posix_kernel_set_shm_namespace(store->kernel,
+                                                 store->shm_namespace);
         posix_termios termios;
         if (posix_kernel_tcgetattr(store->kernel, 0, &termios) == 0) {
             termios.iflag |= POSIX_TERMIOS_IFLAG_ICRNL;

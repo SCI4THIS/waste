@@ -84,6 +84,8 @@ Engine (C):
   --cli-test       run the full core spec test suite via the CLI runner
   --html-test      generate the full C-engine browser test dashboard
   --html-bash      generate the self-contained C-engine Bash page
+  --build-coreutils
+                   build and audit the staged GNU coreutils Wasm utility set
 
 OCaml:
   --compile        compile the OCaml interpreter to Wasm
@@ -1107,12 +1109,30 @@ generate_c_engine_bash_html() {
     return 1
   fi
 
+  # Build and audit the external coreutils utilities before packaging the VFS.
+  if ! run_logged_step "Build and audit coreutils true" \
+      "$C_ENGINE_BASH_LOG" make -C "$REPO_ROOT/src/html-rt" \
+      BUILD_DIR="$HTML_BUILD" build-coreutils; then
+    show_message "C-engine Bash failed" \
+      "Could not build or audit coreutils true.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
   # Copy staging data and amalgamate the HTML page
+  if ! run_logged_step "Build and audit Coreutils true" \
+      "$C_ENGINE_BASH_LOG" make -C "$REPO_ROOT/src/html-rt" \
+      BUILD_DIR="$HTML_BUILD" build-coreutils; then
+    show_message "Coreutils true build failed" \
+      "The import-closed /usr/bin/true image could not be built.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
   if ! run_logged_step "Copy staging data for Bash page" \
       "$C_ENGINE_BASH_LOG" python3 "$C_ENGINE_BASH_GENERATOR" \
       --repo-root "$REPO_ROOT" \
       --wasm "$C_ENGINE_WASM" \
       --launch "$C_ENGINE_BASH_RUNTIME_WAST" \
+      --coreutils-true "$REPO_ROOT/build/coreutils/utility-probe/true-linked.wasm" \
+      --coreutils-false "$REPO_ROOT/build/coreutils/utility-probe/false-linked.wasm" \
       --output-dir "$C_ENGINE_STAGING_BASH"; then
     show_message "C-engine Bash staging failed" \
       "Could not copy staging data.\n\nLog: $C_ENGINE_BASH_LOG"
@@ -1415,6 +1435,9 @@ main() {
     --cli-test) run_cli_tests ;;
     --compile) compile_interpreter ;;
     --build-libc) build_waste_libc ;;
+    --build-coreutils)
+      make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$HTML_BUILD" \
+        build-coreutils ;;
     --generate-html) generate_browser_test_html ;;
     --generate-bash-html) generate_bash_html ;;
     --c-engine-tests)

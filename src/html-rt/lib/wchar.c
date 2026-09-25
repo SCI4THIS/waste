@@ -44,11 +44,33 @@ i32 mbrtowc(u32 *wide, const char *source, u32 available, void *state) {
   if (result == -1) *__errno_location() = 84; if (result >= 0 && wide) *wide = value; return result;
 }
 i32 mbtowc(u32 *wide, const char *source, u32 available) { return mbrtowc(wide, source, available, 0); }
+i32 btowc(i32 value) { return value < 0 ? -1 : (unsigned char)value; }
 i32 mbrlen(const char *source, u32 available, void *state) { return mbrtowc(0, source, available, state); }
 i32 mblen(const char *source, u32 available) { return mbrtowc(0, source, available, 0); }
 i32 wcrtomb(char *destination, u32 value, void *state) {
   (void)state; if (!destination) return 1; i32 result = utf8_encode((unsigned char *)destination, value);
   if (result < 0) *__errno_location() = 84; return result;
+}
+size_t c32rtomb(char *destination, u32 value, void *state) {
+  return (size_t)wcrtomb(destination, value, state);
+}
+size_t mbrtoc32(u32 *wide, const char *source, size_t available, void *state) {
+  return (size_t)mbrtowc(wide, source, (u32)available, state);
+}
+size_t c16rtomb(char *destination, unsigned short value, void *state) {
+  if (value >= 0xd800 && value <= 0xdfff) {
+    *__errno_location() = 84; return (size_t)-1;
+  }
+  return (size_t)wcrtomb(destination, value, state);
+}
+size_t mbrtoc16(unsigned short *wide, const char *source, size_t available,
+                void *state) {
+  u32 value = 0; size_t result = mbrtoc32(&value, source, available, state);
+  if (result != (size_t)-1 && result != (size_t)-2 && value > 0xffff) {
+    *__errno_location() = 84; return (size_t)-1;
+  }
+  if (wide) *wide = (unsigned short)value;
+  return result;
 }
 
 u32 mbstowcs(u32 *destination, const char *source, u32 capacity) {
@@ -117,6 +139,10 @@ i32 iswprint(u32 c) { return c >= 32 && c != 127 && c <= 0x10ffff && !(c >= 0xd8
 u32 towupper(u32 c) { return (u32)toupper((i32)c); }
 u32 towlower(u32 c) { return (u32)tolower((i32)c); }
 i32 wctob(u32 c) { return c <= 0x7f ? (i32)c : -1; }
+i32 iswgraph(u32 c) { return c > 0x20 && c < 0x7f; }
+i32 iswpunct(u32 c) { return iswgraph(c) && !iswalnum(c); }
+i32 iswxdigit(u32 c) { return (c >= '0' && c <= '9') ||
+  (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f'); }
 i32 wcwidth(u32 c) {
   if (!c) return 0; if (!iswprint(c)) return -1;
   if ((c >= 0x300 && c <= 0x36f) || (c >= 0x1ab0 && c <= 0x1aff)) return 0;

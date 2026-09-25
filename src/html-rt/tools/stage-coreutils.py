@@ -173,8 +173,8 @@ def stage_source(repo_root: Path, output: Path) -> None:
         applied_here = True
     try:
         source = output / "source"
-        if output.exists():
-            shutil.rmtree(output)
+        if source.exists():
+            shutil.rmtree(source)
         source.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(
             coreutils,

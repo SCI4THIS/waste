@@ -237,14 +237,17 @@ def main() -> None:
             "-o", str(helpers_wasm),
         ], environment)
         run(["wasm-merge", str(core_wasm), "env", str(helpers_wasm), "helpers",
-             "-o", str(merged_wasm), "--enable-bulk-memory"])
-        run(["wasm-dis", str(merged_wasm), "-o", str(merged_wat)])
+             "-o", str(merged_wasm), "--enable-bulk-memory",
+             "--enable-nontrapping-float-to-int"])
+        run(["wasm-dis", str(merged_wasm), "-o", str(merged_wat),
+             "--enable-nontrapping-float-to-int"])
         libc_source = rewrite_libc(merged_wat.read_text(encoding="utf-8"))
         linked_libc_wat.write_text(libc_source, encoding="utf-8")
         run(["wasm-as", str(linked_libc_wat), "-o", str(linked_libc_wasm),
-             "--enable-bulk-memory"])
+             "--enable-bulk-memory", "--enable-nontrapping-float-to-int"])
         run(["wasm-opt", str(linked_libc_wasm), "-O2", "--strip-debug",
-             "--enable-bulk-memory", "-o", str(optimized_libc_wasm)])
+             "--enable-bulk-memory", "--enable-nontrapping-float-to-int",
+             "-o", str(optimized_libc_wasm)])
 
         bash_source = rewrite_bash((root / "examples" / "bash.wat").read_text(encoding="utf-8"))
         linked_bash_wat.write_text(bash_source, encoding="utf-8")

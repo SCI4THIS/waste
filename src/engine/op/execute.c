@@ -1041,35 +1041,65 @@ int execute_op_simd(waste_exec_context *ctx, const exec_instr *instr) {
         if(store) {
             if(lane_memory) {
                 uint32_t lane_width=UINT32_C(1)<<((op-0x58)&3u);
-                memcpy(memory->data+address,
-                       vector.v128.bytes+instr->lane_index*lane_width,
-                       lane_width);
-            } else memcpy(memory->data+address,vector.v128.bytes,16);
+                mem_status = exec_memory_write(
+                    memory, address,
+                    vector.v128.bytes+instr->lane_index*lane_width,
+                    lane_width, ctx->error);
+            } else {
+                mem_status = exec_memory_write(memory, address,
+                                               vector.v128.bytes, 16,
+                                               ctx->error);
+            }
+            if (mem_status != EXEC_OK) return mem_status;
             return EXEC_OK;
         }
         if(lane_memory) {
+            uint8_t lane_bytes[16];
+            mem_status = exec_memory_read(memory, address, lane_bytes,
+                                          width, ctx->error);
+            if (mem_status != EXEC_OK) return mem_status;
             memcpy(vector.v128.bytes+instr->lane_index*width,
-                   memory->data+address,width);
+                   lane_bytes, width);
             if(!stack_push(ctx->operand_stack,vector))
                 return exec_fail(ctx->error,EXEC_ERROR_TRAP,"stack overflow");
             return EXEC_OK;
         }
         out=simd_zero();
-        if(op==0x00) memcpy(out.v128.bytes,memory->data+address,16);
+        if(op==0x00) {
+            mem_status = exec_memory_read(memory, address, out.v128.bytes,
+                                          16, ctx->error);
+            if (mem_status != EXEC_OK) return mem_status;
+        }
         else if(op>=0x01&&op<=0x06) {
             uint32_t source_width=op<=0x02?1:op<=0x04?2:4;
             uint32_t dest_width=source_width*2;
             int signed_=(op&1)!=0;
             for(uint32_t i=0;i<16/dest_width;i++) {
-                uint64_t raw=0;memcpy(&raw,memory->data+address+i*source_width,source_width);
+                uint8_t source_bytes[8];
+                uint64_t raw=0;
+                mem_status = exec_memory_read(memory,
+                                              address+i*source_width,
+                                              source_bytes, source_width,
+                                              ctx->error);
+                if (mem_status != EXEC_OK) return mem_status;
+                memcpy(&raw, source_bytes, source_width);
                 if(signed_&&source_width<8&&(raw&(UINT64_C(1)<<(source_width*8-1))))
                     raw|=UINT64_MAX<<(source_width*8);
                 simd_set_lane(&out,i,dest_width,raw);
             }
         } else if(op>=0x07&&op<=0x0a) {
-            uint64_t raw=0;memcpy(&raw,memory->data+address,width);
+            uint8_t source_bytes[8];
+            uint64_t raw=0;
+            mem_status = exec_memory_read(memory, address, source_bytes,
+                                          width, ctx->error);
+            if (mem_status != EXEC_OK) return mem_status;
+            memcpy(&raw, source_bytes, width);
             for(uint32_t i=0;i<16/width;i++)simd_set_lane(&out,i,width,raw);
-        } else memcpy(out.v128.bytes,memory->data+address,width);
+        } else {
+            mem_status = exec_memory_read(memory, address, out.v128.bytes,
+                                          width, ctx->error);
+            if (mem_status != EXEC_OK) return mem_status;
+        }
         if(!stack_push(ctx->operand_stack,out))
             return exec_fail(ctx->error,EXEC_ERROR_TRAP,"stack overflow");
         return EXEC_OK;

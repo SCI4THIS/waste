@@ -2,6 +2,8 @@
 
 #include "include/helper.h"
 
+struct timespec { i64 tv_sec; long tv_nsec; };
+
 #ifndef WASTE_ENGINE
 __attribute__((import_module("waste_kernel"), import_name("startup_v1")))
 extern i32 waste_kernel_startup_v1(void);
@@ -11,9 +13,14 @@ extern i32 open(const char *path, i32 flags, i32 mode);
 extern i32 close(i32 descriptor);
 extern i32 waste_env_chdir(const char *path) __attribute__((import_module("env"), import_name("chdir")));
 extern i32 waste_env_getcwd(char *buffer, i32 capacity) __attribute__((import_module("env"), import_name("getcwd")));
-i32 chdir(const char *path) { return waste_env_chdir(path); }
+static i32 env_result(i32 result) {
+  if (result < -1) { *__errno_location() = -result; return -1; }
+  return result;
+}
+i32 chdir(const char *path) { return env_result(waste_env_chdir(path)); }
 char *getcwd(char *buffer, u32 capacity) {
   i32 result = waste_env_getcwd(buffer, (i32)capacity);
+  if (result < -1) { *__errno_location() = -result; return 0; }
   return result ? buffer : 0;
 }
 
@@ -66,6 +73,7 @@ static char tty_path[9]={'/','d','e','v','/','t','t','y',0};
 char *ttyname(i32 descriptor){return descriptor>=0&&descriptor<=2?tty_path:0;}
 
 i32 setdtablesize(i64 size){return size>0&&size<=0x7fffffff?(i32)size:-1;}
+const char *getprogname(void){return "waste";}
 i32 sysconf(i32 name){(void)name;return 1024;}
 i32 pathconf(const char*path,i32 name){(void)path;(void)name;return 255;}
 u32 confstr(i32 name,char*buffer,u32 capacity){(void)name;const char*value="/bin:/usr/bin";u32 needed=c_length(value)+1;if(buffer&&capacity){u32 n=needed<capacity?needed:capacity;bytes_copy(buffer,value,n);buffer[n-1]=0;}return needed;}
@@ -73,13 +81,28 @@ u32 confstr(i32 name,char*buffer,u32 capacity){(void)name;const char*value="/bin
 #ifdef WASTE_ENGINE
 i32 execve(const char*p,char*const*a,char*const*e){(void)p;(void)a;(void)e;return unsupported();}
 #else
-i32 execve(const char*p,char*const*a,char*const*e){return waste_env_execve(p,a,e);}
+i32 execve(const char*p,char*const*a,char*const*e){return env_result(waste_env_execve(p,a,e));}
 #endif
 i32 chown(const char*p,u32 u,u32 g){(void)p;(void)u;(void)g;return unsupported();}
+i32 lchmod(const char*p,u32 mode){(void)p;(void)mode;return unsupported();}
+i32 mkfifo(const char*p,u32 mode){(void)p;(void)mode;return unsupported();}
+i32 mkfifoat(i32 directory,const char*p,u32 mode){(void)directory;(void)p;(void)mode;return unsupported();}
+i32 mknod(const char*p,u32 mode,unsigned long device){(void)p;(void)mode;(void)device;return unsupported();}
+i32 mknodat(i32 directory,const char*p,u32 mode,unsigned long device){(void)directory;(void)p;(void)mode;(void)device;return unsupported();}
+i32 linkat(i32 old_directory,const char*old_path,i32 new_directory,const char*new_path,i32 flags){(void)old_directory;(void)old_path;(void)new_directory;(void)new_path;(void)flags;return unsupported();}
+i32 lchown(const char*p,u32 u,u32 g){return chown(p,u,g);}
+i32 fchown(i32 fd,u32 u,u32 g){(void)fd;(void)u;(void)g;return unsupported();}
+i32 fchdir(i32 fd){(void)fd;return unsupported();}
+i32 fchmodat(i32 directory,const char*path,u32 mode,i32 flags){(void)directory;(void)path;(void)mode;(void)flags;return unsupported();}
+i32 utimensat(i32 directory,const char*path,const struct timespec*times,i32 flags){(void)directory;(void)path;(void)times;(void)flags;return unsupported();}
+i32 futimens(i32 fd,const struct timespec times[2]){(void)fd;(void)times;return unsupported();}
+i32 posix_fadvise(i32 fd, i64 offset, i64 length, i32 advice) {
+  (void)fd; (void)offset; (void)length; (void)advice; return 0;
+}
 extern i32 waste_env_readlink(const char *path, char *buffer, u32 capacity)
   __attribute__((import_module("env"), import_name("readlink")));
 i32 readlink(const char *path, char *buffer, u32 capacity) {
-  return waste_env_readlink(path, buffer, capacity);
+  return env_result(waste_env_readlink(path, buffer, capacity));
 }
 
 /* Path queries cross the versioned engine-owned kernel boundary. The kernel
@@ -130,3 +153,7 @@ static i32 stat_query(const char *path, waste_stat *output, i32 follow) {
 
 i32 stat(const char *path, waste_stat *output) { return stat_query(path, output, 1); }
 i32 lstat(const char *path, waste_stat *output) { return stat_query(path, output, 0); }
+i32 fstatat(i32 directory, const char *path, waste_stat *output, i32 flags) {
+  (void)directory;
+  return stat_query(path, output, !(flags & 0x100));
+}

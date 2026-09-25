@@ -139,9 +139,17 @@ async function startShell(event) {
     if (typeof g !== "undefined" && g.tar_hash && Object.keys(g.tar_hash).length) {
       for (const name of Object.keys(g.tar_hash)) {
         const bytes = await g.tar_hash[name].arrayBuffer();
-        const path = name === "waste-probe.wasm" ? "/bin/waste-probe" :
-          "/usr/share/waste/" + name;
-        vfsFiles.push({path, bytes, kind: 1, mode: name === "waste-probe.wasm" ? 0o755 : 0o644});
+        const isProbe = name === "waste-probe.wasm";
+        const isCoreutilsTrue = name === "true.wasm";
+        const isCoreutilsFalse = name === "false.wasm";
+        const paths = isProbe ? ["/bin/waste-probe"] :
+          isCoreutilsTrue ? ["/usr/bin/true", "/bin/true"] :
+          isCoreutilsFalse ? ["/usr/bin/false", "/bin/false"] :
+          ["/usr/share/waste/" + name];
+        for (const path of paths) {
+          vfsFiles.push({path, bytes, kind: 1,
+            mode: isProbe || isCoreutilsTrue || isCoreutilsFalse ? 0o755 : 0o644});
+        }
       }
     }
     vfsFiles.push(...evidenceFiles());

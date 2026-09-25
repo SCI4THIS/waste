@@ -26,14 +26,35 @@ int main(void) {
 
     exec_memory *memory = &provider->owned_memories[0];
     memory->pages = 1;
+    memory->linear_pages = 1;
     memory->max_pages = 4;
     memory->has_max = 1;
-    memory->data = calloc(1, EXEC_PAGE_SIZE);
-    memory->data[13] = 0x5a;
+    memory->page_data = calloc(1, sizeof(*memory->page_data));
+    memory->page_protection = malloc(1);
+    memory->mappings = calloc(1, sizeof(*memory->mappings));
+    memory->mapping_count = 1;
+    memory->mapping_capacity = 1;
+    memory->page_protection[0] = EXEC_MEMORY_PROT_READ |
+                                 EXEC_MEMORY_PROT_WRITE;
+    memory->mappings[0].first_page = 0;
+    memory->mappings[0].page_count = 1;
+    memory->mappings[0].protection = memory->page_protection[0];
+    uint8_t initial_value = 0x5a;
+    check(exec_memory_write(memory, 13, &initial_value, 1, NULL) == EXEC_OK,
+          "memory fixture initializes through the access API");
+    exec_memory *shared_memory = &provider->owned_memories[1];
+    shared_memory->max_pages = 4;
+    shared_memory->has_max = 1;
+    check(exec_memory_resize_pages(shared_memory, 1, NULL) == EXEC_OK &&
+          exec_memory_share_pages(shared_memory, 0, memory, 0, 1, NULL) ==
+              EXEC_OK,
+          "shared checkpoint fixture initializes through the memory API");
     provider->memories[0] = memory;
-    provider->memory_count = 1;
+    provider->memories[1] = shared_memory;
+    provider->memory_count = 2;
     provider->memory = memory;
     provider->owns_memories[0] = 1;
+    provider->owns_memories[1] = 1;
     consumer->memories[0] = memory;
     consumer->memory_count = 1;
     consumer->import_memory_count = 1;
@@ -72,6 +93,14 @@ int main(void) {
     native_store_checkpoint_init(&checkpoint);
     exec_error error;
     memset(&error, 0, sizeof(error));
+    posix_file_object *mapping_object = NULL;
+    int mapping_writable = 0;
+    int mapping_fd = -1;
+    posix_path_metadata mapping_metadata;
+    memset(&mapping_metadata, 0, sizeof(mapping_metadata));
+    mapping_metadata.kind = POSIX_NODE_REGULAR;
+    mapping_metadata.mode = 0600;
+    mapping_metadata.inode = 41;
 
     store.processes[0].used = 1;
     store.processes[0].capsule.handler.kind = NATIVE_PROCESS_HANDLER_WAST;
@@ -87,14 +116,62 @@ int main(void) {
           "rejected handler checkpoint does not publish a snapshot");
     free(store.processes[0].capsule.handler.source);
     memset(&store.processes[0], 0, sizeof(store.processes[0]));
+    store.processes[0].used = 1;
+    store.processes[0].pid = 1;
+    store.processes[0].kernel = posix_kernel_create(0);
+    check(store.processes[0].kernel != NULL,
+          "process checkpoint fixture creates a kernel");
+    check(store.processes[0].kernel &&
+          posix_kernel_path_add_data(store.processes[0].kernel,
+                                     "/checkpoint-map", &mapping_metadata,
+                                     (const uint8_t *)"x", 1) == 0 &&
+          (mapping_fd = posix_kernel_open(
+              store.processes[0].kernel,
+              (const uint8_t *)"/checkpoint-map", 15, POSIX_O_RDWR, 0)) >= 0 &&
+          posix_kernel_file_retain(store.processes[0].kernel, mapping_fd,
+                                   &mapping_object, &mapping_writable) == 0 &&
+          (store.processes[0].capsule.file_mappings = calloc(
+              1, sizeof(*store.processes[0].capsule.file_mappings))) != NULL &&
+          (store.processes[0].capsule.regions = calloc(
+              1, sizeof(*store.processes[0].capsule.regions))) != NULL,
+          "process checkpoint fixture records mapping topology");
+    store.processes[0].capsule.file_mappings[0] =
+        (native_process_file_mapping){EXEC_PAGE_SIZE * 2, EXEC_PAGE_SIZE, 0,
+                                      mapping_object, 1, 1};
+    store.processes[0].capsule.file_mapping_count = 1;
+    store.processes[0].capsule.file_mapping_capacity = 1;
+    store.processes[0].capsule.regions[0] =
+        (native_process_region){2, 1, NATIVE_PROCESS_REGION_MAPPING};
+    store.processes[0].capsule.region_count = 1;
+    store.processes[0].capsule.region_capacity = 1;
+    if (mapping_fd >= 0)
+        check(posix_kernel_close(store.processes[0].kernel, mapping_fd) == 0,
+              "process checkpoint fixture closes source descriptor");
     memset(&error, 0, sizeof(error));
     check(native_store_checkpoint_capture(&store, &checkpoint, &error) == EXEC_OK,
           "capture succeeds");
+    posix_kernel_file_release(
+        store.processes[0].capsule.file_mappings[0].file_object);
+    free(store.processes[0].capsule.file_mappings);
+    store.processes[0].capsule.file_mappings = NULL;
+    store.processes[0].capsule.file_mapping_count = 0;
+    free(store.processes[0].capsule.regions);
+    store.processes[0].capsule.regions = NULL;
+    store.processes[0].capsule.region_count = 0;
+    native_store_checkpoint nested;
+    native_store_checkpoint_init(&nested);
 
-    memory->data[13] = 0xa5;
-    memory->data = realloc(memory->data, 2 * EXEC_PAGE_SIZE);
-    memset(memory->data + EXEC_PAGE_SIZE, 0xcc, EXEC_PAGE_SIZE);
-    memory->pages = 2;
+    uint8_t changed_value = 0xa5;
+    check(exec_memory_write(memory, 13, &changed_value, 1, NULL) == EXEC_OK,
+          "memory fixture mutates through the access API");
+    check(exec_memory_resize_pages(memory, 2, NULL) == EXEC_OK,
+          "memory fixture grows through the memory API");
+    uint8_t second_page_value = 0xcc;
+    check(exec_memory_fill(memory, EXEC_PAGE_SIZE, second_page_value,
+                           EXEC_PAGE_SIZE, NULL) == EXEC_OK,
+          "memory fixture fills through the memory API");
+    check(native_store_checkpoint_capture(&store, &nested, &error) == EXEC_OK,
+          "nested checkpoint captures shared post-growth state");
     table->elements = realloc(table->elements, 2 * sizeof(*table->elements));
     table->elements[1].func_idx = 99;
     table->size = 2;
@@ -107,15 +184,31 @@ int main(void) {
     provider->local_frames[0] = calloc(1, sizeof(*provider->local_frames[0]));
     provider->local_frames[0][0].type = WASM_VALTYPE_I32;
     provider->local_frames[0][0].i32 = -1;
+    uint8_t restored_value = 0;
+    check(native_store_checkpoint_restore(&nested, &error) == EXEC_OK &&
+          memory->pages == 2 &&
+          exec_memory_read(shared_memory, 13, &restored_value, 1, NULL) ==
+              EXEC_OK && restored_value == 0xa5 &&
+          memory->page_data[0] == shared_memory->page_data[0],
+          "nested restore preserves shared page identity and growth");
+    uint8_t nested_mutation = 0x77;
+    check(exec_memory_write(memory, 13, &nested_mutation, 1, NULL) == EXEC_OK,
+          "nested restored memory accepts a follow-up mutation");
     check(native_store_checkpoint_restore(&checkpoint, &error) == EXEC_OK,
           "restore succeeds");
+    check(store.processes[0].capsule.file_mapping_count == 1 &&
+          store.processes[0].capsule.file_mappings[0].file_object ==
+              mapping_object && store.processes[0].capsule.region_count == 1,
+          "restore recovers process mapping topology");
     check(provider->memories[0] == consumer->memories[0],
           "imported memory identity is preserved");
     check(provider->tables[0] == consumer->tables[0],
           "imported table identity is preserved");
     check(provider->globals[0] == consumer->globals[0],
           "imported global identity is preserved");
-    check(memory->pages == 1 && memory->data[13] == 0x5a,
+    check(exec_memory_read(memory, 13, &restored_value, 1, NULL) == EXEC_OK,
+          "restored memory remains readable");
+    check(memory->pages == 1 && restored_value == 0x5a,
           "memory bytes and growth are restored");
     check(table->size == 1 && table->elements[0].func_idx == 17,
           "table contents and growth are restored");
@@ -135,17 +228,32 @@ int main(void) {
         binding.clone = provider_clone;
         check(exec_clone_engine_bind(provider_clone, &binding, 1, &error) ==
                   EXEC_OK, "provider clone binding succeeds");
-        provider_clone->memory->data[13] = 0x3c;
-        check(provider->memory->data[13] == 0x5a,
-              "cloned provider memory is isolated");
+        uint8_t clone_value = 0x3c;
+        check(exec_memory_write(provider_clone->memory, 13, &clone_value, 1,
+                                &error) == EXEC_OK,
+              "cloned provider memory accepts writes");
+        uint8_t provider_value = 0;
+        check(exec_memory_read(provider->memory, 13, &provider_value, 1,
+                               &error) == EXEC_OK && provider_value == clone_value,
+              "cloned provider preserves explicit shared memory");
         check(exec_clone_resolve(provider_clone, provider) == provider_clone,
               "clone provider resolution is local");
         exec_free(provider_clone);
     }
 
     native_store_checkpoint_destroy(&checkpoint);
+    native_store_checkpoint_destroy(&nested);
+    if (store.processes[0].capsule.file_mappings) {
+        for (uint32_t i = 0; i < store.processes[0].capsule.file_mapping_count; i++)
+            posix_kernel_file_release(
+                store.processes[0].capsule.file_mappings[i].file_object);
+        free(store.processes[0].capsule.file_mappings);
+    }
+    free(store.processes[0].capsule.regions);
+    posix_kernel_destroy(store.processes[0].kernel);
     free(table->elements);
-    free(memory->data);
+    exec_memory_release(memory);
+    exec_memory_release(shared_memory);
     free(provider);
     free(consumer);
     printf("C-engine store checkpoint: %d checks, %d failures\n", checks, failures);

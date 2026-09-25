@@ -23,6 +23,7 @@ typedef struct WasteDIR {
 
 void *opendir(const char *path) {
   i32 descriptor = open(path, 0, 0);
+  if (descriptor < -1) { *__errno_location() = -descriptor; return 0; }
   if (descriptor < 0) return 0;
   WasteDIR *directory = malloc((u32)sizeof(WasteDIR));
   if (!directory) { close(descriptor); *__errno_location() = 12; return 0; }
@@ -35,7 +36,13 @@ i32 closedir(void *value) {
   if (!directory) { *__errno_location() = 14; return -1; }
   i32 result = close(directory->descriptor);
   free(directory);
+  if (result < -1) { *__errno_location() = -result; return -1; }
   return result;
+}
+
+i32 dirfd(void *value) {
+  WasteDIR *directory = value;
+  return directory ? directory->descriptor : -1;
 }
 
 WasteDirent *readdir(void *value) {
@@ -44,6 +51,7 @@ WasteDirent *readdir(void *value) {
   if (!directory) { *__errno_location() = 14; return 0; }
   i32 result = waste_env_readdir(directory->descriptor, directory->entry.d_name,
                                  (i32)sizeof(directory->entry.d_name), &metadata);
+  if (result < -1) { *__errno_location() = -result; return 0; }
   if (result <= 0) return 0;
   directory->entry.d_ino = metadata.inode;
   directory->entry.d_off++;

@@ -10,6 +10,8 @@
 /* --- Constants --- */
 
 #define POSIX_KERNEL_FD_MAX      64
+#define POSIX_SHM_NAME_MAX      128
+#define POSIX_SHM_OBJECT_MAX     64
 #define POSIX_PIPE_CAPACITY    4096
 #define POSIX_TERMINAL_INPUT_CAPACITY 4096
 #define POSIX_TERMIOS_CC_COUNT 20
@@ -37,6 +39,7 @@
 #define POSIX_TCIOFF 2
 #define POSIX_TCION 3
 #define POSIX_SIGWINCH 28
+#define POSIX_SIGBUS 7
 #define POSIX_SIGKILL 9
 #define POSIX_SIGSTOP 19
 #define POSIX_SIG_DFL UINT32_C(0)
@@ -81,6 +84,7 @@ typedef struct {
 #define POSIX_EPIPE   32
 #define POSIX_ECHILD  10
 #define POSIX_EFAULT  14
+#define POSIX_EIO      5
 #define POSIX_EEXIST  17
 #define POSIX_EBUSY   16
 #define POSIX_ENOSYS  38
@@ -95,6 +99,7 @@ typedef struct {
 #define POSIX_O_WRONLY 1
 #define POSIX_O_RDWR 2
 #define POSIX_O_CREAT 64
+#define POSIX_O_EXCL  128
 #define POSIX_O_TRUNC 512
 #define POSIX_O_APPEND 1024
 
@@ -115,6 +120,28 @@ typedef enum {
 } posix_ofd_kind;
 
 typedef struct posix_kernel_path_node posix_kernel_path_node;
+typedef struct posix_file_object posix_file_object;
+
+struct posix_file_object {
+    uint8_t *data;
+    size_t data_capacity;
+    uint32_t refs;
+    uint64_t inode;
+};
+
+typedef struct {
+    char name[POSIX_SHM_NAME_MAX];
+    posix_file_object *file;
+    uint32_t mode;
+    uint32_t uid;
+    uint32_t gid;
+} posix_shm_object;
+
+typedef struct posix_shm_namespace {
+    uint32_t refs;
+    uint32_t count;
+    posix_shm_object objects[POSIX_SHM_OBJECT_MAX];
+} posix_shm_namespace;
 
 /* Shared pipe buffer between read and write endpoints. */
 typedef struct posix_pipe {
@@ -142,6 +169,7 @@ typedef struct posix_ofd {
         } terminal;
         struct {
             posix_kernel_path_node *node;
+            posix_file_object *file;
             size_t offset;
             int readable;
             int writable;
@@ -164,8 +192,7 @@ typedef struct {
 struct posix_kernel_path_node {
     char path[POSIX_PATH_NODE_NAME_MAX];
     posix_path_metadata metadata;
-    uint8_t *data;
-    size_t data_capacity;
+    posix_file_object *file;
     char *link_target;
 };
 
@@ -197,12 +224,15 @@ typedef struct posix_kernel {
     /* Signal consumed by the most recent interrupted wait, if any. */
     int delivered_signal;
     int process_group_id;
+    uint32_t uid;
+    uint32_t gid;
     uint8_t signal_disposition[POSIX_SIGSET_BYTES * 8 + 1];
     uint32_t signal_handlers[POSIX_SIGSET_BYTES * 8 + 1];
     posix_sigset signal_action_masks[POSIX_SIGSET_BYTES * 8 + 1];
     char cwd[POSIX_PATH_NODE_NAME_MAX];
     posix_kernel_path_node path_nodes[POSIX_PATH_NODE_MAX];
     int path_node_count;
+    posix_shm_namespace *shm_namespace;
 } posix_kernel;
 
 /* --- Lifecycle --- */
@@ -211,6 +241,15 @@ typedef struct posix_kernel {
    interactive=0 leaves all fds closed (for WAST test sandboxes).
    Returns NULL on allocation failure. */
 posix_kernel *posix_kernel_create(int interactive);
+posix_shm_namespace *posix_shm_namespace_create(void);
+void posix_shm_namespace_retain(posix_shm_namespace *namespace_);
+void posix_shm_namespace_release(posix_shm_namespace *namespace_);
+posix_shm_namespace *posix_shm_namespace_clone(
+    const posix_shm_namespace *namespace_);
+int posix_kernel_set_shm_namespace(posix_kernel *kernel,
+                                    posix_shm_namespace *namespace_);
+int posix_kernel_set_credentials(posix_kernel *kernel, uint32_t uid,
+                                  uint32_t gid);
 
 /* Clone a process kernel.  Descriptor entries are copied while preserving
    shared open-file descriptions and pipe endpoint identity. */
@@ -309,6 +348,10 @@ int posix_kernel_pipe(posix_kernel *kernel, int fds[2]);
 int posix_kernel_close(posix_kernel *kernel, int fd);
 int posix_kernel_open(posix_kernel *kernel, const uint8_t *path, size_t length,
                       int flags, int mode);
+int posix_kernel_shm_open(posix_kernel *kernel, const uint8_t *name,
+                          size_t length, int flags, int mode);
+int posix_kernel_shm_unlink(posix_kernel *kernel, const uint8_t *name,
+                            size_t length);
 int posix_kernel_readdir(posix_kernel *kernel, int fd, char *name,
                          size_t capacity, posix_path_metadata *metadata);
 int posix_kernel_lseek(posix_kernel *kernel, int fd, int64_t offset,
@@ -330,6 +373,29 @@ void posix_kernel_close_on_exec(posix_kernel *kernel);
 /* Read up to count bytes from fd.  Returns bytes read (> 0), 0 at EOF,
    or negative errno (-POSIX_EBADF, -POSIX_EAGAIN). */
 int posix_kernel_read(posix_kernel *kernel, int fd, void *buf, int count);
+
+/* Read immutable file contents for a future file-backed mapping without
+   changing the descriptor's file offset.  The requested range must be fully
+   inside the regular file; returns bytes copied (the requested length) or a
+   negative errno. */
+int posix_kernel_file_read_at(posix_kernel *kernel, int fd, uint64_t offset,
+                              void *buf, size_t count);
+int posix_kernel_file_write_at(posix_kernel *kernel, int fd, uint64_t offset,
+                               const void *buf, size_t count);
+int posix_kernel_file_size(posix_kernel *kernel, int fd, uint64_t *size_out);
+int posix_kernel_ftruncate(posix_kernel *kernel, int fd, uint64_t size);
+int posix_kernel_file_identity(posix_kernel *kernel, int fd,
+                               uint64_t *object_id_out,
+                               int *writable_out);
+int posix_kernel_file_retain(posix_kernel *kernel, int fd,
+                             posix_file_object **object_out,
+                             int *writable_out);
+void posix_file_object_retain(posix_file_object *object);
+void posix_kernel_file_release(posix_file_object *object);
+int posix_kernel_file_write_object(posix_kernel *kernel,
+                                   posix_file_object *object,
+                                   uint64_t offset, const void *buf,
+                                   size_t count);
 
 /* Write up to count bytes to fd.  Returns bytes written (> 0) or
    negative errno (-POSIX_EBADF, -POSIX_EAGAIN, -POSIX_EPIPE). */

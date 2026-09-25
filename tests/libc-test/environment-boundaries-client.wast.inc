@@ -29,6 +29,8 @@
   ;; Helper: check errno == ENOSYS (38) after a call
   (func $is_enosys (result i32)
     call $errno_location i32.load i32.const 38 i32.eq)
+  (func $is_efault (result i32)
+    call $errno_location i32.load i32.const 14 i32.eq)
 
   ;; --- Filesystem and process boundaries (each returns 1 if correct) ---
 
@@ -50,11 +52,11 @@
 
   (func (export "boundary-closedir") (result i32)
     i32.const 0 call $closedir
-    i32.const -1 i32.eq call $is_enosys i32.and)
+    i32.const -1 i32.eq call $is_efault i32.and)
 
   (func (export "boundary-readdir") (result i32)
     i32.const 0 call $readdir
-    i32.eqz call $is_enosys i32.and)
+    i32.eqz call $is_efault i32.and)
 
   ;; select/pselect are readiness-reporting stubs, not ENOSYS.
   ;; select(0,0,0,0,0) returns 0 (no descriptors ready).

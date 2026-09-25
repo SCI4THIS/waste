@@ -8,11 +8,17 @@
 
 typedef struct {
     exec_memory *object;
-    uint8_t *data;
+    exec_memory_page **page_data;
+    uint8_t *page_protection;
+    exec_memory_mapping *mappings;
     uint64_t pages;
+    uint64_t linear_pages;
+    uint32_t mapping_count;
     uint64_t max_pages;
+    uint64_t virtual_max_pages;
     uint8_t has_max;
     uint8_t is_64;
+    uint8_t process_virtual_memory;
 } memory_snapshot;
 
 typedef struct {
@@ -37,6 +43,11 @@ typedef struct {
 } gc_snapshot;
 
 typedef struct {
+    exec_memory_page *source;
+    exec_memory_page *snapshot;
+} checkpoint_page_alias;
+
+typedef struct {
     waste_exec_engine *engine;
     exec_continuation evaluator;
     uint8_t evaluator_valid;
@@ -56,6 +67,14 @@ typedef struct {
 } engine_snapshot;
 
 typedef struct {
+    native_process_file_mapping *file_mappings;
+    uint32_t file_mapping_count;
+    native_process_region *regions;
+    uint32_t region_count;
+    uint64_t virtual_page_limit;
+} process_snapshot;
+
+typedef struct {
     memory_snapshot *memories;
     size_t memory_count;
     table_snapshot *tables;
@@ -67,6 +86,13 @@ typedef struct {
     exec_memory *spectest_memory;
     exec_table *spectest_table;
     exec_global *spectest_globals[4];
+    checkpoint_page_alias *page_aliases;
+    size_t page_alias_count;
+    native_store *store;
+    posix_shm_namespace *shm_namespace;
+    uint32_t process_uids[NATIVE_PROCESS_MAX];
+    uint32_t process_gids[NATIVE_PROCESS_MAX];
+    process_snapshot processes[NATIVE_PROCESS_MAX];
 } checkpoint_impl;
 
 static exec_status checkpoint_error(exec_error *error, const char *message) {
@@ -178,9 +204,34 @@ static int collect_engine(checkpoint_impl *impl, waste_exec_engine *engine) {
     return 1;
 }
 
+static void release_memory_snapshot(memory_snapshot *snapshot) {
+    if (!snapshot) return;
+    if (snapshot->page_data) {
+        for (uint64_t i = 0; i < snapshot->pages; i++)
+            if (snapshot->page_data[i]) {
+                exec_memory_page_release(snapshot->page_data[i]);
+            }
+    }
+    free(snapshot->page_data);
+    free(snapshot->page_protection);
+    free(snapshot->mappings);
+    snapshot->page_data = NULL;
+    snapshot->page_protection = NULL;
+    snapshot->mappings = NULL;
+}
+
 static void free_impl(checkpoint_impl *impl) {
     if (!impl) return;
-    for (size_t i = 0; i < impl->memory_count; i++) free(impl->memories[i].data);
+    posix_shm_namespace_release(impl->shm_namespace);
+    for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
+        process_snapshot *snapshot = &impl->processes[i];
+        for (uint32_t j = 0; j < snapshot->file_mapping_count; j++)
+            posix_kernel_file_release(snapshot->file_mappings[j].file_object);
+        free(snapshot->file_mappings);
+        free(snapshot->regions);
+    }
+    for (size_t i = 0; i < impl->memory_count; i++)
+        release_memory_snapshot(&impl->memories[i]);
     for (size_t i = 0; i < impl->table_count; i++) free(impl->tables[i].elements);
     for (size_t i = 0; i < impl->engine_count; i++) {
         engine_snapshot *snapshot = &impl->engines[i];
@@ -195,7 +246,94 @@ static void free_impl(checkpoint_impl *impl) {
     free(impl->tables);
     free(impl->globals);
     free(impl->engines);
+    free(impl->page_aliases);
     free(impl);
+}
+
+static int copy_process_snapshot(process_snapshot *snapshot,
+                                 const native_process *process) {
+    const native_process_capsule *capsule;
+    if (!snapshot || !process) return 0;
+    memset(snapshot, 0, sizeof(*snapshot));
+    capsule = &process->capsule;
+    snapshot->virtual_page_limit = capsule->virtual_page_limit;
+    snapshot->file_mapping_count = capsule->file_mapping_count;
+    snapshot->region_count = capsule->region_count;
+    if (snapshot->file_mapping_count) {
+        if (!capsule->file_mappings) return 0;
+        snapshot->file_mappings = malloc(
+            (size_t)snapshot->file_mapping_count *
+            sizeof(*snapshot->file_mappings));
+        if (!snapshot->file_mappings) return 0;
+        memcpy(snapshot->file_mappings, capsule->file_mappings,
+               (size_t)snapshot->file_mapping_count *
+               sizeof(*snapshot->file_mappings));
+        for (uint32_t i = 0; i < snapshot->file_mapping_count; i++) {
+            if (!snapshot->file_mappings[i].file_object) return 0;
+            posix_file_object_retain(snapshot->file_mappings[i].file_object);
+        }
+    }
+    if (snapshot->region_count) {
+        if (!capsule->regions) return 0;
+        snapshot->regions = malloc((size_t)snapshot->region_count *
+                                    sizeof(*snapshot->regions));
+        if (!snapshot->regions) return 0;
+        memcpy(snapshot->regions, capsule->regions,
+               (size_t)snapshot->region_count * sizeof(*snapshot->regions));
+    }
+    return 1;
+}
+
+static void clear_process_file_mappings(native_process_capsule *capsule) {
+    if (!capsule) return;
+    for (uint32_t i = 0; i < capsule->file_mapping_count; i++)
+        posix_kernel_file_release(capsule->file_mappings[i].file_object);
+    free(capsule->file_mappings);
+    capsule->file_mappings = NULL;
+    capsule->file_mapping_count = 0;
+    capsule->file_mapping_capacity = 0;
+}
+
+static exec_status restore_process_snapshot(const process_snapshot *snapshot,
+                                            native_process *process,
+                                            exec_error *error) {
+    native_process_capsule *capsule;
+    if (!snapshot || !process) return checkpoint_error(error,
+                                                       "invalid process checkpoint");
+    capsule = &process->capsule;
+    clear_process_file_mappings(capsule);
+    free(capsule->regions);
+    capsule->regions = NULL;
+    capsule->region_count = 0;
+    capsule->region_capacity = 0;
+    capsule->virtual_page_limit = snapshot->virtual_page_limit;
+    if (snapshot->file_mapping_count) {
+        capsule->file_mappings = malloc(
+            (size_t)snapshot->file_mapping_count *
+            sizeof(*capsule->file_mappings));
+        if (!capsule->file_mappings)
+            return checkpoint_error(error, "process mapping restore allocation failed");
+        memcpy(capsule->file_mappings, snapshot->file_mappings,
+               (size_t)snapshot->file_mapping_count *
+               sizeof(*capsule->file_mappings));
+        capsule->file_mapping_count = snapshot->file_mapping_count;
+        capsule->file_mapping_capacity = snapshot->file_mapping_count;
+        for (uint32_t i = 0; i < capsule->file_mapping_count; i++)
+            posix_file_object_retain(capsule->file_mappings[i].file_object);
+    }
+    if (snapshot->region_count) {
+        capsule->regions = malloc((size_t)snapshot->region_count *
+                                  sizeof(*capsule->regions));
+        if (!capsule->regions) {
+            clear_process_file_mappings(capsule);
+            return checkpoint_error(error, "process region restore allocation failed");
+        }
+        memcpy(capsule->regions, snapshot->regions,
+               (size_t)snapshot->region_count * sizeof(*capsule->regions));
+        capsule->region_count = snapshot->region_count;
+        capsule->region_capacity = snapshot->region_count;
+    }
+    return EXEC_OK;
 }
 
 void native_store_checkpoint_init(native_store_checkpoint *checkpoint) {
@@ -208,19 +346,75 @@ void native_store_checkpoint_destroy(native_store_checkpoint *checkpoint) {
     checkpoint->impl = NULL;
 }
 
-static int copy_memory(memory_snapshot *snapshot) {
+static exec_memory_page *copy_checkpoint_page(const exec_memory_page *source) {
+    exec_memory_page *copy = calloc(1, sizeof(*copy));
+    if (!copy) return NULL;
+    copy->bytes = malloc(EXEC_PAGE_SIZE);
+    if (!copy->bytes) {
+        free(copy);
+        return NULL;
+    }
+    memcpy(copy->bytes, source->bytes, EXEC_PAGE_SIZE);
+    copy->refs = 1;
+    copy->shared = source->shared;
+    return copy;
+}
+
+static int copy_memory(checkpoint_impl *impl, memory_snapshot *snapshot) {
     exec_memory *memory = snapshot->object;
     snapshot->pages = memory->pages;
+    snapshot->linear_pages = memory->linear_pages;
+    snapshot->mapping_count = memory->mapping_count;
     snapshot->max_pages = memory->max_pages;
+    snapshot->virtual_max_pages = memory->virtual_max_pages;
     snapshot->has_max = memory->has_max;
     snapshot->is_64 = memory->is_64;
-    if (!memory->pages) return 1;
-    if (memory->pages > SIZE_MAX / EXEC_PAGE_SIZE) return 0;
-    size_t bytes = (size_t)memory->pages * EXEC_PAGE_SIZE;
-    snapshot->data = malloc(bytes);
-    if (!snapshot->data) return 0;
-    if (memory->data) memcpy(snapshot->data, memory->data, bytes);
-    else memset(snapshot->data, 0, bytes);
+    snapshot->process_virtual_memory = memory->process_virtual_memory;
+    if (memory->pages > SIZE_MAX / sizeof(*snapshot->page_data) ||
+        memory->pages > SIZE_MAX / sizeof(*snapshot->page_protection))
+        return 0;
+    if (memory->pages) {
+        snapshot->page_data = calloc((size_t)memory->pages,
+                                     sizeof(*snapshot->page_data));
+        snapshot->page_protection = malloc((size_t)memory->pages);
+        if (!snapshot->page_data || !snapshot->page_protection) return 0;
+        if (!memory->page_data || !memory->page_protection) return 0;
+        memcpy(snapshot->page_protection, memory->page_protection,
+               (size_t)memory->pages);
+        for (uint64_t i = 0; i < memory->pages; i++) {
+            exec_memory_page *source_page = memory->page_data[i];
+            if (!source_page) continue;
+            for (size_t j = 0; j < impl->page_alias_count; j++)
+                if (impl->page_aliases[j].source == source_page) {
+                    snapshot->page_data[i] = impl->page_aliases[j].snapshot;
+                    exec_memory_page_retain(snapshot->page_data[i]);
+                    source_page = NULL;
+                    break;
+                }
+            if (!source_page) continue;
+            exec_memory_page *snapshot_page = copy_checkpoint_page(source_page);
+            if (!snapshot_page) return 0;
+            checkpoint_page_alias *aliases = realloc(
+                impl->page_aliases,
+                (impl->page_alias_count + 1) * sizeof(*impl->page_aliases));
+            if (!aliases) {
+                exec_memory_page_release(snapshot_page);
+                return 0;
+            }
+            impl->page_aliases = aliases;
+            impl->page_aliases[impl->page_alias_count++] =
+                (checkpoint_page_alias){source_page, snapshot_page};
+            snapshot->page_data[i] = snapshot_page;
+        }
+    }
+    if (memory->mapping_count) {
+        if (!memory->mappings) return 0;
+        snapshot->mappings = malloc((size_t)memory->mapping_count *
+                                    sizeof(*snapshot->mappings));
+        if (!snapshot->mappings) return 0;
+        memcpy(snapshot->mappings, memory->mappings,
+               (size_t)memory->mapping_count * sizeof(*snapshot->mappings));
+    }
     return 1;
 }
 
@@ -301,6 +495,20 @@ exec_status native_store_checkpoint_capture(native_store *store,
     native_store_checkpoint_destroy(checkpoint);
     checkpoint_impl *impl = calloc(1, sizeof(*impl));
     if (!impl) return checkpoint_error(error, "checkpoint allocation failed");
+    impl->store = store;
+    impl->shm_namespace = posix_shm_namespace_clone(store->shm_namespace);
+    if (store->shm_namespace && !impl->shm_namespace) {
+        free_impl(impl);
+        return checkpoint_error(error, "shared-memory checkpoint allocation failed");
+    }
+    for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
+        if (!store->processes[i].used || !store->processes[i].kernel) continue;
+        impl->process_uids[i] = store->processes[i].kernel->uid;
+        impl->process_gids[i] = store->processes[i].kernel->gid;
+        if (!copy_process_snapshot(&impl->processes[i],
+                                   &store->processes[i]))
+            goto alloc_fail;
+    }
     if (!add_memory(impl, &store->spectest_memory) ||
         !add_table(impl, &store->spectest_table) ||
         !add_global(impl, &store->spectest_i32) ||
@@ -316,7 +524,7 @@ exec_status native_store_checkpoint_capture(native_store *store,
     for (size_t i = 0; i < impl->engine_count; i++)
         if (!collect_engine(impl, impl->engines[i].engine)) goto alloc_fail;
     for (size_t i = 0; i < impl->memory_count; i++)
-        if (!copy_memory(&impl->memories[i])) goto alloc_fail;
+        if (!copy_memory(impl, &impl->memories[i])) goto alloc_fail;
     for (size_t i = 0; i < impl->table_count; i++)
         if (!copy_table(&impl->tables[i])) goto alloc_fail;
     for (size_t i = 0; i < impl->global_count; i++)
@@ -332,22 +540,55 @@ alloc_fail:
 
 static exec_status restore_memory(memory_snapshot *snapshot, exec_error *error) {
     exec_memory *memory = snapshot->object;
-    if (snapshot->pages > SIZE_MAX / EXEC_PAGE_SIZE)
+    exec_memory replacement = {0};
+    if (snapshot->pages > SIZE_MAX / sizeof(*replacement.page_data) ||
+        snapshot->pages > SIZE_MAX / sizeof(*replacement.page_protection))
         return checkpoint_error(error, "memory checkpoint is too large");
-    size_t bytes = (size_t)snapshot->pages * EXEC_PAGE_SIZE;
-    uint8_t *data = NULL;
-    if (bytes) {
-        data = realloc(memory->data, bytes);
-        if (!data) return checkpoint_error(error, "memory restore allocation failed");
-        memcpy(data, snapshot->data, bytes);
-    } else {
-        free(memory->data);
+    replacement.pages = snapshot->pages;
+    replacement.linear_pages = snapshot->linear_pages;
+    replacement.mapping_count = snapshot->mapping_count;
+    replacement.mapping_capacity = snapshot->mapping_count;
+    if (snapshot->pages) {
+        replacement.page_data = calloc((size_t)snapshot->pages,
+                                       sizeof(*replacement.page_data));
+        replacement.page_protection = malloc((size_t)snapshot->pages);
+        if (!replacement.page_data || !replacement.page_protection) {
+            exec_memory_release(&replacement);
+            return checkpoint_error(error, "memory restore allocation failed");
+        }
+        if (!snapshot->page_data || !snapshot->page_protection) {
+            exec_memory_release(&replacement);
+            return checkpoint_error(error, "invalid memory checkpoint");
+        }
+        memcpy(replacement.page_protection, snapshot->page_protection,
+               (size_t)snapshot->pages);
+        for (uint64_t i = 0; i < snapshot->pages; i++) {
+            replacement.page_data[i] = snapshot->page_data[i];
+            if (replacement.page_data[i])
+                exec_memory_page_retain(replacement.page_data[i]);
+        }
     }
-    memory->data = data;
-    memory->pages = snapshot->pages;
-    memory->max_pages = snapshot->max_pages;
-    memory->has_max = snapshot->has_max;
-    memory->is_64 = snapshot->is_64;
+    if (snapshot->mapping_count) {
+        if (!snapshot->mappings) {
+            exec_memory_release(&replacement);
+            return checkpoint_error(error, "invalid memory checkpoint");
+        }
+        replacement.mappings = malloc((size_t)snapshot->mapping_count *
+                                      sizeof(*replacement.mappings));
+        if (!replacement.mappings) {
+            exec_memory_release(&replacement);
+            return checkpoint_error(error, "memory restore allocation failed");
+        }
+        memcpy(replacement.mappings, snapshot->mappings,
+               (size_t)snapshot->mapping_count * sizeof(*replacement.mappings));
+    }
+    exec_memory_release(memory);
+    replacement.max_pages = snapshot->max_pages;
+    replacement.virtual_max_pages = snapshot->virtual_max_pages;
+    replacement.has_max = snapshot->has_max;
+    replacement.is_64 = snapshot->is_64;
+    replacement.process_virtual_memory = snapshot->process_virtual_memory;
+    *memory = replacement;
     return EXEC_OK;
 }
 
@@ -375,6 +616,32 @@ exec_status native_store_checkpoint_restore(native_store_checkpoint *checkpoint,
     if (!checkpoint || !checkpoint->impl)
         return checkpoint_error(error, "empty checkpoint");
     checkpoint_impl *impl = checkpoint->impl;
+    if (impl->store && impl->shm_namespace) {
+        posix_shm_namespace *old = impl->store->shm_namespace;
+        posix_shm_namespace_retain(impl->shm_namespace);
+        for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
+            if (!impl->store->processes[i].used ||
+                !impl->store->processes[i].kernel) continue;
+            if (posix_kernel_set_shm_namespace(
+                    impl->store->processes[i].kernel,
+                    impl->shm_namespace) != 0)
+                return checkpoint_error(error,
+                                        "shared-memory namespace restore failed");
+            (void)posix_kernel_set_credentials(
+                impl->store->processes[i].kernel,
+                impl->process_uids[i], impl->process_gids[i]);
+        }
+        impl->store->shm_namespace = impl->shm_namespace;
+        posix_shm_namespace_release(old);
+    }
+    if (impl->store) {
+        for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
+            if (!impl->store->processes[i].used) continue;
+            exec_status process_status = restore_process_snapshot(
+                &impl->processes[i], &impl->store->processes[i], error);
+            if (process_status != EXEC_OK) return process_status;
+        }
+    }
     for (size_t i = 0; i < impl->memory_count; i++) {
         exec_status status = restore_memory(&impl->memories[i], error);
         if (status != EXEC_OK) return status;

@@ -73,6 +73,80 @@ static void test_invalid_fd(void) {
     posix_kernel_destroy(k);
 }
 
+/* --- File-backed mapping source --- */
+
+static void test_file_read_at(void) {
+    posix_kernel *k = posix_kernel_create(0);
+    const uint8_t source[] = "mapped-bytes";
+    uint8_t result[6] = {0};
+    posix_path_metadata metadata = {
+        POSIX_NODE_REGULAR, 0666, 0, 0, sizeof(source) - 1, 77
+    };
+    CHECK(k != NULL, "create file mapping kernel");
+    CHECK(posix_kernel_path_add_data(k, "/mapped", &metadata, source,
+                                     sizeof(source) - 1) == 0,
+          "add file mapping source");
+    int fd = posix_kernel_open(k, (const uint8_t *)"/mapped", 7, 0, 0);
+    CHECK(fd >= 0, "open file mapping source");
+    CHECK(posix_kernel_file_read_at(k, fd, 2, result, sizeof(result)) == 6 &&
+          memcmp(result, "pped-b", sizeof(result)) == 0,
+          "read mapping bytes without changing descriptor offset");
+    memset(result, 0, sizeof(result));
+    CHECK(posix_kernel_read(k, fd, result, sizeof(result)) == 6 &&
+          memcmp(result, source, sizeof(result)) == 0,
+          "descriptor offset remains independent");
+    int writable_fd = posix_kernel_open(k, (const uint8_t *)"/mapped", 7,
+                                        POSIX_O_RDWR, 0);
+    CHECK(writable_fd >= 0 &&
+          posix_kernel_file_write_at(k, writable_fd, 2, "XY", 2) == 2 &&
+          posix_kernel_file_read_at(k, fd, 2, result, sizeof(result)) == 6 &&
+          memcmp(result, "XYed-b", sizeof(result)) == 0,
+          "write mapping bytes without changing descriptor offset");
+    uint64_t object_id = 0;
+    int writable = 0;
+    posix_file_object *object = NULL;
+    CHECK(posix_kernel_file_identity(k, writable_fd, &object_id,
+                                     &writable) == 0 &&
+          object_id == metadata.inode && writable &&
+          posix_kernel_file_retain(k, writable_fd, &object, &writable) == 0 &&
+          object != NULL,
+          "capture writable file object identity");
+    CHECK(posix_kernel_close(k, writable_fd) == 0 &&
+          posix_kernel_file_write_object(k, object, 1, "Q", 1) == 1 &&
+          posix_kernel_file_read_at(k, fd, 0, result, sizeof(result)) == 6 &&
+          memcmp(result, "mQXYed", sizeof(result)) == 0,
+          "file object write survives descriptor close");
+    posix_kernel_file_release(object);
+    posix_kernel *child_kernel = posix_kernel_clone(k);
+    int child_fd = child_kernel ? posix_kernel_open(
+        child_kernel, (const uint8_t *)"/mapped", 7, POSIX_O_RDWR, 0) : -1;
+    CHECK(child_fd >= 0 &&
+          posix_kernel_file_write_at(child_kernel, child_fd, 0, "Z", 1) == 1 &&
+          posix_kernel_file_read_at(k, fd, 0, result, sizeof(result)) == 6 &&
+          memcmp(result, "ZQXYed", sizeof(result)) == 0,
+          "forked kernels share retained VFS file objects");
+    posix_kernel_destroy(child_kernel);
+    CHECK(posix_kernel_file_read_at(k, fd, 8, result, 8) == -POSIX_EINVAL,
+          "reject file mapping range past EOF");
+    CHECK(posix_kernel_file_read_at(k, fd, 0, result, 1) == 1 &&
+          result[0] == 'Z', "read shared mapping source after fork write");
+    int truncate_fd = posix_kernel_open(k, (const uint8_t *)"/mapped", 7,
+                                        POSIX_O_RDWR, 0);
+    uint64_t truncated_size = 0;
+    CHECK(truncate_fd >= 0 &&
+          posix_kernel_ftruncate(k, truncate_fd, 4) == 0 &&
+          posix_kernel_file_size(k, truncate_fd, &truncated_size) == 0 &&
+          truncated_size == 4 &&
+          posix_kernel_file_read_at(k, truncate_fd, 4, result, 1) == -POSIX_EINVAL,
+          "truncate shared file object and reject its old tail");
+    CHECK(posix_kernel_ftruncate(k, truncate_fd, 8) == 0 &&
+          posix_kernel_file_size(k, truncate_fd, &truncated_size) == 0 &&
+          truncated_size == 8,
+          "grow truncated file object");
+    posix_kernel_close(k, truncate_fd);
+    posix_kernel_destroy(k);
+}
+
 /* --- Terminal readiness --- */
 
 static void test_terminal_readiness(void) {
@@ -624,6 +698,64 @@ static void test_close_on_exec(void) {
     posix_kernel_destroy(k);
 }
 
+static void test_shared_memory_names(void) {
+    posix_kernel *kernel = posix_kernel_create(0);
+    posix_kernel *child;
+    posix_kernel *independent = posix_kernel_create(0);
+    uint8_t value = 0;
+    int fd;
+    CHECK(kernel != NULL && independent != NULL, "create shared-memory kernels");
+    CHECK(posix_kernel_set_shm_namespace(independent,
+              kernel->shm_namespace) == 0,
+          "attach independent kernel to shared-memory namespace");
+    CHECK(posix_kernel_set_credentials(kernel, 1000, 1000) == 0 &&
+          posix_kernel_shm_open(kernel, (const uint8_t *)"/denied-create", 14,
+                                POSIX_O_CREAT | POSIX_O_RDWR, 0001) ==
+              -POSIX_EACCES,
+          "failed named-object creation is denied atomically");
+    CHECK(posix_kernel_set_credentials(kernel, 0, 0) == 0 &&
+          posix_kernel_shm_open(kernel, (const uint8_t *)"/denied-create", 14,
+                                0, 0) == -POSIX_ENOENT,
+          "failed named-object creation does not publish a name");
+    fd = posix_kernel_shm_open(kernel, (const uint8_t *)"/object", 7,
+                               POSIX_O_CREAT | POSIX_O_RDWR, 0600);
+    CHECK(fd >= 0 && posix_kernel_ftruncate(kernel, fd, 4) == 0,
+          "create and size named shared-memory object");
+    CHECK(posix_kernel_shm_open(kernel, (const uint8_t *)"/object", 7,
+                                POSIX_O_CREAT | POSIX_O_EXCL, 0600) ==
+              -POSIX_EEXIST,
+          "exclusive shared-memory creation rejects an existing name");
+    CHECK(posix_kernel_file_write_at(kernel, fd, 0, "S", 1) == 1,
+          "write named shared-memory object");
+    int independent_fd = posix_kernel_shm_open(
+        independent, (const uint8_t *)"/object", 7, 0, 0);
+    CHECK(posix_kernel_set_credentials(independent, 1000, 1000) == 0 &&
+          posix_kernel_shm_open(independent, (const uint8_t *)"/object", 7,
+                                0, 0) == -POSIX_EACCES,
+          "shared-memory mode denies an unrelated user");
+    CHECK(posix_kernel_set_credentials(independent, 0, 0) == 0,
+          "restore root credentials for shared-memory read");
+    CHECK(independent_fd >= 0 &&
+          posix_kernel_file_read_at(independent, independent_fd, 0,
+                                     &value, 1) == 1 && value == 'S',
+          "independent kernel opens shared-memory object");
+    child = posix_kernel_clone(kernel);
+    CHECK(child != NULL && posix_kernel_shm_unlink(kernel,
+              (const uint8_t *)"/object", 7) == 0 &&
+          posix_kernel_shm_open(kernel, (const uint8_t *)"/object", 7,
+                                0, 0) == -POSIX_ENOENT,
+          "unlink removes shared-memory name");
+    CHECK(posix_kernel_file_read_at(kernel, fd, 0, &value, 1) == 1 &&
+          value == 'S', "open descriptor survives shared-memory unlink");
+    CHECK(child && posix_kernel_file_read_at(child, 0, 0, &value, 1) == 1 &&
+          value == 'S', "forked descriptor retains shared-memory object");
+    posix_kernel_close(kernel, fd);
+    if (independent_fd >= 0) posix_kernel_close(independent, independent_fd);
+    if (child) posix_kernel_destroy(child);
+    if (independent) posix_kernel_destroy(independent);
+    posix_kernel_destroy(kernel);
+}
+
 static void test_foreground_process_group_routing(void) {
     posix_kernel *k = posix_kernel_create(1);
     posix_termios termios;
@@ -660,6 +792,7 @@ int main(void) {
     test_lifecycle();
     test_invalid_fd();
     test_terminal_readiness();
+    test_file_read_at();
     test_terminal_modes();
     test_terminal_eof_and_output();
     test_terminal_vtime();
@@ -675,6 +808,7 @@ int main(void) {
     test_fd_exhaustion();
     test_foreground_process_group_routing();
     test_close_on_exec();
+    test_shared_memory_names();
 
     if (failures)
         fprintf(stderr, "%d/%d tests FAILED\n", failures, tests);

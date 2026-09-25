@@ -210,12 +210,29 @@ async function runWastScript(wasmBytes, testSpec) {
   const ptr = exp.waste_wast_alloc(wastBytes.length);
   new Uint8Array(exp.memory.buffer).set(wastBytes, ptr);
 
+  for (const file of (testSpec.vfsFiles || [])) {
+    const pathBytes = new TextEncoder().encode(file.path);
+    const pathPtr = exp.waste_wast_alloc(pathBytes.length);
+    new Uint8Array(exp.memory.buffer).set(pathBytes, pathPtr);
+    const dataBytes = decodeB64(file.dataB64 || "");
+    const dataPtr = dataBytes.length ? exp.waste_wast_alloc(dataBytes.length) : 0;
+    if (dataBytes.length) new Uint8Array(exp.memory.buffer).set(dataBytes, dataPtr);
+    const staged = exp.waste_wast_stage_file(
+      pathPtr, pathBytes.length, dataPtr, dataBytes.length, file.mode || 0o666);
+    if (staged !== 0) throw new Error("VFS file staging failed: " + staged);
+  }
+
+  let sharedFilePageProbe = null;
+  if (testSpec.sharedFilePageProbe)
+    exp.waste_wast_request_shared_file_page_probe();
   try {
     exp.waste_wast_run_script(ptr, wastBytes.length);
   } catch (error) {
     throw new Error(String(error) + " at WAST line " +
                     exp.waste_wast_command_line());
   }
+  if (testSpec.sharedFilePageProbe)
+    sharedFilePageProbe = exp.waste_wast_shared_file_page_probe_result();
 
   const total = exp.waste_wast_results_total();
   const resultsPtr = exp.waste_wast_results_ptr();
@@ -233,6 +250,11 @@ async function runWastScript(wasmBytes, testSpec) {
     const error = pass ? "" : decoder.decode(mem.subarray(base + 64, base + errEnd));
     results.push({func, pass, error});
   }
+  if (sharedFilePageProbe !== null)
+    results.push({func: "shared-file-page-probe",
+      pass: sharedFilePageProbe === 0,
+      error: sharedFilePageProbe === 0 ? "" :
+        "probe returned " + sharedFilePageProbe});
   return results;
 }
 
