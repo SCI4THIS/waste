@@ -670,7 +670,12 @@ static size_t g_boot_executable_size;
 /* Boot-time packaged VFS manifest.  The browser submits only bounded path
  * metadata; file contents and executable bytes remain separate staged images
  * until the VFS data plane is added in Stage 7. */
-#define BROWSER_VFS_MANIFEST_MAX 24
+/* Keep enough room for the launcher directories, the complete packaged
+ * Coreutils wave (including /bin aliases), evidence fixtures, and subsequent
+ * package growth.  The full offline page stages these entries together; the
+ * focused utility harnesses stage only a subset and therefore did not expose
+ * the former 24-entry ceiling. */
+#define BROWSER_VFS_MANIFEST_MAX 64
 typedef struct {
     char path[POSIX_PATH_NODE_NAME_MAX];
     posix_path_metadata metadata;
@@ -1709,16 +1714,23 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
     /* Terminal creation replaces the initial noninteractive kernel, so bind
      * packaged metadata only after that optional replacement. */
     for (uint32_t i = 0; i < g_vfs_manifest_count; i++) {
+        int install_status;
         if (g_vfs_manifest[i].metadata.kind == POSIX_NODE_SYMLINK)
-            (void)posix_kernel_path_add_symlink(
+            install_status = posix_kernel_path_add_symlink(
                 g_yield_context.store.kernel, g_vfs_manifest[i].path,
                 &g_vfs_manifest[i].metadata, g_vfs_manifest[i].link_target);
         else
-            (void)posix_kernel_path_add_data(g_yield_context.store.kernel,
-                                              g_vfs_manifest[i].path,
-                                              &g_vfs_manifest[i].metadata,
-                                              g_vfs_manifest[i].data,
-                                              g_vfs_manifest[i].data_length);
+            install_status = posix_kernel_path_add_data(
+                g_yield_context.store.kernel, g_vfs_manifest[i].path,
+                &g_vfs_manifest[i].metadata, g_vfs_manifest[i].data,
+                g_vfs_manifest[i].data_length);
+        if (install_status != 0) {
+            char error[192];
+            snprintf(error, sizeof(error),
+                     "cannot install packaged VFS path %s: %d",
+                     g_vfs_manifest[i].path, install_status);
+            add_result(0, "(vfs)", error);
+        }
         free(g_vfs_manifest[i].data);
         free(g_vfs_manifest[i].link_target);
         g_vfs_manifest[i].data = NULL;

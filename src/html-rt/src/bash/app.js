@@ -138,19 +138,20 @@ async function startShell(event) {
     const vfsFiles = [];
     if (typeof g !== "undefined" && g.tar_hash && Object.keys(g.tar_hash).length) {
       for (const name of Object.keys(g.tar_hash)) {
+        /* worker.js and waste-wast.wasm are host runtime assets, not guest VFS
+           files.  Keep package-owned guest paths exact and install every
+           Coreutils executable in the normal command-search locations. */
+        if (name === "worker.js" || name === "waste-wast.wasm") continue;
         const bytes = await g.tar_hash[name].arrayBuffer();
         const isProbe = name === "waste-probe.wasm";
-        const isCoreutilsTrue = name === "true.wasm";
-        const isCoreutilsFalse = name === "false.wasm";
-        const isCoreutilsPwd = name === "pwd.wasm";
+        const utilityMatch = /^(true|false|pwd|echo|printf|basename|dirname|cat|wc|ls)\.wasm$/.exec(name);
         const paths = isProbe ? ["/bin/waste-probe"] :
-          isCoreutilsTrue ? ["/usr/bin/true", "/bin/true"] :
-          isCoreutilsFalse ? ["/usr/bin/false", "/bin/false"] :
-          isCoreutilsPwd ? ["/usr/bin/pwd", "/bin/pwd"] :
+          utilityMatch ? [`/usr/bin/${utilityMatch[1]}`, `/bin/${utilityMatch[1]}`] :
+          name.startsWith("usr/") ? [`/${name}`] :
           ["/usr/share/waste/" + name];
         for (const path of paths) {
           vfsFiles.push({path, bytes, kind: 1,
-            mode: isProbe || isCoreutilsTrue || isCoreutilsFalse || isCoreutilsPwd ? 0o755 : 0o644});
+            mode: isProbe || utilityMatch ? 0o755 : 0o644});
         }
       }
     }

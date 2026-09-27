@@ -462,12 +462,12 @@ static exec_status exec_invoke_managed(waste_exec_engine *eng,
     if (!eng) return exec_fail(err, EXEC_ERROR_NOT_FOUND, "null engine");
     depth = eng->active_call_depth;
     if (depth >= EXEC_MAX_CALL_DEPTH) {
-        char message[2048];
+        char message[512];
         int pos = snprintf(message, sizeof(message),
                  "call stack exhausted at depth %u calling func %u; trace:",
                  depth, func_idx);
-        /* Dump last 64 frames of the call chain */
-        uint32_t start = depth > 64 ? depth - 64 : 0;
+        /* Dump last 16 frames of the call chain */
+        uint32_t start = depth > 16 ? depth - 16 : 0;
         for (uint32_t i = start; i < depth && pos < (int)sizeof(message) - 8; i++)
             pos += snprintf(message + pos, sizeof(message) - (size_t)pos,
                             " %u", eng->call_func_trace[i]);

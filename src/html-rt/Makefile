@@ -118,6 +118,7 @@ WASTE_SYSROOT_HEADERS := $(shell find $(REPO_ROOT)/src/html-rt/lib/include \
 COREUTILS_CONFIGURE_TOOL := tools/configure-coreutils.py
 COREUTILS_CONFIGURE_DIR := $(COREUTILS_BUILD_DIR)/configure
 COREUTILS_CONFIGURE_REPORT := $(COREUTILS_CONFIGURE_DIR)/configure-report.json
+COREUTILS_CONFIGURE_SCRIPT := $(COREUTILS_BUILD_DIR)/source/configure
 COREUTILS_UTILITY_TOOL := tools/probe-coreutils-utility.py
 COREUTILS_RUNTIME_TOOL := tools/build-coreutils-runtime.py
 COREUTILS_PACKAGE_AUDIT := tools/audit-coreutils-package.py
@@ -340,6 +341,10 @@ $(COREUTILS_STAGE_STAMP): $(COREUTILS_STAGER) $(COREUTILS_PATCH)
 		--action stage --output $(COREUTILS_BUILD_DIR)
 	touch $@
 
+$(COREUTILS_CONFIGURE_SCRIPT): $(COREUTILS_STAGE_STAMP) $(COREUTILS_BOOTSTRAP)
+	WASTE_COREUTILS_BUILD_DIR=$(abspath $(COREUTILS_BUILD_DIR)) \
+		$(COREUTILS_BOOTSTRAP) --no-install
+
 # Stage 8D: generate the freestanding target sysroot and build the startup
 # fixture through its compiler wrapper.  All outputs remain under build/.
 coreutils-sysroot: $(WASTE_SYSROOT_DIR)/manifest.json
@@ -378,9 +383,7 @@ coreutils-configure-probe: $(COREUTILS_CONFIGURE_REPORT)
 
 $(COREUTILS_CONFIGURE_REPORT): $(COREUTILS_CONFIGURE_TOOL) \
 		tools/coreutils-waste.config.site $(WASTE_SYSROOT_DIR)/manifest.json \
-		$(COREUTILS_STAGE_STAMP)
-	WASTE_COREUTILS_BUILD_DIR=$(abspath $(COREUTILS_BUILD_DIR)) \
-		$(COREUTILS_BOOTSTRAP) --no-install
+		$(COREUTILS_CONFIGURE_SCRIPT)
 	$(PYTHON) $(COREUTILS_CONFIGURE_TOOL) \
 		--repo-root $(abspath $(REPO_ROOT)) \
 		--source $(abspath $(COREUTILS_BUILD_DIR)/source) \
@@ -423,7 +426,7 @@ coreutils-audit: $(COREUTILS_REPORTS)
 
 coreutils-source-package: $(COREUTILS_SOURCE_STAMP)
 
-$(COREUTILS_SOURCE_STAMP): $(COREUTILS_SOURCE_PACKAGER) $(COREUTILS_STAGE_STAMP) \
+$(COREUTILS_SOURCE_STAMP): $(COREUTILS_SOURCE_PACKAGER) $(COREUTILS_CONFIGURE_SCRIPT) \
 		$(COREUTILS_BUILD_DIR)/provenance.json \
 		$(COREUTILS_PATCH) $(REPO_ROOT)/start.sh \
 		$(REPO_ROOT)/docs/coreutils-source-distribution.md \

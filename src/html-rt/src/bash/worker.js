@@ -170,7 +170,9 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
                                                 dataPtr, fileBytes.length, file.mode);
       exp.waste_wast_free?.(pathPtr);
       exp.waste_wast_free?.(dataPtr);
-      if (staged !== 0) throw new Error(`C engine packaged file staging failed for ${file.path}`);
+      if (staged !== 0) {
+        throw new Error(`C engine packaged file staging failed for ${file.path}: ${staged}`);
+      }
     }
   }
   if (probeBuf && (!packagedFiles || !packagedFiles.some(file => file.path === "/bin/waste-probe")) && exp.waste_wast_stage_file) {

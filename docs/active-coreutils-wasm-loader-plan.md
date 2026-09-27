@@ -2529,7 +2529,18 @@ Implementation update (2026-09-27, Wave 4 `ls` acceptance):
   and non-terminal layouts, symlink presentation, multiple operands, and
   missing-path status match. Native account names and filesystem times differ
   only in the fields identified by the deviation ledger.
-- The final headless browser matrix passes 7/7 and returns status 0 after the
+- Runtime crash: the linked `ls` binary hit `call stack exhausted at depth
+  256` on its first invocation.  Root cause was gnulib's `rpl_localeconv`
+  wrapper — the same infinite-recursion pattern as `rpl_fcntl` in Wave 1.
+  gnulib's `localeconv.c` `#undef`s `localeconv` and calls the "real" system
+  function, but in Wasm there is no separate system implementation so the call
+  resolves back to the wrapper itself.  Fixed by adding
+  `libcoreutils_a-localeconv.o` to the gnulib strip list in
+  `probe-coreutils-utility.py`, so the waste-libc `localeconv` wins at link
+  time.  The same strip-list pattern now covers `fcntl`, `open`, `stat`,
+  `lstat`, `fstatat`, `localeconv`, and the seven `*zprintf` variants.
+- The final headless browser matrix passes 12/12 (baseline Bash, missing
+  command, and all ten coreutils utilities) and returns status 0 after the
   representative status-2 failure. Native warnings-as-errors sanitizer gates
   also pass: the executor smoke gate is green and the POSIX kernel reports
   329 tests. Wave 4 and Stage 8F are closed; no manual browser test is needed.

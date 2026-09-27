@@ -21,6 +21,7 @@ const coreutilsDirnameProbe = process.argv.includes("--coreutils-dirname");
 const coreutilsCatProbe = process.argv.includes("--coreutils-cat");
 const coreutilsWcProbe = process.argv.includes("--coreutils-wc");
 const coreutilsLsProbe = process.argv.includes("--coreutils-ls");
+const fullPackageProbe = process.argv.includes("--full-package");
 const coreutilsLsCommand = process.env.WASTE_COREUTILS_LS_COMMAND || "";
 const coreutilsLsExpected = process.env.WASTE_COREUTILS_LS_EXPECT || "";
 const watProbe = process.argv.includes("--wat-probe");
@@ -94,6 +95,27 @@ const coreutilsLsBytes = coreutilsLsProbe && fs.existsSync(coreutilsLsPath)
   ? fs.readFileSync(coreutilsLsPath) : null;
 const asArrayBuffer = bytes => bytes && bytes.buffer.slice(
   bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+const fullPackageFiles = fullPackageProbe
+  ? ["true", "false", "pwd", "echo", "printf", "basename", "dirname", "cat", "wc", "ls"]
+      .flatMap(name => {
+        const bytes = fs.readFileSync(path.join(stagingDir, `${name}.wasm`));
+        return ["/usr/bin/", "/bin/"].map(prefix => ({
+          path: prefix + name,
+          bytes: asArrayBuffer(bytes),
+          mode: 0o755,
+        }));
+      })
+      .concat([
+        "/usr/share/waste/coreutils-provenance.json",
+        "/usr/share/waste/coreutils-source-package.json",
+        "/usr/share/waste/waste-interpreters.json",
+        "/usr/share/licenses/coreutils/COPYING",
+      ].map(filePath => ({
+        path: filePath,
+        bytes: asArrayBuffer(Buffer.from("full-package regression fixture\n", "utf8")),
+        mode: 0o644,
+      })))
+  : [];
 
 /* Resolve launch.wast: staging symlink or build directory */
 let launchPath = path.join(stagingDir, "launch.wast");
@@ -616,7 +638,7 @@ self.onmessage({data: {
     path: "/bin/waste-probe",
     bytes: asArrayBuffer(probeBytes),
     mode: 0o755,
-  }, ...(coreutilsTrueBytes ? [{
+  }, ...fullPackageFiles, ...(coreutilsTrueBytes ? [{
     path: "/usr/bin/true",
     bytes: asArrayBuffer(coreutilsTrueBytes),
     mode: 0o755,

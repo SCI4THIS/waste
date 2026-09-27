@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 COREUTILS_SUBMODULE="$SCRIPT_DIR/coreutils"
 COREUTILS_PATCH="$SCRIPT_DIR/coreutils-waste.patch"
-COREUTILS_BUILD="${WASTE_COREUTILS_BUILD_DIR:-$REPO_ROOT/build/html-rt/coreutils}"
+COREUTILS_BUILD="${WASTE_COREUTILS_BUILD_DIR:-$REPO_ROOT/build/coreutils}"
 STAGED_SOURCE="$COREUTILS_BUILD/source"
 SOURCE_STAMP="$STAGED_SOURCE/.waste-bootstrap-source"
 
