@@ -13,7 +13,7 @@ enum {
     EXEC_MAX_STACK = 256,
     EXEC_MAX_LOCALS = WAST_MAX_LOCALS,
     EXEC_MAX_CONTROL = 256,
-    EXEC_MAX_CALL_DEPTH = 256,
+    EXEC_MAX_CALL_DEPTH = 1024,
     EXEC_MAX_CALL_ARGS = 256,
     EXEC_MAX_GLOBALS = 2048,
     EXEC_MAX_TABLES = 16,
@@ -246,11 +246,19 @@ struct waste_exec_engine {
     exec_control *control_frames[EXEC_MAX_CALL_DEPTH];
     uint32_t local_frame_capacities[EXEC_MAX_CALL_DEPTH];
     uint32_t active_call_depth;
+    uint32_t call_func_trace[EXEC_MAX_CALL_DEPTH];
     uint64_t frame_generations[EXEC_MAX_CALL_DEPTH];
     exec_jump_snapshot *jump_snapshots;
     uint32_t jump_snapshot_count;
     uint32_t jump_snapshot_capacity;
     exec_yield_frame yield_frames[EXEC_MAX_CALL_DEPTH];
+    /* Per-depth call arg storage and shared result/tail buffers reduce
+     * per-frame C stack usage to allow deep managed call chains without
+     * overflowing the engine's Wasm stack.  Per-depth args are needed
+     * because yield must restore the caller's original arguments. */
+    wasm_value *call_arg_frames[EXEC_MAX_CALL_DEPTH];
+    wasm_value call_results_buffer[WAST_MAX_RESULTS];
+    wasm_value tail_args_buffer[EXEC_MAX_CALL_ARGS];
     exec_clone_binding *clone_bindings;
     uint32_t clone_binding_count;
 };

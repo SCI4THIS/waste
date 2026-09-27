@@ -1022,34 +1022,31 @@ exec_status native_load_module(native_store *store,
         native_linked_module *provider = native_registered_module(
             store, request->module);
         if (request->kind == WASM_IMPORT_FUNCTION) {
+            native_host_binding host_binding = {0};
+            int host_resolved = store->host_resolver &&
+                store->host_resolver(request->module, request->name,
+                                     store->host_context, &host_binding);
             functions[nf].module = request->module;
             functions[nf].name = request->name;
             if (!provider && strcmp(request->module, "spectest") == 0 &&
                 native_spectest_has_function(request->name)) {
                 functions[nf].function = native_spectest_noop;
-            } else if (!provider && store->host_resolver) {
-                native_host_binding binding;
-                if (store->host_resolver(request->module, request->name,
-                                          store->host_context, &binding)) {
-                    functions[nf].function = binding.function;
-                    functions[nf].host_data = binding.host_data;
-                    functions[nf].control = binding.control;
-                }
+            } else if (host_resolved &&
+                       (!provider || host_binding.prefer_over_module)) {
+                functions[nf].function = host_binding.function;
+                functions[nf].host_data = host_binding.host_data;
+                functions[nf].control = host_binding.control;
             } else if (provider) {
                 uint32_t index = 0, type_index = 0;
                 exec_status status = exec_find_export(
                     provider->engine, request->name, &index, error);
-                if (status != EXEC_OK && store->host_resolver) {
-                    native_host_binding binding;
-                    if (store->host_resolver(request->module, request->name,
-                                              store->host_context, &binding)) {
-                        functions[nf].function = binding.function;
-                        functions[nf].host_data = binding.host_data;
-                        functions[nf].control = binding.control;
-                        if (error) memset(error, 0, sizeof(*error));
-                        nf++;
-                        continue;
-                    }
+                if (status != EXEC_OK && host_resolved) {
+                    functions[nf].function = host_binding.function;
+                    functions[nf].host_data = host_binding.host_data;
+                    functions[nf].control = host_binding.control;
+                    if (error) memset(error, 0, sizeof(*error));
+                    nf++;
+                    continue;
                 }
                 if (status != EXEC_OK) {
                     if (error) {

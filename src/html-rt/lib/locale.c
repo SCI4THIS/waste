@@ -31,7 +31,25 @@ static void locale_initialize(void) {
 
 char *setlocale(i32 category, const char *locale) { (void)category; locale_initialize(); (void)locale; return locale_name; }
 u32 *localeconv(void) { locale_initialize(); return locale_record; }
-char *nl_langinfo(i32 item) { (void)item; locale_initialize(); return locale_name; }
+static char *abmon_table[12];
+static void abmon_initialize(void) {
+  if (abmon_table[0]) return;
+  static const char names[] = "Jan\0Feb\0Mar\0Apr\0May\0Jun\0Jul\0Aug\0Sep\0Oct\0Nov\0Dec";
+  const char *p = names;
+  for (i32 i = 0; i < 12; i++) {
+    u32 len = c_length(p);
+    abmon_table[i] = malloc(len + 1);
+    bytes_copy(abmon_table[i], p, len + 1);
+    p += len + 1;
+  }
+}
+char *nl_langinfo(i32 item) {
+  locale_initialize();
+  if (item == 1) return locale_name;
+  if (item >= 9 && item <= 20) { abmon_initialize(); return abmon_table[item - 9]; }
+  if (item == 5) return decimal_point;
+  return empty_text;
+}
 char *gettext(const char *message) { return (char *)message; }
 char *dgettext(const char *domain, const char *message) { (void)domain; return (char *)message; }
 char *ngettext(const char *one, const char *many, u32 count) { return (char *)(count == 1 ? one : many); }

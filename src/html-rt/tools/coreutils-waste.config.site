@@ -25,3 +25,7 @@ ac_cv_func_sched_getaffinity_np=no
 ac_cv_func_pstat_getdynamic=no
 ac_cv_func_pstat_getstatic=no
 ac_cv_func_pstat_getprocvm=no
+# waste-libc's allocator guarantees 16-byte alignment. Let gnulib provide its
+# portable over-allocation shim for larger alignments such as cat's page-sized
+# I/O buffers instead of selecting the limited POSIX entry point.
+ac_cv_func_posix_memalign=no

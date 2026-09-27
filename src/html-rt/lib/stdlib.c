@@ -79,10 +79,12 @@ float strtof(const char *s, char **endptr) {
 
 char *getenv(const char *name) { (void)name; return (void *)0; }
 
+#ifndef WASTE_ALLOCATOR_ONLY
 _Noreturn void exit(int status) { (void)status; __builtin_trap(); }
 _Noreturn void _exit(int status) { exit(status); }
 _Noreturn void abort(void) { __builtin_trap(); }
 int atexit(void (*callback)(void)) { (void)callback; return 0; }
+#endif
 
 /* ---- Freestanding heap allocator ---- */
 extern unsigned char __heap_base;
@@ -290,11 +292,33 @@ __attribute__((noinline)) static u64 multiply_high(u64 a,u64 b){volatile u64 lo=
 void __multi3(u64*out,u64 a0,u64 a1,u64 b0,u64 b1){out[0]=a0*b0;out[1]=multiply_high(a0,b0)+a0*b1+a1*b0;}
 void imaxdiv(i64*out,i64 numerator,i64 denominator){out[0]=numerator/denominator;out[1]=numerator%denominator;}
 
+char *getenv(const char *name) { (void)name; return (void *)0; }
+char *secure_getenv(const char *name) { (void)name; return (void *)0; }
+
 void *sh_malloc(u32 size,const char*file,i32 line){(void)file;(void)line;return malloc(size);}
 void *sh_realloc(void*p,u32 size,const char*file,i32 line){(void)file;(void)line;return realloc(p,size);}
 void sh_free(void*p,const char*file,i32 line){(void)file;(void)line;free(p);}
 
 static void swap_bytes(unsigned char*a,unsigned char*b,u32 n){while(n--){unsigned char t=*a;*a++=*b;*b++=t;}}
 void qsort(void*base,u32 count,u32 size,i32(*compare)(const void*,const void*)){unsigned char*p=base;if(!size)return;for(u32 i=1;i<count;i++)for(u32 j=i;j&&compare(p+(j-1)*size,p+j*size)>0;j--)swap_bytes(p+(j-1)*size,p+j*size,size);}
+
+/* pthread stubs — single-threaded environment. */
+i32 pthread_mutex_init(void*m,const void*a){(void)m;(void)a;return 0;}
+i32 pthread_mutex_destroy(void*m){(void)m;return 0;}
+i32 pthread_mutex_lock(void*m){(void)m;return 0;}
+i32 pthread_mutex_unlock(void*m){(void)m;return 0;}
+i32 pthread_mutex_trylock(void*m){(void)m;return 0;}
+
+/* signal() — return SIG_DFL; engine owns signal dispatch. */
+typedef void (*sighandler_t)(i32);
+sighandler_t signal(i32 signum,sighandler_t handler){(void)signum;(void)handler;return (sighandler_t)0;}
+
+/* uselocale — single C.UTF-8 locale. */
+void *uselocale(void *locale){(void)locale;return (void *)0;}
+
+/* Compiler runtime — wasm32 long double is double; these convert between
+   unsigned 64-bit integers and IEEE-754 quad (128-bit) representation. */
+u64 __fixunstfdi(u64 lo,u64 hi){(void)lo;u64 sign=hi>>63;u64 exp=(hi>>48)&0x7fff;if(exp<16383)return 0;u32 shift=(u32)(exp-16383);u64 frac=((hi&0xffffffffffffULL)|0x1000000000000ULL)<<12;if(shift>=64)return sign?0:0xffffffffffffffffULL;return frac>>(64-shift);}
+void __floatunditf(u64*out,u64 value){if(!value){out[0]=out[1]=0;return;}u32 top=0;for(u64 scan=value;scan>>=1;)top++;u64 fraction=value-(1ULL<<top),shift=112-top,low=0,high=0;if(shift>=64)high=fraction<<(shift-64);else{low=fraction<<shift;high=fraction>>(64-shift);}out[0]=low;out[1]=((u64)(16383+top)<<48)|high;}
 
 #endif /* WASTE_ENGINE */

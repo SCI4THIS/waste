@@ -235,9 +235,16 @@ static exec_status instantiate_imports(waste_exec_engine *eng,
             const exec_host_import *binding =
                 find_host_import(imports, module_name, name);
             if (!binding || !binding->function) return exec_fail(err, EXEC_ERROR_NOT_FOUND, "unresolved function import");
-            if(binding->has_wasm_type&&!func_type_is_subtype(
-                    binding->type_owner,binding->type_index,eng,type_index))
-                return exec_fail(err,EXEC_ERROR_FORMAT,"function import type mismatch");
+            if (binding->has_wasm_type && !func_type_is_subtype(
+                    binding->type_owner, binding->type_index, eng, type_index)) {
+                if (err) {
+                    err->status = EXEC_ERROR_FORMAT;
+                    snprintf(err->message, sizeof(err->message),
+                             "function import type mismatch: %.80s.%.80s",
+                             module_name, name);
+                }
+                return EXEC_ERROR_FORMAT;
+            }
             uint32_t index=eng->import_func_count++;
             eng->import_func_types[index]=type_index; eng->import_funcs[index]=binding->function;
             eng->import_host_data[index]=binding->host_data;

@@ -13,6 +13,16 @@ const executableProbe = process.argv.includes("--exec-probe");
 const executableExitProbe = process.argv.includes("--exec-exit");
 const coreutilsTrueProbe = process.argv.includes("--coreutils-true");
 const coreutilsFalseProbe = process.argv.includes("--coreutils-false");
+const coreutilsPwdProbe = process.argv.includes("--coreutils-pwd");
+const coreutilsEchoProbe = process.argv.includes("--coreutils-echo");
+const coreutilsBasenameProbe = process.argv.includes("--coreutils-basename");
+const coreutilsPrintfProbe = process.argv.includes("--coreutils-printf");
+const coreutilsDirnameProbe = process.argv.includes("--coreutils-dirname");
+const coreutilsCatProbe = process.argv.includes("--coreutils-cat");
+const coreutilsWcProbe = process.argv.includes("--coreutils-wc");
+const coreutilsLsProbe = process.argv.includes("--coreutils-ls");
+const coreutilsLsCommand = process.env.WASTE_COREUTILS_LS_COMMAND || "";
+const coreutilsLsExpected = process.env.WASTE_COREUTILS_LS_EXPECT || "";
 const watProbe = process.argv.includes("--wat-probe");
 const watShebangProbe = process.argv.includes("--wat-shebang-probe");
 const watFailureProbe = process.argv.includes("--wat-failure-probe");
@@ -53,10 +63,35 @@ const probeBytes = (executableProbe || executableExitProbe) && fs.existsSync(pro
   ? fs.readFileSync(probePath) : null;
 const coreutilsTruePath = path.join(stagingDir, "true.wasm");
 const coreutilsFalsePath = path.join(stagingDir, "false.wasm");
+const coreutilsPwdPath = path.join(stagingDir, "pwd.wasm");
+const coreutilsEchoPath = path.join(stagingDir, "echo.wasm");
+const coreutilsBasenamePath = path.join(stagingDir, "basename.wasm");
+const coreutilsPrintfPath = path.join(stagingDir, "printf.wasm");
+const coreutilsDirnamePath = path.join(stagingDir, "dirname.wasm");
+const coreutilsCatPath = path.join(stagingDir, "cat.wasm");
+const coreutilsWcPath = path.join(stagingDir, "wc.wasm");
+const coreutilsLsPath = path.join(stagingDir, "ls.wasm");
 const coreutilsTrueBytes = coreutilsTrueProbe && fs.existsSync(coreutilsTruePath)
   ? fs.readFileSync(coreutilsTruePath) : null;
 const coreutilsFalseBytes = coreutilsFalseProbe && fs.existsSync(coreutilsFalsePath)
   ? fs.readFileSync(coreutilsFalsePath) : null;
+const coreutilsPwdBytes = coreutilsPwdProbe && fs.existsSync(coreutilsPwdPath)
+  ? fs.readFileSync(coreutilsPwdPath) : null;
+const coreutilsEchoBytes = coreutilsEchoProbe && fs.existsSync(coreutilsEchoPath)
+  ? fs.readFileSync(coreutilsEchoPath) : null;
+const coreutilsBasenameBytes = coreutilsBasenameProbe && fs.existsSync(coreutilsBasenamePath)
+  ? fs.readFileSync(coreutilsBasenamePath) : null;
+const coreutilsPrintfBytes = coreutilsPrintfProbe && fs.existsSync(coreutilsPrintfPath)
+  ? fs.readFileSync(coreutilsPrintfPath) : null;
+const coreutilsDirnameBytes = coreutilsDirnameProbe && fs.existsSync(coreutilsDirnamePath)
+  ? fs.readFileSync(coreutilsDirnamePath) : null;
+const coreutilsCatBytes = (coreutilsCatProbe || coreutilsLsProbe) &&
+  fs.existsSync(coreutilsCatPath)
+  ? fs.readFileSync(coreutilsCatPath) : null;
+const coreutilsWcBytes = coreutilsWcProbe && fs.existsSync(coreutilsWcPath)
+  ? fs.readFileSync(coreutilsWcPath) : null;
+const coreutilsLsBytes = coreutilsLsProbe && fs.existsSync(coreutilsLsPath)
+  ? fs.readFileSync(coreutilsLsPath) : null;
 const asArrayBuffer = bytes => bytes && bytes.buffer.slice(
   bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 
@@ -95,6 +130,30 @@ let coreutilsTrueStatusRequested = false;
 let coreutilsTrueStatusSeen = false;
 let coreutilsFalseStatusRequested = false;
 let coreutilsFalseStatusSeen = false;
+let coreutilsPwdStatusRequested = false;
+let coreutilsPwdStatusSeen = false;
+let coreutilsPwdRootSeen = false;
+let coreutilsEchoStatusRequested = false;
+let coreutilsEchoStatusSeen = false;
+let coreutilsEchoOutputSeen = false;
+let coreutilsBasenameStatusRequested = false;
+let coreutilsBasenameStatusSeen = false;
+let coreutilsBasenameOutputSeen = false;
+let coreutilsPrintfStatusRequested = false;
+let coreutilsPrintfStatusSeen = false;
+let coreutilsPrintfOutputSeen = false;
+let coreutilsDirnameStatusRequested = false;
+let coreutilsDirnameStatusSeen = false;
+let coreutilsDirnameOutputSeen = false;
+let coreutilsCatStatusRequested = false;
+let coreutilsCatStatusSeen = false;
+let coreutilsCatOutputSeen = false;
+let coreutilsWcStatusRequested = false;
+let coreutilsWcStatusSeen = false;
+let coreutilsWcOutputSeen = false;
+let coreutilsLsStatusRequested = false;
+let coreutilsLsStatusSeen = false;
+let coreutilsLsOutputSeen = false;
 let exitProbeStatusRequested = false;
 let watStatusRequested = false;
 let watAfterSeen = false;
@@ -107,16 +166,66 @@ const self = {
   postMessage(message) {
     if (message.type === "vfs") {
       if (message.paths?.includes("/tmp") &&
+          message.paths?.includes("/root") &&
           message.paths?.includes("/usr/bin") &&
           message.paths?.includes("/usr/share/waste/launch.wast") &&
-          ((!coreutilsTrueProbe && !coreutilsFalseProbe) ||
+          ((!coreutilsTrueProbe && !coreutilsFalseProbe && !coreutilsPwdProbe &&
+            !coreutilsEchoProbe && !coreutilsBasenameProbe &&
+            !coreutilsPrintfProbe && !coreutilsDirnameProbe && !coreutilsCatProbe &&
+            !coreutilsWcProbe && !coreutilsLsProbe) ||
             (coreutilsTrueProbe && message.paths?.includes("/usr/bin/true") &&
              message.paths?.includes("/bin/true")) ||
             (coreutilsFalseProbe && message.paths?.includes("/usr/bin/false") &&
-             message.paths?.includes("/bin/false")))) vfsSeen = true;
+             message.paths?.includes("/bin/false")) ||
+            (coreutilsPwdProbe && message.paths?.includes("/usr/bin/pwd") &&
+             message.paths?.includes("/bin/pwd")) ||
+            (coreutilsEchoProbe && message.paths?.includes("/usr/bin/echo") &&
+             message.paths?.includes("/bin/echo")) ||
+            (coreutilsBasenameProbe && message.paths?.includes("/usr/bin/basename") &&
+             message.paths?.includes("/bin/basename")) ||
+            (coreutilsPrintfProbe && message.paths?.includes("/usr/bin/printf") &&
+             message.paths?.includes("/bin/printf")) ||
+            (coreutilsDirnameProbe && message.paths?.includes("/usr/bin/dirname") &&
+             message.paths?.includes("/bin/dirname")) ||
+            (coreutilsCatProbe && message.paths?.includes("/usr/bin/cat") &&
+             message.paths?.includes("/bin/cat") &&
+             message.paths?.includes("/usr/share/waste/cat-fixture.txt")) ||
+            (coreutilsWcProbe && message.paths?.includes("/usr/bin/wc") &&
+             message.paths?.includes("/bin/wc") &&
+             message.paths?.includes("/usr/share/waste/wc-fixture.txt")) ||
+            (coreutilsLsProbe && message.paths?.includes("/usr/bin/ls") &&
+             message.paths?.includes("/bin/ls")))) vfsSeen = true;
     } else if (message.type === "output") {
       output += message.text;
       process.stdout.write(message.text);
+      if (coreutilsPwdProbe && output.includes("/root")) coreutilsPwdRootSeen = true;
+      if (coreutilsEchoProbe && output.includes("hello world")) coreutilsEchoOutputSeen = true;
+      if (coreutilsBasenameProbe && output.includes("file.txt")) coreutilsBasenameOutputSeen = true;
+      if (coreutilsPrintfProbe && output.includes("42")) coreutilsPrintfOutputSeen = true;
+      if (coreutilsDirnameProbe && output.includes("/usr/local")) coreutilsDirnameOutputSeen = true;
+      if (coreutilsCatProbe && output.includes("WASTE_CAT_FIXTURE_7f3a")) coreutilsCatOutputSeen = true;
+      if (coreutilsWcProbe &&
+          /\b2\s+3\s+14\s+\/usr\/share\/waste\/wc-fixture\.txt\b/.test(output)) {
+        coreutilsWcOutputSeen = true;
+      }
+      if (coreutilsLsProbe && coreutilsLsCommand && coreutilsLsExpected &&
+          output.includes(coreutilsLsExpected)) {
+        coreutilsLsOutputSeen = true;
+      } else if (coreutilsLsProbe &&
+          /__LS_ROOT_BEGIN__\r?\n(?:bin\r?\nroot\r?\ntmp\r?\nusr|bin\s+root\s+tmp\s+usr)/.test(output) &&
+          /__LS_BIN_BEGIN__\r?\n(?:cat\r?\n)?ls\r?\nwast\r?\nwaste-probe\r?\nwat/.test(output) &&
+          /__LS_EMPTY_BEGIN__\r?\n__LS_EMPTY_END__/.test(output) &&
+          /__LS_HIDDEN_BEGIN__\r?\n\.hidden\r?\nlink\r?\nvisible/.test(output) &&
+          /__LS_LONG_BEGIN__[\s\S]*lrwxrwxrwx[^\r\n]*link -> \/tmp\/ls-fixture\/visible/.test(output) &&
+          /__LS_TTY_BEGIN__\r?\nlink\s+visible\r?\n__LS_TTY_END__/.test(output) &&
+          /__LS_REDIRECT_BEGIN__\r?\nlink\r?\nvisible\r?\n__LS_REDIRECT_END__/.test(output) &&
+          output.includes("__LS_MULTI_BEGIN__") &&
+          output.includes("/tmp/ls-empty:") &&
+          output.includes("/tmp/ls-fixture:") &&
+          output.includes("__LS_MISSING_STATUS_2__") &&
+          output.includes("__LS_SECOND_COMMAND__")) {
+        coreutilsLsOutputSeen = true;
+      }
       if (baselineMissingCommand) {
         if (output.includes("/home/a")) environmentEchoSeen = true;
         if (output.includes("bash: ls: command not found")) {
@@ -230,18 +339,44 @@ const self = {
           setTimeout(() => self.onmessage({data: {type: "input",
             bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
         }
-      } else if (coreutilsTrueProbe || coreutilsFalseProbe) {
+      } else if (coreutilsTrueProbe || coreutilsFalseProbe || coreutilsPwdProbe ||
+                 coreutilsEchoProbe || coreutilsBasenameProbe ||
+                 coreutilsPrintfProbe || coreutilsDirnameProbe || coreutilsCatProbe ||
+                 coreutilsWcProbe || coreutilsLsProbe) {
         const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
-        const statusRequested = coreutilsTrueProbe
-          ? coreutilsTrueStatusRequested : coreutilsFalseStatusRequested;
+        const statusRequested = coreutilsTrueProbe ? coreutilsTrueStatusRequested :
+          coreutilsFalseProbe ? coreutilsFalseStatusRequested :
+          coreutilsPwdProbe ? coreutilsPwdStatusRequested :
+          coreutilsEchoProbe ? coreutilsEchoStatusRequested :
+          coreutilsBasenameProbe ? coreutilsBasenameStatusRequested :
+          coreutilsPrintfProbe ? coreutilsPrintfStatusRequested :
+          coreutilsDirnameProbe ? coreutilsDirnameStatusRequested :
+          coreutilsCatProbe ? coreutilsCatStatusRequested :
+          coreutilsWcProbe ? coreutilsWcStatusRequested :
+          coreutilsLsStatusRequested;
         if (commandSent && messageHasPrompt && !statusRequested) {
           if (coreutilsTrueProbe) coreutilsTrueStatusRequested = true;
-          else coreutilsFalseStatusRequested = true;
+          else if (coreutilsFalseProbe) coreutilsFalseStatusRequested = true;
+          else if (coreutilsPwdProbe) coreutilsPwdStatusRequested = true;
+          else if (coreutilsEchoProbe) coreutilsEchoStatusRequested = true;
+          else if (coreutilsBasenameProbe) coreutilsBasenameStatusRequested = true;
+          else if (coreutilsPrintfProbe) coreutilsPrintfStatusRequested = true;
+          else if (coreutilsDirnameProbe) coreutilsDirnameStatusRequested = true;
+          else if (coreutilsCatProbe) coreutilsCatStatusRequested = true;
+          else if (coreutilsWcProbe) coreutilsWcStatusRequested = true;
+          else coreutilsLsStatusRequested = true;
+          const tag = coreutilsTrueProbe ? "TRUE" :
+            coreutilsFalseProbe ? "FALSE" :
+            coreutilsPwdProbe ? "PWD" :
+            coreutilsEchoProbe ? "ECHO" :
+            coreutilsBasenameProbe ? "BASENAME" :
+            coreutilsPrintfProbe ? "PRINTF" :
+            coreutilsDirnameProbe ? "DIRNAME" :
+            coreutilsCatProbe ? "CAT" :
+            coreutilsWcProbe ? "WC" : "LS";
           setTimeout(() => self.onmessage({data: {type: "input",
             bytes: Array.from(new TextEncoder().encode(
-              coreutilsTrueProbe
-                ? "printf '__C_ENGINE_COREUTILS_TRUE_STATUS_%s__\\n' \"$?\"\n"
-                : "printf '__C_ENGINE_COREUTILS_FALSE_STATUS_%s__\\n' \"$?\"\n",
+              `printf '__C_ENGINE_COREUTILS_${tag}_STATUS_%s__\\n' \"$?\"\n`,
             ))}}), 10);
         }
         if (coreutilsTrueProbe && output.includes("__C_ENGINE_COREUTILS_TRUE_STATUS_") &&
@@ -254,6 +389,62 @@ const self = {
         if (coreutilsFalseProbe && output.includes("__C_ENGINE_COREUTILS_FALSE_STATUS_") &&
             !coreutilsFalseStatusSeen) {
           coreutilsFalseStatusSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        }
+        if (coreutilsPwdProbe && output.includes("__C_ENGINE_COREUTILS_PWD_STATUS_") &&
+            !coreutilsPwdStatusSeen) {
+          coreutilsPwdStatusSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        }
+        if (coreutilsEchoProbe && output.includes("__C_ENGINE_COREUTILS_ECHO_STATUS_") &&
+            !coreutilsEchoStatusSeen) {
+          coreutilsEchoStatusSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        }
+        if (coreutilsBasenameProbe && output.includes("__C_ENGINE_COREUTILS_BASENAME_STATUS_") &&
+            !coreutilsBasenameStatusSeen) {
+          coreutilsBasenameStatusSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        }
+        if (coreutilsPrintfProbe && output.includes("__C_ENGINE_COREUTILS_PRINTF_STATUS_") &&
+            !coreutilsPrintfStatusSeen) {
+          coreutilsPrintfStatusSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        }
+        if (coreutilsDirnameProbe && output.includes("__C_ENGINE_COREUTILS_DIRNAME_STATUS_") &&
+            !coreutilsDirnameStatusSeen) {
+          coreutilsDirnameStatusSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        }
+        if (coreutilsCatProbe && output.includes("__C_ENGINE_COREUTILS_CAT_STATUS_") &&
+            !coreutilsCatStatusSeen) {
+          coreutilsCatStatusSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        }
+        if (coreutilsWcProbe && output.includes("__C_ENGINE_COREUTILS_WC_STATUS_") &&
+            !coreutilsWcStatusSeen) {
+          coreutilsWcStatusSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        }
+        if (coreutilsLsProbe && output.includes("__C_ENGINE_COREUTILS_LS_STATUS_") &&
+            !coreutilsLsStatusSeen) {
+          coreutilsLsStatusSeen = true;
           exitSent = true;
           setTimeout(() => self.onmessage({data: {type: "input",
             bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
@@ -333,6 +524,34 @@ const self = {
                   ? "/bin/true\n"
                 : coreutilsFalseProbe
                   ? "/bin/false\n"
+                : coreutilsPwdProbe
+                  ? "/bin/pwd\n"
+                : coreutilsEchoProbe
+                  ? "/bin/echo hello world\n"
+                : coreutilsBasenameProbe
+                  ? "/bin/basename /usr/local/file.txt\n"
+                : coreutilsPrintfProbe
+                  ? "/bin/printf '%d\\n' 42\n"
+                : coreutilsDirnameProbe
+                  ? "/bin/dirname /usr/local/file.txt\n"
+                : coreutilsCatProbe
+                  ? "/bin/cat -n /usr/share/waste/cat-fixture.txt\n"
+                : coreutilsWcProbe
+                  ? "/bin/wc -l -w -c /usr/share/waste/wc-fixture.txt\n"
+                : coreutilsLsProbe
+                  ? coreutilsLsCommand ? coreutilsLsCommand + "\n" : [
+                      "echo __LS_ROOT_BEGIN__; /bin/ls -1 /",
+                      "echo __LS_BIN_BEGIN__; /bin/ls -1 /bin",
+                      "echo __LS_EMPTY_BEGIN__; /bin/ls -A /tmp/ls-empty; echo __LS_EMPTY_END__",
+                      "echo __LS_HIDDEN_BEGIN__; /bin/ls -A1 /tmp/ls-fixture",
+                      "echo __LS_LONG_BEGIN__; /bin/ls -l /tmp/ls-fixture",
+                      "echo __LS_TTY_BEGIN__; /bin/ls /tmp/ls-fixture; echo __LS_TTY_END__",
+                      "/bin/ls /tmp/ls-fixture > /tmp/ls-nontty.out",
+                      "echo __LS_REDIRECT_BEGIN__; /bin/cat /tmp/ls-nontty.out; echo __LS_REDIRECT_END__",
+                      "echo __LS_MULTI_BEGIN__; /bin/ls -1 /tmp/ls-empty /tmp/ls-fixture",
+                      "/bin/ls /tmp/ls-missing; echo __LS_MISSING_STATUS_$?__",
+                      "echo __LS_SECOND_COMMAND__",
+                    ].join("\n") + "\n"
                   : "echo __C_ENGINE_BASH_OK__\n",
             )),
           }});
@@ -413,6 +632,99 @@ self.onmessage({data: {
     path: "/bin/false",
     bytes: asArrayBuffer(coreutilsFalseBytes),
     mode: 0o755,
+  }] : []), ...(coreutilsPwdBytes ? [{
+    path: "/usr/bin/pwd",
+    bytes: asArrayBuffer(coreutilsPwdBytes),
+    mode: 0o755,
+  }, {
+    path: "/bin/pwd",
+    bytes: asArrayBuffer(coreutilsPwdBytes),
+    mode: 0o755,
+  }] : []), ...(coreutilsEchoBytes ? [{
+    path: "/usr/bin/echo",
+    bytes: asArrayBuffer(coreutilsEchoBytes),
+    mode: 0o755,
+  }, {
+    path: "/bin/echo",
+    bytes: asArrayBuffer(coreutilsEchoBytes),
+    mode: 0o755,
+  }] : []), ...(coreutilsBasenameBytes ? [{
+    path: "/usr/bin/basename",
+    bytes: asArrayBuffer(coreutilsBasenameBytes),
+    mode: 0o755,
+  }, {
+    path: "/bin/basename",
+    bytes: asArrayBuffer(coreutilsBasenameBytes),
+    mode: 0o755,
+  }] : []), ...(coreutilsPrintfBytes ? [{
+    path: "/usr/bin/printf",
+    bytes: asArrayBuffer(coreutilsPrintfBytes),
+    mode: 0o755,
+  }, {
+    path: "/bin/printf",
+    bytes: asArrayBuffer(coreutilsPrintfBytes),
+    mode: 0o755,
+  }] : []), ...(coreutilsDirnameBytes ? [{
+    path: "/usr/bin/dirname",
+    bytes: asArrayBuffer(coreutilsDirnameBytes),
+    mode: 0o755,
+  }, {
+    path: "/bin/dirname",
+    bytes: asArrayBuffer(coreutilsDirnameBytes),
+    mode: 0o755,
+  }] : []), ...(coreutilsCatBytes ? [{
+    path: "/usr/bin/cat",
+    bytes: asArrayBuffer(coreutilsCatBytes),
+    mode: 0o755,
+  }, {
+    path: "/bin/cat",
+    bytes: asArrayBuffer(coreutilsCatBytes),
+    mode: 0o755,
+  }, {
+    path: "/usr/share/waste/cat-fixture.txt",
+    bytes: asArrayBuffer(Buffer.from("WASTE_CAT_FIXTURE_7f3a\n", "utf8")),
+    mode: 0o644,
+  }] : []), ...(coreutilsLsBytes ? [{
+    path: "/usr/bin/ls",
+    bytes: asArrayBuffer(coreutilsLsBytes),
+    mode: 0o755,
+  }, {
+    path: "/bin/ls",
+    bytes: asArrayBuffer(coreutilsLsBytes),
+    mode: 0o755,
+  }, {
+    path: "/tmp/ls-empty",
+    kind: 2,
+    mode: 0o755,
+  }, {
+    path: "/tmp/ls-fixture",
+    kind: 2,
+    mode: 0o755,
+  }, {
+    path: "/tmp/ls-fixture/.hidden",
+    bytes: asArrayBuffer(Buffer.from("hidden\n", "utf8")),
+    mode: 0o600,
+  }, {
+    path: "/tmp/ls-fixture/visible",
+    bytes: asArrayBuffer(Buffer.from("visible\n", "utf8")),
+    mode: 0o640,
+  }, {
+    path: "/tmp/ls-fixture/link",
+    kind: 3,
+    target: "/tmp/ls-fixture/visible",
+    mode: 0o777,
+  }] : []), ...(coreutilsWcBytes ? [{
+    path: "/usr/bin/wc",
+    bytes: asArrayBuffer(coreutilsWcBytes),
+    mode: 0o755,
+  }, {
+    path: "/bin/wc",
+    bytes: asArrayBuffer(coreutilsWcBytes),
+    mode: 0o755,
+  }, {
+    path: "/usr/share/waste/wc-fixture.txt",
+    bytes: asArrayBuffer(Buffer.from("one two\nthree\n", "utf8")),
+    mode: 0o644,
   }] : []), {
     path: watShebangProbe ? "/tmp/wat-shebang.wat" :
       watFailureProbe ? "/tmp/wat-bad.wat" :
@@ -481,6 +793,45 @@ Promise.race([completion, timeout]).then(result => {
     : coreutilsFalseProbe
       ? promptSeen && commandSent && vfsSeen && coreutilsFalseStatusSeen &&
         output.includes("__C_ENGINE_COREUTILS_FALSE_STATUS_1__") &&
+        exitSent && !doneBeforeExit && result.ok
+    : coreutilsPwdProbe
+      ? promptSeen && commandSent && vfsSeen && coreutilsPwdRootSeen && coreutilsPwdStatusSeen &&
+        output.includes("__C_ENGINE_COREUTILS_PWD_STATUS_0__") &&
+        exitSent && !doneBeforeExit && result.ok
+    : coreutilsEchoProbe
+      ? promptSeen && commandSent && vfsSeen && coreutilsEchoOutputSeen &&
+        coreutilsEchoStatusSeen &&
+        output.includes("__C_ENGINE_COREUTILS_ECHO_STATUS_0__") &&
+        exitSent && !doneBeforeExit && result.ok
+    : coreutilsBasenameProbe
+      ? promptSeen && commandSent && vfsSeen && coreutilsBasenameOutputSeen &&
+        coreutilsBasenameStatusSeen &&
+        output.includes("__C_ENGINE_COREUTILS_BASENAME_STATUS_0__") &&
+        exitSent && !doneBeforeExit && result.ok
+    : coreutilsPrintfProbe
+      ? promptSeen && commandSent && vfsSeen && coreutilsPrintfOutputSeen &&
+        coreutilsPrintfStatusSeen &&
+        output.includes("__C_ENGINE_COREUTILS_PRINTF_STATUS_0__") &&
+        exitSent && !doneBeforeExit && result.ok
+    : coreutilsDirnameProbe
+      ? promptSeen && commandSent && vfsSeen && coreutilsDirnameOutputSeen &&
+        coreutilsDirnameStatusSeen &&
+        output.includes("__C_ENGINE_COREUTILS_DIRNAME_STATUS_0__") &&
+        exitSent && !doneBeforeExit && result.ok
+    : coreutilsCatProbe
+      ? promptSeen && commandSent && vfsSeen && coreutilsCatOutputSeen &&
+        coreutilsCatStatusSeen &&
+        output.includes("__C_ENGINE_COREUTILS_CAT_STATUS_0__") &&
+        exitSent && !doneBeforeExit && result.ok
+    : coreutilsWcProbe
+      ? promptSeen && commandSent && vfsSeen && coreutilsWcOutputSeen &&
+        coreutilsWcStatusSeen &&
+        output.includes("__C_ENGINE_COREUTILS_WC_STATUS_0__") &&
+        exitSent && !doneBeforeExit && result.ok
+    : coreutilsLsProbe
+      ? promptSeen && commandSent && vfsSeen && coreutilsLsOutputSeen &&
+        coreutilsLsStatusSeen &&
+        output.includes("__C_ENGINE_COREUTILS_LS_STATUS_0__") &&
         exitSent && !doneBeforeExit && result.ok
     : wastRepeatProbe
       ? promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&

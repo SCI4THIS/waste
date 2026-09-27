@@ -202,6 +202,10 @@ typedef struct {
     exec_host_func function;
     void *host_data;
     exec_host_control control;
+    /* Select this ABI adapter even when a registered Wasm module exports the
+     * same name.  This is for explicit compatibility shims whose signature
+     * differs from the module's application ABI. */
+    uint8_t prefer_over_module;
 } native_host_binding;
 
 /* Optional callback for resolving host-provided function imports that no

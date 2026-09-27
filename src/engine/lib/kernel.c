@@ -607,6 +607,41 @@ posix_kernel *posix_kernel_clone(const posix_kernel *source) {
     return clone;
 }
 
+int posix_kernel_merge_paths(posix_kernel *target,
+                             const posix_kernel *source) {
+    if (!target || !source) return -POSIX_EINVAL;
+    for (int i = 0; i < source->path_node_count; i++) {
+        const posix_kernel_path_node *from = &source->path_nodes[i];
+        posix_kernel_path_node *to = path_find(target, from->path);
+        char *link_target = NULL;
+        if (from->link_target) {
+            size_t length = strlen(from->link_target);
+            link_target = malloc(length + 1u);
+            if (!link_target) return -POSIX_ENOMEM;
+            memcpy(link_target, from->link_target, length + 1u);
+        }
+        if (!to) {
+            if (target->path_node_count >= POSIX_PATH_NODE_MAX) {
+                free(link_target);
+                return -POSIX_ENOMEM;
+            }
+            to = &target->path_nodes[target->path_node_count++];
+            memset(to, 0, sizeof(*to));
+            memcpy(to->path, from->path, sizeof(to->path));
+            to->file = from->file;
+            posix_file_object_retain(to->file);
+        } else if (to->file != from->file) {
+            posix_kernel_file_release(to->file);
+            to->file = from->file;
+            posix_file_object_retain(to->file);
+        }
+        to->metadata = from->metadata;
+        free(to->link_target);
+        to->link_target = link_target;
+    }
+    return 0;
+}
+
 void posix_kernel_destroy(posix_kernel *kernel) {
     if (!kernel) return;
     for (int i = 0; i < POSIX_KERNEL_FD_MAX; i++) {
@@ -1345,6 +1380,31 @@ int posix_kernel_dup(posix_kernel *kernel, int oldfd) {
     kernel->fds[newfd].ofd = ofd;
     kernel->fds[newfd].cloexec = 0;
     return newfd;
+}
+
+int posix_kernel_dupfd(posix_kernel *kernel, int oldfd, int minfd,
+                       int cloexec) {
+    if (!kernel || !fd_valid(oldfd) || minfd < 0) return -POSIX_EINVAL;
+    posix_ofd *ofd = kernel->fds[oldfd].ofd;
+    if (!ofd) return -POSIX_EBADF;
+
+    int newfd = kernel_find_free_fd(kernel, minfd);
+    if (newfd < 0) return newfd;
+
+    ofd->ref_count++;
+    if (ofd->kind == POSIX_OFD_PIPE_READ) ofd->pipe->readers++;
+    if (ofd->kind == POSIX_OFD_PIPE_WRITE) ofd->pipe->writers++;
+    kernel->fds[newfd].ofd = ofd;
+    kernel->fds[newfd].cloexec = cloexec ? 1 : 0;
+    return newfd;
+}
+
+int posix_kernel_fchdir(posix_kernel *kernel, int fd) {
+    if (!kernel || !fd_valid(fd)) return -POSIX_EINVAL;
+    posix_ofd *ofd = kernel->fds[fd].ofd;
+    if (!ofd) return -POSIX_EBADF;
+    if (ofd->kind != POSIX_OFD_DIRECTORY) return -POSIX_ENOTDIR;
+    return posix_kernel_path_set_cwd(kernel, ofd->directory.node->path);
 }
 
 int posix_kernel_dup2(posix_kernel *kernel, int oldfd, int newfd) {

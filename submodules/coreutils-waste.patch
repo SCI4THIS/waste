@@ -48,3 +48,69 @@ index 0000000..0000000 100644
  #endif
 +
 +#endif /* WASTE_WASM */
+
+diff --git a/src/ls.c b/src/ls.c
+index 0000000..0000000 100644
+--- a/src/ls.c
++++ b/src/ls.c
+@@ -50,7 +50,9 @@
+ #endif
+ 
+ #include <stdio.h>
++#ifndef WASTE_WASM
+ #include <setjmp.h>
++#endif
+ #include <pwd.h>
+ #include <getopt.h>
+ #include <signal.h>
+@@ -1650,6 +1652,10 @@ main (int argc, char **argv)
+   struct pending *thispend;
+   int n_files;
+ 
++#ifdef WASTE_WASM
++  ls_mode = LS_LS;
++#endif
++
+   initialize_main (&argc, &argv);
+   set_program_name (argv[0]);
+   setlocale (LC_ALL, "");
+@@ -3753,6 +3759,13 @@ gobble_file (char const *name, enum filetype type, ino_t inode,
+   cwd_n_used = j;
+ }
+ 
++#ifdef WASTE_WASM
++/* The WASTE locale model uses bytewise, infallible collation.  Avoid the
++   unavailable stack-restoring setjmp ABI and select strcmp ordering below.  */
++static int
++xstrcoll (char const *a, char const *b)
++{ return strcmp (a, b); }
++#else
+ /* Use strcoll to compare strings in this locale.  If an error occurs,
+    report an error and longjmp to failed_strcoll.  */
+ 
+@@ -3773,6 +3786,7 @@ xstrcoll (char const *a, char const *b)
+     }
+   return diff;
+ }
++#endif
+ 
+ /* Comparison routines for sorting the files.  */
+ 
+@@ -4070,6 +4084,9 @@ sort_files (void)
+      comparison function that is not a total order, and if we ignored
+      the failure this might cause qsort to dump core.  */
+ 
++#ifdef WASTE_WASM
++  use_strcmp = true;
++#else
+   if (! setjmp (failed_strcoll))
+     use_strcmp = false;      /* strcoll() succeeded */
+   else
+@@ -4078,6 +4095,7 @@ sort_files (void)
+       affirm (sort_type != sort_version);
+       initialize_ordering_vector ();
+     }
++#endif
+ 
+   /* When sort_type == sort_time, use time_type as subindex.  */
+   mpsort ((void const **) sorted_file, cwd_n_used,

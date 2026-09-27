@@ -676,9 +676,14 @@ typedef struct {
     posix_path_metadata metadata;
     uint8_t *data;
     size_t data_length;
+    char *link_target;
 } browser_vfs_manifest_entry;
 static browser_vfs_manifest_entry g_vfs_manifest[BROWSER_VFS_MANIFEST_MAX];
 static uint32_t g_vfs_manifest_count;
+/* Optional initial cwd selected by the browser launcher before the process
+ * store is created.  Keep this as bounded host-side state so the path remains
+ * valid after the staging allocation is released. */
+static char g_initial_cwd[POSIX_PATH_NODE_NAME_MAX];
 
 /* The browser-facing scheduler owns one explicit driver record.  The store
  * remains authoritative for process state; this record only identifies the
@@ -1136,6 +1141,84 @@ static exec_status browser_invoke_process(browser_wast_context *context,
                 continue;
             }
             native_exec_request_destroy(&context->store.exec_request);
+            /* Run guest libc bootstrap on the new image when the
+             * standard init exports are present.  This mirrors the
+             * WAST-level init sequence the launcher performs for Bash. */
+            {
+                uint32_t init_func;
+                wasm_value init_args[4];
+                int init_result_count = 0;
+                exec_error init_error;
+                uint32_t heap_base = 65536;
+                exec_global *heap_global = NULL;
+                memset(&init_error, 0, sizeof(init_error));
+                if (exec_find_export_global(image->engine, "__heap_base",
+                                            &heap_global,
+                                            &init_error) == EXEC_OK
+                    && heap_global
+                    && heap_global->value.type == WASM_VALTYPE_I32
+                    && heap_global->value.i32 > (int32_t)heap_base) {
+                    heap_base = (uint32_t)heap_global->value.i32;
+                }
+                {
+                    char heap_event[128];
+                    snprintf(heap_event, sizeof(heap_event),
+                             "image-heap-base-%u", heap_base);
+                    waste_browser_record_transition(heap_event);
+                }
+                memset(&init_error, 0, sizeof(init_error));
+                if (exec_find_export(image->engine, "waste_allocator_init",
+                                     &init_func, &init_error) == EXEC_OK) {
+                    init_args[0].type = WASM_VALTYPE_I32;
+                    init_args[0].i32 = (int32_t)heap_base;
+                    exec_status init_st = exec_invoke(image->engine, init_func,
+                                      init_args, 1, NULL,
+                                      &init_result_count, &init_error);
+                    if (init_st != EXEC_OK) {
+                        char ev[128];
+                        snprintf(ev, sizeof(ev), "image-alloc-FAIL-s%d-%s",
+                                 init_st, init_error.message);
+                        waste_browser_record_transition(ev);
+                    }
+                }
+                waste_browser_record_transition("image-alloc-ok");
+                memset(&init_error, 0, sizeof(init_error));
+                if (exec_find_export(image->engine, "waste_stdio_init",
+                                     &init_func, &init_error) == EXEC_OK) {
+                    init_args[0].type = WASM_VALTYPE_I32;
+                    init_args[0].i32 = 4096;
+                    exec_status init_st = exec_invoke(image->engine, init_func,
+                                      init_args, 1, NULL,
+                                      &init_result_count, &init_error);
+                    if (init_st != EXEC_OK) {
+                        char ev[128];
+                        snprintf(ev, sizeof(ev), "image-stdio-FAIL-s%d-%s",
+                                 init_st, init_error.message);
+                        waste_browser_record_transition(ev);
+                    }
+                }
+                waste_browser_record_transition("image-stdio-ok");
+                memset(&init_error, 0, sizeof(init_error));
+                if (exec_find_export(image->engine, "waste_stdio_bind",
+                                     &init_func, &init_error) == EXEC_OK) {
+                    init_args[0].type = WASM_VALTYPE_I32;
+                    init_args[0].i32 = 0;
+                    init_args[1].type = WASM_VALTYPE_I32;
+                    init_args[1].i32 = 1;
+                    init_args[2].type = WASM_VALTYPE_I32;
+                    init_args[2].i32 = 2;
+                    exec_status init_st = exec_invoke(image->engine, init_func,
+                                      init_args, 3, NULL,
+                                      &init_result_count, &init_error);
+                    if (init_st != EXEC_OK) {
+                        char ev[128];
+                        snprintf(ev, sizeof(ev), "image-bind-FAIL-s%d-%s",
+                                 init_st, init_error.message);
+                        waste_browser_record_transition(ev);
+                    }
+                }
+                waste_browser_record_transition("image-bind-ok");
+            }
             active_engine = image->engine;
             active_func_idx = image->entry_func;
             image_active = 1;
@@ -1157,10 +1240,11 @@ static exec_status browser_invoke_process(browser_wast_context *context,
             continue;
         }
         if (image_active && status != EXEC_YIELD) {
-            char image_event[64];
+            char image_event[512];
             snprintf(image_event, sizeof(image_event),
-                     "image-return-s%d-e%d-%s", status,
+                     "image-return-s%d-e%d-f%llu-%s", status,
                      error ? error->exit_code : -1,
+                     error ? (unsigned long long)error->memory_fault_address : 0,
                      error && error->message[0] ? error->message : "none");
             waste_browser_record_transition(image_event);
             if (status == EXEC_ERROR_EXIT) {
@@ -1625,15 +1709,27 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
     /* Terminal creation replaces the initial noninteractive kernel, so bind
      * packaged metadata only after that optional replacement. */
     for (uint32_t i = 0; i < g_vfs_manifest_count; i++) {
-        (void)posix_kernel_path_add_data(g_yield_context.store.kernel,
-                                          g_vfs_manifest[i].path,
-                                          &g_vfs_manifest[i].metadata,
-                                          g_vfs_manifest[i].data,
-                                          g_vfs_manifest[i].data_length);
+        if (g_vfs_manifest[i].metadata.kind == POSIX_NODE_SYMLINK)
+            (void)posix_kernel_path_add_symlink(
+                g_yield_context.store.kernel, g_vfs_manifest[i].path,
+                &g_vfs_manifest[i].metadata, g_vfs_manifest[i].link_target);
+        else
+            (void)posix_kernel_path_add_data(g_yield_context.store.kernel,
+                                              g_vfs_manifest[i].path,
+                                              &g_vfs_manifest[i].metadata,
+                                              g_vfs_manifest[i].data,
+                                              g_vfs_manifest[i].data_length);
         free(g_vfs_manifest[i].data);
+        free(g_vfs_manifest[i].link_target);
         g_vfs_manifest[i].data = NULL;
+        g_vfs_manifest[i].link_target = NULL;
     }
     g_vfs_manifest_count = 0;
+    if (g_initial_cwd[0]) {
+        (void)posix_kernel_path_set_cwd(g_yield_context.store.kernel,
+                                        g_initial_cwd);
+        g_initial_cwd[0] = '\0';
+    }
     if (g_shared_file_page_probe_requested) {
         g_shared_file_page_probe_result =
             waste_wast_shared_file_page_probe();
@@ -1761,7 +1857,7 @@ int32_t waste_wast_stage_path(uint32_t ptr, uint32_t length,
     browser_vfs_manifest_entry *entry;
     if (!length || length >= POSIX_PATH_NODE_NAME_MAX ||
         g_vfs_manifest_count >= BROWSER_VFS_MANIFEST_MAX ||
-        kind == POSIX_NODE_NONE || kind > POSIX_NODE_SYMLINK)
+        kind == POSIX_NODE_NONE || kind >= POSIX_NODE_SYMLINK)
         return -POSIX_EINVAL;
     entry = &g_vfs_manifest[g_vfs_manifest_count];
     memcpy(entry->path, (const void *)(uintptr_t)ptr, length);
@@ -1773,6 +1869,39 @@ int32_t waste_wast_stage_path(uint32_t ptr, uint32_t length,
     entry->metadata.size = size;
     entry->metadata.inode = 1000u + g_vfs_manifest_count;
     g_vfs_manifest_count++;
+    return 0;
+}
+
+__attribute__((export_name("waste_wast_stage_symlink")))
+int32_t waste_wast_stage_symlink(uint32_t path_ptr, uint32_t path_length,
+                                 uint32_t target_ptr, uint32_t target_length,
+                                 uint32_t mode) {
+    browser_vfs_manifest_entry *entry;
+    if (!path_length || path_length >= POSIX_PATH_NODE_NAME_MAX ||
+        !target_length || target_length >= POSIX_PATH_NODE_NAME_MAX ||
+        g_vfs_manifest_count >= BROWSER_VFS_MANIFEST_MAX)
+        return -POSIX_EINVAL;
+    entry = &g_vfs_manifest[g_vfs_manifest_count];
+    entry->link_target = malloc(target_length + 1u);
+    if (!entry->link_target) return -POSIX_ENOMEM;
+    memcpy(entry->path, (const void *)(uintptr_t)path_ptr, path_length);
+    entry->path[path_length] = '\0';
+    memcpy(entry->link_target, (const void *)(uintptr_t)target_ptr,
+           target_length);
+    entry->link_target[target_length] = '\0';
+    entry->metadata = (posix_path_metadata){ POSIX_NODE_SYMLINK, mode,
+        0, 0, (int64_t)target_length, 1000u + g_vfs_manifest_count };
+    g_vfs_manifest_count++;
+    return 0;
+}
+
+__attribute__((export_name("waste_wast_stage_cwd")))
+int32_t waste_wast_stage_cwd(uint32_t ptr, uint32_t length) {
+    if (!ptr || !length || length >= sizeof(g_initial_cwd) ||
+        ((const char *)(uintptr_t)ptr)[0] != '/')
+        return -POSIX_EINVAL;
+    memcpy(g_initial_cwd, (const void *)(uintptr_t)ptr, length);
+    g_initial_cwd[length] = '\0';
     return 0;
 }
 

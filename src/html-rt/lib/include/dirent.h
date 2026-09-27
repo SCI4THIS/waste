@@ -1,8 +1,11 @@
 #ifndef WASTE_DIRENT_H
 #define WASTE_DIRENT_H
 
-#include <sys/types.h>
-#include <sys/stat.h>
+#include "sys/types.h"
+
+#ifndef NULL
+#define NULL ((void *)0)
+#endif
 
 typedef struct waste_dir DIR;
 struct dirent {
@@ -21,8 +24,9 @@ struct dirent {
 #define DT_REG 8
 #define DT_LNK 10
 #define DT_SOCK 12
+#define DT_WHT 14
 #define _GL_DT_NOTDIR 0x100
-#define IFTODT(mode) (((mode) & S_IFMT) >> 12)
+#define IFTODT(mode) (((mode) & 0170000) >> 12)
 #define DTTOIF(type) ((type) << 12)
 
 DIR *opendir(const char *);

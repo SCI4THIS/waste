@@ -147,6 +147,33 @@ static void test_file_read_at(void) {
     posix_kernel_destroy(k);
 }
 
+static void test_fork_path_publication(void) {
+    posix_kernel *parent = posix_kernel_create(0);
+    posix_kernel *child = posix_kernel_clone(parent);
+    uint8_t bytes[4] = {0};
+    int child_fd = child ? posix_kernel_open(
+        child, (const uint8_t *)"/fork-output", 12,
+        POSIX_O_CREAT | POSIX_O_RDWR, 0644) : -1;
+    CHECK(parent && child && child_fd >= 0,
+          "create fork child output file");
+    CHECK(child_fd >= 0 && posix_kernel_write(child, child_fd, "data", 4) == 4,
+          "write fork child output file");
+    CHECK(posix_kernel_path_access(parent, (const uint8_t *)"/fork-output",
+                                   12, POSIX_F_OK, 0) == -POSIX_ENOENT,
+          "fork child path remains unpublished before reap");
+    CHECK(posix_kernel_merge_paths(parent, child) == 0 &&
+          posix_kernel_path_access(parent, (const uint8_t *)"/fork-output",
+                                   12, POSIX_F_OK, 0) == 0,
+          "publish fork child pathname changes at reap");
+    int parent_fd = posix_kernel_open(parent,
+        (const uint8_t *)"/fork-output", 12, 0, 0);
+    CHECK(parent_fd >= 0 && posix_kernel_read(parent, parent_fd, bytes, 4) == 4 &&
+          memcmp(bytes, "data", 4) == 0,
+          "published fork output retains shared bytes");
+    posix_kernel_destroy(child);
+    posix_kernel_destroy(parent);
+}
+
 /* --- Terminal readiness --- */
 
 static void test_terminal_readiness(void) {
@@ -793,6 +820,7 @@ int main(void) {
     test_invalid_fd();
     test_terminal_readiness();
     test_file_read_at();
+    test_fork_path_publication();
     test_terminal_modes();
     test_terminal_eof_and_output();
     test_terminal_vtime();

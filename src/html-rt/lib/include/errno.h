@@ -18,6 +18,9 @@ int *__errno_location(void);
 #define ENOTDIR 20
 #define EISDIR 21
 #define EINVAL 22
+#define ENOTTY 25
+#define ETXTBSY 26
+#define EFBIG 27
 #define ENOSPC 28
 #define EPIPE 32
 #define ENOTEMPTY 39

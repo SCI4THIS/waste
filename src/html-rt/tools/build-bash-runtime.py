@@ -21,6 +21,13 @@ HOSTTYPE_ADDRESS = 240056
 OSTYPE_ADDRESS = 240063
 EXE_SUFFIX_ADDRESS = 240084
 STRING_ADDRESS = 240096
+ENV_STRING_ADDRESS = 240160
+ROOT_NAME_ADDRESS = 240400
+ROOT_PASSWORD_ADDRESS = 240405
+ROOT_GECOS_ADDRESS = 240407
+ROOT_HOME_ADDRESS = 240412
+ROOT_SHELL_ADDRESS = 240418
+HOSTNAME_ADDRESS = 240428
 ALLOCATOR_BASE = 327680
 BASH_STDIN_SLOT = 129176
 BASH_STDOUT_SLOT = 112228
@@ -163,6 +170,22 @@ def wat_bytes(data: bytes) -> str:
 
 
 def runtime_module(interactive: bool) -> str:
+    environment_entries = (
+        b"HOME=/root",
+        b"USER=root",
+        b"LOGNAME=root",
+        b"PWD=/root",
+        b"PATH=/bin:/usr/bin",
+    )
+    environment = b"\0".join(environment_entries) + b"\0"
+    # The merged Bash artifact consumes char ** environment slots at its
+    # eight-byte ABI stride even though each Wasm pointer is i32.
+    environment_pointers = b"".join(
+        (ENV_STRING_ADDRESS + offset).to_bytes(4, "little") + b"\0\0\0\0"
+        for offset in (0, *(sum(len(entry) + 1 for entry in environment_entries[:index])
+                            for index in range(1, len(environment_entries))))
+    ) + b"\0\0\0\0\0\0\0\0"
+    root_profile = b"root\0x\0root\0/root\0/bin/bash\0waste\0"
     if interactive:
         pointers = (
             STRING_ADDRESS.to_bytes(4, "little")
@@ -184,9 +207,11 @@ def runtime_module(interactive: bool) -> str:
   (table (export "table") {SHARED_TABLE_SIZE} {SHARED_TABLE_SIZE} funcref)
   (memory (export "memory") {RUNTIME_PAGES})
   (data (i32.const {ARGV_ADDRESS}) "{wat_bytes(pointers)}")
-  (data (i32.const {ENVP_ADDRESS}) "\\00\\00\\00\\00")
+  (data (i32.const {ENVP_ADDRESS}) "{wat_bytes(environment_pointers)}")
   (data (i32.const {PACKAGE_ADDRESS}) "bash\\00/usr/share/locale\\00\\00wasm32\\00browser\\00wasm32-waste\\00\\00")
-  (data (i32.const {STRING_ADDRESS}) "{argument_data}"))
+  (data (i32.const {STRING_ADDRESS}) "{argument_data}")
+  (data (i32.const {ENV_STRING_ADDRESS}) "{wat_bytes(environment)}")
+  (data (i32.const {ROOT_NAME_ADDRESS}) "{wat_bytes(root_profile)}"))
 (register "{RUNTIME_MODULE}" $waste_runtime)'''
 
 
@@ -267,6 +292,12 @@ def main() -> None:
         f'(assert_return (invoke "waste_stdio_bind" '
         f'(i32.const {BASH_STDIN_SLOT}) (i32.const {BASH_STDOUT_SLOT}) '
         f'(i32.const {BASH_STDERR_SLOT})) (i32.const 1))',
+        f'(invoke "waste_identity_set" (i32.const 0) (i32.const 0) '
+        f'(i32.const 0) (i32.const 0) (i32.const {HOSTNAME_ADDRESS}))',
+        f'(invoke "waste_passwd_set" (i32.const {ROOT_NAME_ADDRESS}) '
+        f'(i32.const {ROOT_PASSWORD_ADDRESS}) (i32.const 0) (i32.const 0) '
+        f'(i32.const {ROOT_GECOS_ADDRESS}) (i32.const {ROOT_HOME_ADDRESS}) '
+        f'(i32.const {ROOT_SHELL_ADDRESS}))',
         f'(module $bash binary "{bash_binary}")',
         '(invoke "__wasm_call_ctors")',
         f'(invoke "main" (i32.const {4 if args.interactive else 3}) (i32.const {ARGV_ADDRESS}) (i32.const {ENVP_ADDRESS}))',

@@ -21,6 +21,7 @@ void exec_free(waste_exec_engine *engine) {
         free(engine->local_frames[i]);
         free(engine->operand_frames[i]);
         free(engine->control_frames[i]);
+        free(engine->call_arg_frames[i]);
     }
     for (uint32_t i = 0; i < engine->elem_count; i++)
         free(engine->elem_values[i]);
@@ -77,6 +78,7 @@ exec_status exec_clone_engine(const waste_exec_engine *source,
     memset(clone->local_frames, 0, sizeof(clone->local_frames));
     memset(clone->operand_frames, 0, sizeof(clone->operand_frames));
     memset(clone->control_frames, 0, sizeof(clone->control_frames));
+    memset(clone->call_arg_frames, 0, sizeof(clone->call_arg_frames));
     memcpy(clone->local_frame_capacities, source->local_frame_capacities,
            sizeof(clone->local_frame_capacities));
 

@@ -87,6 +87,13 @@ void __subtf3(u64 *out, u64 al, u64 ah, u64 bl, u64 bh) {
 void __multf3(u64 *out, u64 al, u64 ah, u64 bl, u64 bh) {
   double_to_quad(out, quad_to_double(al, ah) * quad_to_double(bl, bh));
 }
+void __divtf3(u64 *out, u64 al, u64 ah, u64 bl, u64 bh) {
+  double_to_quad(out, quad_to_double(al, ah) / quad_to_double(bl, bh));
+}
+i32 __letf2(u64 al, u64 ah, u64 bl, u64 bh) {
+  i32 result = quad_compare(al, ah, bl, bh);
+  return result == 2 ? 1 : result;
+}
 
 void frexpl(u64 *out, u64 low, u64 high, i32 *exponent) {
   int exp = 0;

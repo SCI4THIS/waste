@@ -17,6 +17,17 @@ import json
 from pathlib import Path
 
 
+COREUTILS_UTILITIES = [
+    "true", "false", "pwd", "echo", "printf", "basename", "dirname", "cat", "wc",
+    "ls",
+]
+PACKAGE_FILES = [
+    ("/usr/share/waste/coreutils-provenance.json", "build/coreutils/provenance.json", 0o644),
+    ("/usr/share/waste/coreutils-source-package.json", "build/coreutils/coreutils-source-package.json", 0o644),
+    ("/usr/share/licenses/coreutils/COPYING", "submodules/coreutils/COPYING", 0o644),
+]
+
+
 def script_json(value) -> str:
     return (
         json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -135,7 +146,7 @@ HTML = r'''<!doctype html>
         return count;
       }
 
-      async function run(wasmB64, source, coreutilsTrueB64, coreutilsFalseB64) {
+      async function run(wasmB64, source, coreutilsMap, packagedFiles) {
         const wasmBytes = decodeB64(wasmB64);
         const hostFloat = (ptr, length, asF32) => {
           const bytes = new Uint8Array(engineMemory.buffer, ptr, length);
@@ -154,8 +165,28 @@ HTML = r'''<!doctype html>
         engineMemory = exp.memory;
         exp.waste_wast_enable_terminal();
 
-        for (const [name, encoded] of [["true", coreutilsTrueB64],
-                                       ["false", coreutilsFalseB64]]) {
+        const stageVfsPath = (path, kind, mode, size) => {
+          const pathBytes = new TextEncoder().encode(path);
+          const pathPtr = exp.waste_wast_alloc(pathBytes.length);
+          if (!pathPtr) throw new Error(`VFS path allocation failed for ${path}`);
+          new Uint8Array(engineMemory.buffer, pathPtr, pathBytes.length).set(pathBytes);
+          const staged = exp.waste_wast_stage_path(pathPtr, pathBytes.length,
+            kind, mode, size >>> 0);
+          exp.waste_wast_free?.(pathPtr);
+          if (staged !== 0) throw new Error(`VFS metadata failed for ${path}`);
+        };
+        stageVfsPath("/tmp", 2, 0o777, 0);
+        stageVfsPath("/root", 2, 0o755, 0);
+        stageVfsPath("/usr", 2, 0o755, 0);
+        stageVfsPath("/usr/bin", 2, 0o755, 0);
+        stageVfsPath("/usr/share", 2, 0o755, 0);
+        stageVfsPath("/usr/share/waste", 2, 0o755, 0);
+        stageVfsPath("/usr/share/licenses", 2, 0o755, 0);
+        stageVfsPath("/usr/share/licenses/coreutils", 2, 0o755, 0);
+        stageVfsPath("/bin/wat", 1, 0o755, 0);
+        stageVfsPath("/bin/wast", 1, 0o755, 0);
+
+        for (const [name, encoded] of Object.entries(coreutilsMap)) {
           const utilityBytes = decodeB64(encoded);
           const utilityPath = new TextEncoder().encode(`/bin/${name}`);
           const pathPtr = exp.waste_wast_alloc(utilityPath.length);
@@ -166,6 +197,20 @@ HTML = r'''<!doctype html>
           const staged = exp.waste_wast_stage_file(pathPtr, utilityPath.length,
             utilityPtr, utilityBytes.length, 0o755);
           if (staged !== 0) throw new Error(`staging /bin/${name} failed: ${staged}`);
+        }
+        for (const file of packagedFiles || []) {
+          const pathBytes = new TextEncoder().encode(file.path);
+          const fileBytes = decodeB64(file.data);
+          const pathPtr = exp.waste_wast_alloc(pathBytes.length);
+          const dataPtr = exp.waste_wast_alloc(fileBytes.length);
+          if (!pathPtr || !dataPtr) throw new Error(`package allocation failed for ${file.path}`);
+          new Uint8Array(engineMemory.buffer, pathPtr, pathBytes.length).set(pathBytes);
+          new Uint8Array(engineMemory.buffer, dataPtr, fileBytes.length).set(fileBytes);
+          const staged = exp.waste_wast_stage_file(pathPtr, pathBytes.length,
+            dataPtr, fileBytes.length, file.mode);
+          exp.waste_wast_free?.(pathPtr);
+          exp.waste_wast_free?.(dataPtr);
+          if (staged !== 0) throw new Error(`staging ${file.path} failed: ${staged}`);
         }
 
         const sourceBytes = new TextEncoder().encode(source);
@@ -206,8 +251,7 @@ HTML = r'''<!doctype html>
       self.onmessage = function(e) {
         const msg = e.data;
         if (msg.type === "start") {
-          run(msg.wasmB64, msg.source, msg.coreutilsTrueB64,
-              msg.coreutilsFalseB64).catch(error => {
+          run(msg.wasmB64, msg.source, msg.coreutilsMap || {}, msg.packagedFiles || []).catch(error => {
             self.postMessage({type: "done", ok: false,
               error: error && (error.stack || error.message) || String(error)});
           });
@@ -303,8 +347,7 @@ HTML = r'''<!doctype html>
         };
         worker.onerror = event => { append(event.message || "worker error"); finish("failed"); };
         worker.postMessage({type: "start", wasmB64: PAYLOAD.wasmB64, source,
-          coreutilsTrueB64: PAYLOAD.coreutilsTrueB64,
-          coreutilsFalseB64: PAYLOAD.coreutilsFalseB64});
+          coreutilsMap: PAYLOAD.coreutilsMap, packagedFiles: PAYLOAD.packagedFiles});
       } catch (error) { status.textContent = error.message || String(error); }
     }
     document.querySelector("#start-form").addEventListener("submit", startShell);
@@ -345,10 +388,8 @@ def main() -> None:
                         help="Path to waste-wast.wasm (C engine)")
     parser.add_argument("--launch", type=Path, required=True,
                         help="Path to bash-runtime.wast (interactive mode)")
-    parser.add_argument("--coreutils-true", type=Path, default=None,
-                        help="Path to linked coreutils true Wasm")
-    parser.add_argument("--coreutils-false", type=Path, default=None,
-                        help="Path to linked coreutils false Wasm")
+    parser.add_argument("--coreutils-dir", type=Path, default=None,
+                        help="Directory containing pre-built coreutils .wasm files")
     parser.add_argument("--output", type=Path, default=None,
                         help="Output HTML file path (monolithic mode)")
     parser.add_argument("--output-dir", type=Path, default=None,
@@ -362,14 +403,32 @@ def main() -> None:
         raise SystemExit(f"C engine Wasm not found: {args.wasm}")
     if not args.launch.is_file():
         raise SystemExit(f"Bash launch script not found: {args.launch}")
-    coreutils_true = args.coreutils_true or (
-        args.repo_root / "build/coreutils/utility-probe/true-linked.wasm")
-    if not coreutils_true.is_file():
-        raise SystemExit(f"coreutils true Wasm not found: {coreutils_true}")
-    coreutils_false = args.coreutils_false or (
-        args.repo_root / "build/coreutils/utility-probe/false-linked.wasm")
-    if not coreutils_false.is_file():
-        raise SystemExit(f"coreutils false Wasm not found: {coreutils_false}")
+    coreutils_dir = args.coreutils_dir or (args.repo_root / "src/html-rt/src/bash")
+    coreutils_paths: dict[str, Path] = {}
+    missing = []
+    for name in COREUTILS_UTILITIES:
+        p = coreutils_dir / f"{name}.wasm"
+        if p.is_file():
+            coreutils_paths[name] = p
+        else:
+            missing.append(name)
+    if missing:
+        raise SystemExit(
+            f"coreutils Wasm files missing from {coreutils_dir}: {', '.join(missing)}\n"
+            "Run ./start.sh --build-coreutils to build them.")
+
+    packaged_files = []
+    for vfs_path, relative_path, mode in PACKAGE_FILES:
+        package_path = args.repo_root / relative_path
+        if not package_path.is_file():
+            raise SystemExit(
+                f"required package file missing: {package_path}\n"
+                "Run make -C src/html-rt BUILD_DIR=../../build/html-rt coreutils-wasm.")
+        packaged_files.append({
+            "path": vfs_path,
+            "mode": mode,
+            "data": base64.b64encode(package_path.read_bytes()).decode("ascii"),
+        })
 
     if args.output_dir:
         import os
@@ -388,16 +447,16 @@ def main() -> None:
 
         safe_copy(args.wasm, out_dir / "waste-wast.wasm")
         safe_copy(args.launch, out_dir / "launch.wast")
-        safe_copy(coreutils_true, out_dir / "true.wasm")
-        safe_copy(coreutils_false, out_dir / "false.wasm")
+        for name, src in coreutils_paths.items():
+            safe_copy(src, out_dir / f"{name}.wasm")
 
         wasm_size = args.wasm.stat().st_size
         launch_size = args.launch.stat().st_size
         print(f"Copied staging files to {out_dir}")
         print(f"  waste-wast.wasm: {wasm_size:,} bytes")
         print(f"  launch.wast: {launch_size:,} bytes")
-        print(f"  true.wasm: {coreutils_true.stat().st_size:,} bytes")
-        print(f"  false.wasm: {coreutils_false.stat().st_size:,} bytes")
+        for name, src in coreutils_paths.items():
+            print(f"  {name}.wasm: {src.stat().st_size:,} bytes")
     else:
         launch_text = args.launch.read_text(encoding="utf-8")
         wasm_bytes = args.wasm.read_bytes()
@@ -406,10 +465,10 @@ def main() -> None:
         payload = {
             "wasmB64": wasm_b64,
             "launch": launch_text,
-            "coreutilsTrueB64": base64.b64encode(
-                coreutils_true.read_bytes()).decode("ascii"),
-            "coreutilsFalseB64": base64.b64encode(
-                coreutils_false.read_bytes()).decode("ascii"),
+            "coreutilsMap": {name: base64.b64encode(
+                src.read_bytes()).decode("ascii")
+                for name, src in coreutils_paths.items()},
+            "packagedFiles": packaged_files,
         }
 
         document = HTML.replace("__PAYLOAD__", script_json(payload))

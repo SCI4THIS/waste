@@ -4,6 +4,7 @@
 #include <sys/select.h>
 
 typedef void (*sighandler_t)(int);
+typedef int sig_atomic_t;
 struct sigaction {
   sighandler_t sa_handler;
   sigset_t sa_mask;
@@ -17,7 +18,9 @@ struct sigaction {
 #define SIGINT 2
 #define SIGQUIT 3
 #define SIGILL 4
+#define SIGTRAP 5
 #define SIGABRT 6
+#define SIGBUS 7
 #define SIGFPE 8
 #define SIGKILL 9
 #define SIGSEGV 11

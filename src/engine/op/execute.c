@@ -461,8 +461,19 @@ static exec_status exec_invoke_managed(waste_exec_engine *eng,
     exec_status status;
     if (!eng) return exec_fail(err, EXEC_ERROR_NOT_FOUND, "null engine");
     depth = eng->active_call_depth;
-    if (depth >= EXEC_MAX_CALL_DEPTH)
-        return exec_fail(err, EXEC_ERROR_TRAP, "call stack exhausted");
+    if (depth >= EXEC_MAX_CALL_DEPTH) {
+        char message[2048];
+        int pos = snprintf(message, sizeof(message),
+                 "call stack exhausted at depth %u calling func %u; trace:",
+                 depth, func_idx);
+        /* Dump last 64 frames of the call chain */
+        uint32_t start = depth > 64 ? depth - 64 : 0;
+        for (uint32_t i = start; i < depth && pos < (int)sizeof(message) - 8; i++)
+            pos += snprintf(message + pos, sizeof(message) - (size_t)pos,
+                            " %u", eng->call_func_trace[i]);
+        return exec_fail(err, EXEC_ERROR_TRAP, message);
+    }
+    eng->call_func_trace[depth] = func_idx;
     eng->active_call_depth = depth + 1;
     status = exec_invoke_frame(eng, func_idx, args, arg_count, results,
                                result_count, err, depth);
@@ -821,7 +832,16 @@ int execute_op_call(waste_exec_context *ctx, const exec_instr *instr) {
         ctx->function_index = instr->u32_imm;
         return WASM_DISPATCH_TAIL_CALL;
     }
-    wasm_value call_args[EXEC_MAX_CALL_ARGS], call_results[WAST_MAX_RESULTS]; int call_result_count = 0;
+    if (!eng->call_arg_frames[ctx->depth]) {
+        eng->call_arg_frames[ctx->depth] = (wasm_value *)calloc(
+            EXEC_MAX_CALL_ARGS, sizeof(wasm_value));
+        if (!eng->call_arg_frames[ctx->depth])
+            return exec_fail(ctx->error, EXEC_ERROR_TRAP,
+                             "call arg frame allocation failed");
+    }
+    wasm_value *call_args = eng->call_arg_frames[ctx->depth];
+    wasm_value *call_results = eng->call_results_buffer;
+    int call_result_count = 0;
     for (int i = callee_type->param_count; i-- > 0;) {
         if (!stack_pop(ctx->operand_stack, &call_args[i]))
             return exec_fail(ctx->error, EXEC_ERROR_TRAP, "call arguments missing");
@@ -902,7 +922,16 @@ int execute_op_call_indirect(waste_exec_context *ctx, const exec_instr *instr) {
         *ctx->tail_arg_count = expected->param_count;
         return WASM_DISPATCH_TAIL_CALL;
     }
-    wasm_value call_args[EXEC_MAX_CALL_ARGS], call_results[WAST_MAX_RESULTS]; int call_result_count = 0;
+    if (!eng->call_arg_frames[ctx->depth]) {
+        eng->call_arg_frames[ctx->depth] = (wasm_value *)calloc(
+            EXEC_MAX_CALL_ARGS, sizeof(wasm_value));
+        if (!eng->call_arg_frames[ctx->depth])
+            return exec_fail(ctx->error, EXEC_ERROR_TRAP,
+                             "call arg frame allocation failed");
+    }
+    wasm_value *call_args = eng->call_arg_frames[ctx->depth];
+    wasm_value *call_results = eng->call_results_buffer;
+    int call_result_count = 0;
     for (int i = expected->param_count; i-- > 0;)
         if (!stack_pop(ctx->operand_stack, &call_args[i]))
             return exec_fail(ctx->error, EXEC_ERROR_TRAP, "call_indirect arguments missing");
@@ -953,8 +982,15 @@ int execute_op_call_ref(waste_exec_context *ctx, const exec_instr *instr) {
         *ctx->tail_arg_count = callee_type->param_count;
         return WASM_DISPATCH_TAIL_CALL;
     }
-    wasm_value call_args[EXEC_MAX_CALL_ARGS];
-    wasm_value call_results[WAST_MAX_RESULTS];
+    if (!eng->call_arg_frames[ctx->depth]) {
+        eng->call_arg_frames[ctx->depth] = (wasm_value *)calloc(
+            EXEC_MAX_CALL_ARGS, sizeof(wasm_value));
+        if (!eng->call_arg_frames[ctx->depth])
+            return exec_fail(ctx->error, EXEC_ERROR_TRAP,
+                             "call arg frame allocation failed");
+    }
+    wasm_value *call_args = eng->call_arg_frames[ctx->depth];
+    wasm_value *call_results = eng->call_results_buffer;
     int call_result_count = 0;
     for (int i = callee_type->param_count; i-- > 0;)
         if (!stack_pop(ctx->operand_stack, &call_args[i]))
@@ -1289,8 +1325,9 @@ static exec_status exec_invoke_frame(waste_exec_engine *eng,
                                      wasm_value *results, int *result_count,
                                      exec_error *err, uint32_t depth) {
     waste_exec_context context;
-    /* Tail-call arguments: these are updated in-place by return_call */
-    wasm_value tail_args[EXEC_MAX_CALL_ARGS];
+    /* Tail-call arguments use the engine's shared buffer to reduce C stack
+     * usage.  Safe because args are consumed before any nested reuse. */
+    wasm_value *tail_args = eng->tail_args_buffer;
     int tail_arg_count;
 
 tail_entry:

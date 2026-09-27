@@ -532,9 +532,12 @@ static int native_posix_copy_guest_vector(exec_memory *memory, uint32_t vector,
 
 static void native_posix_metadata_stat(const posix_path_metadata *metadata,
                                        posix_guest_stat *stat) {
+    uint32_t type_mode = metadata->kind == POSIX_NODE_REGULAR ? 0100000u :
+                         metadata->kind == POSIX_NODE_DIRECTORY ? 0040000u :
+                         metadata->kind == POSIX_NODE_SYMLINK ? 0120000u : 0;
     memset(stat, 0, sizeof(*stat));
     stat->st_ino = metadata->inode;
-    stat->st_mode = metadata->mode;
+    stat->st_mode = metadata->mode | type_mode;
     stat->st_nlink = metadata->kind == POSIX_NODE_DIRECTORY ? 2 : 1;
     stat->st_uid = metadata->uid;
     stat->st_gid = metadata->gid;
@@ -570,6 +573,10 @@ static exec_status native_posix_open(void *data, const wasm_value *args,
                                    args[1].i32, args[2].i32);
     else
         result = waste_host_posix_open(path, length, args[1].i32, args[2].i32);
+    if (result < 0) {
+        native_posix_set_errno(store, caller, -result);
+        result = -1;
+    }
     free(path);
     return native_posix_result(result, results, result_count);
 }
@@ -634,6 +641,44 @@ static exec_status native_posix_close(void *data, const wasm_value *args,
     }
     return native_posix_result(waste_host_posix_close(args[0].i32), results,
                                result_count);
+}
+
+static exec_status native_posix_dup(void *data, const wasm_value *args,
+                                    int arg_count, wasm_value *results,
+                                    int *result_count, exec_error *error,
+                                    const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    int result;
+    (void)error;
+    if (!store || !store->kernel || arg_count != 1) {
+        native_posix_set_errno(store, caller, POSIX_EINVAL);
+        return native_posix_result(-1, results, result_count);
+    }
+    result = posix_kernel_dup(store->kernel, args[0].i32);
+    if (result < 0) {
+        native_posix_set_errno(store, caller, -result);
+        result = -1;
+    }
+    return native_posix_result(result, results, result_count);
+}
+
+static exec_status native_posix_dup2(void *data, const wasm_value *args,
+                                     int arg_count, wasm_value *results,
+                                     int *result_count, exec_error *error,
+                                     const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    int result;
+    (void)error;
+    if (!store || !store->kernel || arg_count != 2) {
+        native_posix_set_errno(store, caller, POSIX_EINVAL);
+        return native_posix_result(-1, results, result_count);
+    }
+    result = posix_kernel_dup2(store->kernel, args[0].i32, args[1].i32);
+    if (result < 0) {
+        native_posix_set_errno(store, caller, -result);
+        result = -1;
+    }
+    return native_posix_result(result, results, result_count);
 }
 
 static exec_status native_posix_ftruncate(void *data, const wasm_value *args,
@@ -1145,6 +1190,14 @@ static exec_status native_posix_fcntl(void *data, const wasm_value *args,
                                                              results, result_count);
     fd = args[0].i32;
     command = args[1].i32;
+    if (command == POSIX_F_DUPFD && arg_count >= 3)
+        return native_posix_result(posix_kernel_dupfd(
+                                       store->kernel, fd, args[2].i32, 0),
+                                   results, result_count);
+    if (command == POSIX_F_DUPFD_CLOEXEC && arg_count >= 3)
+        return native_posix_result(posix_kernel_dupfd(
+                                       store->kernel, fd, args[2].i32, 1),
+                                   results, result_count);
     if (command == POSIX_F_GETFD)
         return native_posix_result(posix_kernel_get_cloexec(store->kernel, fd),
                                    results, result_count);
@@ -1171,22 +1224,29 @@ static exec_status native_posix_getcwd(void *data, const wasm_value *args,
     offset = (uint32_t)args[0].i32;
     capacity = (uint32_t)args[1].i32;
     if (offset == 0) {
-        native_linked_module *libc = native_registered_module(store, "env");
         uint32_t malloc_index;
         wasm_value malloc_arg;
         wasm_value malloc_result;
         int malloc_result_count = 0;
-        if (!libc || exec_find_export(libc->engine, "malloc", &malloc_index,
-                                      error) != EXEC_OK)
+        /* The returned pointer belongs to the calling image.  Allocating from
+         * the registered env module produces an address in a different Wasm
+         * linear memory, which makes getcwd(NULL, 0) unusable for exec'd
+         * utilities such as pwd. */
+        if (!caller || exec_find_export(caller, "malloc", &malloc_index,
+                                        error) != EXEC_OK)
             return native_posix_result(0, results, result_count);
         malloc_arg.type = WASM_VALTYPE_I32;
-        malloc_arg.i32 = 2;
-        if (exec_invoke(libc->engine, malloc_index, &malloc_arg, 1,
+        /* POSIX getcwd(NULL, 0) asks libc to allocate a result large enough
+         * for the current directory. The old two-byte placeholder forced the
+         * guest fallback path and could recurse through gnulib's getcwd
+         * implementation. Use the engine's bounded pathname limit. */
+        malloc_arg.i32 = POSIX_PATH_MAX;
+        if (exec_invoke((waste_exec_engine *)caller, malloc_index, &malloc_arg, 1,
                         &malloc_result, &malloc_result_count, error) != EXEC_OK ||
             malloc_result_count != 1)
             return native_posix_result(0, results, result_count);
         offset = (uint32_t)malloc_result.i32;
-        capacity = 2;
+        capacity = POSIX_PATH_MAX;
     }
     if (capacity < 2)
         return native_posix_result(0, results, result_count);
@@ -1221,6 +1281,20 @@ static exec_status native_posix_chdir(void *data, const wasm_value *args,
         store->kernel, path) : -POSIX_ENOSYS;
     if (result < 0) native_posix_set_errno(store, caller, -result);
     free(path);
+    (void)error;
+    return native_posix_result(result < 0 ? -1 : 0, results, result_count);
+}
+
+static exec_status native_posix_fchdir(void *data, const wasm_value *args,
+                                       int arg_count, wasm_value *results,
+                                       int *result_count, exec_error *error,
+                                       const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    if (arg_count < 1)
+        return native_posix_result(-1, results, result_count);
+    int result = store->kernel ? posix_kernel_fchdir(store->kernel, args[0].i32)
+                               : -POSIX_ENOSYS;
+    if (result < 0) native_posix_set_errno(store, caller, -result);
     (void)error;
     return native_posix_result(result < 0 ? -1 : 0, results, result_count);
 }
@@ -1969,6 +2043,12 @@ static exec_host_func native_posix_function(const char *module,
         if (strcmp(name, "tcsetattr_v1") == 0) return native_posix_tcsetattr;
         if (strcmp(name, "tcflow_v1") == 0) return native_posix_tcflow;
         if (strcmp(name, "ioctl_v1") == 0) return native_posix_ioctl;
+        if (strcmp(name, "getcwd") == 0) return native_posix_getcwd;
+        if (strcmp(name, "chdir") == 0) return native_posix_chdir;
+        if (strcmp(name, "lseek") == 0) return native_posix_lseek;
+        if (strcmp(name, "readlink_v1") == 0) return native_posix_readlink;
+        if (strcmp(name, "fchdir_v1") == 0) return native_posix_fchdir;
+        if (strcmp(name, "fcntl_v1") == 0) return native_posix_fcntl;
         return (void *)0;
     }
     if (strcmp(module, "env") != 0) return (void *)0;
@@ -1980,13 +2060,17 @@ static exec_host_func native_posix_function(const char *module,
     if (strcmp(name, "write") == 0) return native_posix_write;
     if (strcmp(name, "getcwd") == 0) return native_posix_getcwd;
     if (strcmp(name, "chdir") == 0) return native_posix_chdir;
+    if (strcmp(name, "lseek") == 0) return native_posix_lseek;
     if (strcmp(name, "readdir_v1") == 0) return native_posix_readdir;
     if (strcmp(name, "getpgrp") == 0) return native_posix_getpgrp;
     if (strcmp(name, "tcgetpgrp") == 0) return native_posix_tcgetpgrp;
     if (strcmp(name, "isatty") == 0) return native_posix_isatty;
     if (strcmp(name, "tcflow") == 0) return native_posix_tcflow;
     if (strcmp(name, "time") == 0) return native_posix_i64_zero;
-    if (strcmp(name, "exit") == 0) return native_posix_exit;
+    if (strcmp(name, "exit") == 0 || strcmp(name, "_exit") == 0)
+        return native_posix_exit;
+    if (strcmp(name, "atexit") == 0) return native_posix_i32_zero;
+    if (strcmp(name, "__fpurge") == 0) return native_posix_i32_zero;
     if (strcmp(name, "raise") == 0) return native_posix_raise;
     if (strcmp(name, "kill") == 0) return native_posix_kill;
     if (strcmp(name, "killpg") == 0) return native_posix_killpg;
@@ -1998,10 +2082,10 @@ static exec_host_func native_posix_function(const char *module,
         strcmp(name, "sigprocmask") == 0 ||
         strcmp(name, "setitimer") == 0 || strcmp(name, "sleep") == 0 ||
         strcmp(name, "gettimeofday") == 0 || strcmp(name, "getrusage") == 0 ||
-        strcmp(name, "dup") == 0 ||
-        strcmp(name, "dup2") == 0 ||
         strcmp(name, "umask") == 0)
         return native_posix_i32_zero;
+    if (strcmp(name, "dup") == 0) return native_posix_dup;
+    if (strcmp(name, "dup2") == 0) return native_posix_dup2;
     if (strcmp(name, "fcntl") == 0) return native_posix_fcntl;
     if (strcmp(name, "setpgid") == 0) return native_posix_setpgid;
     if (strcmp(name, "tcsetpgrp") == 0) return native_posix_tcsetpgrp;
@@ -2062,5 +2146,10 @@ int browser_host_resolver(const char *module, const char *name,
     out->function = func;
     out->host_data = context;
     out->control = native_posix_control(module, name);
+    /* Bash is built with 64-bit off_t while the current guest-libc module's
+     * public off_t remains Wasm32 long.  Route Bash's env.lseek import to the
+     * engine adapter with its native (i32, i64, i32) -> i64 signature. */
+    out->prefer_over_module = strcmp(module, "env") == 0 &&
+        (strcmp(name, "lseek") == 0 || strcmp(name, "__fpurge") == 0);
     return 1;
 }

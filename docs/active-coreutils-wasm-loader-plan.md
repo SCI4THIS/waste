@@ -1,6 +1,7 @@
 # WASTE image loader and GNU coreutils plan
 
-Status: active (design complete; implementation pending)
+Status: active (binary/text loader, ten-utility Coreutils bring-up, and
+distribution packaging complete; final command-matrix integration remains)
 
 Parent stage: Stage 8 of `docs/active-c-engine-webgl-shell-plan.md`
 
@@ -1413,8 +1414,8 @@ Implementation update (2026-09-21, parser-side shebang boundary):
 
 ## Stage 8D: Build a WASTE target sysroot and CRT
 
-Status: in progress (sysroot, CRT, and cross-configure probe complete;
-selected utility compilation remains)
+Status: complete (sysroot, CRT, cross-configure, deterministic utility link,
+and import-report pipeline)
 
 Work:
 
@@ -1710,8 +1711,8 @@ Implementation update (2026-09-23, generated Unicode and width increment):
 
 ## Stage 8E: Close the utility-facing libc and POSIX ABI
 
-Status: in progress (public header seam is being filled from the `true`
-compile trace; implementation and link audit remain)
+Status: complete for the accepted ten-utility set; later utilities extend the
+same per-utility ABI ledger rather than reopening this stage
 
 Use real build failures and per-utility import reports to extend the ABI. Keep
 shared POSIX semantics in `src/engine/`, browser capability adapters in
@@ -2068,7 +2069,7 @@ Implementation update (2026-09-23, first non-empty linked utility and import gat
 
 ## Stage 8F: Bring up coreutils in waves
 
-Status: in progress (true handoff validated; awaiting VM-plan closure pass)
+Status: complete (Waves 1 through 4 accepted)
 
 Dependency clarification (2026-09-24):
 
@@ -2076,11 +2077,10 @@ Dependency clarification (2026-09-24):
   must close at the same time as Stage 8F.
 - `true` has already passed the first handoff gate: compile/link/import audit,
   VFS packaging, Bash PATH execution, and status 0 in the offline browser.
-- `false` has passed compile/link/import audit but remains downstream packaging
-  and browser behavior work.
-- Once the VM plan's documented closure gates pass, implementation ownership
-  returns here for the remaining utility waves. No VM-plan work should be
-  duplicated in this plan.
+- `false` has passed compile/link/import audit, VFS packaging, and browser
+  behavior validation with status 1.
+- The VM plan is closed. Implementation ownership is now here for the
+  remaining utility waves; no VM-plan work should be duplicated in this plan.
 
 Implementation update (2026-09-23, first coreutils VFS packaging gate):
 
@@ -2241,40 +2241,319 @@ Implementation update (2026-09-23, reproducible coreutils build entry point):
   `/bin/true` retained as a compatibility alias. Typing `true` in Bash should
   resolve `/usr/bin/true` through PATH and invoke `execve`.
 
-Implementation update (2026-09-23, virtual-memory dependency):
+Implementation update (2026-09-24, VM handoff and Wave 1 continuation):
 
-- Coreutils and guest libc must share one process address space, while future
-  POSIX mappings need selected backing pages to remain shareable across
-  otherwise isolated processes. Continuing with standalone module memories or
-  a second allocator would create an ABI that must be removed in later waves.
-- Stage 8F is therefore paused on
-  `docs/active-engine-virtual-memory-plan.md`. That plan first centralizes all
-  guest-memory accesses, then introduces reference-counted virtual pages,
-  copy-on-write process cloning, process-local module aliasing, and POSIX
-  anonymous/file/shared mappings.
-- The existing `true` compile and link result remains useful build evidence,
-  but browser acceptance resumes only after the VM plan reaches its
-  process-shared module stage. No manual browser test is requested while this
-  dependency is open.
+- The engine virtual-memory plan is closed and is no longer a blocker for
+  this loader plan. Its process-memory interfaces remain available to later
+  Coreutils waves; no VM work is duplicated here.
+- `true` and `false` remain accepted Wave 1 utilities: both compile, relink,
+  pass the explicit import audit, are packaged as `/usr/bin` and `/bin`
+  aliases, and return their expected statuses in the offline browser gate.
+- `pwd` now also compiles, relinks, and passes the import audit. The existing
+  `env:fstat` implementation was added to the probe's explicit runtime-import
+  allowlist, and the linked image is packaged under both `/usr/bin/pwd` and
+  `/bin/pwd`.
+- The focused `pwd` browser gate is not accepted yet. The child reaches the
+  image entry point but traps with `call stack exhausted`; Bash also reports a
+  `getcwd` startup error. The attempted VFS home-directory and guest
+  `getcwd(NULL, 0)` fixes did not remove that runtime failure. This is now a
+  bounded runtime/guest-libc investigation, not a Coreutils compile, link, or
+  loader-classification blocker. No manual browser test is requested until
+  the headless gate reports the expected status 0.
+
+Wave 1 user-directory prerequisite (2026-09-25):
+
+- The virtual shell must not derive its identity, home directory, or cwd from
+  the machine that built the browser artifact. The engine-owned startup
+  profile for the current shell is UID 0/GID 0 with `root` as the user and
+  `/root` as its home directory.
+- Install the corresponding guest passwd record through the guest libc
+  identity interface: `root:x:0:0:root:/root:/bin/bash`. It must be
+  available before Bash initializes its environment so Bash's existing
+  `getpwuid(0)` and `getpwnam("root")` paths resolve consistently.
+- Stage `/root` as an engine-owned VFS directory and initialize the browser
+  shell's process cwd to `/root`. Set `HOME=/root`, `USER=root`,
+  `LOGNAME=root`, and `PWD=/root` in the virtual process environment. These
+  values are process state, not packaging-time host values.
+- Keep `/home/a` out of the production initialization path. Any occurrence
+  in a browser fixture must be an explicitly named test input, never an
+  inherited host cwd or home directory.
+- The `pwd` gate must verify physical cwd output and environment consistency:
+  startup prints `/root`, `HOME` prints `/root`, and after `cd /tmp`, `pwd`
+  prints `/tmp` while `PWD` tracks the directory change. A child utility must
+  inherit the same cwd and identity without changing the parent shell state.
+
+Implementation update (2026-09-25, root startup profile):
+
+- The generated interactive Bash runtime now carries the virtual root
+  environment (`HOME=/root`, `USER=root`, `LOGNAME=root`, `PWD=/root`, and the
+  virtual PATH) and installs the guest passwd record
+  `root:x:0:0:root:/root:/bin/bash` before Bash starts.
+- The browser launcher now stages `/root`, submits `/root` as the initial cwd
+  through the engine API, and reports `/root` in its VFS inventory. The host
+  build directory is no longer used to select the virtual shell home.
+- The headless `pwd` gate still does not pass: the generated browser run exits
+  before the VFS verification step can observe `/tmp` (the engine reports an
+  invalid path-access state and produces no prompt). This is a browser launch
+  lifecycle/runtime blocker, not evidence that `/home/a` is still being used.
+  No browser test is requested from the user until the headless gate reaches
+  the command prompt again.
+
+Implementation update (2026-09-25, environment ABI isolation):
+
+- The launch failure is now narrowed to Bash's environment-vector handoff. A
+  one-entry `HOME=/root` vector reaches the interactive prompt, while adding
+  the next environment pointer makes Bash trap with `out of bounds memory
+  access` before startup. This explains the earlier empty-output/VFS error;
+  it is not caused by selecting `/root` or by Coreutils `pwd`.
+- The full root environment remains specified in the generator, but the
+  browser gate is intentionally still open until the multi-entry `envp`
+  representation is corrected and the gate verifies `HOME`, `PWD`, `cd`, and
+  the child utility together. The next implementation increment is therefore
+  the Bash/guest-libc environment-vector ABI, followed by rerunning the
+  existing headless gate.
+- The environment-vector generator now derives every pointer from the actual
+  encoded entry lengths instead of maintaining hand-counted offsets. The
+  generated WAST parses successfully. The Bash startup ABI uses eight-byte
+  environment-pointer slots in this merged artifact, so the generator now
+  emits four-byte Wasm pointers with four-byte padding per slot and an
+  eight-byte terminator. The full root environment reaches the prompt again;
+  the prior multi-entry startup trap is resolved.
+- The generic headless Bash gate passes with the complete root profile and
+  records the expected UID/root startup. The focused `pwd` gate remains open
+  separately: the child utility still reaches the known call-stack exhaustion
+  path and returns status 127. The next increment is therefore the utility
+  child stack/entry-path fix, not environment setup.
+
+Implementation update (2026-09-25, child depth diagnostic):
+
+- The executor now reports the exact managed-call depth when it rejects a
+  call-stack transition. The focused `pwd` evidence identifies the failure as
+  `call stack exhausted at depth 256` while entering the child image; this is
+  an executor/utility entry-depth boundary, not a VFS lookup or root-profile
+  failure.
+- A trial increase of the global depth limit was reverted because it exposed a
+  deeper engine-memory trap rather than producing a valid child continuation.
+  The bounded diagnostic is retained, and the next increment is to reduce the
+  child entry call depth or introduce a continuation-safe image entry boundary
+  before changing the global limit.
+
+Implementation update (2026-09-25, pwd runtime fix — Wave 1 closed):
+
+- Root cause of `call stack exhausted at depth 256`: gnulib's `rpl_fcntl`
+  contained an infinite self-recursion.  The `REPLACE_FCNTL=1` config macro
+  renamed `fcntl` to `rpl_fcntl` via `#define`, but gnulib's `fcntl.c` still
+  compiled a `fcntl()` body that called itself after `#undef`.  Fixed by
+  removing `libcoreutils_a-fcntl.o` from `libcoreutils.a` via `ar d` before
+  relinking, so the guest libc's kernel-backed `fcntl` wins.
+- Second failure: `unreachable` trap in function 343.  The guest libc's
+  `exit()` was `__builtin_trap()` inside `coreutils-allocator.o` (compiled
+  with `WASTE_ENGINE`).  gnulib's `close_stdout → exit` hit the trap.  Fixed
+  by wrapping `exit`/`_exit`/`abort`/`atexit` in `#ifndef WASTE_ALLOCATOR_ONLY`
+  so they become `env:exit`/`env:_exit`/`env:atexit` imports resolved by the
+  engine.  Added `_exit` and `atexit` handlers in `posix_stubs.c`.
+- Third failure: exit status 1 (pwd error).  The exec'd child process had no
+  guest libc initialization.  Added `waste_allocator_init`,
+  `waste_stdio_init`, and `waste_stdio_bind(0,1,2)` bootstrap calls in
+  `browser_api.c`'s exec flow after `native_store_commit_process_image`.
+- Fourth failure: exit status 0 but no output.  `waste-libc.wasm` was built
+  without `-DWASTE_POSIX_IO`, so `fwrite` buffered to guest memory but never
+  called `write()`.  Fixed by changing `build-coreutils-runtime.py` to build
+  its own POSIX-IO-enabled libc (matching `build-bash-runtime.py`) rather
+  than reusing the base `waste-libc.wasm`.  Also added `fflush(NULL)` before
+  `waste_env_exit` in `waste-crt.c`.
+- Added `env:read`, `env:write` to the probe's runtime-import allowlist and
+  registered `waste_kernel:fchdir_v1`, `waste_kernel:fcntl_v1` in
+  `posix_stubs.c`.  Implemented `posix_kernel_fchdir` in `kernel.c`.
+- The focused `--coreutils-pwd` headless gate now passes: the child outputs
+  `/root`, returns status 0, and Bash reaches a second prompt.  The
+  `--coreutils-true` and `--coreutils-false` gates remain green.
+- Wave 1 is closed: `true`, `false`, and `pwd` all compile, relink with a
+  POSIX-IO-enabled guest libc, pass the import audit, and return expected
+  statuses with correct output in the offline browser gate.
+
+Implementation update (2026-09-26, Wave 2 — echo, basename, dirname, printf):
+
+- `echo` and `basename` linked and passed the headless browser gate without
+  incident.  `dirname` required extending the CRT with
+  `WASTE_MAIN_TWO_ARGS` to match its `main(int, char**)` signature.
+- `printf` was the longest debugging effort in Wave 2.  Its crash at address
+  0xFFFFFFB4 (signed −76, OOB) persisted across five distinct fixes:
+  1.  Extended `format_variadic` with `j/z/t` length modifiers and flag
+      characters.
+  2.  Provided waste-libc implementations of gnulib's `vfzprintf`, `vzprintf`,
+      `vsnzprintf`, `vszprintf`, `vaszprintf`, `aszprintf`, `vasprintf`,
+      and `vprintf`, bypassing gnulib's `vasnprintf` chain.
+  3.  Stripped nine gnulib `.o` files from `libcoreutils.a` so the waste-libc
+      versions win at link time.
+  4.  Fixed the runtime module's `__stack_pointer` from 65536 to the
+      utility's actual 131072.
+  5.  Added `stdin`/`stdout`/`stderr` variable definitions to `waste-crt.c`
+      so wasm-ld allocates them at valid addresses (136456–136464) instead of
+      address 0.
+  None of these fixed the crash.
+- Root cause: **dual allocator corruption**.  The probe script compiled a
+  standalone C allocator (`coreutils-allocator.o` from `stdlib.c` under
+  `-DWASTE_ENGINE -DWASTE_ALLOCATOR_ONLY`) and linked it into the utility.
+  After `wasm-merge`, the merged binary had two independent heap allocators —
+  the C linked-list allocator and waste-libc's WAT boundary-tag allocator —
+  both starting from `__heap_base` and managing separate metadata over the
+  same linear memory.  gnulib's `xmalloc` used the C allocator while
+  `vfprintf` used the WAT allocator; their interleaved allocations corrupted
+  each other's metadata, producing the −76 fault address.
+- Fix: removed `coreutils-allocator.o` from the link line.  With
+  `--allow-undefined`, `malloc`/`free`/`calloc`/`realloc` become imports
+  that `wasm-merge` resolves against waste-libc's single WAT allocator.
+  Added `getenv` and `secure_getenv` to the guest libc (previously only in
+  the `WASTE_ENGINE` build).
+- Secondary fix: corrected the `off64_t` typedef in both the sysroot
+  (`build/coreutils/sysroot/include/sys/types.h`) and waste-libc
+  (`src/html-rt/lib/stdio.c`) from `signed long` (32-bit on wasm32) to
+  `signed long long` (64-bit).  gnulib defines `off64_t` as `long long`;
+  the mismatch caused silent return-type truncation for the `*zprintf`
+  family.
+- Build ordering fix: gnulib strip must happen AFTER `make` rebuilds
+  `libcoreutils.a` (make recreates the archive from all `.o` files, undoing
+  any earlier `ar d`).  The probe script now runs make first, strips the
+  conflicting objects, then manually relinks.
+- All seven coreutils headless gates pass: `true`, `false`, `pwd`, `echo`,
+  `basename`, `dirname`, `printf`.  The baseline Bash smoke test remains
+  green.
+
+Implementation update (2026-09-26, Wave 2 build-entry integration):
+
+- The normal `src/html-rt/Makefile` path now has explicit probe targets for
+  `echo`, `printf`, `basename`, and `dirname`, in addition to the existing
+  true/false/pwd targets.  `build-coreutils` and the documented
+  `coreutils-wasm`/`coreutils-audit` entry points cover all seven accepted
+  utilities instead of silently checking only Wave 1.
+- The offline Bash package builder now stages all seven linked files from the
+  generated page directory.  A missing utility is a packaging error, so a
+  page cannot appear complete while its command is absent from the archive.
+- This closes the Wave 2 build-graph gap.  Stage 8G is still open for the
+  complete `/bin/wat` and `/bin/wast` package, license/source provenance
+  files, deterministic archive audit, and the final distribution gate; no
+  browser action is required for this Makefile-only increment.
+
+Implementation update (2026-09-26, Wave 3 `cat` acceptance):
+
+- `cat` first exposed missing public ABI declarations for `ENOTTY`, `ETXTBSY`,
+  `EFBIG`, `getpagesize`, `copy_file_range`, and `splice`. The optional
+  zero-copy and pipe calls now return `ENOSYS`, causing Coreutils to use its
+  ordinary read/write fallback until those kernel accelerators are available.
+- Corrected the merged libc signatures for `posix_fadvise`, `__fpurge`, and
+  the `*zprintf` family. Added a versioned `waste_kernel:lseek` bridge so the
+  utility-facing 32-bit `off_t` ABI does not bind directly to the engine's
+  internal 64-bit seek callback.
+- Removed gnulib's `open.o` replacement after each archive rebuild. Like the
+  earlier `fcntl.o` case, its replacement called itself in this freestanding
+  target instead of reaching the guest kernel.
+- Coreutils images now request a 1 MiB initial memory, and the shared runtime
+  adopts each utility's declared memory minimum. This avoids constraining
+  data-heavy utilities to the earlier four-page bootstrap image.
+- The browser hang was traced to configure selecting `posix_memalign` even
+  though waste-libc advertises only 16-byte alignment. The WASTE config site
+  now reports that function unavailable, allowing gnulib's portable
+  over-allocation shim to satisfy `cat`'s 64 KiB page-aligned buffers without
+  falsifying the WebAssembly page size.
+- `cat` now compiles, relinks into the shared-memory image, passes its import
+  audit, reads a packaged engine-VFS file with `-n`, writes the expected bytes,
+  returns status 0, reaches a later Bash prompt, and exits cleanly in the
+  headless browser gate. Its Make target, normal build list, generated page,
+  deterministic package audit, and corresponding-source mapping are wired.
+- The corresponding-source archive now covers eight accepted utilities and
+  has SHA-256
+  `4f8cfb7191af9cf54d490280acde10aff27ac2f2cf91206943ed29aea40c6265`.
+  Wave 3 continues with `wc`; no manual browser test is required for this
+  increment.
+
+Implementation update (2026-09-26, Wave 3 `wc` acceptance):
+
+- `wc` compiles from the pinned GNU source, relinks into the shared-memory
+  runtime, and passes its import audit with no unknown imports or Asyncify
+  symbols. It is now covered by the normal Make targets, `start.sh` build
+  list, page generator, package audit, and corresponding-source mapping.
+- Its first browser execution exposed a genuine stack underflow: GNU `wc`'s
+  counting frame exceeded the old 128 KiB linker stack and wrapped its read
+  buffer to an address near `UINT32_MAX`. Coreutils applications now reserve
+  a 512 KiB stack while retaining the bounded 1 MiB initial memory.
+- The one-memory relinker now reads the utility's declared memory minimum
+  before building the libc participants. The allocator core, C libc helpers,
+  rewritten utility, and engine-owned runtime therefore agree on the same
+  minimum instead of hard-coding a four-page helper memory that cannot hold a
+  larger utility stack and static data.
+- The aggregate rebuild also corrected the manual link object manifests for
+  GNU `true` and `false`: both use `true.o` plus their respective
+  `true-true.o` or `true-false.o` selector. This preserves their exact 0 and 1
+  statuses in clean builds rather than relying on an unresolved selector.
+- The focused browser gate reads an engine-VFS fixture and verifies GNU
+  `wc -l -w -c` output `2 3 14`, status 0, a later Bash prompt, and clean
+  exit. All eight earlier focused Coreutils gates and the baseline Bash gate
+  remain green after the larger-stack relink.
+- The aggregate nine-utility build and import gate passes, and the
+  deterministic browser package audit includes `wc.wasm`. The corresponding
+  source archive now covers all nine accepted utilities and has SHA-256
+  `526fc106e4bca3027bdf399d603c7fd9d282cce60f8225740da7cde045352c22`.
+  Wave 3 is closed; Wave 4 begins with `ls`. No manual browser test is needed
+  for this increment.
+
+Implementation update (2026-09-27, Wave 4 `ls` acceptance):
+
+- `ls` compiles from the pinned GNU source, relinks into the one-memory guest
+  runtime, and passes its import audit with no unknown imports or Asyncify
+  symbols. The managed Coreutils patch removes only the unavailable
+  stack-restoring `setjmp` collation fallback for WASTE, selects the documented
+  bytewise locale ordering, and resets the utility mode for repeat process
+  images; the submodule remains clean.
+- Completed the VFS metadata boundary needed by directory presentation:
+  directory entries use the guest ABI layout, stat modes carry file-type bits,
+  and symlink metadata plus `readlink` reach the utility through the versioned
+  kernel interface. Explicit host-binding precedence is limited to the Bash
+  `lseek` and `__fpurge` compatibility shims whose signatures differ from the
+  registered guest-libc exports.
+- Shell redirection now uses engine-backed `dup` and `dup2`, `open` returns the
+  POSIX `-1`/guest-errno contract, and pathname/file changes made by a forked
+  child are published to the waiting parent before the child is reaped. The
+  latter is the current process-lifecycle synchronization point; it does not
+  claim a general shared-mount-namespace implementation for concurrently
+  running processes.
+- The generated `ls-report.json` includes the accepted feature ledger and
+  explicit deviations. Supported behavior covers `/`, `/bin`, empty and
+  hidden directories, symlinks, long metadata, terminal columns, redirected
+  one-name-per-line output, multiple operands, missing-path status 2, and a
+  later shell command. Locale collation is bytewise; color and locale-specific
+  quoting are outside this accepted subset; account names and host timestamps
+  are not fabricated.
+- The same fixture shapes were checked against a native build from pinned
+  source commit `cecd945aa93ab77e759fe766206cfe93e634d07b`: ordering, terminal
+  and non-terminal layouts, symlink presentation, multiple operands, and
+  missing-path status match. Native account names and filesystem times differ
+  only in the fields identified by the deviation ledger.
+- The final headless browser matrix passes 7/7 and returns status 0 after the
+  representative status-2 failure. Native warnings-as-errors sanitizer gates
+  also pass: the executor smoke gate is green and the POSIX kernel reports
+  329 tests. Wave 4 and Stage 8F are closed; no manual browser test is needed.
 
 Build and accept utilities in dependency order. Do not enable the next wave by
 silently disabling failures in the current one.
 
 ### Wave 1: process and startup
 
-- `true`
-- `false`
-- `pwd`
+- `true` — accepted
+- `false` — accepted
+- `pwd` — accepted
 
-Gate: direct absolute invocation and PATH lookup return exact statuses, `pwd`
-tracks `cd`, and Bash reaches a second prompt after every command.
+Gate: direct absolute invocation and PATH lookup return exact statuses, the
+engine-owned root profile is visible as `/root`, `pwd` tracks `cd`, and Bash
+reaches a second prompt after every command. The gate must also prove that no
+host `HOME`, `PWD`, uid, gid, or cwd value enters the virtual process.
 
 ### Wave 2: output and path strings
 
-- `echo`
-- `printf`
-- `basename`
-- `dirname`
+- `echo` — accepted
+- `printf` — accepted
+- `basename` — accepted
+- `dirname` — accepted
 
 Gate: invoke external utilities by absolute path where Bash has a builtin;
 cover empty operands, option terminators, escapes, and non-ASCII bytes within
@@ -2282,8 +2561,8 @@ the documented locale model.
 
 ### Wave 3: regular-file data
 
-- `cat`
-- `wc`
+- `cat` — accepted
+- `wc` — accepted
 
 Gate: cover packaged files, writable `/tmp` files, standard input, standard
 output redirection, seekable and non-seekable descriptors, errors, and binary
@@ -2291,7 +2570,7 @@ data containing NUL bytes.
 
 ### Wave 4: directory presentation
 
-- `ls`
+- `ls` — accepted
 
 Gate: cover `/`, `/bin`, empty directories, hidden names, symlinks, long
 format metadata, terminal/non-terminal output differences, missing paths, and
@@ -2308,7 +2587,108 @@ For every accepted utility:
 
 ## Stage 8G: Package the utilities and satisfy distribution requirements
 
-Status: pending
+Status: complete (ten utilities, interpreters, notices, provenance, and
+corresponding source are covered by the deterministic package audit)
+
+Implementation update (2026-09-26, Stage 8G package metadata):
+
+- `build-coreutils` now generates the machine-readable Coreutils provenance
+  report as part of the required build, so a successful utility build always
+  has source commit, managed-patch, submodule, and license-file metadata.
+- The Bash archive builder now includes that report at
+  `/usr/share/waste/coreutils-provenance.json` and the upstream `COPYING` file
+  at `/usr/share/licenses/coreutils/COPYING`. Missing metadata is a hard
+  packaging error rather than a silently incomplete release.
+- The browser worker registers the corresponding `/usr/share/licenses` and
+  `/usr/share/licenses/coreutils` directories before staging packaged files.
+  The metadata therefore remains visible through the engine-owned VFS, while
+  JavaScript continues to transport bytes only.
+- The remaining Stage 8G work is to package the executable `/bin/wat` and
+  `/bin/wast` handler nodes, include the complete source-access bundle, and
+  run the deterministic archive/license audit. This increment does not require
+  a manual browser test.
+
+Implementation update (2026-09-26, Stage 8G interpreter package contract):
+
+- The generated C-engine Bash page now carries the two engine-owned handler
+  paths in its VFS metadata: `/bin/wat` and `/bin/wast`, both executable. It
+  also registers `/usr`, `/usr/bin`, `/usr/share`, and the license directory
+  hierarchy before loading package files.
+- The monolithic page payload now includes the provenance report and
+  Coreutils `COPYING` bytes at their final VFS paths. The page generator fails
+  early if either required distribution file is absent, so a browser artifact
+  cannot claim the Stage 8G package contract without its notices.
+- A generated package check confirmed that the page contains both handler
+  paths and both metadata paths. The remaining work is the complete source
+  access bundle and deterministic archive/license audit; the handlers
+  themselves are now represented in the generated package contract.
+
+Implementation update (2026-09-26, Stage 8G deterministic package audit):
+
+- Added `src/html-rt/tools/audit-coreutils-package.py`. It checks the offline
+  archive for all seven utility images, provenance, `COPYING`, and an explicit
+  interpreter manifest listing `/bin/wat` and `/bin/wast`. It also rejects
+  unsorted entries, nonzero ownership metadata, names, or timestamps.
+- `src/html-rt/tools/build.sh` now creates a normalized ustar archive with
+  stable ordering, epoch timestamps, numeric root ownership, and a no-name
+  gzip header before amalgamation. The audit runs before the manifest is
+  embedded in the HTML page.
+- The same Bash page was built twice and produced the identical SHA-256
+  digest, `b83b7f72f21ce29bdeb832cfe775654ef7f77a1a0a7db0d6987f7bd94513a16a`.
+- Stage 8G still needs the complete corresponding-source bundle and release
+  license mapping; the browser package archive and deterministic audit are now
+  closed.
+
+Implementation update (2026-09-26, Stage 8G corresponding source):
+
+- Added `src/html-rt/tools/package-coreutils-source.py` and the
+  `coreutils-source-package` Make target. They create and audit
+  `build/coreutils/coreutils-corresponding-source.tar.gz` from the exact
+  patched/bootstrapped source tree used by the build.
+- The source archive also contains the managed patch, bootstrap and configure
+  inputs, generated configure/provenance reports, WASTE engine and browser
+  runtime source, guest libc and interface headers, build tools, notices, and
+  `docs/coreutils-source-distribution.md` instructions. Generated Wasm and
+  Python bytecode are excluded.
+- `coreutils-source-package.json` maps all seven accepted utility binaries to
+  the archive, pinned source commit, instructions, and SHA-256. The browser
+  package installs that mapping under `/usr/share/waste`, and both the page
+  generator and package audit reject a missing or incomplete mapping.
+- The normal C-engine Bash generation path now builds the corresponding-source
+  artifact before producing the distributable page. Repository source inputs
+  invalidate its Make stamp, preventing a stale archive after runtime or build
+  script changes.
+- Two independent builds from the same inputs produced SHA-256
+  `595211955a5eec2007baa801bde57fe93796e96564e4219fb6e6454191929856`.
+  Distribution requirements are complete for the currently accepted utility
+  set. Stage 8G remains open only because its final `/bin` inventory includes
+  `ls`, which belongs to the remaining Stage 8F wave.
+
+Implementation update (2026-09-26, nine-utility package inventory):
+
+- Added `wc.wasm` to the deterministic package contract and extended the
+  source-package mapping from eight to nine accepted utilities.
+- `make -C src/html-rt BUILD_DIR=../../build/html-rt
+  coreutils-package-audit` now rebuilds and audits all nine reports, generates
+  the corresponding-source archive, requires every utility in the offline
+  tar manifest, and produces the self-contained Bash page successfully.
+- The only utility still missing from the planned final inventory is `ls`.
+
+Implementation update (2026-09-27, final ten-utility package inventory):
+
+- Added `ls.wasm` to the normal build, page generation, VFS inventory,
+  deterministic archive audit, and corresponding-source mapping. The package
+  audit now requires all ten accepted utilities plus `/bin/wat`, `/bin/wast`,
+  provenance, source mapping, and the Coreutils license notice.
+- `make -C src/html-rt BUILD_DIR=../../build/html-rt
+  coreutils-package-audit` passes. The final corresponding-source archive maps
+  the pinned source, managed patch, WASTE runtime/build inputs, and all ten
+  binaries with SHA-256
+  `307962944ac6006511fd2a30d7345094040ca08a49d6df0126a48fa33575ac77`.
+- The rebuilt self-contained `file://` Bash page passes its baseline and
+  process-continuation browser gates, and its focused `/bin/ls` gate observes
+  the packaged `/bin` inventory. Stage 8G is closed without modifying the
+  Coreutils submodule.
 
 Work:
 
@@ -2343,7 +2723,20 @@ Gate:
 
 ## Stage 8H: Integrate commands and regression gates
 
-Status: pending
+Status: in progress (entry points and focused fixtures exist; unified command
+matrix and durable documentation consolidation remain)
+
+Implementation update (2026-09-27, Stage 8H handoff):
+
+- The stable `coreutils-wasm` and `coreutils-audit` Make entry points,
+  `./start.sh --build-coreutils`, offline Bash rebuild, native loader tests,
+  and focused browser utility switches are in place. Stages 8F and 8G no
+  longer block integration.
+- The next increment is one aggregate browser command matrix covering the
+  accepted utilities and WAT/WAST handlers in a single shell lifetime, plus
+  consolidation of the now-stable loader, package, and Wasm32 ABI rules into
+  the durable architecture documents. It must retain the existing individual
+  gates so failures still identify one boundary.
 
 Add focused build entry points without changing the existing command meanings:
 

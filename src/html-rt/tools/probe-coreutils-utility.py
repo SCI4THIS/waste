@@ -16,15 +16,50 @@ UNDEFINED_SYMBOL = re.compile(
     r"([A-Za-z_][A-Za-z0-9_]*)"
 )
 
-WASTE_STARTUP_IMPORTS = ("env:exit", "waste_kernel:startup_v1")
+WASTE_STARTUP_IMPORTS = ("env:exit", "env:_exit", "env:abort", "env:atexit",
+                         "waste_kernel:startup_v1")
 WASTE_RUNTIME_IMPORTS = (
-    "env:close", "env:open", "env:readdir_v1",
+    "env:close", "env:fstat", "env:open", "env:read", "env:readdir_v1",
+    "env:write",
+    "env:gettimeofday", "env:raise",
+    "env:sigaction", "env:sigaddset", "env:sigemptyset",
+    "env:sigismember", "env:sigprocmask",
+    "waste_kernel:chdir", "waste_kernel:fchdir_v1",
+    "waste_kernel:fcntl_v1", "waste_kernel:getcwd",
+    "waste_kernel:lseek", "waste_kernel:readlink_v1",
     "waste_kernel:ioctl_v1", "waste_kernel:isatty_v1",
     "waste_kernel:path_access_v1", "waste_kernel:path_stat_v1",
     "waste_kernel:pselect_v1", "waste_kernel:select_v1",
     "waste_kernel:tcgetattr_v1", "waste_kernel:tcsetattr_v1",
 )
 RUNTIME_BUILDER = "src/html-rt/tools/build-coreutils-runtime.py"
+
+LS_FEATURE_LEDGER = {
+    "supported": [
+        "default terminal column output",
+        "default non-terminal one-name-per-line output",
+        "-1 one-name-per-line output",
+        "-A hidden-name output excluding dot and dot-dot",
+        "-l long format with file type, mode, ownership, size, and symlink target",
+        "multiple directory operands",
+        "missing-path diagnostics and status 2",
+    ],
+    "browser_acceptance": [
+        "/ and /bin directory listings",
+        "empty directory",
+        "hidden regular file",
+        "symbolic link and link target",
+        "terminal and redirected stdout layouts",
+        "child-created redirected output visible to the parent shell",
+        "second command after success and failure",
+    ],
+    "intentional_deviations": [
+        "collation is bytewise because the guest locale model has no locale-specific strcoll data",
+        "owner and group names are not claimed until account-name lookup is covered by the ls gate",
+        "color and locale-specific quoting are outside the accepted option subset",
+        "timestamps are deterministic engine metadata rather than host filesystem timestamps",
+    ],
+}
 
 
 def relative(path: Path, root: Path) -> str:
@@ -49,22 +84,32 @@ def main() -> int:
                          "lib/unictype.h", "lib/unicase.h", "lib/uninorm.h",
                          "lib/uniwidth.h", "lib/malloc/scratch_buffer.gl.h"]
     generated_headers.extend(["lib/crc-sliceby8.h", "lib/fts_.h"])
+    generated_targets = list(generated_headers)
+    generated_paths = [build / name for name in generated_headers]
+    if args.utility == "ls":
+        # dircolors.h is generated into the source tree by the native dcgen
+        # build helper, so its Make target is the expanded absolute path.
+        generated_headers.append("src/dircolors.h")
+        dircolors_header = coreutils_build / "source/src/dircolors.h"
+        generated_targets.append(str(dircolors_header))
+        generated_paths.append(dircolors_header)
     preflight = ["make", "-C", str(build), "-o", "config.status",
-                 "V=1", "-j1"] + generated_headers
-    missing_generated = [name for name in generated_headers
-                         if not (build / name).is_file()]
+                 "V=1", "-j1"] + generated_targets
+    missing_generated = [name for name, path in zip(generated_headers, generated_paths)
+                         if not path.is_file()]
     command = ["make", "-C", str(build), "-o", "config.status",
                "V=1", "-j1", f"src/{args.utility}"]
     artifact = build / "src" / args.utility
     crt_object = coreutils_build / "sysroot" / "lib" / "waste-crt.o"
     crt_source = root / "src/html-rt/lib/waste-crt.c"
-    allocator_object = coreutils_build / "sysroot" / "lib" / "coreutils-allocator.o"
-    allocator_source = root / "src/html-rt/lib/stdlib.c"
     audit_path = output.parent / f"{args.utility}-import-audit.json"
     linked_artifact = output.parent / f"{args.utility}-linked.wasm"
     linked_audit_path = output.parent / f"{args.utility}-linked-import-audit.json"
     link_flags = ("-Wl,--no-entry,--export-memory,--export-table,--export=_start,"
-                  "--allow-undefined,--gc-sections")
+                  "--export=__stack_pointer,--export=__heap_base,"
+                  "--allow-undefined,--gc-sections,"
+                  "--initial-memory=1048576,--max-memory=268435456,"
+                  "-z,stack-size=524288")
     with log_path.open("w", encoding="utf-8") as log:
         if missing_generated:
             preflight_result = subprocess.run(
@@ -83,28 +128,76 @@ def main() -> int:
             if crt_result.returncode != 0:
                 result = crt_result
             else:
-                allocator_result = subprocess.run(
-                    [str(coreutils_build / "sysroot/bin/waste-wasm-clang"),
-                     "-DWASTE_ENGINE", "-DWASTE_ALLOCATOR_ONLY",
-                     "-Isrc/html-rt/lib", "-c", str(allocator_source),
-                     "-o", str(allocator_object)],
-                    cwd=root, stdout=log, stderr=subprocess.STDOUT,
-                    check=False,
+                # First, let make build everything (including the archive)
+                # normally.  Then strip conflicting gnulib objects and
+                # manually relink.
+                artifact.unlink(missing_ok=True)
+                result = subprocess.run(
+                    command + [
+                        f"LDFLAGS={link_flags}",
+                        f"LIBS={crt_object}",
+                    ], stdout=log, stderr=subprocess.STDOUT, check=False,
                 )
-                if allocator_result.returncode != 0:
-                    result = allocator_result
-                    allocator_object.unlink(missing_ok=True)
-                else:
-                    # The normal configure link line has no host entry point.
-                    # Remove only this generated target so make performs the
-                    # link while retaining its normal object/library deps.
-                    artifact.unlink(missing_ok=True)
-                    result = subprocess.run(
-                        command + [
-                            f"LDFLAGS={link_flags}",
-                            f"LIBS={crt_object} {allocator_object}",
-                        ], stdout=log, stderr=subprocess.STDOUT, check=False,
+                # gnulib's fcntl.c defines a replacement fcntl() that
+                # internally calls the "real" fcntl (via #undef).  In
+                # WASTE there is no real system fcntl—the guest libc
+                # provides one via a kernel import—so gnulib's version
+                # recurses infinitely.  Remove it from libcoreutils.a.
+                #
+                # gnulib's *zprintf family (vfzprintf, vzprintf, etc.)
+                # routes through vasnprintf which crashes in the Wasm
+                # environment due to unresolved internal data.  Remove
+                # them so the waste-libc implementations win instead.
+                #
+                # Strip AFTER make finishes (make rebuilds the archive,
+                # undoing any earlier strip), then manually relink.
+                libcoreutils = build / "lib" / "libcoreutils.a"
+                gnulib_strip = [
+                    "libcoreutils_a-fcntl.o",
+                    "libcoreutils_a-open.o",
+                    "libcoreutils_a-stat.o",
+                    "libcoreutils_a-lstat.o",
+                    "libcoreutils_a-fstatat.o",
+                    "libcoreutils_a-localeconv.o",
+                    "libcoreutils_a-vfzprintf.o",
+                    "libcoreutils_a-vzprintf.o",
+                    "libcoreutils_a-vsnzprintf.o",
+                    "libcoreutils_a-vszprintf.o",
+                    "libcoreutils_a-vaszprintf.o",
+                    "libcoreutils_a-aszprintf.o",
+                    "libcoreutils_a-vasnprintf.o",
+                    "libcoreutils_a-vasprintf.o",
+                ]
+                if result.returncode == 0 and libcoreutils.is_file():
+                    for obj in gnulib_strip:
+                        subprocess.run(
+                            ["ar", "d", str(libcoreutils), obj],
+                            stdout=log, stderr=subprocess.STDOUT,
+                            check=False,
+                        )
+                    # Relink after stripping conflicting objects.
+                    # Do NOT link a separate allocator — waste-libc
+                    # provides malloc/free/calloc/realloc.
+                    cc = str(coreutils_build / "sysroot/bin/waste-wasm-clang")
+                    utility_objects = [build / "src" / f"{args.utility}.o"]
+                    if args.utility in ("true", "false"):
+                        # Coreutils builds true and false from their shared
+                        # implementation plus a command-specific selector.
+                        utility_objects = [
+                            build / "src" / "true.o",
+                            build / "src" / f"true-{args.utility}.o",
+                        ]
+                    relink = subprocess.run(
+                        [cc, "-std=gnu23", link_flags,
+                         "-o", str(artifact),
+                         *(str(path) for path in utility_objects),
+                         str(build / "src" / "libver.a"),
+                         str(libcoreutils), str(libcoreutils),
+                         str(crt_object)],
+                        stdout=log, stderr=subprocess.STDOUT, check=False,
                     )
+                    if relink.returncode != 0:
+                        result = relink
         else:
             result = preflight_result
     log_text = log_path.read_text(encoding="utf-8", errors="replace")
@@ -181,6 +274,7 @@ def main() -> int:
         "unknown_imports": audit.get("unknown", []) if audit else [],
         "asyncify_symbols": audit.get("asyncifySymbols", []) if audit else [],
         "import_audit": relative(audit_path, root) if audit_path.is_file() else None,
+        "feature_ledger": LS_FEATURE_LEDGER if args.utility == "ls" else None,
         "blockers": blockers,
         "next_stage": "8F" if status == "blocked" else None,
     }

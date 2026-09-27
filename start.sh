@@ -85,7 +85,7 @@ Engine (C):
   --html-test      generate the full C-engine browser test dashboard
   --html-bash      generate the self-contained C-engine Bash page
   --build-coreutils
-                   build and audit the staged GNU coreutils Wasm utility set
+                   build all GNU coreutils Wasm utilities and install to repo
 
 OCaml:
   --compile        compile the OCaml interpreter to Wasm
@@ -1056,6 +1056,86 @@ generate_c_engine_dashboard_html() {
     "A self-contained C-engine dashboard was generated with the same groups as the OCaml-Wasm dashboard, including signaling/POSIX and libc tests.\n\nOutput: $C_ENGINE_OCAML_LAYOUT_HTML\nLog: $C_ENGINE_HTML_LOG"
 }
 
+# ── Coreutils build helpers ──────────────────────────────────────────────
+
+COREUTILS_UTILITIES=(true false pwd echo printf basename dirname cat wc ls)
+COREUTILS_STAGING="$REPO_ROOT/src/html-rt/src/bash"
+COREUTILS_LOG="$LOG_DIR/coreutils-build.log"
+
+build_single_coreutils() {
+  local utility="$1"
+  if ! have_command clang || ! have_command make || ! have_command python3 ||
+      ! have_command wasm-as || ! have_command wasm-merge || ! have_command wasm-dis ||
+      ! wasm_ld_is_usable; then
+    show_message "Coreutils build" \
+      "clang, make, wasm-ld, wasm-as, wasm-merge, wasm-dis, and Python 3 are required."
+    return 1
+  fi
+  mkdir -p "$HTML_BUILD"
+  : >"$COREUTILS_LOG"
+  if ! run_logged_step "Build and audit coreutils $utility" \
+      "$COREUTILS_LOG" make -C "$REPO_ROOT/src/html-rt" \
+      BUILD_DIR="$HTML_BUILD" "coreutils-${utility}-probe"; then
+    show_message "Coreutils build failed" \
+      "Could not build coreutils $utility.\n\nLog: $COREUTILS_LOG"
+    return 1
+  fi
+  local report_dir="$REPO_ROOT/build/coreutils/utility-probe"
+  local linked="$report_dir/${utility}-linked.wasm"
+  if [[ ! -f "$linked" ]]; then
+    show_message "Coreutils build failed" \
+      "Linked artifact not found: $linked"
+    return 1
+  fi
+  cp "$linked" "$COREUTILS_STAGING/${utility}.wasm"
+  printf 'Installed %s → %s\n' "$linked" "$COREUTILS_STAGING/${utility}.wasm"
+}
+
+build_all_coreutils() {
+  local failed=()
+  for utility in "${COREUTILS_UTILITIES[@]}"; do
+    if ! build_single_coreutils "$utility"; then
+      failed+=("$utility")
+    fi
+  done
+  if ((${#failed[@]} > 0)); then
+    show_message "Coreutils build" \
+      "Failed utilities: ${failed[*]}"
+    return 1
+  fi
+  show_message "Coreutils build" \
+    "All ${#COREUTILS_UTILITIES[@]} utilities built and installed:\n${COREUTILS_UTILITIES[*]}"
+}
+
+coreutils_menu() {
+  if ! have_command whiptail || [[ ! -t 0 || ! -t 1 ]]; then
+    build_all_coreutils
+    return
+  fi
+  while true; do
+    local items=("all" "Build all coreutils (${COREUTILS_UTILITIES[*]})")
+    for utility in "${COREUTILS_UTILITIES[@]}"; do
+      local status="not built"
+      if [[ -f "$COREUTILS_STAGING/${utility}.wasm" ]]; then
+        status="$(stat -c '%Y' "$COREUTILS_STAGING/${utility}.wasm" 2>/dev/null | xargs -I{} date -d @{} '+%Y-%m-%d %H:%M' 2>/dev/null || echo 'built')"
+      fi
+      items+=("$utility" "Build $utility ($status)")
+    done
+    items+=("back" "Return to main menu")
+
+    local choice
+    choice="$(whiptail --title "Coreutils" --menu \
+      "Build GNU coreutils Wasm utilities" 20 70 10 \
+      -- "${items[@]}" 3>&1 1>&2 2>&3)" || return 0
+
+    case "$choice" in
+      all)  build_all_coreutils || true ;;
+      back) return 0 ;;
+      *)    build_single_coreutils "$choice" || true ;;
+    esac
+  done
+}
+
 generate_c_engine_bash_html() {
   if ! have_command cc || ! have_command clang || ! have_command make ||
       ! have_command flex || ! have_command bison || ! have_command python3 ||
@@ -1109,30 +1189,33 @@ generate_c_engine_bash_html() {
     return 1
   fi
 
-  # Build and audit the external coreutils utilities before packaging the VFS.
-  if ! run_logged_step "Build and audit coreutils true" \
-      "$C_ENGINE_BASH_LOG" make -C "$REPO_ROOT/src/html-rt" \
-      BUILD_DIR="$HTML_BUILD" build-coreutils; then
+  # Verify pre-built coreutils Wasm files are present.
+  local coreutils_missing=()
+  for util_name in "${COREUTILS_UTILITIES[@]}"; do
+    if [[ ! -f "$REPO_ROOT/src/html-rt/src/bash/${util_name}.wasm" ]]; then
+      coreutils_missing+=("$util_name")
+    fi
+  done
+  if ((${#coreutils_missing[@]} > 0)); then
     show_message "C-engine Bash failed" \
-      "Could not build or audit coreutils true.\n\nLog: $C_ENGINE_BASH_LOG"
+      "Pre-built coreutils Wasm files missing: ${coreutils_missing[*]}\n\nRun ./start.sh --build-coreutils to build them."
+    return 1
+  fi
+
+  if ! run_logged_step "Build Coreutils corresponding-source package" \
+      "$C_ENGINE_BASH_LOG" make -C "$REPO_ROOT/src/html-rt" \
+      BUILD_DIR="$HTML_BUILD" coreutils-source-package; then
+    show_message "C-engine Bash source package failed" \
+      "Could not build the Coreutils corresponding-source archive.\n\nLog: $C_ENGINE_BASH_LOG"
     return 1
   fi
 
   # Copy staging data and amalgamate the HTML page
-  if ! run_logged_step "Build and audit Coreutils true" \
-      "$C_ENGINE_BASH_LOG" make -C "$REPO_ROOT/src/html-rt" \
-      BUILD_DIR="$HTML_BUILD" build-coreutils; then
-    show_message "Coreutils true build failed" \
-      "The import-closed /usr/bin/true image could not be built.\n\nLog: $C_ENGINE_BASH_LOG"
-    return 1
-  fi
   if ! run_logged_step "Copy staging data for Bash page" \
       "$C_ENGINE_BASH_LOG" python3 "$C_ENGINE_BASH_GENERATOR" \
       --repo-root "$REPO_ROOT" \
       --wasm "$C_ENGINE_WASM" \
       --launch "$C_ENGINE_BASH_RUNTIME_WAST" \
-      --coreutils-true "$REPO_ROOT/build/coreutils/utility-probe/true-linked.wasm" \
-      --coreutils-false "$REPO_ROOT/build/coreutils/utility-probe/false-linked.wasm" \
       --output-dir "$C_ENGINE_STAGING_BASH"; then
     show_message "C-engine Bash staging failed" \
       "Could not copy staging data.\n\nLog: $C_ENGINE_BASH_LOG"
@@ -1387,6 +1470,7 @@ main_menu() {
       cli-test    "Run the full test suite in the cli runtime" \
       html-test   "Compile engine into static HTML for browser tests" \
       html-bash   "Compile engine and example bash into static HTML" \
+      coreutils   "Build GNU coreutils Wasm utilities" \
       ----    "── OCaml ───────────────────────────────────" \
       ocaml-compile "Compile the OCaml interpreter to Wasm" \
       ocaml-test    "Run the full test suite with OCaml interpreter" \
@@ -1401,6 +1485,7 @@ main_menu() {
       cli-test) run_cli_tests || true ;;
       html-test) generate_c_engine_dashboard_html || true ;;
       html-bash) generate_c_engine_bash_html || true ;;
+      coreutils) coreutils_menu ;;
       ocaml-compile) compile_interpreter || true ;;
       ocaml-test) test_suite_menu ;;
       ocaml-html) generate_browser_test_html || true ;;
@@ -1435,9 +1520,7 @@ main() {
     --cli-test) run_cli_tests ;;
     --compile) compile_interpreter ;;
     --build-libc) build_waste_libc ;;
-    --build-coreutils)
-      make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$HTML_BUILD" \
-        build-coreutils ;;
+    --build-coreutils) build_all_coreutils ;;
     --generate-html) generate_browser_test_html ;;
     --generate-bash-html) generate_bash_html ;;
     --c-engine-tests)

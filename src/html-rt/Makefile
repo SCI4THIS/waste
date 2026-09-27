@@ -120,9 +120,24 @@ COREUTILS_CONFIGURE_DIR := $(COREUTILS_BUILD_DIR)/configure
 COREUTILS_CONFIGURE_REPORT := $(COREUTILS_CONFIGURE_DIR)/configure-report.json
 COREUTILS_UTILITY_TOOL := tools/probe-coreutils-utility.py
 COREUTILS_RUNTIME_TOOL := tools/build-coreutils-runtime.py
+COREUTILS_PACKAGE_AUDIT := tools/audit-coreutils-package.py
+COREUTILS_SOURCE_PACKAGER := tools/package-coreutils-source.py
+COREUTILS_SOURCE_ARCHIVE := $(COREUTILS_BUILD_DIR)/coreutils-corresponding-source.tar.gz
+COREUTILS_SOURCE_MAPPING := $(COREUTILS_BUILD_DIR)/coreutils-source-package.json
+COREUTILS_SOURCE_STAMP := $(COREUTILS_BUILD_DIR)/.source-package-stamp
+COREUTILS_SOURCE_INPUTS := $(shell find $(REPO_ROOT)/src/engine $(REPO_ROOT)/src/html-rt \
+	-type f ! -name '*.wasm' ! -name '*.pyc' ! -path '*/__pycache__/*' -print)
 COREUTILS_UTILITY_DIR := $(COREUTILS_BUILD_DIR)/utility-probe
 COREUTILS_UTILITY_REPORT := $(COREUTILS_UTILITY_DIR)/true-report.json
 COREUTILS_FALSE_REPORT := $(COREUTILS_UTILITY_DIR)/false-report.json
+COREUTILS_PWD_REPORT := $(COREUTILS_UTILITY_DIR)/pwd-report.json
+COREUTILS_ECHO_REPORT := $(COREUTILS_UTILITY_DIR)/echo-report.json
+COREUTILS_PRINTF_REPORT := $(COREUTILS_UTILITY_DIR)/printf-report.json
+COREUTILS_BASENAME_REPORT := $(COREUTILS_UTILITY_DIR)/basename-report.json
+COREUTILS_DIRNAME_REPORT := $(COREUTILS_UTILITY_DIR)/dirname-report.json
+COREUTILS_CAT_REPORT := $(COREUTILS_UTILITY_DIR)/cat-report.json
+COREUTILS_WC_REPORT := $(COREUTILS_UTILITY_DIR)/wc-report.json
+COREUTILS_LS_REPORT := $(COREUTILS_UTILITY_DIR)/ls-report.json
 COREUTILS_BOOTSTRAP := $(REPO_ROOT)/submodules/bootstrap-coreutils.sh
 WASTE_CRT_SOURCE := lib/waste-crt.c
 WASTE_CRT_OBJECT := $(COREUTILS_BUILD_DIR)/waste-crt.o
@@ -134,8 +149,13 @@ WASTE_HELLO_AUDIT := $(COREUTILS_BUILD_DIR)/sysroot-hello.audit.json
 
 .PHONY: wast-browser waste-libc coreutils-patch-status \
 	coreutils-provenance coreutils-sysroot \
-	coreutils-crt-fixture coreutils-configure-probe coreutils-utility-probe \
-	build-coreutils gen clean
+coreutils-crt-fixture coreutils-configure-probe coreutils-utility-probe \
+	coreutils-true-probe coreutils-false-probe coreutils-pwd-probe \
+	coreutils-echo-probe coreutils-printf-probe coreutils-basename-probe \
+	coreutils-dirname-probe coreutils-cat-probe coreutils-wc-probe coreutils-ls-probe \
+	build-coreutils coreutils-wasm coreutils-audit \
+	coreutils-package-audit coreutils-source-package \
+	gen clean
 
 # ---- Parser generation (delegate to engine) ----
 
@@ -371,12 +391,53 @@ $(COREUTILS_CONFIGURE_REPORT): $(COREUTILS_CONFIGURE_TOOL) \
 # header is an expected, machine-readable handoff to Stage 8E; an unexpected
 # compiler or linker failure remains a failed target.
 coreutils-utility-probe: $(COREUTILS_UTILITY_REPORT)
+coreutils-true-probe: $(COREUTILS_UTILITY_REPORT)
 coreutils-false-probe: $(COREUTILS_FALSE_REPORT)
+coreutils-pwd-probe: $(COREUTILS_PWD_REPORT)
+coreutils-echo-probe: $(COREUTILS_ECHO_REPORT)
+coreutils-printf-probe: $(COREUTILS_PRINTF_REPORT)
+coreutils-basename-probe: $(COREUTILS_BASENAME_REPORT)
+coreutils-dirname-probe: $(COREUTILS_DIRNAME_REPORT)
+coreutils-cat-probe: $(COREUTILS_CAT_REPORT)
+coreutils-wc-probe: $(COREUTILS_WC_REPORT)
+coreutils-ls-probe: $(COREUTILS_LS_REPORT)
 
 # Public Stage 8F entry point. All staged sources, sysroot files, configure
 # output, objects, reports, and linked utilities live below build/coreutils.
-build-coreutils: coreutils-utility-probe coreutils-false-probe
-	$(PYTHON) -c 'import json; reports=[json.load(open(p)) for p in ["$(COREUTILS_UTILITY_REPORT)", "$(COREUTILS_FALSE_REPORT)"]]; assert all(p["status"] == "passed" for p in reports), "coreutils utility gate failed: " + "; ".join(p["utility"] + ": " + "; ".join(p["blockers"]) for p in reports if p["status"] != "passed")'
+COREUTILS_REPORTS := $(COREUTILS_UTILITY_REPORT) $(COREUTILS_FALSE_REPORT) \
+	$(COREUTILS_PWD_REPORT) $(COREUTILS_ECHO_REPORT) \
+	$(COREUTILS_PRINTF_REPORT) $(COREUTILS_BASENAME_REPORT) \
+	$(COREUTILS_DIRNAME_REPORT) $(COREUTILS_CAT_REPORT) $(COREUTILS_WC_REPORT) \
+	$(COREUTILS_LS_REPORT)
+
+build-coreutils: coreutils-provenance coreutils-utility-probe coreutils-false-probe \
+		coreutils-pwd-probe coreutils-echo-probe coreutils-printf-probe \
+		coreutils-basename-probe coreutils-dirname-probe coreutils-cat-probe \
+		coreutils-wc-probe coreutils-ls-probe
+	$(PYTHON) -c 'import json; reports=[json.load(open(p)) for p in "$(COREUTILS_REPORTS)".split()]; assert all(p["status"] == "passed" for p in reports), "coreutils utility gate failed: " + "; ".join(p["utility"] + ": " + "; ".join(p["blockers"]) for p in reports if p["status"] != "passed")'
+
+# Stable names for the sectioned build entry points documented in Stage 8H.
+coreutils-wasm: build-coreutils
+coreutils-audit: $(COREUTILS_REPORTS)
+	$(PYTHON) -c 'import json; reports=[json.load(open(p)) for p in "$(COREUTILS_REPORTS)".split()]; assert all(p["status"] == "passed" for p in reports), "coreutils audit failed"'
+
+coreutils-source-package: $(COREUTILS_SOURCE_STAMP)
+
+$(COREUTILS_SOURCE_STAMP): $(COREUTILS_SOURCE_PACKAGER) $(COREUTILS_STAGE_STAMP) \
+		$(COREUTILS_BUILD_DIR)/provenance.json \
+		$(COREUTILS_PATCH) $(REPO_ROOT)/start.sh \
+		$(REPO_ROOT)/docs/coreutils-source-distribution.md \
+		$(COREUTILS_SOURCE_INPUTS)
+	$(PYTHON) $(COREUTILS_SOURCE_PACKAGER) \
+		--repo-root $(abspath $(REPO_ROOT)) \
+		--source $(abspath $(COREUTILS_BUILD_DIR)/source) \
+		--provenance $(abspath $(COREUTILS_BUILD_DIR)/provenance.json) \
+		--output $(abspath $(COREUTILS_SOURCE_ARCHIVE)) \
+		--mapping $(abspath $(COREUTILS_SOURCE_MAPPING))
+	touch $@
+
+coreutils-package-audit: build-coreutils coreutils-source-package $(COREUTILS_PACKAGE_AUDIT)
+	bash tools/build.sh bash
 
 $(COREUTILS_UTILITY_REPORT): $(COREUTILS_UTILITY_TOOL) $(COREUTILS_RUNTIME_TOOL) \
 		$(COREUTILS_CONFIGURE_REPORT) $(LIBC_OUTPUT)
@@ -395,6 +456,34 @@ $(COREUTILS_FALSE_REPORT): $(COREUTILS_UTILITY_TOOL) $(COREUTILS_RUNTIME_TOOL) \
 		--build $(abspath $(COREUTILS_CONFIGURE_DIR)) \
 		--utility false \
 		--output $@
+
+$(COREUTILS_PWD_REPORT): $(COREUTILS_UTILITY_TOOL) $(COREUTILS_RUNTIME_TOOL) \
+		$(COREUTILS_CONFIGURE_REPORT) $(LIBC_OUTPUT)
+	mkdir -p $(COREUTILS_UTILITY_DIR)
+	$(PYTHON) $(COREUTILS_UTILITY_TOOL) \
+		--repo-root $(abspath $(REPO_ROOT)) \
+		--build $(abspath $(COREUTILS_CONFIGURE_DIR)) \
+		--utility pwd \
+		--output $@
+
+define COREUTILS_PROBE_RULE
+$($(1)_REPORT): $$(COREUTILS_UTILITY_TOOL) $$(COREUTILS_RUNTIME_TOOL) \
+		$$(COREUTILS_CONFIGURE_REPORT) $$(LIBC_OUTPUT)
+	mkdir -p $$(COREUTILS_UTILITY_DIR)
+	$$(PYTHON) $$(COREUTILS_UTILITY_TOOL) \
+		--repo-root $$(abspath $$(REPO_ROOT)) \
+		--build $$(abspath $$(COREUTILS_CONFIGURE_DIR)) \
+		--utility $(2) \
+		--output $$@
+endef
+
+$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_ECHO,echo))
+$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_PRINTF,printf))
+$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_BASENAME,basename))
+$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_DIRNAME,dirname))
+$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_CAT,cat))
+$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_WC,wc))
+$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_LS,ls))
 
 clean:
 	rm -f $(WAST_WASM_TARGET) $(ENGINE_OBJS) $(RT_OBJS) \

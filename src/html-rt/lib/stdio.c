@@ -299,7 +299,7 @@ i32 fpurge(FILE *file) {
   file->length = file->position = 0;
   return 0;
 }
-i32 __fpurge(FILE *file) { return fpurge(file); }
+void __fpurge(FILE *file) { (void)fpurge(file); }
 void __fseterr(FILE *file) { if (file) file->error = 1; }
 i32 setvbuf(FILE *file, char *buffer, i32 mode, u32 size) {
   (void)mode;
@@ -397,8 +397,19 @@ static i32 format_variadic(char *destination, u32 capacity, const char *format, 
     if (format[at] != '%') { format_byte(&output, format[at]); continue; }
     at++;
     if (format[at] == '%') { format_byte(&output, '%'); continue; }
+    /* Skip flag characters: -, +, space, #, 0, ' (grouping) */
     char padding = ' ';
-    if (format[at] == '0') { padding = '0'; at++; }
+    i32 left_justify = 0, show_sign = 0, space_sign = 0;
+    for (;;) {
+      if (format[at] == '-') { left_justify = 1; at++; }
+      else if (format[at] == '+') { show_sign = 1; at++; }
+      else if (format[at] == ' ') { space_sign = 1; at++; }
+      else if (format[at] == '#') { at++; }
+      else if (format[at] == '\'') { at++; }
+      else if (format[at] == '0') { padding = '0'; at++; }
+      else break;
+    }
+    if (left_justify) padding = ' ';
     i32 width = 0;
     if (format[at] == '*') { width = va_arg(arguments, i32); at++; }
     else while (format[at] >= '0' && format[at] <= '9') width = width * 10 + format[at++] - '0';
@@ -410,6 +421,9 @@ static i32 format_variadic(char *destination, u32 capacity, const char *format, 
     }
     i32 long_count = 0;
     while (format[at] == 'l') { long_count++; at++; }
+    if (format[at] == 'j') { long_count = 2; at++; }
+    else if (format[at] == 'z' || format[at] == 't') { at++; }
+    else if (format[at] == 'h') { at++; if (format[at] == 'h') at++; }
     char conversion = format[at];
     if (conversion == 's') format_text(&output, va_arg(arguments, const char *), precision);
     else if (conversion == 'c') format_byte(&output, (char)va_arg(arguments, i32));
@@ -479,6 +493,49 @@ i32 asprintf(char **destination, const char *format, ...) {
   char *buffer = malloc((u32)length + 1); if (!buffer) { va_end(arguments); return -1; }
   format_variadic(buffer, (u32)length + 1, format, arguments); va_end(arguments);
   *destination = buffer; return length;
+}
+
+i32 vprintf(const char *format, va_list arguments) {
+  return vfprintf(standard_output, format, arguments);
+}
+
+i32 vasprintf(char **destination, const char *format, va_list arguments) {
+  va_list copy; va_copy(copy, arguments);
+  i32 length = format_variadic(0, 0, format, copy); va_end(copy);
+  char *buffer = malloc((u32)length + 1); if (!buffer) return -1;
+  format_variadic(buffer, (u32)length + 1, format, arguments);
+  *destination = buffer; return length;
+}
+
+/* gnulib-compatible *zprintf family — these delegate to waste-libc's own
+   format_variadic instead of gnulib's vasnprintf, avoiding crashes from
+   unresolved gnulib internal data structures in the wasm environment. */
+typedef signed long off64_t;
+
+off64_t vfzprintf(FILE *file, const char *format, va_list arguments) {
+  return (off64_t)vfprintf(file, format, arguments);
+}
+
+off64_t vzprintf(const char *format, va_list arguments) {
+  return vfzprintf(standard_output, format, arguments);
+}
+
+i32 vsnzprintf(char *destination, u32 capacity, const char *format, va_list arguments) {
+  return vsnprintf(destination, capacity, format, arguments);
+}
+
+i32 vszprintf(char *destination, const char *format, va_list arguments) {
+  return format_variadic(destination, 0xffffffffU, format, arguments);
+}
+
+i32 vaszprintf(char **destination, const char *format, va_list arguments) {
+  return vasprintf(destination, format, arguments);
+}
+
+i32 aszprintf(char **destination, const char *format, ...) {
+  va_list arguments; va_start(arguments, format);
+  i32 result = vasprintf(destination, format, arguments);
+  va_end(arguments); return result;
 }
 
 #endif /* WASTE_ENGINE */

@@ -114,12 +114,51 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
     exp.waste_wast_free?.(pathPtr);
     if (staged !== 0) throw new Error(`C engine VFS metadata failed for ${path}`);
   };
+  const stageVfsSymlink = (path, target, mode) => {
+    if (!exp.waste_wast_stage_symlink)
+      throw new Error("C engine VFS symlink staging is unavailable");
+    const pathBytes = new TextEncoder().encode(path);
+    const targetBytes = new TextEncoder().encode(target);
+    const pathPtr = exp.waste_wast_alloc(pathBytes.length);
+    const targetPtr = exp.waste_wast_alloc(targetBytes.length);
+    if (!pathPtr || !targetPtr)
+      throw new Error("C engine VFS symlink allocation failed");
+    new Uint8Array(engineMemory.buffer, pathPtr, pathBytes.length).set(pathBytes);
+    new Uint8Array(engineMemory.buffer, targetPtr, targetBytes.length).set(targetBytes);
+    const staged = exp.waste_wast_stage_symlink(
+      pathPtr, pathBytes.length, targetPtr, targetBytes.length, mode);
+    exp.waste_wast_free?.(pathPtr);
+    exp.waste_wast_free?.(targetPtr);
+    if (staged !== 0) throw new Error(`C engine VFS symlink failed for ${path}`);
+  };
   stageVfsPath("/tmp", 2, 0o777, 0);
+  /* The virtual shell runs as UID 0.  Its passwd home and initial cwd are
+     /root, independent of the host directory that built the page. */
+  stageVfsPath("/root", 2, 0o755, 0);
+  if (exp.waste_wast_stage_cwd) {
+    const cwdBytes = new TextEncoder().encode("/root");
+    const cwdPtr = exp.waste_wast_alloc(cwdBytes.length);
+    if (!cwdPtr) throw new Error("C engine initial cwd allocation failed");
+    new Uint8Array(engineMemory.buffer, cwdPtr, cwdBytes.length).set(cwdBytes);
+    const staged = exp.waste_wast_stage_cwd(cwdPtr, cwdBytes.length);
+    exp.waste_wast_free?.(cwdPtr);
+    if (staged !== 0) throw new Error("C engine initial cwd staging failed");
+  }
   stageVfsPath("/usr/bin", 2, 0o755, 0);
   if (packagedFiles && packagedFiles.length) {
     stageVfsPath("/usr/share", 2, 0o755, 0);
     stageVfsPath("/usr/share/waste", 2, 0o755, 0);
+    stageVfsPath("/usr/share/licenses", 2, 0o755, 0);
+    stageVfsPath("/usr/share/licenses/coreutils", 2, 0o755, 0);
     for (const file of packagedFiles) {
+      if (file.kind === 2) {
+        stageVfsPath(file.path, 2, file.mode, 0);
+        continue;
+      }
+      if (file.kind === 3) {
+        stageVfsSymlink(file.path, file.target, file.mode);
+        continue;
+      }
       const pathBytes = new TextEncoder().encode(file.path);
       const fileBytes = new Uint8Array(file.bytes);
       const pathPtr = exp.waste_wast_alloc(pathBytes.length);
@@ -166,7 +205,35 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
       new Uint8Array(engineMemory.buffer, pathPtr, pathBytes.length).set(pathBytes);
       const result = exp.waste_wast_path_access(pathPtr, pathBytes.length, mode);
       exp.waste_wast_free?.(pathPtr);
-      if (result !== 0) throw new Error(`C engine VFS check failed for ${path}`);
+      if (result !== 0) {
+        let evidence = "";
+        if (exp.waste_wast_transition_evidence_ptr &&
+            exp.waste_wast_transition_evidence_len) {
+          const evidencePtr = exp.waste_wast_transition_evidence_ptr();
+          const evidenceLength = exp.waste_wast_transition_evidence_len();
+          evidence = decoder.decode(new Uint8Array(
+            engineMemory.buffer, evidencePtr, evidenceLength));
+        }
+        const resultErrors = [];
+        const total = exp.waste_wast_results_total?.() || 0;
+        if (total && exp.waste_wast_results_ptr) {
+          const resultsPtr = exp.waste_wast_results_ptr();
+          const bytes = new Uint8Array(engineMemory.buffer);
+          for (let i = 0; i < total; i++) {
+            const base = resultsPtr + i * 256;
+            if (bytes[base]) continue;
+            let nameEnd = 1;
+            while (nameEnd < 64 && bytes[base + nameEnd]) nameEnd++;
+            let errorEnd = 64;
+            while (errorEnd < 256 && bytes[base + errorEnd]) errorEnd++;
+            resultErrors.push(`${decoder.decode(bytes.subarray(base + 1, base + nameEnd))}: ` +
+                              decoder.decode(bytes.subarray(base + 64, base + errorEnd)));
+          }
+        }
+        throw new Error(`C engine VFS check failed for ${path}: ${result}` +
+                        (evidence ? `; transitions=${evidence}` : "") +
+                        (resultErrors.length ? `; results=${resultErrors.join(" | ")}` : ""));
+      }
     };
     checkVfs("/tmp", 0);
     checkVfs("/usr/bin", 0);
@@ -175,7 +242,7 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
     if (probeBuf) checkVfs("/bin/waste-probe", 1);
     const packagedPaths = (packagedFiles || []).map(file => file.path);
     for (const path of packagedPaths) checkVfs(path, 0);
-    self.postMessage({type: "vfs", paths: ["/tmp", "/usr/bin", "/bin/wat", "/bin/wast",
+    self.postMessage({type: "vfs", paths: ["/tmp", "/root", "/usr/bin", "/bin/wat", "/bin/wast",
       ...(probeBuf ? ["/bin/waste-probe"] : []), ...packagedPaths]});
   }
   engineReady = true;

@@ -1435,6 +1435,11 @@ int native_store_wait_process(native_store *store, int pid, int options,
     }
     if (!candidate) return -POSIX_ECHILD;
     if (!candidate->zombie) return (options & POSIX_WNOHANG) ? 0 : -POSIX_EAGAIN;
+    {
+        int merge_status = posix_kernel_merge_paths(parent->kernel,
+                                                     candidate->kernel);
+        if (merge_status != 0) return merge_status;
+    }
     int child_pid = candidate->pid;
     *status_out = candidate->exit_status;
     store->last_wait_pid = child_pid;

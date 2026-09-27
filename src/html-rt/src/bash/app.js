@@ -142,13 +142,15 @@ async function startShell(event) {
         const isProbe = name === "waste-probe.wasm";
         const isCoreutilsTrue = name === "true.wasm";
         const isCoreutilsFalse = name === "false.wasm";
+        const isCoreutilsPwd = name === "pwd.wasm";
         const paths = isProbe ? ["/bin/waste-probe"] :
           isCoreutilsTrue ? ["/usr/bin/true", "/bin/true"] :
           isCoreutilsFalse ? ["/usr/bin/false", "/bin/false"] :
+          isCoreutilsPwd ? ["/usr/bin/pwd", "/bin/pwd"] :
           ["/usr/share/waste/" + name];
         for (const path of paths) {
           vfsFiles.push({path, bytes, kind: 1,
-            mode: isProbe || isCoreutilsTrue || isCoreutilsFalse ? 0o755 : 0o644});
+            mode: isProbe || isCoreutilsTrue || isCoreutilsFalse || isCoreutilsPwd ? 0o755 : 0o644});
         }
       }
     }

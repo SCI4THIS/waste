@@ -93,8 +93,10 @@ typedef struct {
 #define POSIX_WCONTINUED 8
 #define POSIX_TIOCGWINSZ 0x5413u
 #define POSIX_TIOCSWINSZ 0x5414u
+#define POSIX_F_DUPFD 0
 #define POSIX_F_GETFD 1
 #define POSIX_F_SETFD 2
+#define POSIX_F_DUPFD_CLOEXEC 1030
 #define POSIX_FD_CLOEXEC 1
 #define POSIX_O_WRONLY 1
 #define POSIX_O_RDWR 2
@@ -255,6 +257,12 @@ int posix_kernel_set_credentials(posix_kernel *kernel, uint32_t uid,
    shared open-file descriptions and pipe endpoint identity. */
 posix_kernel *posix_kernel_clone(const posix_kernel *kernel);
 
+/* Publish pathname and file-metadata changes made by a fork child into the
+   parent's shared filesystem view before the child is reaped. Descriptor,
+   cwd, credential, signal, and wait state remain process-private. */
+int posix_kernel_merge_paths(posix_kernel *target,
+                             const posix_kernel *source);
+
 /* Destroy a kernel and all owned resources. */
 void posix_kernel_destroy(posix_kernel *kernel);
 
@@ -360,6 +368,12 @@ int posix_kernel_lseek(posix_kernel *kernel, int fd, int64_t offset,
 /* Duplicate a descriptor to the lowest available fd.
    Returns the new fd or negative errno. */
 int posix_kernel_dup(posix_kernel *kernel, int oldfd);
+
+/* Duplicate oldfd to the lowest available fd >= minfd.
+   Returns the new fd or negative errno. */
+int posix_kernel_dupfd(posix_kernel *kernel, int oldfd, int minfd,
+                       int cloexec);
+int posix_kernel_fchdir(posix_kernel *kernel, int fd);
 
 /* Duplicate oldfd to exactly newfd.  If newfd is open, it is closed first.
    Returns newfd on success or negative errno. */

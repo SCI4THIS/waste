@@ -39,8 +39,9 @@ TARBALL_JS="$REPO_ROOT/submodules/tarballjs/tarball.js"
 ZLIBAUX_WASM="$REPO_ROOT/submodules/zlib-wasm/zlibaux.wasm"
 LOADER_JS="$SHARED_DIR/loader.js"
 AMALGAMATE="$SCRIPT_DIR/amalgamate.py"
+PACKAGE_AUDIT="$SCRIPT_DIR/audit-coreutils-package.py"
 
-for f in "$TARBALL_JS" "$ZLIBAUX_WASM" "$LOADER_JS" "$AMALGAMATE"; do
+for f in "$TARBALL_JS" "$ZLIBAUX_WASM" "$LOADER_JS" "$AMALGAMATE" "$PACKAGE_AUDIT"; do
   if [ ! -f "$f" ]; then
     echo "error: required file not found: $f" >&2
     exit 1
@@ -109,25 +110,45 @@ elif [ "$TARGET" = "bash" ]; then
   if [ -f "$REPO_ROOT/build/cli-rt/waste-probe.wasm" ]; then
     cp "$REPO_ROOT/build/cli-rt/waste-probe.wasm" "$STAGING/"
   fi
-  if [ -f "$PAGE_DIR/true.wasm" ]; then
-    cp "$PAGE_DIR/true.wasm" "$STAGING/"
-  else
-    echo "error: linked coreutils true.wasm not found" >&2
+  for utility in true false pwd echo printf basename dirname cat wc ls; do
+    if [ -f "$PAGE_DIR/$utility.wasm" ]; then
+      cp "$PAGE_DIR/$utility.wasm" "$STAGING/"
+    else
+      echo "error: linked coreutils $utility.wasm not found" >&2
+      exit 1
+    fi
+  done
+  provenance="$REPO_ROOT/build/coreutils/provenance.json"
+  source_mapping="$REPO_ROOT/build/coreutils/coreutils-source-package.json"
+  copying="$REPO_ROOT/submodules/coreutils/COPYING"
+  if [ ! -f "$provenance" ]; then
+    echo "error: coreutils provenance not found: $provenance" >&2
     exit 1
   fi
-  if [ -f "$PAGE_DIR/false.wasm" ]; then
-    cp "$PAGE_DIR/false.wasm" "$STAGING/"
-  else
-    echo "error: linked coreutils false.wasm not found" >&2
+  if [ ! -f "$copying" ]; then
+    echo "error: coreutils license notice not found: $copying" >&2
     exit 1
   fi
+  if [ ! -f "$source_mapping" ]; then
+    echo "error: Coreutils source-package mapping not found: $source_mapping" >&2
+    exit 1
+  fi
+  mkdir -p "$STAGING/usr/share/waste" "$STAGING/usr/share/licenses/coreutils"
+  cp "$provenance" "$STAGING/usr/share/waste/coreutils-provenance.json"
+  cp "$source_mapping" "$STAGING/usr/share/waste/coreutils-source-package.json"
+  cp "$copying" "$STAGING/usr/share/licenses/coreutils/COPYING"
+  STAGING_PATH="$STAGING" python3 -c 'import json, os, pathlib; pathlib.Path(os.environ["STAGING_PATH"], "usr/share/waste/waste-interpreters.json").write_text(json.dumps({"interpreters":["/bin/wast","/bin/wat"]}, separators=(",", ":")) + "\n")'
 fi
 
 echo "  Staged $(find "$STAGING" -type f | wc -l) files"
 
 # --- Step 2: Create tar.gz ---
 TAR_GZ="$WORK_DIR/manifest.tar.gz"
-tar -czf "$TAR_GZ" -C "$STAGING" .
+TAR_RAW="$WORK_DIR/manifest.tar"
+tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 \
+  --numeric-owner --format=ustar -cf "$TAR_RAW" -C "$STAGING" .
+gzip -n -c "$TAR_RAW" > "$TAR_GZ"
+python3 "$PACKAGE_AUDIT" --archive "$TAR_GZ"
 TAR_SIZE=$(stat -c%s "$TAR_GZ" 2>/dev/null || stat -f%z "$TAR_GZ")
 echo "  Compressed tar: $TAR_SIZE bytes"
 
