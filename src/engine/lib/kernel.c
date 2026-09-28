@@ -1107,7 +1107,13 @@ int posix_kernel_terminal_set_winsize(posix_kernel *kernel, int fd,
                                       const posix_winsize *winsize) {
     if (!winsize) return -POSIX_EFAULT;
     if (!posix_kernel_isatty(kernel, fd)) return -POSIX_EBADF;
-    kernel->fds[fd].ofd->terminal.winsize = *winsize;
+    posix_winsize *current = &kernel->fds[fd].ofd->terminal.winsize;
+    if (current->rows == winsize->rows &&
+        current->columns == winsize->columns &&
+        current->xpixels == winsize->xpixels &&
+        current->ypixels == winsize->ypixels)
+        return 0;
+    *current = *winsize;
     (void)posix_kernel_signal_raise(kernel, POSIX_SIGWINCH);
     return 0;
 }

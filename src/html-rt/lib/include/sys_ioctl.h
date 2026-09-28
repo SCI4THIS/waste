@@ -13,6 +13,6 @@ typedef struct {
   unsigned short ws_ypixel;
 } waste_winsize;
 
-i32 ioctl(i32 descriptor, u32 request, void *argument);
+i32 ioctl(i32 descriptor, u32 request, ...);
 
 #endif

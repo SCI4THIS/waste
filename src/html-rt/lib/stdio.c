@@ -196,6 +196,16 @@ i32 fread(void *pointer, u32 size, u32 members, FILE *file) {
   u64 wanted64 = (u64)size * members;
   if (wanted64 > 0xffffffffULL) return 0;
   u32 wanted = (u32)wanted64;
+#ifdef WASTE_POSIX_IO
+  /* The prebuilt Bash image owns a libc FILE layout that is intentionally
+     opaque to this compact guest libc.  Readline reaches that stream through
+     fgetc/fread, so route its stdin token to the process terminal just as the
+     existing opaque fgets path does. */
+  if (file->magic != FILE_MAGIC) {
+    i32 received = read(0, pointer, wanted);
+    return received < 0 ? 0 : (u32)received / size;
+  }
+#endif
   if (file->magic != FILE_MAGIC || !(file->flags & FILE_READ)) return 0;
   u32 copied = 0;
   while (copied < wanted) {

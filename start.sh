@@ -1243,6 +1243,14 @@ generate_c_engine_bash_html() {
     return 1
   fi
 
+  if ! run_logged_step "Run the C-engine Bash readline/select test" \
+      "$C_ENGINE_BASH_LOG" node "$C_ENGINE_BASH_BROWSER_TEST" \
+      --readline-echo; then
+    show_message "C-engine Bash readline/select test failed" \
+      "The generated runtime did not display per-key readline input before Enter or resume Bash through the engine select path.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
   printf 'Completed: %s\n' "$(date --iso-8601=seconds)" >>"$C_ENGINE_BASH_LOG"
   show_message "C-engine Bash generated" \
     "The static page embeds the C engine, shared runtime, waste-libc, and Bash. It can be opened directly with file:// and requires no server.\n\nOutput: $C_ENGINE_BASH_HTML\nLog: $C_ENGINE_BASH_LOG"

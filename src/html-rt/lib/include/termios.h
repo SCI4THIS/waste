@@ -3,7 +3,9 @@
 
 #include "helper.h"
 
-#define ICRNL 0x0001u
+#define ICRNL 0x0100u
+#define OPOST 0x0001u
+#define ONLCR 0x0004u
 #define ISIG 0x0001u
 #define ICANON 0x0002u
 #define ECHO 0x0008u
@@ -22,7 +24,11 @@ typedef struct {
   u32 c_oflag;
   u32 c_cflag;
   u32 c_lflag;
-  u8 c_cc[20];
+  u8 c_line;
+  u8 c_cc[32];
+  u8 _pad[3];
+  u32 c_ispeed;
+  u32 c_ospeed;
 } waste_termios;
 
 i32 tcgetattr(i32 descriptor, waste_termios *termios);

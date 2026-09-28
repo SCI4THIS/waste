@@ -22,6 +22,7 @@ const coreutilsCatProbe = process.argv.includes("--coreutils-cat");
 const coreutilsWcProbe = process.argv.includes("--coreutils-wc");
 const coreutilsLsProbe = process.argv.includes("--coreutils-ls");
 const fullPackageProbe = process.argv.includes("--full-package");
+const readlineEchoProbe = process.argv.includes("--readline-echo");
 const coreutilsLsCommand = process.env.WASTE_COREUTILS_LS_COMMAND || "";
 const coreutilsLsExpected = process.env.WASTE_COREUTILS_LS_EXPECT || "";
 const watProbe = process.argv.includes("--wat-probe");
@@ -176,6 +177,9 @@ let coreutilsWcOutputSeen = false;
 let coreutilsLsStatusRequested = false;
 let coreutilsLsStatusSeen = false;
 let coreutilsLsOutputSeen = false;
+let readlineEchoVisibleBeforeEnter = false;
+let readlineEnterSent = false;
+let readlineResultSeen = false;
 let exitProbeStatusRequested = false;
 let watStatusRequested = false;
 let watAfterSeen = false;
@@ -220,6 +224,24 @@ const self = {
     } else if (message.type === "output") {
       output += message.text;
       process.stdout.write(message.text);
+      if (readlineEchoProbe && !readlineEnterSent &&
+          output.includes("echo __C_ENGINE_READLINE_RESULT__")) {
+        readlineEchoVisibleBeforeEnter = true;
+        readlineEnterSent = true;
+        setTimeout(() => self.onmessage({data: {
+          type: "input", bytes: [10],
+        }}), 10);
+      }
+      if (readlineEchoProbe && readlineEnterSent &&
+          output.includes("\r\n__C_ENGINE_READLINE_RESULT__\r\n") &&
+          !readlineResultSeen) {
+        readlineResultSeen = true;
+        exitSent = true;
+        setTimeout(() => self.onmessage({data: {
+          type: "input",
+          bytes: Array.from(new TextEncoder().encode("exit\n")),
+        }}), 10);
+      }
       if (coreutilsPwdProbe && output.includes("/root")) coreutilsPwdRootSeen = true;
       if (coreutilsEchoProbe && output.includes("hello world")) coreutilsEchoOutputSeen = true;
       if (coreutilsBasenameProbe && output.includes("file.txt")) coreutilsBasenameOutputSeen = true;
@@ -521,9 +543,7 @@ const self = {
         setTimeout(() => {
           commandSent = true;
           if (wastRepeatProbe) wastRepeatStage = 1;
-          self.onmessage({data: {
-            type: "input",
-            bytes: Array.from(new TextEncoder().encode(
+          const initialBytes = new TextEncoder().encode(
               baselineMissingCommand
                 ? "HOME_DIR=/home/a\n"
                 : runTextProbe
@@ -574,9 +594,22 @@ const self = {
                       "/bin/ls /tmp/ls-missing; echo __LS_MISSING_STATUS_$?__",
                       "echo __LS_SECOND_COMMAND__",
                     ].join("\n") + "\n"
-                  : "echo __C_ENGINE_BASH_OK__\n",
-            )),
-          }});
+                  : readlineEchoProbe
+                    ? "echo __C_ENGINE_READLINE_RESULT__"
+                    : "echo __C_ENGINE_BASH_OK__\n");
+          if (readlineEchoProbe) {
+            let index = 0;
+            const sendNextKey = () => {
+              if (index >= initialBytes.length) return;
+              self.onmessage({data: {type: "input", bytes: [initialBytes[index++]]}});
+              setTimeout(sendNextKey, 5);
+            };
+            sendNextKey();
+          } else {
+            self.onmessage({data: {
+              type: "input", bytes: Array.from(initialBytes),
+            }});
+          }
         }, 10);
       } else if (baselineMissingCommand && commandSent && messageHasPrompt &&
                  !environmentEchoSent) {
@@ -799,6 +832,9 @@ Promise.race([completion, timeout]).then(result => {
       builtinSeen && genericMissingSeen && exitSent && !doneBeforeExit &&
       output.includes("__C_ENGINE_STATUS_127__") &&
       output.includes("__C_ENGINE_AFTER__") && result.ok
+    : readlineEchoProbe
+      ? promptSeen && commandSent && vfsSeen && readlineEchoVisibleBeforeEnter &&
+        readlineEnterSent && readlineResultSeen && exitSent && !doneBeforeExit && result.ok
     : executableExitProbe
       ? promptSeen && commandSent && vfsSeen && exitProbeStatusRequested &&
         probeStatus7Seen && output.includes("__C_ENGINE_EXEC_EXIT_AFTER__") &&

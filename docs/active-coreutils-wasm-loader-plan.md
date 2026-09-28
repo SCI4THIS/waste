@@ -2695,7 +2695,7 @@ Implementation update (2026-09-27, final ten-utility package inventory):
   coreutils-package-audit` passes. The final corresponding-source archive maps
   the pinned source, managed patch, WASTE runtime/build inputs, and all ten
   binaries with SHA-256
-  `307962944ac6006511fd2a30d7345094040ca08a49d6df0126a48fa33575ac77`.
+  `a40ee59ef26d0ad49a35ff3460f797164610c80966bd725f11c7fcbdddebb7ef`.
 - The rebuilt self-contained `file://` Bash page passes its baseline and
   process-continuation browser gates, and its focused `/bin/ls` gate observes
   the packaged `/bin` inventory. Stage 8G is closed without modifying the
@@ -2748,6 +2748,32 @@ Implementation update (2026-09-27, Stage 8H handoff):
   consolidation of the now-stable loader, package, and Wasm32 ABI rules into
   the durable architecture documents. It must retain the existing individual
   gates so failures still identify one boundary.
+
+Implementation update (2026-09-27, full-page VFS and readline integration):
+
+- Reproduced the generated `bash.html` startup failure at packaged-file
+  staging. The focused utility tests had not exercised the complete archive:
+  its entries exceeded both the 24-entry browser manifest and the 32-node
+  engine VFS table. Those bounded capacities are now 64 and 128 respectively,
+  and failed package installs become explicit test results rather than silently
+  disappearing from the namespace.
+- The page now excludes host-only `worker.js`/`waste-wast.wasm` assets from the
+  guest VFS, installs all ten utilities under `/usr/bin` and `/bin`, and keeps
+  archive-owned `usr/...` license and provenance paths exact. A `--full-package`
+  browser regression stages the complete utility/metadata inventory together.
+- Coreutils bootstrap is now a real Make prerequisite of configure, configure
+  reports, and the corresponding-source package. The helper defaults to
+  `build/coreutils/`, so restaging cannot remove `configure` and leave the
+  offline page build requiring a manual bootstrap rerun.
+- Interactive Bash now uses readline and the engine-owned select/pselect path.
+  The required `--readline-echo` gate sends input one key at a time, verifies
+  redisplay before Enter, executes the command, reaches a later prompt, and
+  exits. `./start.sh --html-bash` passes smoke, process-continuation, and
+  readline/select gates; the aggregate full-package staging test also passes.
+- Runtime/select integration changed the packaged WASTE support source, so the
+  current corresponding-source archive supersedes the earlier Stage 8G hash;
+  its SHA-256 is
+  `a40ee59ef26d0ad49a35ff3460f797164610c80966bd725f11c7fcbdddebb7ef`.
 
 Add focused build entry points without changing the existing command meanings:
 

@@ -95,9 +95,9 @@ shared between processes unless POSIX thread semantics explicitly require it.
   normalized by the engine before both the model and transcript consume it.
 - `src/html-rt/src/bash/worker.js` already carries terminal bytes across the
   browser/engine boundary without Asyncify.
-- The engine terminal currently acts primarily as an input queue. Guest
-  termios, `isatty`, raw/canonical behavior, kernel echo, and window sizing are
-  incomplete.
+- The engine terminal owns termios, `isatty`, canonical/raw readiness,
+  configured controls, output processing, and window sizing. Interactive Bash
+  now runs readline over the same byte stream and engine-owned `pselect` path.
 - `native_posix_execve` now resolves registered executable manifests and carries
   successful replacements through the child capsule; packaged tar files are
   still a separate Stage 7 VFS concern.
@@ -514,6 +514,26 @@ Implementation update (2026-09-21, foreground process-group slice):
 - Added native foreground-group routing coverage; the POSIX-kernel fixture now
   passes 296 tests. Browser HTML regeneration, smoke, command-not-found, and
   executable-probe gates remain green.
+
+Implementation update (2026-09-27, readline/select integration):
+
+- Enabled Bash readline by removing `--noediting`, supplying the offline
+  `TERM=xterm` environment, implementing the VT/ANSI termcap capabilities it
+  consumes, and matching the prebuilt wasm32 glibc 60-byte `termios` layout.
+- Corrected the guest `ioctl` declaration and wrapper to use its variadic ABI.
+  The old fixed third argument forwarded Bash's vararg-area pointer as a
+  `winsize` pointer, which created bogus dimensions and a startup SIGWINCH.
+  Unchanged dimensions now leave SIGWINCH pending state untouched.
+- Connected legacy `env.select` and `env.pselect` imports to the same
+  engine-owned implementation as `waste_kernel.select_v1`/`pselect_v1`.
+  Readline blocks with `EXEC_YIELD_SELECT`, input arrival makes fd 0 readable,
+  and resume returns through the saved evaluator/process continuation.
+- Worker output is batched at engine yield/resume boundaries. This preserves
+  the exact terminal byte stream while allowing one-byte readline prompt and
+  redisplay writes to reach the browser as coherent updates.
+- Added a per-key browser regression that verifies the typed command is visible
+  before Enter, then executes it and exits cleanly. The native POSIX-kernel
+  fixture passes 331 checks, including the unchanged-window-size signal case.
 
 ## Stage 5: Define the executable-image and wasm32 application ABI
 

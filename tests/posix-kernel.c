@@ -278,6 +278,11 @@ static void test_terminal_modes(void) {
           "tcflow accepts output-on action");
     CHECK(posix_kernel_tcflow(k, 0, 99) == -POSIX_EINVAL,
           "tcflow rejects unknown action");
+    posix_winsize unchanged = {24, 80, 0, 0};
+    CHECK(posix_kernel_terminal_set_winsize(k, 0, &unchanged) == 0,
+          "accept unchanged terminal window size");
+    CHECK(!posix_kernel_signal_pending(k, POSIX_SIGWINCH),
+          "unchanged window size does not raise SIGWINCH");
     posix_winsize winsize = {40, 100, 0, 0};
     CHECK(posix_kernel_terminal_set_winsize(k, 0, &winsize) == 0,
           "set terminal window size");

@@ -14,13 +14,14 @@
 #define POSIX_SHM_OBJECT_MAX     64
 #define POSIX_PIPE_CAPACITY    4096
 #define POSIX_TERMINAL_INPUT_CAPACITY 4096
-#define POSIX_TERMIOS_CC_COUNT 20
+#define POSIX_TERMIOS_CC_COUNT 32
 
-/* Stable wasm32 terminal ABI.  The layout intentionally uses fixed-width
- * fields instead of the host libc's termios definition. */
-#define POSIX_TERMIOS_IFLAG_ICRNL 0x0001u
+/* Stable wasm32 terminal ABI.  The layout matches musl's struct termios
+ * so that guest binaries compiled with musl can pass their termios structs
+ * directly through tcgetattr/tcsetattr without field misalignment. */
+#define POSIX_TERMIOS_IFLAG_ICRNL 0x0100u
 #define POSIX_TERMIOS_OFLAG_OPOST 0x0001u
-#define POSIX_TERMIOS_OFLAG_ONLCR 0x0002u
+#define POSIX_TERMIOS_OFLAG_ONLCR 0x0004u
 #define POSIX_TERMIOS_LFLAG_ISIG  0x0001u
 #define POSIX_TERMIOS_LFLAG_ICANON 0x0002u
 #define POSIX_TERMIOS_LFLAG_ECHO  0x0008u
@@ -56,7 +57,11 @@ typedef struct {
     uint32_t oflag;
     uint32_t cflag;
     uint32_t lflag;
+    uint8_t line;
     uint8_t cc[POSIX_TERMIOS_CC_COUNT];
+    uint8_t _pad[3];
+    uint32_t ispeed;
+    uint32_t ospeed;
 } posix_termios;
 
 typedef struct {

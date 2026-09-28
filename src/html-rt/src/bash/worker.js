@@ -32,6 +32,13 @@ function waitForIO() {
 }
 
 const decoder = new TextDecoder();
+let pendingOutput = "";
+
+function flushOutput() {
+  if (!pendingOutput) return;
+  self.postMessage({type: "output", text: pendingOutput});
+  pendingOutput = "";
+}
 
 function posixRead(fd, ptr, count) {
   /* Interactive reads are owned by the engine kernel.  This import remains
@@ -42,8 +49,7 @@ function posixRead(fd, ptr, count) {
 function posixWrite(fd, ptr, count) {
   if (fd === 1 || fd === 2) {
     const bytes = new Uint8Array(engineMemory.buffer, ptr, count);
-    const text = decoder.decode(bytes, {stream: true});
-    self.postMessage({type: "output", text});
+    pendingOutput += decoder.decode(bytes, {stream: true});
   }
   return count;
 }
@@ -199,6 +205,7 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
   new Uint8Array(engineMemory.buffer, scriptPtr, sourceBytes.length).set(sourceBytes);
 
   let yielded = exp.waste_wast_run_script(scriptPtr, sourceBytes.length);
+  flushOutput();
   if (exp.waste_wast_path_access) {
     const checkVfs = (path, mode) => {
       const pathBytes = new TextEncoder().encode(path);
@@ -254,8 +261,11 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
     await waitForIO();
     if (terminated) break;
     yielded = exp.waste_wast_resume();
+    flushOutput();
     if (yielded) self.postMessage({type: "io-ready"});
   }
+
+  flushOutput();
 
   if (exp.waste_wast_transition_evidence_ptr &&
       exp.waste_wast_transition_evidence_len) {

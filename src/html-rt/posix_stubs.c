@@ -2092,6 +2092,11 @@ static exec_host_func native_posix_function(const char *module,
     if (strcmp(name, "tcgetattr") == 0) return native_posix_tcgetattr;
     if (strcmp(name, "tcsetattr") == 0) return native_posix_tcsetattr;
     if (strcmp(name, "ioctl") == 0) return native_posix_ioctl;
+    /* Legacy applications such as the prebuilt Bash image import the libc
+     * names directly.  Route them through the same engine-owned readiness
+     * implementation as the versioned waste_kernel ABI. */
+    if (strcmp(name, "select") == 0) return native_posix_select;
+    if (strcmp(name, "pselect") == 0) return native_posix_pselect;
     if (strcmp(name, "sigaction") == 0) return native_posix_sigaction;
     if (strcmp(name, "getpid") == 0) return native_posix_getpid;
     if (strcmp(name, "getppid") == 0) return native_posix_getppid;

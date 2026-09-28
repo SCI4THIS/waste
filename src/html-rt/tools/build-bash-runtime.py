@@ -15,19 +15,19 @@ RUNTIME_MODULE = "waste-runtime"
 RUNTIME_PAGES = 5
 ARGV_ADDRESS = 240000
 ENVP_ADDRESS = 240024
-PACKAGE_ADDRESS = 240032
-LOCALE_DIRECTORY_ADDRESS = 240037
-HOSTTYPE_ADDRESS = 240056
-OSTYPE_ADDRESS = 240063
-EXE_SUFFIX_ADDRESS = 240084
-STRING_ADDRESS = 240096
-ENV_STRING_ADDRESS = 240160
-ROOT_NAME_ADDRESS = 240400
-ROOT_PASSWORD_ADDRESS = 240405
-ROOT_GECOS_ADDRESS = 240407
-ROOT_HOME_ADDRESS = 240412
-ROOT_SHELL_ADDRESS = 240418
-HOSTNAME_ADDRESS = 240428
+PACKAGE_ADDRESS = 240080
+LOCALE_DIRECTORY_ADDRESS = 240085
+HOSTTYPE_ADDRESS = 240104
+OSTYPE_ADDRESS = 240111
+EXE_SUFFIX_ADDRESS = 240132
+STRING_ADDRESS = 240136
+ENV_STRING_ADDRESS = 240168
+ROOT_NAME_ADDRESS = 240248
+ROOT_PASSWORD_ADDRESS = 240253
+ROOT_GECOS_ADDRESS = 240255
+ROOT_HOME_ADDRESS = 240260
+ROOT_SHELL_ADDRESS = 240266
+HOSTNAME_ADDRESS = 240276
 ALLOCATOR_BASE = 327680
 BASH_STDIN_SLOT = 129176
 BASH_STDOUT_SLOT = 112228
@@ -176,6 +176,7 @@ def runtime_module(interactive: bool) -> str:
         b"LOGNAME=root",
         b"PWD=/root",
         b"PATH=/bin:/usr/bin",
+        b"TERM=xterm",
     )
     environment = b"\0".join(environment_entries) + b"\0"
     # The merged Bash artifact consumes char ** environment slots at its
@@ -191,10 +192,9 @@ def runtime_module(interactive: bool) -> str:
             STRING_ADDRESS.to_bytes(4, "little")
             + (STRING_ADDRESS + 5).to_bytes(4, "little")
             + (STRING_ADDRESS + 12).to_bytes(4, "little")
-            + (STRING_ADDRESS + 24).to_bytes(4, "little")
             + b"\0\0\0\0"
         )
-        argument_data = "bash\\00--norc\\00--noediting\\00-i\\00"
+        argument_data = "bash\\00--norc\\00-i\\00"
     else:
         pointers = (
             STRING_ADDRESS.to_bytes(4, "little")
@@ -300,7 +300,7 @@ def main() -> None:
         f'(i32.const {ROOT_SHELL_ADDRESS}))',
         f'(module $bash binary "{bash_binary}")',
         '(invoke "__wasm_call_ctors")',
-        f'(invoke "main" (i32.const {4 if args.interactive else 3}) (i32.const {ARGV_ADDRESS}) (i32.const {ENVP_ADDRESS}))',
+        f'(invoke "main" (i32.const 3) (i32.const {ARGV_ADDRESS}) (i32.const {ENVP_ADDRESS}))',
         "",
     ])
     output.write_text(launch, encoding="utf-8")
