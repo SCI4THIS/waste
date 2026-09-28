@@ -14,8 +14,9 @@
   (import "waste-libc" "mktemp" (func $mktemp (param i32) (result i32)))
   (import "waste-libc" "mkstemp" (func $mkstemp (param i32) (result i32)))
   (import "waste-libc" "mkdtemp" (func $mkdtemp (param i32) (result i32)))
+  (import "waste-libc" "close" (func $close (param i32) (result i32)))
   (import "waste-libc" "__errno_location" (func $errno_location (result i32)))
-  (data (i32.const 180000) "/tmp/waste-XXXXXX\00%Y-%m-%d %H:%M:%S\00/\00")
+  (data (i32.const 180000) "/tmp/waste-XXXXXX\00%Y-%m-%d %H:%M:%S\00/\00/tmp/stemp-XXXXXX\00")
   (data (i32.const 181000) "\20\00\00\00\00\00\00\00\40\00\00\00\00\00\00\00")
 
   (func (export "resources") (result i32)
@@ -32,6 +33,7 @@
 
   (func (export "clock-and-temporaries") (result i32)
     (local $tm i32)
+    (local $fd i32)
     i32.const 181400 i64.const 0 i64.store
     i32.const 181400 call $localtime local.tee $tm i32.eqz i32.eqz
     local.get $tm i32.load offset=12 i32.const 1 i32.eq i32.and
@@ -41,8 +43,8 @@
     i32.const 181500 i32.const 32 i32.const 180018 local.get $tm call $strftime i32.const 19 i32.eq i32.and
     i32.const 180000 call $mktemp i32.const 180000 i32.eq i32.and
     i32.const 180016 i32.load8_u i32.const 88 i32.ne i32.and
-    i32.const 180000 call $mkstemp i32.const -1 i32.eq i32.and
-    call $errno_location i32.load i32.const 38 i32.eq i32.and
+    i32.const 180038 call $mkstemp local.tee $fd i32.const 0 i32.ge_s i32.and
+    local.get $fd call $close i32.eqz i32.and
     i32.const 180000 call $mkdtemp i32.eqz i32.and
     call $errno_location i32.load i32.const 38 i32.eq i32.and))
 (assert_return (invoke $time_resource_tests "resources") (i32.const 1))

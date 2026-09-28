@@ -319,6 +319,12 @@ processes, and deadlines leave the runnable queue instead of spinning through
 instruction quanta.  An unblocked signal wakes an affected waiter so the
 interrupted operation can return the correct result.
 
+Every operation on an engine-owned descriptor, including `open`, `close`,
+`read`, `write`, and duplication, resolves through the active process kernel.
+Browser host shims are only a fallback for runtimes without that kernel. Mixing
+the two paths would leave kernel reference and pipe-endpoint counts stale; in
+particular, a pipe reader would never observe EOF after a host-only `close`.
+
 The VFS is a rooted in-memory namespace.  Persistent storage, if enabled, is a
 mount backend rather than a replacement namespace in JavaScript.  The terminal
 retains controlling-session, foreground-process-group, termios, and job-control

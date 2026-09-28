@@ -431,6 +431,9 @@ proposal and WAST assertion semantics.
   callback.
 - Do not locate the active process or module through mutable global state.
 - Do not put POSIX descriptor or process policy in JavaScript.
+- Do not send `close` or another descriptor-lifecycle operation to a host shim
+  when `open`, `pipe`, `read`, and `write` use the engine kernel; all operations
+  on one descriptor must update the same open-file description.
 - Do not claim browser performance from native OCaml measurements.
 
 After shell or Python changes, run `bash -n start.sh`, bytecode checks for

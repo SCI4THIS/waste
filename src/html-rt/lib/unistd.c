@@ -14,6 +14,7 @@ extern i32 close(i32 descriptor);
 extern i32 waste_kernel_chdir(const char *path) __attribute__((import_module("waste_kernel"), import_name("chdir")));
 extern i32 waste_kernel_getcwd(char *buffer, i32 capacity) __attribute__((import_module("waste_kernel"), import_name("getcwd")));
 extern i32 waste_kernel_fcntl_v1(i32 fd, i32 cmd, i32 arg) __attribute__((import_module("waste_kernel"), import_name("fcntl_v1")));
+extern i32 waste_kernel_pipe_v1(i32 pipefd[2]) __attribute__((import_module("waste_kernel"), import_name("pipe_v1")));
 extern i64 waste_kernel_lseek(i32 fd, i64 offset, i32 whence)
   __attribute__((import_module("waste_kernel"), import_name("lseek")));
 static i32 env_result(i32 result) {
@@ -109,9 +110,7 @@ i32 lseek(i32 fd, i32 offset, i32 whence) {
 }
 
 i32 pipe(i32 pipefd[2]) {
-    (void)pipefd;
-    *__errno_location() = 38;
-    return -1;
+    return env_result(waste_kernel_pipe_v1(pipefd));
 }
 
 i32 pipe2(i32 pipefd[2], i32 flags) {

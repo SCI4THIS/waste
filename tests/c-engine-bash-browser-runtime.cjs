@@ -23,6 +23,9 @@ const coreutilsWcProbe = process.argv.includes("--coreutils-wc");
 const coreutilsLsProbe = process.argv.includes("--coreutils-ls");
 const fullPackageProbe = process.argv.includes("--full-package");
 const readlineEchoProbe = process.argv.includes("--readline-echo");
+const heredocProbe = process.argv.includes("--heredoc");
+const heredocBuiltinProbe = process.argv.includes("--heredoc-builtin");
+const heredocStdoutProbe = process.argv.includes("--heredoc-stdout");
 const coreutilsLsCommand = process.env.WASTE_COREUTILS_LS_COMMAND || "";
 const coreutilsLsExpected = process.env.WASTE_COREUTILS_LS_EXPECT || "";
 const watProbe = process.argv.includes("--wat-probe");
@@ -543,6 +546,8 @@ const self = {
         setTimeout(() => {
           commandSent = true;
           if (wastRepeatProbe) wastRepeatStage = 1;
+          if (heredocProbe || heredocBuiltinProbe || heredocStdoutProbe)
+            exitSent = true;
           const initialBytes = new TextEncoder().encode(
               baselineMissingCommand
                 ? "HOME_DIR=/home/a\n"
@@ -594,6 +599,31 @@ const self = {
                       "/bin/ls /tmp/ls-missing; echo __LS_MISSING_STATUS_$?__",
                       "echo __LS_SECOND_COMMAND__",
                     ].join("\n") + "\n"
+                  : heredocStdoutProbe
+                    ? [
+                        "/bin/cat <<EOF",
+                        "Hello world!",
+                        "EOF",
+                        "exit",
+                      ].join("\n") + "\n"
+                  : heredocBuiltinProbe
+                    ? [
+                        "read value <<EOF",
+                        "Hello world!",
+                        "EOF",
+                        "printf '%s\\n' \"$value\"",
+                        "exit",
+                      ].join("\n") + "\n"
+                  : heredocProbe
+                    ? [
+                        "/bin/cat > hello.txt <<EOF",
+                        "Hello world!",
+                        "EOF",
+                        "echo __C_ENGINE_HEREDOC_BEGIN__",
+                        "/bin/cat hello.txt",
+                        "echo __C_ENGINE_HEREDOC_END__",
+                        "exit",
+                      ].join("\n") + "\n"
                   : readlineEchoProbe
                     ? "echo __C_ENGINE_READLINE_RESULT__"
                     : "echo __C_ENGINE_BASH_OK__\n");
@@ -835,6 +865,19 @@ Promise.race([completion, timeout]).then(result => {
     : readlineEchoProbe
       ? promptSeen && commandSent && vfsSeen && readlineEchoVisibleBeforeEnter &&
         readlineEnterSent && readlineResultSeen && exitSent && !doneBeforeExit && result.ok
+    : heredocProbe
+      ? promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&
+        /bash-[^\r\n]*[#$] \/bin\/cat hello\.txt\r?\nHello world!\r?\n/.test(output) &&
+        output.includes("__C_ENGINE_HEREDOC_END__") &&
+        !output.includes("cannot create temp file for here-document") && result.ok
+    : heredocBuiltinProbe
+      ? promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&
+        /bash-[^\r\n]*[#$] printf[^\r\n]*\r?\nHello world!\r?\n/.test(output) &&
+        !output.includes("cannot create temp file for here-document") && result.ok
+    : heredocStdoutProbe
+      ? promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&
+        /> EOF\r?\nHello world!\r?\n/.test(output) &&
+        !output.includes("cannot create temp file for here-document") && result.ok
     : executableExitProbe
       ? promptSeen && commandSent && vfsSeen && exitProbeStatusRequested &&
         probeStatus7Seen && output.includes("__C_ENGINE_EXEC_EXIT_AFTER__") &&

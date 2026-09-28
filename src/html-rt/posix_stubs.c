@@ -632,15 +632,22 @@ static exec_status native_posix_close(void *data, const wasm_value *args,
                                       int arg_count, wasm_value *results,
                                       int *result_count, exec_error *error,
                                       const waste_exec_engine *caller) {
-    (void)data; (void)caller;
+    native_store *store = (native_store *)data;
+    int result;
     if (arg_count != 1) {
         error->status = EXEC_ERROR_FORMAT;
         snprintf(error->message, sizeof(error->message),
                  "POSIX close argument count mismatch");
         return error->status;
     }
-    return native_posix_result(waste_host_posix_close(args[0].i32), results,
-                               result_count);
+    result = store && store->kernel ?
+        posix_kernel_close(store->kernel, args[0].i32) :
+        waste_host_posix_close(args[0].i32);
+    if (result < 0) {
+        native_posix_set_errno(store, caller, -result);
+        result = -1;
+    }
+    return native_posix_result(result, results, result_count);
 }
 
 static exec_status native_posix_dup(void *data, const wasm_value *args,
@@ -659,6 +666,57 @@ static exec_status native_posix_dup(void *data, const wasm_value *args,
         native_posix_set_errno(store, caller, -result);
         result = -1;
     }
+    return native_posix_result(result, results, result_count);
+}
+
+static int native_posix_pipe_create(native_store *store,
+                                    const waste_exec_engine *caller,
+                                    uint32_t descriptor_pointer) {
+    exec_memory *memory = caller ? caller->memory : NULL;
+    int descriptors[2];
+    uint8_t encoded[8];
+    int status;
+    if (!store || !store->kernel || !memory) return -POSIX_EINVAL;
+    status = posix_kernel_pipe(store->kernel, descriptors);
+    if (status < 0) return status;
+    for (int at = 0; at < 2; at++) {
+        uint32_t value = (uint32_t)descriptors[at];
+        encoded[at * 4 + 0] = (uint8_t)value;
+        encoded[at * 4 + 1] = (uint8_t)(value >> 8);
+        encoded[at * 4 + 2] = (uint8_t)(value >> 16);
+        encoded[at * 4 + 3] = (uint8_t)(value >> 24);
+    }
+    if (!native_posix_write_guest(memory, descriptor_pointer,
+                                  encoded, sizeof(encoded))) {
+        (void)posix_kernel_close(store->kernel, descriptors[0]);
+        (void)posix_kernel_close(store->kernel, descriptors[1]);
+        return -POSIX_EFAULT;
+    }
+    return 0;
+}
+
+static exec_status native_posix_pipe_v1(void *data, const wasm_value *args,
+                                        int arg_count, wasm_value *results,
+                                        int *result_count, exec_error *error,
+                                        const waste_exec_engine *caller) {
+    int result = arg_count == 1 ? native_posix_pipe_create(
+        (native_store *)data, caller, (uint32_t)args[0].i32) : -POSIX_EINVAL;
+    (void)error;
+    return native_posix_result(result, results, result_count);
+}
+
+static exec_status native_posix_pipe(void *data, const wasm_value *args,
+                                     int arg_count, wasm_value *results,
+                                     int *result_count, exec_error *error,
+                                     const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    int result = arg_count == 1 ? native_posix_pipe_create(
+        store, caller, (uint32_t)args[0].i32) : -POSIX_EINVAL;
+    if (result < 0) {
+        native_posix_set_errno(store, caller, -result);
+        result = -1;
+    }
+    (void)error;
     return native_posix_result(result, results, result_count);
 }
 
@@ -2049,6 +2107,7 @@ static exec_host_func native_posix_function(const char *module,
         if (strcmp(name, "readlink_v1") == 0) return native_posix_readlink;
         if (strcmp(name, "fchdir_v1") == 0) return native_posix_fchdir;
         if (strcmp(name, "fcntl_v1") == 0) return native_posix_fcntl;
+        if (strcmp(name, "pipe_v1") == 0) return native_posix_pipe_v1;
         return (void *)0;
     }
     if (strcmp(module, "env") != 0) return (void *)0;
@@ -2118,8 +2177,8 @@ static exec_host_func native_posix_function(const char *module,
     if (strcmp(name, "msync") == 0) return native_posix_msync;
     if (strcmp(name, "mprotect") == 0) return native_posix_mprotect;
     if (strcmp(name, "fork") == 0) return native_posix_fork;
-    if (strcmp(name, "pipe") == 0 ||
-        strcmp(name, "getgroups") == 0 ||
+    if (strcmp(name, "pipe") == 0) return native_posix_pipe;
+    if (strcmp(name, "getgroups") == 0 ||
         strcmp(name, "confstr") == 0 || strcmp(name, "fchmod") == 0 ||
         strcmp(name, "rmdir") == 0)
         return native_posix_i32_negative;

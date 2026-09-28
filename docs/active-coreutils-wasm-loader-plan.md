@@ -2773,7 +2773,25 @@ Implementation update (2026-09-27, full-page VFS and readline integration):
 - Runtime/select integration changed the packaged WASTE support source, so the
   current corresponding-source archive supersedes the earlier Stage 8G hash;
   its SHA-256 is
-  `a40ee59ef26d0ad49a35ff3460f797164610c80966bd725f11c7fcbdddebb7ef`.
+  `6656dd28b3310bbdd45871ad2efe8133453fc5695d1f4ffaf5a41278fd2f47ae`.
+
+Implementation update (2026-09-28, heredoc pipe and VFS temporary files):
+
+- Replaced the guest `pipe` and `mkstemp` ENOSYS stubs. `pipe` now creates an
+  engine-kernel pipe through the versioned `waste_kernel.pipe_v1` boundary, and
+  `mkstemp` performs bounded, exclusive `0600` creation in the VFS.
+- Corrected the legacy `env.close` bridge to close descriptors in the active
+  process kernel. It previously called only the browser host shim while
+  `pipe`, `read`, and `write` used the kernel, leaving the pipe writer count
+  nonzero and packaged `/bin/cat` blocked forever waiting for heredoc EOF.
+- Added a full-package browser regression for
+  `cat > hello.txt <<EOF`, followed by `/bin/cat hello.txt`. It verifies the
+  continuation reaches a later prompt, observes `Hello world!`, and exits.
+  `./start.sh --html-bash` now runs this gate after smoke,
+  process-continuation, and readline/select tests.
+- The rebuilt self-contained page passes all four required browser gates. The
+  current corresponding-source archive SHA-256 is
+  `6656dd28b3310bbdd45871ad2efe8133453fc5695d1f4ffaf5a41278fd2f47ae`.
 
 Add focused build entry points without changing the existing command meanings:
 

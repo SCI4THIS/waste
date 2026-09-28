@@ -1251,6 +1251,14 @@ generate_c_engine_bash_html() {
     return 1
   fi
 
+  if ! run_logged_step "Run the C-engine Bash heredoc/pipe test" \
+      "$C_ENGINE_BASH_LOG" node "$C_ENGINE_BASH_BROWSER_TEST" \
+      --heredoc --full-package; then
+    show_message "C-engine Bash heredoc/pipe test failed" \
+      "The generated runtime did not pass heredoc input through an engine-owned pipe to packaged Coreutils cat, persist redirected output in the VFS, and exit cleanly.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
   printf 'Completed: %s\n' "$(date --iso-8601=seconds)" >>"$C_ENGINE_BASH_LOG"
   show_message "C-engine Bash generated" \
     "The static page embeds the C engine, shared runtime, waste-libc, and Bash. It can be opened directly with file:// and requires no server.\n\nOutput: $C_ENGINE_BASH_HTML\nLog: $C_ENGINE_BASH_LOG"

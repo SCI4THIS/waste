@@ -263,7 +263,31 @@ u32 arc4random(void){u32 x=random_state;x^=x<<13;x^=x>>17;x^=x<<5;return random_
 
 static u32 temporary_counter;
 char *mktemp(char*pattern){u32 n=c_length(pattern),value=++temporary_counter;for(u32 i=n;i&&pattern[i-1]=='X';i--){pattern[i-1]=(char)('a'+value%26);value/=26;}return pattern;}
-i32 mkstemp(char*pattern){mktemp(pattern);*__errno_location()=38;return-1;}
+extern i32 open(const char *path, i32 flags, i32 mode);
+
+static i32 temporary_open(char *pattern, i32 flags) {
+  u32 length = c_length(pattern), placeholders = 0;
+  while (placeholders < length && pattern[length - placeholders - 1] == 'X')
+    placeholders++;
+  if (placeholders < 6) { *__errno_location() = 22; return -1; }
+  for (u32 attempt = 0; attempt < 256; attempt++) {
+    u32 value = ++temporary_counter;
+    for (u32 at = 0; at < placeholders; at++) {
+      pattern[length - at - 1] = (char)('a' + value % 26);
+      value /= 26;
+    }
+    /* O_RDWR | O_CREAT | O_EXCL.  Exclusive creation makes name selection
+       atomic in the engine-owned VFS just as it is on a host filesystem. */
+    i32 descriptor = open(pattern, (flags & ~3) | 2 | 0100 | 0200, 0600);
+    if (descriptor >= 0) return descriptor;
+    if (*__errno_location() != 17) return -1;
+  }
+  *__errno_location() = 17;
+  return -1;
+}
+
+i32 mkstemp(char *pattern) { return temporary_open(pattern, 0); }
+i32 mkostemp(char *pattern, i32 flags) { return temporary_open(pattern, flags); }
 char *mkdtemp(char*pattern){mktemp(pattern);*__errno_location()=38;return 0;}
 
 /* Forward declaration from string.c */
