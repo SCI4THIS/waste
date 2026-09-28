@@ -43,6 +43,32 @@ The external-image descriptor subset exposes `env.fcntl(fd, command, argument)`
 for `F_GETFD` and `F_SETFD` with `FD_CLOEXEC`. Descriptor numbers are engine
 owned; only integer results cross the boundary.
 
+Guest libc exports the variadic C `open(path, flags, ...)` interface and calls
+`waste_kernel.open_v1(path, flags, mode)` after extracting the optional mode
+when `O_CREAT` is present. A Wasm variadic argument is represented by a pointer
+to the caller's argument area, so it must not be interpreted directly as a
+mode by a host import. The engine kernel applies the process creation mask;
+new processes begin with `umask(0022)`.
+
+The shared wasm32 `struct dirent` uses 64-bit `d_ino` and `d_off`, followed by
+16-bit `d_reclen`, 8-bit `d_type`, and `d_name` at byte offset 19. This matches
+the prebuilt Bash/Emscripten ABI. Guest libc and all applications that consume
+`readdir` must use this layout; directory records are not host C structures.
+
+The compact pathname metadata record is 48 bytes: kind, mode, uid, and gid at
+offsets 0 through 12; signed size at 16; inode at 24; signed modification-time
+seconds at 32; and nanoseconds at 40. Guest `stat` expands that mtime into its
+128-byte public structure. Guest `time_t` is signed 64-bit, matching the
+prebuilt Bash ABI and avoiding a 2038 cutoff. `waste_kernel.realtime_v1`
+writes epoch seconds and nanoseconds into caller-owned memory; the browser
+runtime derives the value from `Date.now()`.
+
+The browser staging API passes 64-bit timestamps as explicit low/high
+32-bit second words plus a nanosecond word. `waste_wast_stage_mtime` applies
+source metadata to the most recently staged package entry;
+`waste_wast_stage_build_mtime` records the engine image timestamp used for
+the virtual root, runtime directories, and `wat`/`wast` interpreter nodes.
+
 ## Process startup
 
 The engine copies `argc`, `argv`, and `envp` strings into the new image before

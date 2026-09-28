@@ -100,19 +100,19 @@ elif [ "$TARGET" = "bash" ]; then
     exit 1
   fi
   if [ -f "$PAGE_DIR/launch.wast" ]; then
-    cp "$PAGE_DIR/launch.wast" "$STAGING/"
+    cp -p "$PAGE_DIR/launch.wast" "$STAGING/"
   elif [ -f "$BUILD_DIR/bash-runtime.wast" ]; then
-    cp "$BUILD_DIR/bash-runtime.wast" "$STAGING/launch.wast"
+    cp -p "$BUILD_DIR/bash-runtime.wast" "$STAGING/launch.wast"
   else
     echo "error: launch.wast not found" >&2
     exit 1
   fi
   if [ -f "$REPO_ROOT/build/cli-rt/waste-probe.wasm" ]; then
-    cp "$REPO_ROOT/build/cli-rt/waste-probe.wasm" "$STAGING/"
+    cp -p "$REPO_ROOT/build/cli-rt/waste-probe.wasm" "$STAGING/"
   fi
-  for utility in true false pwd echo printf basename dirname cat wc ls; do
+  for utility in true false pwd echo printf basename dirname cat wc ls date; do
     if [ -f "$PAGE_DIR/$utility.wasm" ]; then
-      cp "$PAGE_DIR/$utility.wasm" "$STAGING/"
+      cp -p "$PAGE_DIR/$utility.wasm" "$STAGING/"
     else
       echo "error: linked coreutils $utility.wasm not found" >&2
       exit 1
@@ -134,10 +134,25 @@ elif [ "$TARGET" = "bash" ]; then
     exit 1
   fi
   mkdir -p "$STAGING/usr/share/waste" "$STAGING/usr/share/licenses/coreutils"
-  cp "$provenance" "$STAGING/usr/share/waste/coreutils-provenance.json"
-  cp "$source_mapping" "$STAGING/usr/share/waste/coreutils-source-package.json"
-  cp "$copying" "$STAGING/usr/share/licenses/coreutils/COPYING"
+  cp -p "$provenance" "$STAGING/usr/share/waste/coreutils-provenance.json"
+  cp -p "$source_mapping" "$STAGING/usr/share/waste/coreutils-source-package.json"
+  cp -p "$copying" "$STAGING/usr/share/licenses/coreutils/COPYING"
   STAGING_PATH="$STAGING" python3 -c 'import json, os, pathlib; pathlib.Path(os.environ["STAGING_PATH"], "usr/share/waste/waste-interpreters.json").write_text(json.dumps({"interpreters":["/bin/wast","/bin/wat"]}, separators=(",", ":")) + "\n")'
+  STAGING_PATH="$STAGING" python3 -c '
+import json, os, pathlib
+root = pathlib.Path(os.environ["STAGING_PATH"])
+result = {}
+for path in sorted(root.rglob("*")):
+    if not path.is_file() or path.name == "vfs-mtimes.json":
+        continue
+    value = path.stat().st_mtime_ns
+    result[path.relative_to(root).as_posix()] = {
+        "sec": value // 1_000_000_000,
+        "nsec": value % 1_000_000_000,
+    }
+(root / "vfs-mtimes.json").write_text(
+    json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
+'
 fi
 
 echo "  Staged $(find "$STAGING" -type f | wc -l) files"

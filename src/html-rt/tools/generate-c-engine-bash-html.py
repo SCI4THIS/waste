@@ -19,7 +19,7 @@ from pathlib import Path
 
 COREUTILS_UTILITIES = [
     "true", "false", "pwd", "echo", "printf", "basename", "dirname", "cat", "wc",
-    "ls",
+    "ls", "date",
 ]
 PACKAGE_FILES = [
     ("/usr/share/waste/coreutils-provenance.json", "build/coreutils/provenance.json", 0o644),
@@ -146,7 +146,7 @@ HTML = r'''<!doctype html>
         return count;
       }
 
-      async function run(wasmB64, source, coreutilsMap, packagedFiles) {
+      async function run(wasmB64, source, coreutilsMap, packagedFiles, buildMtime) {
         const wasmBytes = decodeB64(wasmB64);
         const hostFloat = (ptr, length, asF32) => {
           const bytes = new Uint8Array(engineMemory.buffer, ptr, length);
@@ -159,13 +159,33 @@ HTML = r'''<!doctype html>
           posix_close: () => 0,
           posix_read: posixRead,
           posix_write: posixWrite,
+          wall_clock_ms: () => Date.now(),
         }};
         const {instance} = await WebAssembly.instantiate(wasmBytes, imports);
         exp = instance.exports;
         engineMemory = exp.memory;
         exp.waste_wast_enable_terminal();
+        if (buildMtime && exp.waste_wast_stage_build_mtime) {
+          const seconds = buildMtime.sec;
+          const staged = exp.waste_wast_stage_build_mtime(
+            seconds >>> 0, Math.floor(seconds / 0x100000000) >>> 0,
+            (buildMtime.nsec || 0) >>> 0);
+          if (staged !== 0) throw new Error(`build mtime staging failed: ${staged}`);
+        }
 
-        const stageVfsPath = (path, kind, mode, size) => {
+        const stageVfsMtime = (seconds, nanoseconds = 0) => {
+          if (!exp.waste_wast_stage_mtime) return;
+          if (seconds === undefined) {
+            const milliseconds = Date.now();
+            seconds = Math.floor(milliseconds / 1000);
+            nanoseconds = (milliseconds % 1000) * 1000000;
+          }
+          const staged = exp.waste_wast_stage_mtime(
+            seconds >>> 0, Math.floor(seconds / 0x100000000) >>> 0,
+            nanoseconds >>> 0);
+          if (staged !== 0) throw new Error(`VFS mtime staging failed: ${staged}`);
+        };
+        const stageVfsPath = (path, kind, mode, size, mtimeSec, mtimeNsec) => {
           const pathBytes = new TextEncoder().encode(path);
           const pathPtr = exp.waste_wast_alloc(pathBytes.length);
           if (!pathPtr) throw new Error(`VFS path allocation failed for ${path}`);
@@ -174,6 +194,7 @@ HTML = r'''<!doctype html>
             kind, mode, size >>> 0);
           exp.waste_wast_free?.(pathPtr);
           if (staged !== 0) throw new Error(`VFS metadata failed for ${path}`);
+          stageVfsMtime(mtimeSec, mtimeNsec);
         };
         stageVfsPath("/tmp", 2, 0o777, 0);
         stageVfsPath("/root", 2, 0o755, 0);
@@ -186,8 +207,8 @@ HTML = r'''<!doctype html>
         stageVfsPath("/bin/wat", 1, 0o755, 0);
         stageVfsPath("/bin/wast", 1, 0o755, 0);
 
-        for (const [name, encoded] of Object.entries(coreutilsMap)) {
-          const utilityBytes = decodeB64(encoded);
+        for (const [name, source] of Object.entries(coreutilsMap)) {
+          const utilityBytes = decodeB64(source.data);
           const utilityPath = new TextEncoder().encode(`/bin/${name}`);
           const pathPtr = exp.waste_wast_alloc(utilityPath.length);
           const utilityPtr = exp.waste_wast_alloc(utilityBytes.length);
@@ -197,6 +218,7 @@ HTML = r'''<!doctype html>
           const staged = exp.waste_wast_stage_file(pathPtr, utilityPath.length,
             utilityPtr, utilityBytes.length, 0o755);
           if (staged !== 0) throw new Error(`staging /bin/${name} failed: ${staged}`);
+          stageVfsMtime(source.mtimeSec, source.mtimeNsec);
         }
         for (const file of packagedFiles || []) {
           const pathBytes = new TextEncoder().encode(file.path);
@@ -211,6 +233,7 @@ HTML = r'''<!doctype html>
           exp.waste_wast_free?.(pathPtr);
           exp.waste_wast_free?.(dataPtr);
           if (staged !== 0) throw new Error(`staging ${file.path} failed: ${staged}`);
+          stageVfsMtime(file.mtimeSec, file.mtimeNsec);
         }
 
         const sourceBytes = new TextEncoder().encode(source);
@@ -251,7 +274,8 @@ HTML = r'''<!doctype html>
       self.onmessage = function(e) {
         const msg = e.data;
         if (msg.type === "start") {
-          run(msg.wasmB64, msg.source, msg.coreutilsMap || {}, msg.packagedFiles || []).catch(error => {
+          run(msg.wasmB64, msg.source, msg.coreutilsMap || {},
+              msg.packagedFiles || [], msg.buildMtime).catch(error => {
             self.postMessage({type: "done", ok: false,
               error: error && (error.stack || error.message) || String(error)});
           });
@@ -347,7 +371,8 @@ HTML = r'''<!doctype html>
         };
         worker.onerror = event => { append(event.message || "worker error"); finish("failed"); };
         worker.postMessage({type: "start", wasmB64: PAYLOAD.wasmB64, source,
-          coreutilsMap: PAYLOAD.coreutilsMap, packagedFiles: PAYLOAD.packagedFiles});
+          coreutilsMap: PAYLOAD.coreutilsMap, packagedFiles: PAYLOAD.packagedFiles,
+          buildMtime: PAYLOAD.buildMtime});
       } catch (error) { status.textContent = error.message || String(error); }
     }
     document.querySelector("#start-form").addEventListener("submit", startShell);
@@ -428,6 +453,8 @@ def main() -> None:
             "path": vfs_path,
             "mode": mode,
             "data": base64.b64encode(package_path.read_bytes()).decode("ascii"),
+            "mtimeSec": package_path.stat().st_mtime_ns // 1_000_000_000,
+            "mtimeNsec": package_path.stat().st_mtime_ns % 1_000_000_000,
         })
 
     if args.output_dir:
@@ -464,10 +491,16 @@ def main() -> None:
 
         payload = {
             "wasmB64": wasm_b64,
+            "buildMtime": {
+                "sec": args.wasm.stat().st_mtime_ns // 1_000_000_000,
+                "nsec": args.wasm.stat().st_mtime_ns % 1_000_000_000,
+            },
             "launch": launch_text,
-            "coreutilsMap": {name: base64.b64encode(
-                src.read_bytes()).decode("ascii")
-                for name, src in coreutils_paths.items()},
+            "coreutilsMap": {name: {
+                "data": base64.b64encode(src.read_bytes()).decode("ascii"),
+                "mtimeSec": src.stat().st_mtime_ns // 1_000_000_000,
+                "mtimeNsec": src.stat().st_mtime_ns % 1_000_000_000,
+            } for name, src in coreutils_paths.items()},
             "packagedFiles": packaged_files,
         }
 

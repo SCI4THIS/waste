@@ -226,6 +226,8 @@ typedef struct posix_kernel {
     posix_wait_record wait;
     posix_clock_now_fn clock_now;
     void *clock_data;
+    posix_clock_now_fn realtime_now;
+    void *realtime_data;
     posix_sigset signal_mask;
     posix_sigset pending_signals;
     /* Signal consumed by the most recent interrupted wait, if any. */
@@ -233,6 +235,7 @@ typedef struct posix_kernel {
     int process_group_id;
     uint32_t uid;
     uint32_t gid;
+    uint32_t creation_mask;
     uint8_t signal_disposition[POSIX_SIGSET_BYTES * 8 + 1];
     uint32_t signal_handlers[POSIX_SIGSET_BYTES * 8 + 1];
     posix_sigset signal_action_masks[POSIX_SIGSET_BYTES * 8 + 1];
@@ -257,6 +260,7 @@ int posix_kernel_set_shm_namespace(posix_kernel *kernel,
                                     posix_shm_namespace *namespace_);
 int posix_kernel_set_credentials(posix_kernel *kernel, uint32_t uid,
                                   uint32_t gid);
+int posix_kernel_umask(posix_kernel *kernel, int mask);
 
 /* Clone a process kernel.  Descriptor entries are copied while preserving
    shared open-file descriptions and pipe endpoint identity. */
@@ -268,12 +272,23 @@ posix_kernel *posix_kernel_clone(const posix_kernel *kernel);
 int posix_kernel_merge_paths(posix_kernel *target,
                              const posix_kernel *source);
 
+/* Close all file descriptors without destroying the kernel.  Called on
+ * process exit to release pipe endpoints (enabling EOF for readers).  The
+ * kernel remains alive for path-node merging at waitpid time. */
+void posix_kernel_close_all_fds(posix_kernel *kernel);
+
 /* Destroy a kernel and all owned resources. */
 void posix_kernel_destroy(posix_kernel *kernel);
 
 /* Install the monotonic clock used for finite wait deadlines. */
 void posix_kernel_set_clock(posix_kernel *kernel, posix_clock_now_fn clock_now,
                             void *clock_data);
+/* Install the UTC epoch clock used for filesystem timestamps and realtime
+   libc calls. The callback returns nanoseconds since 1970-01-01 UTC. */
+void posix_kernel_set_realtime_clock(posix_kernel *kernel,
+                                     posix_clock_now_fn realtime_now,
+                                     void *realtime_data);
+uint64_t posix_kernel_realtime_now(const posix_kernel *kernel);
 
 /* Poll/cancel the pointer-free wait record. */
 int posix_kernel_wait_poll(posix_kernel *kernel);

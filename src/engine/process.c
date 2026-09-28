@@ -1397,6 +1397,10 @@ int native_store_exit_process(native_store *store, int status) {
     process->zombie = 1;
     process->capsule.state = NATIVE_PROCESS_EXITED;
     process->capsule.pending_transition = NATIVE_PROCESS_TRANSITION_EXIT;
+    /* Release file descriptors immediately so that pipe endpoints are freed
+     * and readers can observe EOF.  The kernel stays alive for path-node
+     * merging at waitpid time; only FDs are closed. */
+    posix_kernel_close_all_fds(process->kernel);
     return 0;
 }
 

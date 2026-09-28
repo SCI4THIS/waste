@@ -3,7 +3,7 @@
 #include "include/helper.h"
 #include "include/dirent.h"
 
-extern i32 open(const char *path, i32 flags, i32 mode);
+extern i32 open(const char *path, i32 flags, ...);
 extern i32 close(i32 descriptor);
 extern i32 waste_env_readdir(i32 descriptor, char *name, i32 capacity,
                              waste_path_metadata *metadata)

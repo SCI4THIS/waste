@@ -30,6 +30,8 @@ WASTE_RUNTIME_IMPORTS = (
     "waste_kernel:ioctl_v1", "waste_kernel:isatty_v1",
     "waste_kernel:path_access_v1", "waste_kernel:path_stat_v1",
     "waste_kernel:pselect_v1", "waste_kernel:select_v1",
+    "waste_kernel:open_v1", "waste_kernel:pipe_v1",
+    "waste_kernel:realtime_v1",
     "waste_kernel:tcgetattr_v1", "waste_kernel:tcsetattr_v1",
 )
 RUNTIME_BUILDER = "src/html-rt/tools/build-coreutils-runtime.py"
@@ -187,6 +189,8 @@ def main() -> int:
                             build / "src" / "true.o",
                             build / "src" / f"true-{args.utility}.o",
                         ]
+                    elif args.utility == "date":
+                        utility_objects.append(build / "src" / "show-date.o")
                     relink = subprocess.run(
                         [cc, "-std=gnu23", link_flags,
                          "-o", str(artifact),

@@ -605,6 +605,7 @@ async function runWastScript(wasmBytes, testSpec) {
     posix_close: () => 0,
     posix_read: () => 0,
     posix_write: (descriptor, ptr, count) => count,
+    wall_clock_ms: () => Date.now(),
   }};
   const {instance} = await WebAssembly.instantiate(wasmBytes, imports);
   engineMemory = instance.exports.memory;

@@ -44,6 +44,7 @@ typedef struct {
 
 typedef struct {
   u32 kind; u32 mode; u32 uid; u32 gid; i64 size; u64 inode;
+  i64 mtime_sec; i64 mtime_nsec;
 } waste_path_metadata;
 
 _Static_assert(sizeof(waste_fd_set)   == 128, "fd_set must be 128 bytes");
@@ -56,7 +57,7 @@ _Static_assert(offsetof(waste_stat, st_mode) == 16, "stat mode offset");
 _Static_assert(offsetof(waste_stat, st_size) == 40, "stat size offset");
 _Static_assert(offsetof(waste_stat, st_atime_sec) == 64, "stat atime offset");
 _Static_assert(offsetof(waste_stat, st_ctime_nsec) == 104, "stat ctime offset");
-_Static_assert(sizeof(waste_path_metadata) == 32, "path metadata must be 32 bytes");
+_Static_assert(sizeof(waste_path_metadata) == 48, "path metadata must be 48 bytes");
 
 #define WASTE_EFAULT 14
 #define WASTE_ENOENT 2

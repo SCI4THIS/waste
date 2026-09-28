@@ -7,6 +7,13 @@
 
 /* --- Internal helpers --- */
 
+static void metadata_set_now(const posix_kernel *kernel,
+                             posix_path_metadata *metadata) {
+    uint64_t now = posix_kernel_realtime_now(kernel);
+    metadata->mtime_sec = (int64_t)(now / UINT64_C(1000000000));
+    metadata->mtime_nsec = (int64_t)(now % UINT64_C(1000000000));
+}
+
 static posix_ofd *ofd_alloc(posix_ofd_kind kind) {
     posix_ofd *ofd = calloc(1, sizeof(posix_ofd));
     if (!ofd) return NULL;
@@ -311,7 +318,8 @@ int posix_kernel_path_mkdir(posix_kernel *kernel, const uint8_t *path,
     if (path_find(kernel, normalized)) return -POSIX_EEXIST;
     posix_path_metadata metadata = { POSIX_NODE_DIRECTORY,
         (uint32_t)(mode ? mode : 0777), 0, 0, 0,
-        1000u + (uint64_t)kernel->path_node_count };
+        1000u + (uint64_t)kernel->path_node_count, 0, 0 };
+    metadata_set_now(kernel, &metadata);
     return posix_kernel_path_add_data(kernel, normalized, &metadata, NULL, 0);
 }
 
@@ -393,6 +401,22 @@ int posix_kernel_path_set_cwd(posix_kernel *kernel, const char *path) {
     if (!node) return path_prefix_is_file(kernel, normalized) ? -POSIX_ENOTDIR : -POSIX_ENOENT;
     if (node->metadata.kind != POSIX_NODE_DIRECTORY) return -POSIX_ENOTDIR;
     memcpy(kernel->cwd, normalized, strlen(normalized) + 1);
+    return 0;
+}
+
+int posix_kernel_path_set_mtime(posix_kernel *kernel, const uint8_t *path,
+                                size_t length, int64_t seconds,
+                                int64_t nanoseconds) {
+    char normalized[POSIX_PATH_NODE_NAME_MAX];
+    if (!kernel || !path || length == 0 || nanoseconds < 0 ||
+        nanoseconds >= 1000000000)
+        return -POSIX_EINVAL;
+    int result = path_normalize(kernel, path, length, normalized);
+    if (result < 0) return result;
+    posix_kernel_path_node *node = path_find(kernel, normalized);
+    if (!node) return -POSIX_ENOENT;
+    node->metadata.mtime_sec = seconds;
+    node->metadata.mtime_nsec = nanoseconds;
     return 0;
 }
 
@@ -495,8 +519,13 @@ posix_kernel *posix_kernel_create(int interactive) {
     if (!k->shm_namespace) { free(k); return NULL; }
 
     memcpy(k->cwd, "/", 2);
-    const posix_path_metadata root = { POSIX_NODE_DIRECTORY, 0755, 0, 0, 0, 1 };
-    const posix_path_metadata directory = { POSIX_NODE_DIRECTORY, 0755, 0, 0, 0, 2 };
+    k->creation_mask = 0022;
+    const posix_path_metadata root = {
+        POSIX_NODE_DIRECTORY, 0755, 0, 0, 0, 1, 0, 0
+    };
+    const posix_path_metadata directory = {
+        POSIX_NODE_DIRECTORY, 0755, 0, 0, 0, 2, 0, 0
+    };
     if (posix_kernel_path_add(k, "/", &root) < 0 ||
         posix_kernel_path_add(k, "/bin", &directory) < 0 ||
         posix_kernel_path_add(k, "/usr", &directory) < 0 ||
@@ -642,6 +671,21 @@ int posix_kernel_merge_paths(posix_kernel *target,
     return 0;
 }
 
+/* Close all file descriptors without destroying the kernel.  Called when a
+ * process exits to release pipe endpoints so that readers see EOF.  The
+ * kernel remains alive for path-node merging at waitpid time. */
+void posix_kernel_close_all_fds(posix_kernel *kernel) {
+    if (!kernel) return;
+    for (int i = 0; i < POSIX_KERNEL_FD_MAX; i++) {
+        posix_ofd *ofd = kernel->fds[i].ofd;
+        if (ofd) {
+            kernel->fds[i].ofd = NULL;
+            pipe_count_dec(ofd);
+            ofd_release(ofd);
+        }
+    }
+}
+
 void posix_kernel_destroy(posix_kernel *kernel) {
     if (!kernel) return;
     for (int i = 0; i < POSIX_KERNEL_FD_MAX; i++) {
@@ -676,11 +720,31 @@ int posix_kernel_set_credentials(posix_kernel *kernel, uint32_t uid,
     return 0;
 }
 
+int posix_kernel_umask(posix_kernel *kernel, int mask) {
+    if (!kernel) return -POSIX_EINVAL;
+    int previous = (int)kernel->creation_mask;
+    kernel->creation_mask = (uint32_t)mask & 0777u;
+    return previous;
+}
+
 void posix_kernel_set_clock(posix_kernel *kernel, posix_clock_now_fn clock_now,
                             void *clock_data) {
     if (!kernel) return;
     kernel->clock_now = clock_now;
     kernel->clock_data = clock_data;
+}
+
+void posix_kernel_set_realtime_clock(posix_kernel *kernel,
+                                     posix_clock_now_fn realtime_now,
+                                     void *realtime_data) {
+    if (!kernel) return;
+    kernel->realtime_now = realtime_now;
+    kernel->realtime_data = realtime_data;
+}
+
+uint64_t posix_kernel_realtime_now(const posix_kernel *kernel) {
+    return kernel && kernel->realtime_now ?
+        kernel->realtime_now(kernel->realtime_data) : 0;
 }
 
 static int signal_valid(int signal) {
@@ -1179,8 +1243,9 @@ int posix_kernel_open(posix_kernel *kernel, const uint8_t *path, size_t length,
         if (!(flags & POSIX_O_CREAT)) return path_prefix_is_file(kernel, normalized) ?
             -POSIX_ENOTDIR : -POSIX_ENOENT;
         posix_path_metadata metadata = { POSIX_NODE_REGULAR,
-            (uint32_t)(mode ? mode : 0666), 0, 0, 0,
-            1000u + (uint64_t)kernel->path_node_count };
+            ((uint32_t)mode & 07777u) & ~kernel->creation_mask, 0, 0, 0,
+            1000u + (uint64_t)kernel->path_node_count, 0, 0 };
+        metadata_set_now(kernel, &metadata);
         result = posix_kernel_path_add_data(kernel, normalized, &metadata, NULL, 0);
         if (result < 0) return result;
         node = path_find(kernel, normalized);
@@ -1215,6 +1280,7 @@ int posix_kernel_open(posix_kernel *kernel, const uint8_t *path, size_t length,
         free(ofd->regular.file->data); ofd->regular.file->data = NULL;
         ofd->regular.file->data_capacity = 0;
         node->metadata.size = 0;
+        metadata_set_now(kernel, &node->metadata);
     }
     kernel->fds[fd].ofd = ofd;
     kernel->fds[fd].cloexec = 0;
@@ -1290,8 +1356,10 @@ int posix_kernel_shm_open(posix_kernel *kernel, const uint8_t *name,
     }
     node = path_find(kernel, path);
     if (!node) {
-        posix_path_metadata metadata = { POSIX_NODE_REGULAR, 0666, 0, 0, 0,
-            object->file->inode };
+        posix_path_metadata metadata = { POSIX_NODE_REGULAR,
+            ((uint32_t)mode & 07777u) & ~kernel->creation_mask, 0, 0, 0,
+            object->file->inode, 0, 0 };
+        metadata_set_now(kernel, &metadata);
         status = posix_kernel_path_add_data(kernel, path, &metadata, NULL, 0);
         if (status < 0) return status;
         node = path_find(kernel, path);
@@ -1338,7 +1406,27 @@ int posix_kernel_readdir(posix_kernel *kernel, int fd, char *name,
     if (ofd->kind != POSIX_OFD_DIRECTORY) return -POSIX_ENOTDIR;
     const char *parent = ofd->directory.node->path;
     size_t parent_length = strlen(parent);
-    for (int i = ofd->directory.index; i < kernel->path_node_count; i++) {
+    if (ofd->directory.index < 2) {
+        const char *synthetic_name = ofd->directory.index == 0 ? "." : "..";
+        posix_kernel_path_node *synthetic_node = ofd->directory.node;
+        if (ofd->directory.index == 1 && parent_length > 1) {
+            char parent_path[POSIX_PATH_NODE_NAME_MAX];
+            memcpy(parent_path, parent, parent_length + 1);
+            char *separator = parent_path + parent_length;
+            while (separator > parent_path && *separator != '/') separator--;
+            if (separator == parent_path) parent_path[1] = '\0';
+            else *separator = '\0';
+            synthetic_node = path_find(kernel, parent_path);
+            if (!synthetic_node) return -POSIX_ENOENT;
+        }
+        if (capacity < strlen(synthetic_name) + 1) return -POSIX_ERANGE;
+        memcpy(name, synthetic_name, strlen(synthetic_name) + 1);
+        *metadata = synthetic_node->metadata;
+        ofd->directory.index++;
+        return 1;
+    }
+    for (int i = ofd->directory.index - 2;
+         i < kernel->path_node_count; i++) {
         const char *candidate = kernel->path_nodes[i].path;
         size_t length = strlen(candidate);
         size_t start = parent_length == 1 ? 1 : parent_length + 1;
@@ -1349,13 +1437,13 @@ int posix_kernel_readdir(posix_kernel *kernel, int fd, char *name,
             if (candidate[at] == '/') { nested = 1; break; }
         if (nested) continue;
         size_t name_length = length - start;
-        ofd->directory.index = i + 1;
         if (name_length + 1 > capacity) return -POSIX_ERANGE;
         memcpy(name, candidate + start, name_length + 1);
         *metadata = kernel->path_nodes[i].metadata;
+        ofd->directory.index = i + 3;
         return 1;
     }
-    ofd->directory.index = kernel->path_node_count;
+    ofd->directory.index = kernel->path_node_count + 2;
     return 0;
 }
 
@@ -1653,8 +1741,10 @@ int posix_kernel_file_write_at(posix_kernel *kernel, int fd, uint64_t offset,
     if (!ofd) return -POSIX_EBADF;
     if (ofd->kind != POSIX_OFD_REGULAR || !ofd->regular.writable)
         return -POSIX_EBADF;
-    return posix_kernel_file_write_object(
+    int result = posix_kernel_file_write_object(
         kernel, ofd->regular.file, offset, buf, count);
+    if (result >= 0) metadata_set_now(kernel, &ofd->regular.node->metadata);
+    return result;
 }
 
 int posix_kernel_write(posix_kernel *kernel, int fd,
@@ -1698,6 +1788,7 @@ int posix_kernel_write(posix_kernel *kernel, int fd,
         }
         memcpy(ofd->regular.file->data + offset, buf, (size_t)count);
         ofd->regular.offset = offset + (size_t)count;
+        metadata_set_now(kernel, &ofd->regular.node->metadata);
         return count;
     }
     }

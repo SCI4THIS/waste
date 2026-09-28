@@ -1,7 +1,8 @@
 # WASTE image loader and GNU coreutils plan
 
-Status: active (binary/text loader, ten-utility Coreutils bring-up, and
-distribution packaging complete; final command-matrix integration remains)
+Status: complete (all stages closed; binary/text loader, eleven-utility
+Coreutils bring-up, distribution packaging, aggregate command matrix,
+and durable documentation delivered)
 
 Parent stage: Stage 8 of `docs/active-c-engine-webgl-shell-plan.md`
 
@@ -2734,8 +2735,8 @@ Gate:
 
 ## Stage 8H: Integrate commands and regression gates
 
-Status: in progress (entry points and focused fixtures exist; unified command
-matrix and durable documentation consolidation remain)
+Status: complete (runtime matrix, durable documentation, and closure audit
+delivered; parent-plan Stage 8 updated)
 
 Implementation update (2026-09-27, Stage 8H handoff):
 
@@ -2773,7 +2774,7 @@ Implementation update (2026-09-27, full-page VFS and readline integration):
 - Runtime/select integration changed the packaged WASTE support source, so the
   current corresponding-source archive supersedes the earlier Stage 8G hash;
   its SHA-256 is
-  `6656dd28b3310bbdd45871ad2efe8133453fc5695d1f4ffaf5a41278fd2f47ae`.
+  `50b963c6ba2f6704809c5bb7272e2d8585040dbb0f00fc9af8d21101ce05aede`.
 
 Implementation update (2026-09-28, heredoc pipe and VFS temporary files):
 
@@ -2791,7 +2792,166 @@ Implementation update (2026-09-28, heredoc pipe and VFS temporary files):
   process-continuation, and readline/select tests.
 - The rebuilt self-contained page passes all four required browser gates. The
   current corresponding-source archive SHA-256 is
-  `6656dd28b3310bbdd45871ad2efe8133453fc5695d1f4ffaf5a41278fd2f47ae`.
+  `50b963c6ba2f6704809c5bb7272e2d8585040dbb0f00fc9af8d21101ce05aede`.
+
+Implementation update (2026-09-28, Readline filename completion):
+
+- Confirmed that the canvas already translates Tab to byte `0x09` and that
+  Readline receives it. The prior BEL response came from an empty completion
+  result rather than a dropped browser event.
+- Corrected the shared wasm32 `struct dirent` ABI to match the prebuilt
+  Bash/Emscripten layout: 64-bit `d_ino`, 64-bit `d_off`, 16-bit `d_reclen`,
+  8-bit `d_type`, and `d_name` at byte offset 19. The old guest-libc layout put
+  `d_name` at offset 11, so Bash read directory metadata as an empty filename.
+- Rebuilt guest libc and all ten Coreutils binaries against the same layout.
+  A new `--readline-completion --full-package` browser regression sends
+  `/bin/pw`, Tab, and Enter; it requires expansion to `/bin/pwd`, output
+  `/root`, a later prompt, and clean exit. The test is now part of
+  `./start.sh --html-bash`.
+- The rebuilt corresponding-source archive SHA-256 is
+  `50b963c6ba2f6704809c5bb7272e2d8585040dbb0f00fc9af8d21101ce05aede`.
+
+Implementation update (2026-09-28, synthetic directory entries):
+
+- `posix_kernel_readdir` now emits `.` and `..` before explicit child nodes,
+  using metadata for the opened directory and its parent. At `/`, both entries
+  resolve to the root inode. They remain synthetic iterator records rather
+  than persistent VFS pathname nodes.
+- Directory iteration no longer consumes an entry when the caller's name
+  buffer is too small. Native sanitizer coverage verifies retry behavior,
+  nested parent metadata, explicit-child ordering, end-of-directory, and root
+  self-parent semantics; the POSIX kernel suite now passes 341 checks.
+- The Coreutils browser matrix now runs `ls -la /tmp/ls-fixture` and requires
+  long-format `.` and `..` records before testing hidden, symlink, redirected,
+  multi-directory, and error cases. The expanded browser test passes.
+- The rebuilt corresponding-source archive SHA-256 is
+  `50b963c6ba2f6704809c5bb7272e2d8585040dbb0f00fc9af8d21101ce05aede`.
+
+Implementation update (2026-09-28, variadic `open` and creation masks):
+
+- Traced heredoc-created modes such as `-rwS-wS--T` to the legacy host
+  `env.open` bridge treating Bash's wasm32 variadic-area pointer as the file
+  mode. The mode bits therefore came from an address rather than the `0666`
+  argument supplied by Bash.
+- Guest libc now owns the variadic `open` function, decodes its optional mode,
+  and calls the fixed-signature `waste_kernel.open_v1` boundary. Its internal
+  declarations and all ten Coreutils images were rebuilt against that ABI.
+- The process kernel now implements `umask`, starts at `0022`, carries an
+  independent inherited mask across `fork`, and applies it to regular and
+  shared-memory file creation. The native sanitizer suite passes 345 checks.
+- The full-package heredoc browser regression now verifies both `Hello world!`
+  and the exact `-rw-r--r--` mode reported by `/bin/ls -l hello.txt`. The
+  complete `./start.sh --html-bash` gate and expanded Coreutils `ls` matrix
+  pass. The rebuilt corresponding-source archive SHA-256 is
+  `50b963c6ba2f6704809c5bb7272e2d8585040dbb0f00fc9af8d21101ce05aede`.
+
+Implementation update (2026-09-28, realtime clock and VFS mtimes):
+
+- Extended the compact pathname metadata ABI from 32 to 48 bytes with signed
+  modification-time seconds and nanoseconds. Guest `stat` now exposes those
+  values, and create, truncate, and successful write operations refresh mtime
+  from an engine-injected realtime clock.
+- Added the browser realtime backend using `Date.now()` through `waste_host`.
+  The platform-neutral kernel owns the callback and timestamp policy; it does
+  not import JavaScript. Guest `time_t` is now signed 64-bit to match prebuilt
+  Bash and retain post-2038 range, with versioned `waste_kernel.realtime_v1`
+  backing guest `time` and `gettimeofday`.
+- The static page keeps normalized tar headers for package reproducibility but
+  embeds a separate `vfs-mtimes.json` map. Guest files receive the mtime of the
+  exact staged source artifact; files without source metadata use the browser
+  wall clock at staging time.
+- Added GNU Coreutils `date` as the eleventh accepted utility. Its relink rule
+  retains both upstream `date.o` and `show-date.o`; all eleven utilities build
+  and pass import audit. In the browser, `date -u` reports the current UTC
+  time, `/bin/ls -l /bin/date` matches the source Wasm mtime, and a heredoc file
+  reports its creation/write time instead of 1970.
+- Native sanitizer coverage now passes 346 kernel checks plus the compact path
+  metadata and VFS suites. The required browser clock, packaged-mtime, heredoc,
+  and `ls` gates are part of `./start.sh --html-bash`.
+- The rebuilt corresponding-source archive SHA-256 is
+  `50b963c6ba2f6704809c5bb7272e2d8585040dbb0f00fc9af8d21101ce05aede`.
+
+Implementation update (2026-09-28, engine-created node build mtimes):
+
+- Added a bounded kernel pathname operation for assigning an exact mtime and
+  covered success, missing-path, and invalid-nanosecond behavior in the native
+  VFS sanitizer test.
+- Both external-asset and inline browser launchers now stage the browser
+  engine image's source mtime independently of guest package metadata. After
+  constructing the process kernel and installing the manifest, the runtime
+  applies it to `/`, `/bin`, `/usr`, `/usr/bin`, `/bin/wat`, and `/bin/wast`.
+  Packaged files continue to retain their individual source mtimes, while
+  runtime-created files use the current browser clock.
+- `./start.sh --html-bash` now requires GNU `ls -ld` to report the exact image
+  build minute on all of `/`, `/bin`, `/bin/wat`, and `/bin/wast`; it also
+  rejects an epoch timestamp. The complete browser gate and the 60-check
+  pathname VFS sanitizer suite pass.
+- The current corresponding-source archive SHA-256 is
+  `6f199cbd271cea22dd1670d41b2c6f5385d003d4704616936029969aa7825abe`.
+
+Implementation update (2026-09-28, aggregate browser command matrix):
+
+- Added `--coreutils-matrix` to the C-engine Bash browser harness. In one Bash
+  lifetime it executes all eleven accepted utilities (`true`, `false`, `pwd`,
+  `echo`, `printf`, `basename`, `dirname`, `cat`, `wc`, `ls`, and `date`), then
+  `/bin/wat` and `/bin/wast` against separate executable fixtures.
+- The matrix records and checks the status immediately after every external
+  command, including the required status 1 from `false` and status 0 from the
+  other twelve commands. It also validates representative stdout, the complete
+  packaged `/bin` inventory, current UTC year, a later usable prompt, and clean
+  shell exit. Existing focused utility and interpreter gates remain available
+  for boundary-specific failures.
+- `./start.sh --html-bash` now runs the matrix after the heredoc/pipe gate. The
+  complete self-contained page build passes smoke, process continuation,
+  readline/select, completion, heredoc, aggregate command, clock, packaged
+  mtime, and virtual-node mtime browser gates. The pinned Coreutils submodule
+  remains clean.
+- The rebuilt corresponding-source archive SHA-256 is
+  `7aa71ef3c29f7f603a25bb76c18219abf323bc2bb41f7ad8666058495deca743`.
+- Stage 8H now has its required unified runtime matrix. The next increment is
+  durable loader/build/package guidance consolidation in `docs/techniques.md`,
+  followed by the final Stage 8 closure audit and parent-plan handoff.
+
+Implementation update (2026-09-28, durable Stage 8 guidance):
+
+- Added durable VFS-backed executable-loading guidance to
+  `docs/techniques.md`: ordinary VFS snapshots are authoritative, binary Wasm
+  is recognized by magic, WAT/WAST and bounded shebang dispatch remain loader
+  policy, parser grammar is shared, and replacement stays transactional.
+- Consolidated the Coreutils build and release method in the same document:
+  pristine pinned submodule, repository-owned patch, idempotent staged
+  bootstrap, generated `build/coreutils/` tree, explicit sysroot/configure
+  reports, per-image import and Asyncify rejection, deterministic offline
+  packaging, source mtimes, and GPL corresponding-source mapping.
+- Recorded the stable build/audit/package commands and the reason to retain
+  both focused utility gates and the one-shell aggregate browser matrix.
+  `docs/architecture.md`, `docs/wasm32-abi.md`, and
+  `docs/coreutils-source-distribution.md` already contain the corresponding
+  ownership, ABI, and release-specific contracts.
+- Stage 8H documentation consolidation is complete.
+
+Implementation update (2026-09-28, Stage 8 closure audit):
+
+- Ran the final closure audit against all completion criteria.
+- Coreutils submodule is pinned at `cecd945aa` (`v9.12-17-gcecd945aa`), clean
+  with no dirty prefix and all WASTE changes in
+  `submodules/coreutils-waste.patch`.
+- Import audit passes for all eleven utilities (true, false, pwd, echo, printf,
+  basename, dirname, cat, wc, ls, date) with zero unknown imports and zero
+  Asyncify symbols.
+- `./start.sh --html-bash` passes all nine browser gates: smoke,
+  process-continuation, readline/select, readline completion, heredoc/pipe,
+  aggregate command matrix, wall-clock/date, packaged-mtime, and virtual-node
+  build-mtime.
+- Python bytecode checks, `bash -n start.sh`, Node syntax validation, and
+  `git diff --check` all pass.
+- Durable loader, packaging, and build guidance consolidated in
+  `docs/techniques.md` (VFS-Backed Executable Loading, Coreutils Cross-Build
+  and Distribution), `docs/architecture.md`, `docs/wasm32-abi.md`, and
+  `docs/coreutils-source-distribution.md`.
+- Updated parent plan Stage 8 status in
+  `docs/active-c-engine-webgl-shell-plan.md`.
+- Stage 8 is closed. This plan can be archived.
 
 Add focused build entry points without changing the existing command meanings:
 

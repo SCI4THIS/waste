@@ -29,6 +29,29 @@ __attribute__((import_module("waste_host"), import_name("posix_write")))
 extern int32_t waste_host_posix_write(int32_t descriptor, const void *buffer,
                                       uint32_t count);
 
+__attribute__((import_module("waste_host"), import_name("wall_clock_ms")))
+extern double waste_host_wall_clock_ms(void);
+
+uint64_t waste_browser_realtime_now(void *data) {
+    double milliseconds = waste_host_wall_clock_ms();
+    (void)data;
+    if (!(milliseconds > 0.0)) return 0;
+    if (milliseconds >= (double)UINT64_MAX / 1000000.0) return UINT64_MAX;
+    return (uint64_t)(milliseconds * 1000000.0);
+}
+
+static void native_posix_le32(uint8_t *bytes, uint32_t value) {
+    bytes[0] = (uint8_t)value;
+    bytes[1] = (uint8_t)(value >> 8);
+    bytes[2] = (uint8_t)(value >> 16);
+    bytes[3] = (uint8_t)(value >> 24);
+}
+
+static void native_posix_le64(uint8_t *bytes, uint64_t value) {
+    native_posix_le32(bytes, (uint32_t)value);
+    native_posix_le32(bytes + 4, (uint32_t)(value >> 32));
+}
+
 /* ---- POSIX stub helpers ---- */
 
 static exec_status native_posix_memory(const waste_exec_engine *caller,
@@ -544,6 +567,14 @@ static void native_posix_metadata_stat(const posix_path_metadata *metadata,
     stat->st_size = metadata->size;
     stat->st_blksize = 4096;
     stat->st_blocks = (metadata->size + 511) / 512;
+    /* Until access/change timestamps gain distinct mutation rules, expose the
+       preserved modification time consistently in all three stat fields. */
+    stat->st_atime_sec = metadata->mtime_sec;
+    stat->st_atime_nsec = metadata->mtime_nsec;
+    stat->st_mtime_sec = metadata->mtime_sec;
+    stat->st_mtime_nsec = metadata->mtime_nsec;
+    stat->st_ctime_sec = metadata->mtime_sec;
+    stat->st_ctime_nsec = metadata->mtime_nsec;
 }
 
 /* ---- POSIX stub implementations ---- */
@@ -666,6 +697,18 @@ static exec_status native_posix_dup(void *data, const wasm_value *args,
         native_posix_set_errno(store, caller, -result);
         result = -1;
     }
+    return native_posix_result(result, results, result_count);
+}
+
+static exec_status native_posix_umask(void *data, const wasm_value *args,
+                                      int arg_count, wasm_value *results,
+                                      int *result_count, exec_error *error,
+                                      const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    int result = store && store->kernel && arg_count == 1 ?
+        posix_kernel_umask(store->kernel, args[0].i32) : -POSIX_EINVAL;
+    (void)error;
+    (void)caller;
     return native_posix_result(result, results, result_count);
 }
 
@@ -889,6 +932,73 @@ static exec_status native_posix_i32_zero(void *data, const wasm_value *args,
                                          exec_error *error,
                                          const waste_exec_engine *caller) {
     (void)data; (void)args; (void)arg_count; (void)error; (void)caller;
+    return native_posix_result(0, results, result_count);
+}
+
+static exec_status native_posix_realtime_v1(
+        void *data, const wasm_value *args, int arg_count,
+        wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    uint8_t seconds[8], nanoseconds[4];
+    if (!store || !store->kernel || !caller->memory || arg_count != 2 ||
+        args[0].i32 == 0 || args[1].i32 == 0)
+        return native_posix_result(-POSIX_EFAULT, results, result_count);
+    uint64_t now = posix_kernel_realtime_now(store->kernel);
+    native_posix_le64(seconds, now / UINT64_C(1000000000));
+    native_posix_le32(nanoseconds,
+                      (uint32_t)(now % UINT64_C(1000000000)));
+    if (!native_posix_write_guest(caller->memory, (uint32_t)args[0].i32,
+                                  seconds, sizeof(seconds)) ||
+        !native_posix_write_guest(caller->memory, (uint32_t)args[1].i32,
+                                  nanoseconds, sizeof(nanoseconds))) {
+        (void)error;
+        return native_posix_result(-POSIX_EFAULT, results, result_count);
+    }
+    return native_posix_result(0, results, result_count);
+}
+
+static exec_status native_posix_time(void *data, const wasm_value *args,
+                                     int arg_count, wasm_value *results,
+                                     int *result_count, exec_error *error,
+                                     const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    uint64_t seconds = store && store->kernel ?
+        posix_kernel_realtime_now(store->kernel) / UINT64_C(1000000000) : 0;
+    if (arg_count != 1) return EXEC_ERROR_TRAP;
+    if (args[0].i32 != 0) {
+        uint8_t encoded[8];
+        native_posix_le64(encoded, seconds);
+        if (!caller->memory || !native_posix_write_guest(
+                caller->memory, (uint32_t)args[0].i32,
+                encoded, sizeof(encoded))) return EXEC_ERROR_TRAP;
+    }
+    (void)error;
+    results[0].type = WASM_VALTYPE_I64;
+    results[0].i64 = (int64_t)seconds;
+    *result_count = 1;
+    return EXEC_OK;
+}
+
+static exec_status native_posix_gettimeofday(
+        void *data, const wasm_value *args, int arg_count,
+        wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    uint8_t timeval[16] = {0};
+    if (!store || !store->kernel || !caller->memory || arg_count != 2 ||
+        args[0].i32 == 0)
+        return native_posix_result(-1, results, result_count);
+    uint64_t now = posix_kernel_realtime_now(store->kernel);
+    native_posix_le64(timeval, now / UINT64_C(1000000000));
+    native_posix_le32(timeval + 8,
+                      (uint32_t)((now % UINT64_C(1000000000)) / 1000u));
+    if (!native_posix_write_guest(caller->memory, (uint32_t)args[0].i32,
+                                  timeval, sizeof(timeval))) {
+        native_posix_set_errno(store, caller, POSIX_EFAULT);
+        return native_posix_result(-1, results, result_count);
+    }
+    (void)error;
     return native_posix_result(0, results, result_count);
 }
 
@@ -1119,18 +1229,6 @@ static exec_status native_posix_i32_negative(void *data,
                                              const waste_exec_engine *caller) {
     (void)data; (void)args; (void)arg_count; (void)error; (void)caller;
     return native_posix_result(-1, results, result_count);
-}
-
-static exec_status native_posix_i64_zero(void *data, const wasm_value *args,
-                                         int arg_count, wasm_value *results,
-                                         int *result_count,
-                                         exec_error *error,
-                                         const waste_exec_engine *caller) {
-    (void)data; (void)args; (void)arg_count; (void)error; (void)caller;
-    results[0].type = WASM_VALTYPE_I64;
-    results[0].i64 = 0;
-    *result_count = 1;
-    return EXEC_OK;
 }
 
 static exec_status native_posix_i64_negative(void *data,
@@ -1634,9 +1732,17 @@ static exec_status native_posix_fstat(void *data, const wasm_value *args,
         native_posix_set_errno(store, caller, POSIX_EBADF);
         return native_posix_result(-1, results, result_count);
     }
+    posix_ofd *ofd = store->kernel->fds[args[0].i32].ofd;
     posix_path_metadata metadata = {
-        POSIX_NODE_REGULAR, 0666, 0, 0, 0, (uint64_t)(args[0].i32 + 1)
+        POSIX_NODE_REGULAR, 0666, 0, 0, 0,
+        (uint64_t)(args[0].i32 + 1), 0, 0
     };
+    if (ofd->kind == POSIX_OFD_REGULAR && ofd->regular.node) {
+        metadata = ofd->regular.node->metadata;
+        metadata.size = (int64_t)ofd->regular.file->data_capacity;
+    } else if (ofd->kind == POSIX_OFD_DIRECTORY && ofd->directory.node) {
+        metadata = ofd->directory.node->metadata;
+    }
     native_posix_metadata_stat(&metadata, &guest_stat);
     posix_guest_stat_encode(status, &guest_stat);
     if (!native_posix_write_guest(memory, (uint32_t)args[1].i32,
@@ -2090,6 +2196,8 @@ static exec_host_func native_posix_function(const char *module,
                                              const char *name) {
     if (strcmp(module, "waste_kernel") == 0) {
         if (strcmp(name, "startup_v1") == 0) return native_posix_startup_v1;
+        if (strcmp(name, "open_v1") == 0) return native_posix_open;
+        if (strcmp(name, "realtime_v1") == 0) return native_posix_realtime_v1;
         if (strcmp(name, "select_v1") == 0) return native_posix_select;
         if (strcmp(name, "pselect_v1") == 0) return native_posix_pselect;
         if (strcmp(name, POSIX_KERNEL_PATH_ACCESS_V1) == 0)
@@ -2125,7 +2233,7 @@ static exec_host_func native_posix_function(const char *module,
     if (strcmp(name, "tcgetpgrp") == 0) return native_posix_tcgetpgrp;
     if (strcmp(name, "isatty") == 0) return native_posix_isatty;
     if (strcmp(name, "tcflow") == 0) return native_posix_tcflow;
-    if (strcmp(name, "time") == 0) return native_posix_i64_zero;
+    if (strcmp(name, "time") == 0) return native_posix_time;
     if (strcmp(name, "exit") == 0 || strcmp(name, "_exit") == 0)
         return native_posix_exit;
     if (strcmp(name, "atexit") == 0) return native_posix_i32_zero;
@@ -2140,9 +2248,10 @@ static exec_host_func native_posix_function(const char *module,
         strcmp(name, "sigdelset") == 0 || strcmp(name, "sigismember") == 0 ||
         strcmp(name, "sigprocmask") == 0 ||
         strcmp(name, "setitimer") == 0 || strcmp(name, "sleep") == 0 ||
-        strcmp(name, "gettimeofday") == 0 || strcmp(name, "getrusage") == 0 ||
-        strcmp(name, "umask") == 0)
+        strcmp(name, "getrusage") == 0)
         return native_posix_i32_zero;
+    if (strcmp(name, "gettimeofday") == 0) return native_posix_gettimeofday;
+    if (strcmp(name, "umask") == 0) return native_posix_umask;
     if (strcmp(name, "dup") == 0) return native_posix_dup;
     if (strcmp(name, "dup2") == 0) return native_posix_dup2;
     if (strcmp(name, "fcntl") == 0) return native_posix_fcntl;

@@ -685,6 +685,9 @@ typedef struct {
 } browser_vfs_manifest_entry;
 static browser_vfs_manifest_entry g_vfs_manifest[BROWSER_VFS_MANIFEST_MAX];
 static uint32_t g_vfs_manifest_count;
+static int g_build_mtime_valid;
+static int64_t g_build_mtime_sec;
+static int64_t g_build_mtime_nsec;
 /* Optional initial cwd selected by the browser launcher before the process
  * store is created.  Keep this as bounded host-side state so the path remains
  * valid after the staging allocation is released. */
@@ -1710,6 +1713,8 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
         native_store_enable_terminal(&g_yield_context.store);
         g_terminal_requested = 0;
     }
+    posix_kernel_set_realtime_clock(g_yield_context.store.kernel,
+                                    waste_browser_realtime_now, NULL);
     (void)native_store_bind_interpreter_paths(&g_yield_context.store);
     /* Terminal creation replaces the initial noninteractive kernel, so bind
      * packaged metadata only after that optional replacement. */
@@ -1737,6 +1742,19 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
         g_vfs_manifest[i].link_target = NULL;
     }
     g_vfs_manifest_count = 0;
+    if (g_build_mtime_valid) {
+        static const char *const engine_paths[] = {
+            "/", "/bin", "/usr", "/usr/bin", "/bin/wat", "/bin/wast"
+        };
+        for (size_t i = 0; i < sizeof(engine_paths) / sizeof(engine_paths[0]);
+             i++) {
+            const char *path = engine_paths[i];
+            (void)posix_kernel_path_set_mtime(
+                g_yield_context.store.kernel, (const uint8_t *)path,
+                strlen(path), g_build_mtime_sec, g_build_mtime_nsec);
+        }
+        g_build_mtime_valid = 0;
+    }
     if (g_initial_cwd[0]) {
         (void)posix_kernel_path_set_cwd(g_yield_context.store.kernel,
                                         g_initial_cwd);
@@ -1884,6 +1902,36 @@ int32_t waste_wast_stage_path(uint32_t ptr, uint32_t length,
     return 0;
 }
 
+/* Apply source metadata to the most recently staged entry without widening
+   the established staging calls. Seconds use an explicit little-endian pair
+   so JavaScript never has to pass an i64/BigInt across this API. */
+__attribute__((export_name("waste_wast_stage_mtime")))
+int32_t waste_wast_stage_mtime(uint32_t seconds_low, uint32_t seconds_high,
+                               uint32_t nanoseconds) {
+    if (g_vfs_manifest_count == 0 || nanoseconds >= 1000000000u)
+        return -POSIX_EINVAL;
+    browser_vfs_manifest_entry *entry =
+        &g_vfs_manifest[g_vfs_manifest_count - 1u];
+    entry->metadata.mtime_sec = (int64_t)(
+        (uint64_t)seconds_low | ((uint64_t)seconds_high << 32));
+    entry->metadata.mtime_nsec = (int64_t)nanoseconds;
+    return 0;
+}
+
+/* Record the timestamp of the engine image used to construct virtual nodes
+   that do not have a corresponding packaged source file. */
+__attribute__((export_name("waste_wast_stage_build_mtime")))
+int32_t waste_wast_stage_build_mtime(uint32_t seconds_low,
+                                     uint32_t seconds_high,
+                                     uint32_t nanoseconds) {
+    if (nanoseconds >= 1000000000u) return -POSIX_EINVAL;
+    g_build_mtime_sec = (int64_t)(
+        (uint64_t)seconds_low | ((uint64_t)seconds_high << 32));
+    g_build_mtime_nsec = (int64_t)nanoseconds;
+    g_build_mtime_valid = 1;
+    return 0;
+}
+
 __attribute__((export_name("waste_wast_stage_symlink")))
 int32_t waste_wast_stage_symlink(uint32_t path_ptr, uint32_t path_length,
                                  uint32_t target_ptr, uint32_t target_length,
@@ -1902,7 +1950,7 @@ int32_t waste_wast_stage_symlink(uint32_t path_ptr, uint32_t path_length,
            target_length);
     entry->link_target[target_length] = '\0';
     entry->metadata = (posix_path_metadata){ POSIX_NODE_SYMLINK, mode,
-        0, 0, (int64_t)target_length, 1000u + g_vfs_manifest_count };
+        0, 0, (int64_t)target_length, 1000u + g_vfs_manifest_count, 0, 0 };
     g_vfs_manifest_count++;
     return 0;
 }
@@ -1933,7 +1981,7 @@ int32_t waste_wast_stage_file(uint32_t path_ptr, uint32_t path_length,
     if (data_length) memcpy(entry->data, (const void *)(uintptr_t)data_ptr, data_length);
     entry->data_length = data_length;
     entry->metadata = (posix_path_metadata){ POSIX_NODE_REGULAR, mode,
-        0, 0, (int64_t)data_length, 1000u + g_vfs_manifest_count };
+        0, 0, (int64_t)data_length, 1000u + g_vfs_manifest_count, 0, 0 };
     g_vfs_manifest_count++;
     return 0;
 }
@@ -1993,7 +2041,7 @@ int32_t waste_wast_shared_file_page_probe(void) {
     static const uint8_t path[] = "/vm-f-shared-page-probe";
     static const uint8_t initial[] = "cache";
     posix_path_metadata metadata = {
-        POSIX_NODE_REGULAR, 0666, 0, 0, 1, 9101
+        POSIX_NODE_REGULAR, 0666, 0, 0, 1, 9101, 0, 0
     };
     native_store *store = &g_yield_context.store;
     exec_memory shared_memory;

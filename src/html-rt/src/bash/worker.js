@@ -78,7 +78,7 @@ function flushPendingEvents() {
   pendingSignals = [];
 }
 
-async function run(wasmBuf, source, probeBuf, packagedFiles) {
+async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime) {
   const wasmBytes = new Uint8Array(wasmBuf);
   const hostFloat = (ptr, length, asF32) => {
     const bytes = new Uint8Array(engineMemory.buffer, ptr, length);
@@ -91,11 +91,19 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
     posix_close: () => 0,
     posix_read: posixRead,
     posix_write: posixWrite,
+    wall_clock_ms: () => Date.now(),
   }};
   const {instance} = await WebAssembly.instantiate(wasmBytes, imports);
   exp = instance.exports;
   engineMemory = exp.memory;
   exp.waste_wast_enable_terminal();
+  if (buildMtime && exp.waste_wast_stage_build_mtime) {
+    const seconds = buildMtime.sec;
+    const staged = exp.waste_wast_stage_build_mtime(
+      seconds >>> 0, Math.floor(seconds / 0x100000000) >>> 0,
+      (buildMtime.nsec || 0) >>> 0);
+    if (staged !== 0) throw new Error(`C engine build mtime failed: ${staged}`);
+  }
   if (probeBuf && exp.waste_wast_stage_executable) {
     const probeBytes = new Uint8Array(probeBuf);
     const probePtr = exp.waste_wast_alloc(probeBytes.length);
@@ -109,7 +117,19 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
   /* Submit the initial packaged namespace as metadata before the script
      creates its process store.  The engine owns the resulting pathname state;
      the browser-side tar map remains packaging input only. */
-  const stageVfsPath = (path, kind, mode, size) => {
+  const stageVfsMtime = (seconds, nanoseconds = 0) => {
+    if (!exp.waste_wast_stage_mtime) return;
+    if (seconds === undefined) {
+      const milliseconds = Date.now();
+      seconds = Math.floor(milliseconds / 1000);
+      nanoseconds = (milliseconds % 1000) * 1000000;
+    }
+    const low = seconds >>> 0;
+    const high = Math.floor(seconds / 0x100000000) >>> 0;
+    const staged = exp.waste_wast_stage_mtime(low, high, nanoseconds >>> 0);
+    if (staged !== 0) throw new Error(`C engine VFS mtime failed: ${staged}`);
+  };
+  const stageVfsPath = (path, kind, mode, size, mtimeSec, mtimeNsec) => {
     if (!exp.waste_wast_stage_path) return;
     const pathBytes = new TextEncoder().encode(path);
     const pathPtr = exp.waste_wast_alloc(pathBytes.length);
@@ -119,8 +139,9 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
                                               kind, mode, size >>> 0);
     exp.waste_wast_free?.(pathPtr);
     if (staged !== 0) throw new Error(`C engine VFS metadata failed for ${path}`);
+    stageVfsMtime(mtimeSec, mtimeNsec);
   };
-  const stageVfsSymlink = (path, target, mode) => {
+  const stageVfsSymlink = (path, target, mode, mtimeSec, mtimeNsec) => {
     if (!exp.waste_wast_stage_symlink)
       throw new Error("C engine VFS symlink staging is unavailable");
     const pathBytes = new TextEncoder().encode(path);
@@ -136,6 +157,7 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
     exp.waste_wast_free?.(pathPtr);
     exp.waste_wast_free?.(targetPtr);
     if (staged !== 0) throw new Error(`C engine VFS symlink failed for ${path}`);
+    stageVfsMtime(mtimeSec, mtimeNsec);
   };
   stageVfsPath("/tmp", 2, 0o777, 0);
   /* The virtual shell runs as UID 0.  Its passwd home and initial cwd are
@@ -158,11 +180,12 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
     stageVfsPath("/usr/share/licenses/coreutils", 2, 0o755, 0);
     for (const file of packagedFiles) {
       if (file.kind === 2) {
-        stageVfsPath(file.path, 2, file.mode, 0);
+        stageVfsPath(file.path, 2, file.mode, 0, file.mtimeSec, file.mtimeNsec);
         continue;
       }
       if (file.kind === 3) {
-        stageVfsSymlink(file.path, file.target, file.mode);
+        stageVfsSymlink(file.path, file.target, file.mode,
+                        file.mtimeSec, file.mtimeNsec);
         continue;
       }
       const pathBytes = new TextEncoder().encode(file.path);
@@ -179,6 +202,7 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
       if (staged !== 0) {
         throw new Error(`C engine packaged file staging failed for ${file.path}: ${staged}`);
       }
+      stageVfsMtime(file.mtimeSec, file.mtimeNsec);
     }
   }
   if (probeBuf && (!packagedFiles || !packagedFiles.some(file => file.path === "/bin/waste-probe")) && exp.waste_wast_stage_file) {
@@ -194,6 +218,7 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
     exp.waste_wast_free?.(pathPtr);
     exp.waste_wast_free?.(dataPtr);
     if (staged !== 0) throw new Error("C engine VFS file staging failed");
+    stageVfsMtime();
   } else if (probeBuf) {
     stageVfsPath("/bin/waste-probe", 1, 0o755,
                  new Uint8Array(probeBuf).byteLength);
@@ -304,7 +329,8 @@ async function run(wasmBuf, source, probeBuf, packagedFiles) {
 self.onmessage = function(e) {
   const msg = e.data;
   if (msg.type === "start") {
-    run(msg.wasmBytes, msg.source, msg.probeBytes, msg.vfsFiles || []).catch(error => {
+    run(msg.wasmBytes, msg.source, msg.probeBytes, msg.vfsFiles || [],
+        msg.buildMtime).catch(error => {
       self.postMessage({type: "done", ok: false,
         error: error && (error.stack || error.message) || String(error)});
     });

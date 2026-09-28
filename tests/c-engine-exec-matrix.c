@@ -98,10 +98,10 @@ int main(int argc, char **argv) {
               "missing path access returns ENOENT");
         {
             const posix_path_metadata nonexec = {
-                POSIX_NODE_REGULAR, 0644u, 0, 0, 17, 40
+                POSIX_NODE_REGULAR, 0644u, 0, 0, 17, 40, 0, 0
             };
             const posix_path_metadata symlink = {
-                POSIX_NODE_SYMLINK, 0777u, 0, 0, 11, 41
+                POSIX_NODE_SYMLINK, 0777u, 0, 0, 11, 41, 0, 0
             };
             CHECK(posix_kernel_path_add(store.kernel, "/tmp/noexec",
                                         &nonexec) == 0,

@@ -324,11 +324,28 @@ Every operation on an engine-owned descriptor, including `open`, `close`,
 Browser host shims are only a fallback for runtimes without that kernel. Mixing
 the two paths would leave kernel reference and pipe-endpoint counts stale; in
 particular, a pipe reader would never observe EOF after a host-only `close`.
+The process kernel also owns the file-creation mask, initialized to `0022`,
+inherited by `fork`, and replaced independently by `umask`. Creation applies
+that mask to the caller-supplied mode for ordinary and shared-memory files.
+Variadic argument decoding remains in guest libc: its `open` wrapper extracts
+the optional mode from the calling image and passes a fixed scalar to the
+versioned kernel boundary.
 
-The VFS is a rooted in-memory namespace.  Persistent storage, if enabled, is a
-mount backend rather than a replacement namespace in JavaScript.  The terminal
-retains controlling-session, foreground-process-group, termios, and job-control
-state in the kernel; JavaScript renders output and delivers input events.
+The VFS is a rooted in-memory namespace. Directory iteration synthesizes `.`
+for the opened directory and `..` for its parent; the root's parent is root
+itself. These are iterator records with the corresponding directory metadata,
+not stored pathname nodes. Path metadata carries modification seconds and
+nanoseconds. Packaged files receive their source artifact's mtime from a
+separate manifest while tar headers remain normalized; runtime create,
+truncate, and write operations use the kernel's injected UTC epoch clock.
+Namespace nodes synthesized by the engine (`/`, `/bin`, `/usr`, `/usr/bin`,
+`/bin/wat`, and `/bin/wast`) receive the browser engine image's build mtime,
+which the launcher stages separately from guest package entries.
+The browser backend supplies that clock from `Date.now()`, while the engine
+retains no JavaScript dependency. Persistent storage, if enabled, is a mount
+backend rather than a replacement namespace in JavaScript. The terminal retains
+controlling-session, foreground-process-group, termios, and job-control state
+in the kernel; JavaScript renders output and delivers input events.
 
 The offline Bash page follows the non-persistent default: each worker start
 creates a new sandbox kernel, imports a read-only copy of the embedded package

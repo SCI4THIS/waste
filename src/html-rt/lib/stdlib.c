@@ -263,7 +263,7 @@ u32 arc4random(void){u32 x=random_state;x^=x<<13;x^=x>>17;x^=x<<5;return random_
 
 static u32 temporary_counter;
 char *mktemp(char*pattern){u32 n=c_length(pattern),value=++temporary_counter;for(u32 i=n;i&&pattern[i-1]=='X';i--){pattern[i-1]=(char)('a'+value%26);value/=26;}return pattern;}
-extern i32 open(const char *path, i32 flags, i32 mode);
+extern i32 open(const char *path, i32 flags, ...);
 
 static i32 temporary_open(char *pattern, i32 flags) {
   u32 length = c_length(pattern), placeholders = 0;
@@ -299,6 +299,7 @@ i32 strtol(const char*s,char**end,i32 base){i32 neg;u64 v=parse_unsigned(s,end,b
 i64 strtoimax(const char*s,char**end,i32 base){i32 neg;u64 v=parse_unsigned(s,end,base,&neg);if(neg)return v>0x8000000000000000ULL?(*__errno_location()=34,(i64)0x8000000000000000ULL):(i64)(0-v);if(v>0x7fffffffffffffffULL){*__errno_location()=34;return 0x7fffffffffffffffLL;}return(i64)v;}
 u64 strtoumax(const char*s,char**end,i32 base){i32 neg;u64 v=parse_unsigned(s,end,base,&neg);return neg?0-v:v;}
 i32 atoi(const char*s){return strtol(s,0,10);}
+i32 abs(i32 value){return value<0?-value:value;}
 
 static double power10(i32 exponent){double value=1.0;if(exponent>0)while(exponent--)value*=10.0;else while(exponent++)value/=10.0;return value;}
 double strtod(const char*s,char**end){while(*s==' '||*s=='\t')s++;i32 neg=0;if(*s=='+'||*s=='-'){neg=*s=='-';s++;}const char*start=s;double value=0;while(*s>='0'&&*s<='9')value=value*10+(*s++-'0');if(*s=='.'){s++;double place=.1;while(*s>='0'&&*s<='9'){value+=(*s++-'0')*place;place*=.1;}}if(*s=='e'||*s=='E'){const char*mark=s++;i32 eneg=0;if(*s=='+'||*s=='-'){eneg=*s=='-';s++;}i32 e=0,any=0;while(*s>='0'&&*s<='9'){any=1;e=e*10+(*s++-'0');}if(any)value*=power10(eneg?-e:e);else s=mark;}if(end)*end=(char*)(s==start?start:s);return neg?-value:value;}
@@ -318,6 +319,10 @@ void imaxdiv(i64*out,i64 numerator,i64 denominator){out[0]=numerator/denominator
 
 char *getenv(const char *name) { (void)name; return (void *)0; }
 char *secure_getenv(const char *name) { (void)name; return (void *)0; }
+i32 setenv(const char *name,const char *value,i32 overwrite){
+  (void)name;(void)value;(void)overwrite;return 0;
+}
+i32 unsetenv(const char *name){(void)name;return 0;}
 
 void *sh_malloc(u32 size,const char*file,i32 line){(void)file;(void)line;return malloc(size);}
 void *sh_realloc(void*p,u32 size,const char*file,i32 line){(void)file;(void)line;return realloc(p,size);}

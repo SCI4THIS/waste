@@ -9,7 +9,8 @@ __attribute__((import_module("waste_kernel"), import_name("startup_v1")))
 extern i32 waste_kernel_startup_v1(void);
 #endif
 
-extern i32 open(const char *path, i32 flags, i32 mode);
+extern i32 waste_kernel_open_v1(const char *path, i32 flags, i32 mode)
+  __attribute__((import_module("waste_kernel"), import_name("open_v1")));
 extern i32 close(i32 descriptor);
 extern i32 waste_kernel_chdir(const char *path) __attribute__((import_module("waste_kernel"), import_name("chdir")));
 extern i32 waste_kernel_getcwd(char *buffer, i32 capacity) __attribute__((import_module("waste_kernel"), import_name("getcwd")));
@@ -20,6 +21,16 @@ extern i64 waste_kernel_lseek(i32 fd, i64 offset, i32 whence)
 static i32 env_result(i32 result) {
   if (result < -1) { *__errno_location() = -result; return -1; }
   return result;
+}
+i32 open(const char *path, i32 flags, ...) {
+  i32 mode = 0;
+  if (flags & 0100) {
+    __builtin_va_list ap;
+    __builtin_va_start(ap, flags);
+    mode = __builtin_va_arg(ap, i32);
+    __builtin_va_end(ap);
+  }
+  return env_result(waste_kernel_open_v1(path, flags, mode));
 }
 i32 chdir(const char *path) { return env_result(waste_kernel_chdir(path)); }
 char *getcwd(char *buffer, u32 capacity) {
@@ -233,6 +244,12 @@ static i32 stat_query(const char *path, waste_stat *output, i32 follow) {
   output->st_size = metadata.size;
   output->st_blksize = 4096;
   output->st_blocks = (metadata.size + 511) / 512;
+  output->st_atime_sec = metadata.mtime_sec;
+  output->st_atime_nsec = metadata.mtime_nsec;
+  output->st_mtime_sec = metadata.mtime_sec;
+  output->st_mtime_nsec = metadata.mtime_nsec;
+  output->st_ctime_sec = metadata.mtime_sec;
+  output->st_ctime_nsec = metadata.mtime_nsec;
   return 0;
 }
 

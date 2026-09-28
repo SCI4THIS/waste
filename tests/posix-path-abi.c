@@ -12,7 +12,10 @@ static int failures;
 } while (0)
 
 int main(void) {
-    posix_path_metadata input = { POSIX_NODE_REGULAR, 0100755, 1000, 1000, 123456, 42 };
+    posix_path_metadata input = {
+        POSIX_NODE_REGULAR, 0100755, 1000, 1000, 123456, 42,
+        1700000000, 123456789
+    };
     posix_path_metadata output;
     uint8_t metadata_bytes[POSIX_PATH_METADATA_BYTES];
     CHECK(posix_path_metadata_validate(&input) == 0);

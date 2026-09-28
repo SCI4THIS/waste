@@ -12,6 +12,7 @@ from pathlib import Path
 REQUIRED_FILES = {
     "true.wasm", "false.wasm", "pwd.wasm", "echo.wasm", "printf.wasm",
     "basename.wasm", "dirname.wasm", "cat.wasm", "wc.wasm", "ls.wasm",
+    "date.wasm",
     "usr/share/waste/coreutils-provenance.json",
     "usr/share/waste/coreutils-source-package.json",
     "usr/share/waste/waste-interpreters.json",
@@ -54,7 +55,7 @@ def audit_archive(path: Path) -> None:
             by_name["usr/share/waste/coreutils-source-package.json"]).read())
         if set(source_mapping.get("utilities", [])) != {
                 "true", "false", "pwd", "echo", "printf", "basename", "dirname", "cat",
-                "wc", "ls"}:
+                "wc", "ls", "date"}:
             raise SystemExit("source-package mapping does not cover every utility")
         if not source_mapping.get("archive") or not source_mapping.get("sha256"):
             raise SystemExit("source-package mapping is incomplete")

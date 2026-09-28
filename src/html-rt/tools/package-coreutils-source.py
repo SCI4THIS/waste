@@ -15,7 +15,7 @@ from pathlib import Path
 
 UTILITY_NAMES = [
     "true", "false", "pwd", "echo", "printf", "basename", "dirname", "cat", "wc",
-    "ls",
+    "ls", "date",
 ]
 REPOSITORY_INPUTS = [
     "start.sh",

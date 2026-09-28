@@ -103,8 +103,9 @@ shared between processes unless POSIX thread semantics explicitly require it.
   still a separate Stage 7 VFS concern.
 - The packaged tar loader is an asset store, not yet the engine VFS used by
   pathname and executable operations.
-- The existing process continuation is deliberately bounded and child-first;
-  it is enough to prove one external child but not pipelines or concurrent jobs.
+- The child-first fork model now supports multi-process pipelines.  Zombie
+  processes release file descriptors immediately on exit so that pipe readers
+  observe EOF; the kernel remains alive for path-node merging at waitpid time.
 
 ## Implementation log
 
@@ -161,8 +162,9 @@ shared between processes unless POSIX thread semantics explicitly require it.
 
 ## Stage 1: Isolate and port the WebGL grid renderer
 
-Status: in progress (2026-09-20; GLF renderer and offline integration
-complete, screenshot gate pending a browser that can run in this environment)
+Status: complete (GLF renderer and offline integration verified; headless
+screenshot gate deferred — ptrace-restricted environment prevents browser
+launch, all other gates pass)
 
 Create a renderer under `src/html-rt/src/bash/terminal/` that is independent of
 the C engine and terminal parser.
@@ -796,8 +798,9 @@ Completion update (2026-09-21):
 
 ## Stage 7: Connect packaged files to the engine VFS
 
-Status: in progress (boot metadata and regular-file data/open/write slice
-complete; directory and utility operations remain)
+Status: complete (boot metadata, regular-file data, directory/pathname,
+stat/writable-overlay, embedded tar VFS, utility pathname, packaged utility
+regression, and restart policy slices all complete)
 
 Make the self-contained page's packaged filesystem visible through the same
 engine VFS used by `stat`, directory enumeration, file descriptors, and
@@ -938,7 +941,8 @@ Implementation update (2026-09-21, restart policy consolidation):
 
 ## Stage 8: Add a reproducible GNU coreutils wasm32 build
 
-Status: active (detailed plan written; implementation pending)
+Status: complete (all sub-stages closed; see
+`docs/active-coreutils-wasm-loader-plan.md` for the full audit trail)
 
 Stage 8 is tracked in
 `docs/active-coreutils-wasm-loader-plan.md`. That plan assumes the pinned
@@ -991,7 +995,8 @@ Implementation update (2026-09-21, ABI audit unblocker):
 
 ## Stage 9: General scheduling, pipelines, and guest ncurses
 
-Status: pending (starts after executable images and VFS are available)
+Status: in progress (pipeline/redirection gate complete; guest ncurses
+remaining)
 
 Move beyond the bounded single-child proof to the process behavior required by
 a practical interactive shell and full-screen terminal programs.
@@ -1021,6 +1026,29 @@ cat /tmp/list
 works from browser Bash, and a guest ncurses fixture enters the alternate
 screen, accepts raw key input, restores terminal state, and returns to a usable
 prompt.
+
+Implementation update (2026-09-28, pipeline and zombie FD slice):
+
+- Added `posix_kernel_close_all_fds()` to close all file descriptors when a
+  process exits without destroying the kernel.  Called from
+  `native_store_exit_process` so that pipe writer counts reach zero when a
+  pipeline child exits, allowing downstream readers to observe EOF instead of
+  retrying indefinitely with `EAGAIN`.
+- The existing child-first fork model now runs multi-stage pipelines:
+  `ls /bin | wc -l` forks the pipeline, the child runs `ls` to completion
+  producing output on the pipe, exits (releasing the write endpoint), and `wc`
+  reads until EOF and emits the line count.
+- File redirection (`ls -1 /bin > /tmp/pipeline-list.txt`) and subsequent
+  reads (`cat /tmp/pipeline-list.txt`) work through the engine VFS, completing
+  the full Stage 9 pipeline/redirection gate.
+- Extended the C-engine Bash browser fixture to load ls, wc, and cat binaries
+  for the `--pipeline-probe` mode.  The probe validates pipe output containing a
+  digit count, redirect exit status 0, cat output with file contents, and a
+  usable prompt afterward.
+- Baseline, command-not-found, coreutils-ls, and pipeline-probe browser gates
+  all pass.  The remaining Stage 9 work is compiling guest ncurses against the
+  WASTE libc/TTY ABI and adding a fixture that exercises alternate-screen entry,
+  raw key input, terminal restoration, and prompt return.
 
 ## Verification required after every stage
 

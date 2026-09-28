@@ -1058,7 +1058,7 @@ generate_c_engine_dashboard_html() {
 
 # ── Coreutils build helpers ──────────────────────────────────────────────
 
-COREUTILS_UTILITIES=(true false pwd echo printf basename dirname cat wc ls)
+COREUTILS_UTILITIES=(true false pwd echo printf basename dirname cat wc ls date)
 COREUTILS_STAGING="$REPO_ROOT/src/html-rt/src/bash"
 COREUTILS_LOG="$LOG_DIR/coreutils-build.log"
 
@@ -1251,11 +1251,66 @@ generate_c_engine_bash_html() {
     return 1
   fi
 
+  if ! run_logged_step "Run the C-engine Bash readline completion test" \
+      "$C_ENGINE_BASH_LOG" node "$C_ENGINE_BASH_BROWSER_TEST" \
+      --readline-completion --full-package; then
+    show_message "C-engine Bash readline completion test failed" \
+      "The generated runtime did not complete /bin/pw to /bin/pwd through Readline and the engine VFS directory ABI.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
   if ! run_logged_step "Run the C-engine Bash heredoc/pipe test" \
       "$C_ENGINE_BASH_LOG" node "$C_ENGINE_BASH_BROWSER_TEST" \
       --heredoc --full-package; then
     show_message "C-engine Bash heredoc/pipe test failed" \
       "The generated runtime did not pass heredoc input through an engine-owned pipe to packaged Coreutils cat, persist redirected output in the VFS, and exit cleanly.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
+  if ! run_logged_step "Run the C-engine Bash aggregate command matrix" \
+      "$C_ENGINE_BASH_LOG" node "$C_ENGINE_BASH_BROWSER_TEST" \
+      --coreutils-matrix --full-package; then
+    show_message "C-engine Bash aggregate command matrix failed" \
+      "One shell lifetime did not execute all packaged Coreutils utilities plus wat and wast with the expected output and status.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
+  local browser_date_year
+  browser_date_year="$(date -u +%Y)"
+  if ! run_logged_step "Run the C-engine Bash wall-clock/date test" \
+      "$C_ENGINE_BASH_LOG" env \
+      WASTE_COREUTILS_LS_COMMAND='/bin/date -u +%Y' \
+      WASTE_COREUTILS_LS_EXPECT="$browser_date_year" \
+      node "$C_ENGINE_BASH_BROWSER_TEST" --coreutils-ls --full-package; then
+    show_message "C-engine Bash wall-clock/date test failed" \
+      "GNU date did not read the current UTC year through the browser Date clock and engine realtime ABI.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
+  local date_source_epoch date_source_time
+  date_source_epoch="$(stat -c %Y "$REPO_ROOT/src/html-rt/src/bash/date.wasm")"
+  date_source_time="$(date -u -d "@$date_source_epoch" '+%b %e %H:%M')"
+  if ! run_logged_step "Run the C-engine Bash packaged-mtime test" \
+      "$C_ENGINE_BASH_LOG" env \
+      WASTE_COREUTILS_LS_COMMAND='/bin/ls -l /bin/date' \
+      WASTE_COREUTILS_LS_EXPECT="$date_source_time" \
+      node "$C_ENGINE_BASH_BROWSER_TEST" --coreutils-ls --full-package; then
+    show_message "C-engine Bash packaged-mtime test failed" \
+      "The static page did not preserve the staged date.wasm source modification time in /bin/date.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
+  local engine_build_epoch engine_build_time
+  engine_build_epoch="$(stat -Lc %Y "$REPO_ROOT/src/html-rt/src/bash/waste-wast.wasm")"
+  engine_build_time="$(date -u -d "@$engine_build_epoch" '+%b %e %H:%M')"
+  if ! run_logged_step "Run the C-engine Bash virtual-node build-mtime test" \
+      "$C_ENGINE_BASH_LOG" env \
+      WASTE_COREUTILS_LS_COMMAND='/bin/ls -ld / /bin /bin/wat /bin/wast' \
+      WASTE_COREUTILS_LS_EXPECT="$engine_build_time" \
+      WASTE_COREUTILS_LS_EXPECT_COUNT=4 \
+      node "$C_ENGINE_BASH_BROWSER_TEST" --coreutils-ls --full-package; then
+    show_message "C-engine Bash virtual-node build-mtime test failed" \
+      "The engine-created root, bin, wat, or wast node did not carry the engine image build timestamp.\n\nLog: $C_ENGINE_BASH_LOG"
     return 1
   fi
 

@@ -11,6 +11,7 @@
 
 static int failures = 0;
 static int tests = 0;
+static uint64_t test_clock_now(void *data);
 
 #define CHECK(cond, ...) do { \
     tests++; \
@@ -80,7 +81,7 @@ static void test_file_read_at(void) {
     const uint8_t source[] = "mapped-bytes";
     uint8_t result[6] = {0};
     posix_path_metadata metadata = {
-        POSIX_NODE_REGULAR, 0666, 0, 0, sizeof(source) - 1, 77
+        POSIX_NODE_REGULAR, 0666, 0, 0, sizeof(source) - 1, 77, 0, 0
     };
     CHECK(k != NULL, "create file mapping kernel");
     CHECK(posix_kernel_path_add_data(k, "/mapped", &metadata, source,
@@ -172,6 +173,86 @@ static void test_fork_path_publication(void) {
           "published fork output retains shared bytes");
     posix_kernel_destroy(child);
     posix_kernel_destroy(parent);
+}
+
+static void test_directory_dot_entries(void) {
+    posix_kernel *k = posix_kernel_create(0);
+    const posix_path_metadata tmp = {
+        POSIX_NODE_DIRECTORY, 0755, 0, 0, 0, 40, 0, 0
+    };
+    const posix_path_metadata child = {
+        POSIX_NODE_DIRECTORY, 0750, 0, 0, 0, 41, 0, 0
+    };
+    const posix_path_metadata file = {
+        POSIX_NODE_REGULAR, 0644, 0, 0, 0, 42, 0, 0
+    };
+    char name[32];
+    posix_path_metadata metadata;
+    CHECK(k && posix_kernel_path_add_data(k, "/tmp", &tmp, NULL, 0) == 0 &&
+          posix_kernel_path_add_data(k, "/tmp/child", &child, NULL, 0) == 0 &&
+          posix_kernel_path_add_data(k, "/tmp/child/file", &file, NULL, 0) == 0,
+          "create directory iteration fixture");
+    int fd = posix_kernel_open(k, (const uint8_t *)"/tmp/child", 10, 0, 0);
+    CHECK(fd >= 0, "open directory iteration fixture");
+    CHECK(posix_kernel_readdir(k, fd, name, 1, &metadata) == -POSIX_ERANGE,
+          "short dot buffer does not consume entry");
+    CHECK(posix_kernel_readdir(k, fd, name, sizeof(name), &metadata) == 1 &&
+          strcmp(name, ".") == 0 && metadata.inode == child.inode,
+          "directory iteration synthesizes dot");
+    CHECK(posix_kernel_readdir(k, fd, name, sizeof(name), &metadata) == 1 &&
+          strcmp(name, "..") == 0 && metadata.inode == tmp.inode,
+          "directory iteration synthesizes parent dot");
+    CHECK(posix_kernel_readdir(k, fd, name, sizeof(name), &metadata) == 1 &&
+          strcmp(name, "file") == 0 && metadata.inode == file.inode,
+          "directory iteration follows dots with explicit children");
+    CHECK(posix_kernel_readdir(k, fd, name, sizeof(name), &metadata) == 0,
+          "directory iteration reaches end after explicit children");
+    CHECK(posix_kernel_close(k, fd) == 0, "close directory fixture");
+
+    fd = posix_kernel_open(k, (const uint8_t *)"/", 1, 0, 0);
+    CHECK(fd >= 0 &&
+          posix_kernel_readdir(k, fd, name, sizeof(name), &metadata) == 1 &&
+          strcmp(name, ".") == 0 && metadata.inode == 1,
+          "root directory synthesizes dot");
+    CHECK(posix_kernel_readdir(k, fd, name, sizeof(name), &metadata) == 1 &&
+          strcmp(name, "..") == 0 && metadata.inode == 1,
+          "root directory parent is root itself");
+    posix_kernel_destroy(k);
+}
+
+static void test_creation_mask(void) {
+    posix_kernel *k = posix_kernel_create(0);
+    posix_path_metadata metadata;
+    uint64_t now = UINT64_C(1700000000123456789);
+    posix_kernel_set_realtime_clock(k, test_clock_now, &now);
+    int fd = k ? posix_kernel_open(k, (const uint8_t *)"/default-mask", 13,
+                                   POSIX_O_CREAT | POSIX_O_RDWR, 0666) : -1;
+    CHECK(fd >= 0 && posix_kernel_path_stat(
+              k, (const uint8_t *)"/default-mask", 13, 1, &metadata) == 0 &&
+          metadata.mode == 0644 && metadata.mtime_sec == 1700000000 &&
+          metadata.mtime_nsec == 123456789,
+          "default creation mask and realtime timestamp apply to new file");
+    now = UINT64_C(1700000001987654321);
+    CHECK(posix_kernel_write(k, fd, "x", 1) == 1 &&
+          posix_kernel_path_stat(k, (const uint8_t *)"/default-mask", 13,
+                                 1, &metadata) == 0 &&
+          metadata.mtime_sec == 1700000001 &&
+          metadata.mtime_nsec == 987654321,
+          "successful write refreshes modification time");
+    CHECK(posix_kernel_umask(k, 0077) == 0022,
+          "umask returns previous creation mask");
+    fd = posix_kernel_open(k, (const uint8_t *)"/private", 8,
+                           POSIX_O_CREAT | POSIX_O_RDWR, 0666);
+    CHECK(fd >= 0 && posix_kernel_path_stat(
+              k, (const uint8_t *)"/private", 8, 1, &metadata) == 0 &&
+          metadata.mode == 0600,
+          "updated creation mask applies to new files");
+    posix_kernel *child = posix_kernel_clone(k);
+    CHECK(child && posix_kernel_umask(child, 0002) == 0077 &&
+          posix_kernel_umask(k, 0077) == 0077,
+          "fork clone inherits an independent creation mask");
+    posix_kernel_destroy(child);
+    posix_kernel_destroy(k);
 }
 
 /* --- Terminal readiness --- */
@@ -826,6 +907,8 @@ int main(void) {
     test_terminal_readiness();
     test_file_read_at();
     test_fork_path_publication();
+    test_directory_dot_entries();
+    test_creation_mask();
     test_terminal_modes();
     test_terminal_eof_and_output();
     test_terminal_vtime();

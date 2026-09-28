@@ -41,7 +41,7 @@ char *strerror(int n) { (void)n; return "error"; }
 #include "include/helper.h"
 
 #ifdef WASTE_POSIX_IO
-extern i32 open(const char *path, i32 flags, i32 mode);
+extern i32 open(const char *path, i32 flags, ...);
 extern i32 close(i32 descriptor);
 extern i32 read(i32 descriptor, void *buffer, u32 count);
 extern i32 write(i32 descriptor, const void *buffer, u32 count);

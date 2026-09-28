@@ -769,7 +769,7 @@ int main(void) {
         {
             const uint8_t mapping_byte = 0x5a;
             posix_path_metadata mapping_metadata = {
-                POSIX_NODE_REGULAR, 0666, 0, 0, 1, 7007
+                POSIX_NODE_REGULAR, 0666, 0, 0, 1, 7007, 0, 0
             };
             check(posix_kernel_path_add_data(
                       store.kernel, "/mapping-record", &mapping_metadata,

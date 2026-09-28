@@ -55,12 +55,14 @@ typedef struct {
     uint32_t gid;
     int64_t size;
     uint64_t inode;
+    int64_t mtime_sec;
+    int64_t mtime_nsec;
 } posix_path_metadata;
 
-#define POSIX_PATH_METADATA_BYTES 32
+#define POSIX_PATH_METADATA_BYTES 48
 
 _Static_assert(sizeof(posix_path_metadata) == POSIX_PATH_METADATA_BYTES,
-               "path metadata ABI must remain 32 bytes");
+               "path metadata ABI must remain 48 bytes");
 _Static_assert(_Alignof(posix_path_metadata) == 8, "metadata alignment");
 _Static_assert(offsetof(posix_path_metadata, kind) == 0, "kind offset");
 _Static_assert(offsetof(posix_path_metadata, mode) == 4, "mode offset");
@@ -68,6 +70,10 @@ _Static_assert(offsetof(posix_path_metadata, uid) == 8, "uid offset");
 _Static_assert(offsetof(posix_path_metadata, gid) == 12, "gid offset");
 _Static_assert(offsetof(posix_path_metadata, size) == 16, "size offset");
 _Static_assert(offsetof(posix_path_metadata, inode) == 24, "inode offset");
+_Static_assert(offsetof(posix_path_metadata, mtime_sec) == 32,
+               "mtime seconds offset");
+_Static_assert(offsetof(posix_path_metadata, mtime_nsec) == 40,
+               "mtime nanoseconds offset");
 
 /* WASTE guest struct stat ABI.  This is a Wasm32 contract, not the build
  * host's struct stat.  The final 16 bytes are reserved for future fields. */
@@ -135,6 +141,9 @@ int posix_kernel_path_rename(struct posix_kernel *kernel,
 int posix_kernel_path_readlink(struct posix_kernel *kernel, const uint8_t *path,
                                size_t length, char *buffer, size_t capacity);
 int posix_kernel_path_set_cwd(struct posix_kernel *kernel, const char *path);
+int posix_kernel_path_set_mtime(struct posix_kernel *kernel,
+                                const uint8_t *path, size_t length,
+                                int64_t seconds, int64_t nanoseconds);
 int posix_kernel_path_stat(struct posix_kernel *kernel, const uint8_t *path,
                            size_t length, int follow,
                            posix_path_metadata *metadata);

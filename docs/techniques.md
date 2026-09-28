@@ -341,6 +341,79 @@ Generated result counts must come from parsed commands, not a lexical count of
 the word `assert`, because comments, quoted modules, and annotations can contain
 assertion-like text.
 
+## VFS-Backed Executable Loading
+
+Treat an executable as an ordinary engine-VFS regular file. `execve` resolves
+the pathname, checks execute permission and type, takes a bounded owned byte
+snapshot, and validates or compiles that snapshot before constructing a
+replacement process image. Production browser execution must not depend on a
+parallel JavaScript blob map or executable-byte registry. A compatibility
+registry may exist only for focused native lifecycle fixtures that do not
+construct a VFS namespace.
+
+Classify binary Wasm by its `\0asm` magic, not by a filename suffix. Textual
+files use the explicit `/bin/wat` or `/bin/wast` handlers, a `.wat`/`.wast`
+suffix, or a bounded shebang naming one of those handlers. Shebang splitting,
+the optional single interpreter argument, recursion limits, and argv rewriting
+belong to the loader boundary. Pass a shebang-stripped byte span to the shared
+WAT/WAST parser; do not add general `#` comments to the grammar.
+
+Keep loading transactional. Decode, validation, import checks, linking,
+instantiation, startup-block creation, and entry lookup must succeed before
+the old image is released. Preserve the old image and return the correct
+failure status on any earlier error. Test binary files without `.wasm`, direct
+and shebang WAT/WAST execution, malformed text, missing and non-executable
+paths, repeated handler use, child exit status, and a later usable shell
+prompt.
+
+## Coreutils Cross-Build and Distribution
+
+Keep the pinned GNU Coreutils submodule pristine. Repository changes belong in
+`submodules/coreutils-waste.patch`; stage the patched source beneath
+`build/coreutils/` and generate `configure` there with
+`submodules/bootstrap-coreutils.sh`. That helper is the idempotent dependency
+and bootstrap entry point. Configure output, the target sysroot, object files,
+linked images, reports, and corresponding-source artifacts are generated
+outputs and must remain below `build/`.
+
+Build utilities against the WASTE sysroot and guest libc, with the application
+and libc sharing one process memory. Keep configure answers explicit and
+machine-readable. Each accepted utility needs a report that records its source
+objects, relink inputs, final image, import audit, and blockers. Reject unknown
+imports and every Asyncify/unwind/rewind symbol; do not make a utility pass by
+silently expanding a JavaScript import surface.
+
+Use the stable build layers:
+
+```sh
+make -C src/html-rt BUILD_DIR=../../build/html-rt coreutils-wasm
+make -C src/html-rt BUILD_DIR=../../build/html-rt coreutils-audit
+make -C src/html-rt BUILD_DIR=../../build/html-rt coreutils-package-audit
+./start.sh --html-bash
+```
+
+Install accepted utility images as extensionless `/bin/NAME` and
+`/usr/bin/NAME` VFS files. Install `/bin/wat` and `/bin/wast` as engine-owned
+handlers, and retain license, provenance, interpreter, and source-package
+metadata under `/usr/share`. The offline tar uses normalized ordering,
+ownership, and header timestamps for reproducibility; a separate manifest
+carries source mtimes into guest `stat`, while engine-created namespace nodes
+receive the engine image build timestamp.
+
+GPL distribution is a build gate, not a release note added afterward. The
+corresponding-source bundle must identify the pinned source commit, managed
+patch, generated configure tree, sysroot/runtime sources, build instructions,
+notices, and every shipped utility. Audit the package-to-source mapping and
+publish its digest with the artifact. See
+[coreutils-source-distribution.md](coreutils-source-distribution.md) for the
+release procedure.
+
+Retain both focused utility tests and one aggregate browser matrix. Focused
+tests locate an ABI or utility regression; the aggregate test proves that all
+accepted utilities plus `wat` and `wast` execute sequentially in one Bash
+lifetime with correct statuses, representative output, a later prompt, and a
+clean exit from the same self-contained `file://` package.
+
 ## Fast Native Testing
 
 Use the mmap/native CLI path for parser, encoder, decoder, linker, validator,

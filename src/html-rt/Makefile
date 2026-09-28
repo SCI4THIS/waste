@@ -139,6 +139,7 @@ COREUTILS_DIRNAME_REPORT := $(COREUTILS_UTILITY_DIR)/dirname-report.json
 COREUTILS_CAT_REPORT := $(COREUTILS_UTILITY_DIR)/cat-report.json
 COREUTILS_WC_REPORT := $(COREUTILS_UTILITY_DIR)/wc-report.json
 COREUTILS_LS_REPORT := $(COREUTILS_UTILITY_DIR)/ls-report.json
+COREUTILS_DATE_REPORT := $(COREUTILS_UTILITY_DIR)/date-report.json
 COREUTILS_BOOTSTRAP := $(REPO_ROOT)/submodules/bootstrap-coreutils.sh
 WASTE_CRT_SOURCE := lib/waste-crt.c
 WASTE_CRT_OBJECT := $(COREUTILS_BUILD_DIR)/waste-crt.o
@@ -404,6 +405,7 @@ coreutils-dirname-probe: $(COREUTILS_DIRNAME_REPORT)
 coreutils-cat-probe: $(COREUTILS_CAT_REPORT)
 coreutils-wc-probe: $(COREUTILS_WC_REPORT)
 coreutils-ls-probe: $(COREUTILS_LS_REPORT)
+coreutils-date-probe: $(COREUTILS_DATE_REPORT)
 
 # Public Stage 8F entry point. All staged sources, sysroot files, configure
 # output, objects, reports, and linked utilities live below build/coreutils.
@@ -411,12 +413,12 @@ COREUTILS_REPORTS := $(COREUTILS_UTILITY_REPORT) $(COREUTILS_FALSE_REPORT) \
 	$(COREUTILS_PWD_REPORT) $(COREUTILS_ECHO_REPORT) \
 	$(COREUTILS_PRINTF_REPORT) $(COREUTILS_BASENAME_REPORT) \
 	$(COREUTILS_DIRNAME_REPORT) $(COREUTILS_CAT_REPORT) $(COREUTILS_WC_REPORT) \
-	$(COREUTILS_LS_REPORT)
+	$(COREUTILS_LS_REPORT) $(COREUTILS_DATE_REPORT)
 
 build-coreutils: coreutils-provenance coreutils-utility-probe coreutils-false-probe \
 		coreutils-pwd-probe coreutils-echo-probe coreutils-printf-probe \
 		coreutils-basename-probe coreutils-dirname-probe coreutils-cat-probe \
-		coreutils-wc-probe coreutils-ls-probe
+		coreutils-wc-probe coreutils-ls-probe coreutils-date-probe
 	$(PYTHON) -c 'import json; reports=[json.load(open(p)) for p in "$(COREUTILS_REPORTS)".split()]; assert all(p["status"] == "passed" for p in reports), "coreutils utility gate failed: " + "; ".join(p["utility"] + ": " + "; ".join(p["blockers"]) for p in reports if p["status"] != "passed")'
 
 # Stable names for the sectioned build entry points documented in Stage 8H.
@@ -487,6 +489,7 @@ $(eval $(call COREUTILS_PROBE_RULE,COREUTILS_DIRNAME,dirname))
 $(eval $(call COREUTILS_PROBE_RULE,COREUTILS_CAT,cat))
 $(eval $(call COREUTILS_PROBE_RULE,COREUTILS_WC,wc))
 $(eval $(call COREUTILS_PROBE_RULE,COREUTILS_LS,ls))
+$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_DATE,date))
 
 clean:
 	rm -f $(WAST_WASM_TARGET) $(ENGINE_OBJS) $(RT_OBJS) \

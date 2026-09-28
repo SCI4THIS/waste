@@ -26,6 +26,8 @@ int posix_path_metadata_validate(const posix_path_metadata *metadata) {
         return -1;
     if (metadata->kind == POSIX_NODE_NONE)
         return -1;
+    if (metadata->mtime_nsec < 0 || metadata->mtime_nsec >= 1000000000)
+        return -1;
     return 0;
 }
 
@@ -39,6 +41,8 @@ int posix_path_metadata_encode(uint8_t *bytes,
     write_le32(bytes + 12, metadata->gid);
     write_le64(bytes + 16, (uint64_t)metadata->size);
     write_le64(bytes + 24, metadata->inode);
+    write_le64(bytes + 32, (uint64_t)metadata->mtime_sec);
+    write_le64(bytes + 40, (uint64_t)metadata->mtime_nsec);
     return 0;
 }
 
@@ -51,6 +55,8 @@ int posix_path_metadata_decode(posix_path_metadata *metadata,
     metadata->gid = read_le32(bytes + 12);
     metadata->size = (int64_t)read_le64(bytes + 16);
     metadata->inode = read_le64(bytes + 24);
+    metadata->mtime_sec = (int64_t)read_le64(bytes + 32);
+    metadata->mtime_nsec = (int64_t)read_le64(bytes + 40);
     return posix_path_metadata_validate(metadata);
 }
 

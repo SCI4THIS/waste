@@ -310,7 +310,7 @@ int native_store_bind_executable_paths(native_store *store) {
         const native_executable *executable = &store->executables[i];
         posix_path_metadata metadata = {
             POSIX_NODE_REGULAR, executable->mode, 0, 0,
-            (int64_t)executable->size, (uint64_t)(3u + i)
+            (int64_t)executable->size, (uint64_t)(3u + i), 0, 0
         };
         int status = posix_kernel_path_add_data(
             store->kernel, executable->path, &metadata, executable->bytes,
@@ -323,7 +323,7 @@ int native_store_bind_executable_paths(native_store *store) {
 int native_store_bind_interpreter_paths(native_store *store) {
     if (!store || !store->kernel) return -POSIX_EINVAL;
     const posix_path_metadata metadata = {
-        POSIX_NODE_REGULAR, 0755u, 0, 0, 0, 0
+        POSIX_NODE_REGULAR, 0755u, 0, 0, 0, 0, 0, 0
     };
     int status = posix_kernel_path_add_data(
         store->kernel, "/bin/wat", &metadata, NULL, 0);
