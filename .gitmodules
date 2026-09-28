@@ -10,3 +10,12 @@
 [submodule "submodules/coreutils"]
 	path = submodules/coreutils
 	url = https://github.com/coreutils/coreutils
+[submodule "submodules/bash"]
+	path = submodules/bash
+	url = https://git.savannah.gnu.org/git/bash.git
+[submodule "submodules/ncurses"]
+	path = submodules/ncurses
+	url = https://github.com/mirror/ncurses
+[submodule "submodules/rogue"]
+	path = submodules/rogue
+	url = https://github.com/Davidslv/rogue
