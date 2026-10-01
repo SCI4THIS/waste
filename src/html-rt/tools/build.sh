@@ -118,6 +118,22 @@ elif [ "$TARGET" = "bash" ]; then
       exit 1
     fi
   done
+  # Optional auxiliary applications and shared libraries are discovered by
+  # the Bash page generator.  Keep them in the manifest too; otherwise they
+  # exist in src/bash but silently disappear from the self-contained HTML.
+  for executable in "$PAGE_DIR"/*.wasm; do
+    [ -f "$executable" ] || continue
+    case "$(basename "$executable")" in
+      waste-wast.wasm|waste-probe.wasm|true.wasm|false.wasm|pwd.wasm|echo.wasm|printf.wasm|basename.wasm|dirname.wasm|cat.wasm|wc.wasm|ls.wasm|date.wasm|*.so.wasm)
+        continue
+        ;;
+    esac
+    cp -p "$executable" "$STAGING/"
+  done
+  for library in "$PAGE_DIR"/*.so.wasm; do
+    [ -f "$library" ] || continue
+    cp -p "$library" "$STAGING/"
+  done
   provenance="$REPO_ROOT/build/coreutils/provenance.json"
   source_mapping="$REPO_ROOT/build/coreutils/coreutils-source-package.json"
   copying="$REPO_ROOT/submodules/coreutils/COPYING"

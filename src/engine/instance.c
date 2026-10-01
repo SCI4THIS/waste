@@ -15,6 +15,13 @@ exec_status exec_fail(exec_error *error, exec_status status, const char *msg) {
 
 void exec_free(waste_exec_engine *engine) {
     if (!engine) return;
+    int free_static = !engine->shared_static;
+    if (engine->static_ref_count) {
+        if (*engine->static_ref_count > 0)
+            (*engine->static_ref_count)--;
+        free_static = *engine->static_ref_count == 0;
+        if (free_static) free(engine->static_ref_count);
+    }
     free(engine->clone_bindings);
     runtime_free_jump_snapshots(engine);
     for (uint32_t i = 0; i < EXEC_MAX_CALL_DEPTH; i++) {
@@ -31,7 +38,7 @@ void exec_free(waste_exec_engine *engine) {
         free(engine->gc_objects[i].values);
     free(engine->gc_objects);
     free(engine->exception_objects);
-    if (!engine->shared_static)
+    if (free_static)
     for (uint32_t i = 0; i < engine->func_count; i++) {
         if (engine->funcs[i].code) {
             for (uint32_t j = 0; j < engine->funcs[i].code_size; j++) {
@@ -46,7 +53,7 @@ void exec_free(waste_exec_engine *engine) {
         }
         free(engine->funcs[i].code);
     }
-    if (!engine->shared_static) {
+    if (free_static) {
         free(engine->types);
         free(engine->funcs);
         free(engine->exports);
@@ -69,6 +76,8 @@ exec_status exec_clone_engine(const waste_exec_engine *source,
     if (!clone)
         return exec_fail(error, EXEC_ERROR_TRAP, "engine clone allocation failed");
     *clone = *source;
+    if (clone->static_ref_count)
+        (*clone->static_ref_count)++;
     clone->shared_static = 1;
     clone->gc_objects = NULL;
     clone->exception_objects = NULL;

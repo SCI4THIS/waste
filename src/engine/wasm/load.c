@@ -282,7 +282,10 @@ static exec_status instantiate_imports(waste_exec_engine *eng,
                 return exec_fail(err,EXEC_ERROR_FORMAT,"invalid memory import type");
             exec_memory *memory=find_memory_import(imports,module_name,name);
             if (!memory) return exec_fail(err,EXEC_ERROR_NOT_FOUND,"unresolved memory import");
-            if (memory->is_64 != ((flags & 4u) != 0) || memory->pages<initial ||
+            uint64_t current_pages = memory->process_virtual_memory ?
+                memory->linear_pages : memory->pages;
+            if (memory->is_64 != ((flags & 4u) != 0) ||
+                current_pages < initial ||
                 ((flags&1u) && (!memory->has_max || memory->max_pages>maximum)) ||
                 (memory->pages && !memory->page_data)) return exec_fail(err,EXEC_ERROR_FORMAT,"memory import type mismatch");
             eng->memories[eng->memory_count++] = memory;
@@ -1496,6 +1499,13 @@ exec_status exec_load_decoded_with_imports(
     waste_exec_engine *eng = (waste_exec_engine *)calloc(1, sizeof(*eng));
     if (!eng)
         return exec_fail(err, EXEC_ERROR_FORMAT, "engine alloc failed");
+    eng->static_ref_count = malloc(sizeof(*eng->static_ref_count));
+    if (!eng->static_ref_count) {
+        free(eng);
+        return exec_fail(err, EXEC_ERROR_FORMAT,
+                         "engine static metadata alloc failed");
+    }
+    *eng->static_ref_count = 1;
 
     wasm_reader r = {
         .start = bytes,

@@ -222,8 +222,15 @@
       const available = container ? container.clientWidth -
         parseFloat(getComputedStyle(container).paddingLeft || 0) -
         parseFloat(getComputedStyle(container).paddingRight || 0) : 0;
+      const availableHeight = container ? container.clientHeight -
+        parseFloat(getComputedStyle(container).paddingTop || 0) -
+        parseFloat(getComputedStyle(container).paddingBottom || 0) : 0;
       const cssWidth = available > 0 ? available : this.model.columns * 8;
-      const cellWidth = Math.max(4, Math.floor(cssWidth * ratio / this.model.columns));
+      const widthCell = Math.floor(cssWidth * ratio / this.model.columns);
+      const heightCell = availableHeight > 0 ? Math.floor(
+        availableHeight * ratio / this.model.rows * FONT_ADVANCE / FONT_LINE) :
+        widthCell;
+      const cellWidth = Math.max(4, Math.min(widthCell, heightCell));
       const cellHeight = Math.max(8, Math.round(cellWidth * FONT_LINE / FONT_ADVANCE));
       const width = cellWidth * this.model.columns;
       const height = cellHeight * this.model.rows;

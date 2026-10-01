@@ -69,7 +69,6 @@ _Static_assert(sizeof(waste_path_metadata) == 48, "path metadata must be 48 byte
 
 static u32 c_length(const char *text) {
   u32 length = 0;
-  if ((u32)text >= __builtin_wasm_memory_size(0) * 65536U) return 0;
   if (text) while (text[length]) length++;
   return length;
 }
@@ -93,7 +92,10 @@ static void bytes_zero(void *destination, u32 count) {
 }
 
 static i32 valid_pointer(const void *p) {
-  return p && (u32)p < __builtin_wasm_memory_size(0) * 65536U;
+  /* Shared objects occupy sparse high virtual pages beyond the contiguous
+     memory.size heap.  The engine validates every actual load/store against
+     the process page map, so non-null DSO pointers are valid libc inputs. */
+  return p != 0;
 }
 
 static i32 lower_ascii(i32 c) {

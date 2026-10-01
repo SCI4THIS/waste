@@ -23,8 +23,10 @@ const coreutilsWcProbe = process.argv.includes("--coreutils-wc");
 const coreutilsLsProbe = process.argv.includes("--coreutils-ls");
 const coreutilsMatrixProbe = process.argv.includes("--coreutils-matrix");
 const fullPackageProbe = process.argv.includes("--full-package");
+const sharedLibraryProbe = process.argv.includes("--shared-library");
 const readlineEchoProbe = process.argv.includes("--readline-echo");
 const readlineCompletionProbe = process.argv.includes("--readline-completion");
+const readlineArrowProbe = process.argv.includes("--readline-arrow");
 const heredocProbe = process.argv.includes("--heredoc");
 const heredocBuiltinProbe = process.argv.includes("--heredoc-builtin");
 const heredocStdoutProbe = process.argv.includes("--heredoc-stdout");
@@ -153,6 +155,28 @@ const fullPackageFiles = fullPackageProbe
         mode: 0o644,
       })))
   : [];
+const sharedLibraryFiles = sharedLibraryProbe
+  ? [
+      ["/bin/ls", "ls.wasm", 0o755],
+      ["/usr/bin/ldd", "ldd.wasm", 0o755],
+      ["/bin/ldd", "ldd.wasm", 0o755],
+      ["/usr/bin/rogue", "rogue.wasm", 0o755],
+      ["/bin/rogue", "rogue.wasm", 0o755],
+      ["/usr/lib/libncurses.so.wasm", "libncurses.so.wasm", 0o644],
+      ["/lib/libncurses.so.wasm", "libncurses.so.wasm", 0o644],
+    ].map(([vfsPath, sourceName, mode]) => {
+      const sourcePath = path.join(stagingDir, sourceName);
+      const bytes = fs.readFileSync(sourcePath);
+      const mtimeMs = fs.statSync(sourcePath).mtimeMs;
+      return {
+        path: vfsPath,
+        bytes: asArrayBuffer(bytes),
+        mode,
+        mtimeSec: Math.floor(mtimeMs / 1000),
+        mtimeNsec: Math.floor(mtimeMs % 1000) * 1000000,
+      };
+    })
+  : [];
 
 /* Resolve launch.wast: staging symlink or build directory */
 let launchPath = path.join(stagingDir, "launch.wast");
@@ -220,6 +244,12 @@ let readlineTabSent = false;
 let readlineCompletionSeen = false;
 let readlineCompletionEnterSent = false;
 let readlineCompletionResultSeen = false;
+let readlineArrowSequenceSent = false;
+let readlineArrowOutputOffset = 0;
+let readlineArrowRedisplaySeen = false;
+let readlineArrowEnterSent = false;
+let readlineArrowHistoryResultSeen = false;
+let readlineArrowAfterSeen = false;
 let exitProbeStatusRequested = false;
 let watStatusRequested = false;
 let watAfterSeen = false;
@@ -230,6 +260,31 @@ let pipelineCountSeen = false;
 let pipelineRedirectDone = false;
 let pipelineCatSeen = false;
 let pipelineAfterSeen = false;
+let rogueScreenSeen = false;
+let rogueArrowSent = false;
+let rogueArrowDispatched = false;
+let rogueArrowHandled = false;
+let rogueTurnDispatched = false;
+let rogueTurnHandled = false;
+let rogueQuitSent = false;
+let rogueContinueSent = false;
+let rogueStatusRequested = false;
+let rogueRun = 0;
+let rogueFirstLifecycleSeen = false;
+let rogueFirstStatusSeen = false;
+let rogueSecondStatusSeen = false;
+let roguePostInputSent = false;
+let roguePostInputSeen = false;
+let rogueCursorHiddenSeen = false;
+let rogueCursorRestoredSeen = false;
+let rogueLoadFailureSeen = false;
+let sharedLayoutSeen = false;
+let sharedEnvironmentSeen = false;
+let lddNcursesSeen = false;
+let lddStatusSeen = false;
+let lddRequested = false;
+let rogueLaunchSent = false;
+let lddLoadFailureSeen = false;
 let vfsSeen = false;
 let finish;
 const completion = new Promise(resolve => { finish = resolve; });
@@ -244,7 +299,15 @@ const self = {
           ((!coreutilsTrueProbe && !coreutilsFalseProbe && !coreutilsPwdProbe &&
             !coreutilsEchoProbe && !coreutilsBasenameProbe &&
             !coreutilsPrintfProbe && !coreutilsDirnameProbe && !coreutilsCatProbe &&
-            !coreutilsWcProbe && !coreutilsLsProbe && !coreutilsMatrixProbe) ||
+            !coreutilsWcProbe && !coreutilsLsProbe && !coreutilsMatrixProbe &&
+            !sharedLibraryProbe) ||
+            (sharedLibraryProbe &&
+             message.paths?.includes("/usr/bin/rogue") &&
+             message.paths?.includes("/bin/rogue") &&
+             message.paths?.includes("/usr/bin/ldd") &&
+             message.paths?.includes("/bin/ldd") &&
+             message.paths?.includes("/usr/lib/libncurses.so.wasm") &&
+             message.paths?.includes("/lib/libncurses.so.wasm")) ||
             (coreutilsTrueProbe && message.paths?.includes("/usr/bin/true") &&
              message.paths?.includes("/bin/true")) ||
             (coreutilsFalseProbe && message.paths?.includes("/usr/bin/false") &&
@@ -290,7 +353,7 @@ const self = {
         }}), 10);
       }
       if (readlineEchoProbe && readlineEnterSent &&
-          output.includes("\r\n__C_ENGINE_READLINE_RESULT__\r\n") &&
+          /(?:\r?\n|\r)__C_ENGINE_READLINE_RESULT__\r?\n/.test(output) &&
           !readlineResultSeen) {
         readlineResultSeen = true;
         exitSent = true;
@@ -323,6 +386,37 @@ const self = {
           bytes: Array.from(new TextEncoder().encode("exit\n")),
         }}), 10);
       }
+      if (readlineArrowProbe && !readlineArrowSequenceSent &&
+          /(?:\r?\n|\r)__C_ENGINE_ARROW_HISTORY__\r?\n/.test(output) &&
+          /bash-[^\r\n]*[#$] ?/.test(message.text)) {
+        readlineArrowSequenceSent = true;
+        readlineArrowOutputOffset = output.length;
+        setTimeout(() => self.onmessage({data: {
+          type: "input", bytes: [27, 91, 65],
+        }}), 10);
+      }
+      if (readlineArrowProbe && readlineArrowSequenceSent &&
+          !readlineArrowEnterSent &&
+          output.slice(readlineArrowOutputOffset).includes(
+            "echo __C_ENGINE_ARROW_HISTORY__")) {
+        readlineArrowRedisplaySeen = true;
+        readlineArrowEnterSent = true;
+        setTimeout(() => self.onmessage({data: {
+          type: "input", bytes: [10],
+        }}), 10);
+      }
+      if (readlineArrowProbe && readlineArrowEnterSent &&
+          (output.match(/(?:\r?\n|\r)__C_ENGINE_ARROW_HISTORY__\r?\n/g) || []).length >= 2 &&
+          !readlineArrowHistoryResultSeen) {
+        readlineArrowHistoryResultSeen = true;
+        exitSent = true;
+        setTimeout(() => self.onmessage({data: {
+          type: "input", bytes: Array.from(new TextEncoder().encode(
+            "echo __C_ENGINE_ARROW_AFTER__\nexit\n")),
+        }}), 10);
+      }
+      if (readlineArrowProbe && output.includes("__C_ENGINE_ARROW_AFTER__"))
+        readlineArrowAfterSeen = true;
       if (coreutilsPwdProbe && output.includes("/root")) coreutilsPwdRootSeen = true;
       if (coreutilsEchoProbe && output.includes("hello world")) coreutilsEchoOutputSeen = true;
       if (coreutilsBasenameProbe && output.includes("file.txt")) coreutilsBasenameOutputSeen = true;
@@ -352,7 +446,133 @@ const self = {
           output.includes("__LS_SECOND_COMMAND__")) {
         coreutilsLsOutputSeen = true;
       }
-      if (baselineMissingCommand) {
+      if (sharedLibraryProbe) {
+        if (message.text.includes("\x1b[?25l")) rogueCursorHiddenSeen = true;
+        if (rogueCursorHiddenSeen && message.text.includes("\x1b[?25h"))
+          rogueCursorRestoredSeen = true;
+        if (output.includes(
+            "__C_ENGINE_ENV_/root|root|root|/root|/bin:/usr/bin|xterm__")) {
+          sharedEnvironmentSeen = true;
+        }
+        if (/libncurses\s+=>\s+\/usr\/lib\/libncurses\.so\.wasm/.test(output)) {
+          lddNcursesSeen = true;
+        }
+        if (output.includes("__C_ENGINE_LDD_STATUS_0__")) lddStatusSeen = true;
+        if (!lddLoadFailureSeen && output.includes("__C_ENGINE_LDD_STATUS_126__")) {
+          lddLoadFailureSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n")),
+          }}), 10);
+        }
+        if (output.includes("__C_ENGINE_SHARED_LAYOUT_OK__") &&
+            /d[rwx-]{9}[^\r\n]* \/usr(?:\r?\n|$)/.test(output) &&
+            /-[rwx-]{9}[^\r\n]* \/bin\/rogue(?:\r?\n|$)/.test(output) &&
+            /-[rwx-]{9}[^\r\n]* \/lib\/libncurses\.so\.wasm(?:\r?\n|$)/.test(output)) {
+          sharedLayoutSeen = true;
+        }
+        const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
+        if (sharedEnvironmentSeen && sharedLayoutSeen && messageHasPrompt &&
+            !lddRequested) {
+          lddRequested = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode(
+              "/bin/ldd /bin/rogue; " +
+              "printf '__C_ENGINE_LDD_STATUS_%s__\\n' \"$?\"\n",
+            ))}}), 10);
+        }
+        if (lddRequested && lddNcursesSeen && lddStatusSeen &&
+            messageHasPrompt && !rogueLaunchSent) {
+          rogueLaunchSent = true;
+          rogueStatusRequested = true;
+          rogueRun = 1;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode(
+              "/bin/rogue; " +
+              "printf '__C_ENGINE_ROGUE_1_STATUS_%s__\\n' \"$?\"\n",
+            )),
+          }}), 10);
+        }
+        if (!rogueLoadFailureSeen && output.includes("bash: /bin/rogue: errno 8")) {
+          rogueLoadFailureSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        }
+        if (!rogueLoadFailureSeen &&
+            (output.includes("Error opening terminal:") ||
+             output.includes("Sorry, the screen must be at least 24x80"))) {
+          rogueLoadFailureSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        }
+        if (!rogueLoadFailureSeen && rogueLaunchSent && !rogueScreenSeen &&
+            /\x1b\[[0-9;?]*[A-Za-z]/.test(message.text) &&
+            !messageHasPrompt) {
+          rogueScreenSeen = true;
+          rogueArrowSent = true;
+          setTimeout(() => {
+            rogueArrowDispatched = true;
+            self.onmessage({data: {type: "input", bytes: [27, 79, 65]}});
+          }, 10);
+        }
+        if (rogueQuitSent && !rogueContinueSent &&
+            output.includes("[Press return to continue]")) {
+          rogueContinueSent = true;
+          setTimeout(() => self.onmessage({data: {
+            type: "input", bytes: [10],
+          }}), 10);
+        }
+        if (output.includes("__C_ENGINE_ROGUE_1_STATUS_0__") &&
+            !rogueFirstStatusSeen) {
+          rogueFirstStatusSeen = true;
+          rogueFirstLifecycleSeen = rogueScreenSeen && rogueArrowSent &&
+            rogueArrowHandled && rogueTurnDispatched && rogueTurnHandled &&
+            rogueQuitSent && rogueContinueSent;
+          rogueRun = 2;
+          rogueScreenSeen = false;
+          rogueArrowSent = false;
+          rogueArrowDispatched = false;
+          rogueArrowHandled = false;
+          rogueTurnDispatched = false;
+          rogueTurnHandled = false;
+          rogueQuitSent = false;
+          rogueContinueSent = false;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode(
+              "/bin/rogue; " +
+              "printf '__C_ENGINE_ROGUE_2_STATUS_%s__\\n' \"$?\"\n",
+            )),
+          }}), 10);
+        } else if (output.includes("__C_ENGINE_ROGUE_2_STATUS_0__") &&
+                   !rogueSecondStatusSeen) {
+          rogueSecondStatusSeen = true;
+        }
+        if (rogueSecondStatusSeen && messageHasPrompt &&
+            !roguePostInputSent) {
+          roguePostInputSent = true;
+          const bytes = new TextEncoder().encode(
+            "printf '__C_ENGINE_ROGUE_POST_INPUT_OK__\\n'\n");
+          for (let i = 0; i < bytes.length; i++) {
+            setTimeout(() => self.onmessage({data: {
+              type: "input", bytes: [bytes[i]],
+            }}), 10 + i * 2);
+          }
+        }
+        if (output.includes("__C_ENGINE_ROGUE_POST_INPUT_OK__") &&
+            !roguePostInputSeen) {
+          roguePostInputSeen = true;
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        } else if (/__C_ENGINE_ROGUE_[12]_STATUS_(?!0__)\d+__/.test(output) &&
+                   !exitSent) {
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
+        }
+      } else if (baselineMissingCommand) {
         if (output.includes("/home/a")) environmentEchoSeen = true;
         if (output.includes("bash: ls: command not found")) {
           commandNotFoundSeen = true;
@@ -683,6 +903,13 @@ const self = {
                          wastDirectProbe ? "/tmp/checks-direct.wast\n" :
                                            "/bin/wast /tmp/checks.wast\n") :
                      "wat /tmp/wat-probe.wat\n")
+                : sharedLibraryProbe
+                  ? "printf '__C_ENGINE_ENV_%s|%s|%s|%s|%s|%s__\\n' " +
+                    "\"$HOME\" \"$USER\" \"$LOGNAME\" \"$PWD\" \"$PATH\" \"$TERM\"; " +
+                    "/bin/ls -ld /usr /usr/bin /usr/lib /lib /bin/ldd /bin/rogue " +
+                    "/usr/bin/rogue /lib/libncurses.so.wasm " +
+                    "/usr/lib/libncurses.so.wasm && " +
+                    "echo __C_ENGINE_SHARED_''LAYOUT_OK__\n"
                 : executableExitProbe
                   ? "WASTE_PROBE_EXIT=7 /bin/waste-probe\n"
                 : executableProbe
@@ -752,6 +979,8 @@ const self = {
                     ? "echo __C_ENGINE_READLINE_RESULT__"
                   : readlineCompletionProbe
                     ? "/bin/pw"
+                  : readlineArrowProbe
+                    ? "echo __C_ENGINE_ARROW_HISTORY__\n"
                     : "echo __C_ENGINE_BASH_OK__\n");
           if (readlineEchoProbe || readlineCompletionProbe) {
             let index = 0;
@@ -791,6 +1020,26 @@ const self = {
           bytes: Array.from(new TextEncoder().encode("exit\n")),
         }}), 10);
       }
+    } else if (message.type === "io-ready" && sharedLibraryProbe &&
+               rogueArrowDispatched && !rogueArrowHandled) {
+      /* The image yielded for terminal input again after consuming the
+       * complete application-cursor sequence, so it neither trapped nor
+       * returned prematurely to Bash. */
+      rogueArrowHandled = true;
+      rogueTurnDispatched = true;
+      setTimeout(() => self.onmessage({data: {
+        type: "input", bytes: [46],
+      }}), 10);
+    } else if (message.type === "io-ready" && sharedLibraryProbe &&
+               rogueTurnDispatched && !rogueTurnHandled) {
+      /* Waiting in place always advances a game turn.  Reaching another
+       * input wait proves Rogue's daemon callbacks survived a guaranteed
+       * turn even when the preceding arrow happened to face a wall. */
+      rogueTurnHandled = true;
+      rogueQuitSent = true;
+      setTimeout(() => self.onmessage({data: {
+        type: "input", bytes: Array.from(new TextEncoder().encode("Qy")),
+      }}), 10);
     } else if (message.type === "done") {
       if (!exitSent) doneBeforeExit = true;
       finish(message);
@@ -829,7 +1078,7 @@ self.onmessage({data: {
     path: "/bin/waste-probe",
     bytes: asArrayBuffer(probeBytes),
     mode: 0o755,
-  }, ...fullPackageFiles, ...(coreutilsTrueBytes ? [{
+  }, ...fullPackageFiles, ...sharedLibraryFiles, ...(coreutilsTrueBytes ? [{
     path: "/usr/bin/true",
     bytes: asArrayBuffer(coreutilsTrueBytes),
     mode: 0o755,
@@ -1001,7 +1250,9 @@ const timeout = new Promise(resolve => {
 
 Promise.race([completion, timeout]).then(result => {
   clearTimeout(timeoutId);
-  const normalizedOutput = output.replace(/\r/g, "");
+  const normalizedOutput = output
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\r/g, "");
   const matrixStatusesPass = matrixCommands.every(({tag, status}) =>
     output.includes(`__C_ENGINE_MATRIX_${tag}_STATUS_${status}__`));
   const matrixOutputsPass = normalizedOutput.includes("\n/root\n") &&
@@ -1028,11 +1279,16 @@ Promise.race([completion, timeout]).then(result => {
       ? promptSeen && commandSent && vfsSeen && readlineTabSent &&
         readlineCompletionSeen && readlineCompletionEnterSent &&
         readlineCompletionResultSeen && exitSent && !doneBeforeExit && result.ok
+    : readlineArrowProbe
+      ? promptSeen && commandSent && vfsSeen && readlineArrowSequenceSent &&
+        readlineArrowRedisplaySeen && readlineArrowEnterSent &&
+        readlineArrowHistoryResultSeen && readlineArrowAfterSeen &&
+        exitSent && !doneBeforeExit && result.ok
     : heredocProbe
       ? promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&
-        /bash-[^\r\n]*[#$] \/bin\/cat hello\.txt\r?\nHello world!\r?\n/.test(output) &&
+        /__C_ENGINE_HEREDOC_BEGIN__[\s\S]*\/bin\/cat hello\.txt[\s\S]*Hello world![\s\S]*__C_ENGINE_HEREDOC_END__/.test(output) &&
         output.includes("__C_ENGINE_HEREDOC_END__") &&
-        /__C_ENGINE_HEREDOC_MODE_BEGIN__[\s\S]*\r?\n-rw-r--r--[^\r\n]* hello\.txt\r?\n[\s\S]*__C_ENGINE_HEREDOC_MODE_END__/.test(output) &&
+        /__C_ENGINE_HEREDOC_MODE_BEGIN__[\s\S]*-rw-r--r--[^\r\n]* hello\.txt[\s\S]*__C_ENGINE_HEREDOC_MODE_END__/.test(output) &&
         !output.includes("Jan  1  1970") &&
         !output.includes("cannot create temp file for here-document") && result.ok
     : heredocBuiltinProbe
@@ -1052,6 +1308,17 @@ Promise.race([completion, timeout]).then(result => {
         probeMissingSeen && probeStatus127Seen && probeSecondSeen &&
         probeFinalStatusSeen && probeAfterSeen && exitSent && !doneBeforeExit &&
         result.ok
+    : sharedLibraryProbe
+      ? promptSeen && commandSent && vfsSeen && sharedLayoutSeen &&
+        sharedEnvironmentSeen && lddNcursesSeen && lddStatusSeen && rogueScreenSeen &&
+        lddRequested && rogueLaunchSent && rogueArrowSent && rogueArrowHandled &&
+        rogueTurnDispatched && rogueTurnHandled &&
+        rogueQuitSent && rogueContinueSent &&
+        rogueStatusRequested && rogueRun === 2 && rogueFirstLifecycleSeen &&
+        rogueFirstStatusSeen && rogueSecondStatusSeen &&
+        roguePostInputSent && roguePostInputSeen &&
+        rogueCursorHiddenSeen && rogueCursorRestoredSeen &&
+        exitSent && !doneBeforeExit && result.ok
     : pipelineProbe
       ? promptSeen && commandSent && vfsSeen &&
         pipelineCountSeen && pipelineRedirectDone &&

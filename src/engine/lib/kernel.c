@@ -420,6 +420,30 @@ int posix_kernel_path_set_mtime(posix_kernel *kernel, const uint8_t *path,
     return 0;
 }
 
+int posix_kernel_path_chmod(posix_kernel *kernel, const uint8_t *path,
+                            size_t length, uint32_t mode) {
+    char normalized[POSIX_PATH_NODE_NAME_MAX];
+    int depth = 0;
+    if (!kernel) return -POSIX_EINVAL;
+    int result = path_normalize(kernel, path, length, normalized);
+    if (result < 0) return result;
+    posix_kernel_path_node *node = path_find(kernel, normalized);
+    if (!node)
+        return path_prefix_is_file(kernel, normalized) ?
+            -POSIX_ENOTDIR : -POSIX_ENOENT;
+    while (node->metadata.kind == POSIX_NODE_SYMLINK &&
+           node->link_target && depth++ < 8) {
+        result = path_normalize(kernel, (const uint8_t *)node->link_target,
+                                strlen(node->link_target), normalized);
+        if (result < 0) return result;
+        node = path_find(kernel, normalized);
+        if (!node) return -POSIX_ENOENT;
+    }
+    if (node->metadata.kind == POSIX_NODE_SYMLINK) return -POSIX_ELOOP;
+    node->metadata.mode = mode & 07777u;
+    return 0;
+}
+
 int posix_kernel_path_stat(posix_kernel *kernel, const uint8_t *path,
                            size_t length, int follow,
                            posix_path_metadata *metadata) {
@@ -462,10 +486,11 @@ int posix_kernel_path_access(posix_kernel *kernel, const uint8_t *path,
     return (permissions & mode) == mode ? 0 : -POSIX_EACCES;
 }
 
-int posix_kernel_path_snapshot(posix_kernel *kernel, const uint8_t *path,
-                               size_t length, size_t maximum_size,
-                               uint8_t **data_out, size_t *length_out,
-                               posix_path_metadata *metadata_out) {
+static int path_snapshot(posix_kernel *kernel, const uint8_t *path,
+                         size_t length, size_t maximum_size,
+                         uint32_t required_mode, uint8_t **data_out,
+                         size_t *length_out,
+                         posix_path_metadata *metadata_out) {
     char normalized[POSIX_PATH_NODE_NAME_MAX];
     posix_kernel_path_node *node;
     uint8_t *copy = NULL;
@@ -495,7 +520,8 @@ int posix_kernel_path_snapshot(posix_kernel *kernel, const uint8_t *path,
         return -POSIX_EISDIR;
     if (node->metadata.kind != POSIX_NODE_REGULAR)
         return -POSIX_ENOENT;
-    if (!(node->metadata.mode & 0111u)) return -POSIX_EACCES;
+    if (required_mode && !(node->metadata.mode & required_mode))
+        return -POSIX_EACCES;
     if (maximum_size != 0 && node->file->data_capacity > maximum_size)
         return -POSIX_E2BIG;
     if (node->file->data_capacity > 0) {
@@ -508,6 +534,23 @@ int posix_kernel_path_snapshot(posix_kernel *kernel, const uint8_t *path,
     *metadata_out = node->metadata;
     metadata_out->size = (int64_t)node->file->data_capacity;
     return 0;
+}
+
+int posix_kernel_path_snapshot(posix_kernel *kernel, const uint8_t *path,
+                               size_t length, size_t maximum_size,
+                               uint8_t **data_out, size_t *length_out,
+                               posix_path_metadata *metadata_out) {
+    return path_snapshot(kernel, path, length, maximum_size, 0111u,
+                         data_out, length_out, metadata_out);
+}
+
+int posix_kernel_path_read_snapshot(posix_kernel *kernel,
+                                    const uint8_t *path, size_t length,
+                                    size_t maximum_size, uint8_t **data_out,
+                                    size_t *length_out,
+                                    posix_path_metadata *metadata_out) {
+    return path_snapshot(kernel, path, length, maximum_size, 0444u,
+                         data_out, length_out, metadata_out);
 }
 
 /* --- Lifecycle --- */

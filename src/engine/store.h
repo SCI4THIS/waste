@@ -9,6 +9,8 @@
 typedef struct {
     waste_exec_engine *engine;
     uint32_t func_idx;
+    char module[WAST_MAX_EXPORT_NAME];
+    char name[WAST_MAX_EXPORT_NAME];
 } native_linked_func;
 
 typedef struct native_call_block {
@@ -145,7 +147,8 @@ typedef enum {
     NATIVE_PROCESS_REGION_STARTUP,
     NATIVE_PROCESS_REGION_BRK,
     NATIVE_PROCESS_REGION_MAPPING,
-    NATIVE_PROCESS_REGION_GUARD
+    NATIVE_PROCESS_REGION_GUARD,
+    NATIVE_PROCESS_REGION_LIBRARY
 } native_process_region_kind;
 
 typedef struct {
@@ -154,11 +157,48 @@ typedef struct {
     native_process_region_kind kind;
 } native_process_region;
 
+#define NATIVE_LOADED_LIBRARY_MAX 32
+
+/* Dynamically loaded shared library instance.  The engine owns the
+ * instantiated PIC module; memory_base and table_base record the offsets
+ * assigned by the loader so that dlsym can compute addresses. */
+typedef struct {
+    char name[NATIVE_EXEC_PATH_MAX];
+    char path[NATIVE_EXEC_PATH_MAX];
+    waste_exec_engine *engine;
+    uint32_t memory_base;
+    uint32_t table_base;
+    uint32_t memory_size;
+    uint32_t table_size;
+    uint32_t ref_count;
+    uint8_t initialized;
+} native_loaded_library;
+
+/* Metadata extracted from the wasm dylink.0 custom section.  Tells the
+ * loader how much shared memory and table space a PIC module requires. */
+typedef struct {
+    uint32_t memory_size;
+    uint32_t memory_alignment;  /* log2 */
+    uint32_t table_size;
+    uint32_t table_alignment;   /* log2 */
+} native_dylink_info;
+
+/* Transient context used during PIC module loading.  Set on the store
+ * before calling native_load_module so the import resolver can provide
+ * __memory_base, __table_base, and __stack_pointer globals. */
+typedef struct {
+    exec_global memory_base_global;
+    exec_global table_base_global;
+    exec_global *stack_pointer;     /* points to the main module's stack pointer */
+    uint8_t active;
+} native_library_load_context;
+
 /* Process-owned execution identity.  The browser driver may cache a pointer
  * to this capsule, but it is the store—not browser globals—that owns the
  * image, evaluator descriptor, and suspended continuation. */
 typedef struct {
     waste_exec_engine *engine;
+    waste_exec_engine *engine_source;
     native_process_image *image;
     uint32_t root_func_idx;
     wasm_value root_args[WAST_MAX_ARGS];
@@ -173,6 +213,7 @@ typedef struct {
     uint8_t continuation_valid;
     native_store_checkpoint *checkpoint;
     waste_exec_engine **linked_engines;
+    waste_exec_engine **linked_engine_sources;
     uint32_t linked_engine_count;
     waste_exec_engine **continuation_engines;
     exec_continuation *continuations;
@@ -185,6 +226,9 @@ typedef struct {
     uint32_t region_capacity;
     uint64_t virtual_page_limit;
     native_process_handler handler;
+    native_loaded_library *loaded_libraries;
+    uint32_t loaded_library_count;
+    uint32_t loaded_library_capacity;
 } native_process_capsule;
 
 typedef struct {
@@ -256,6 +300,10 @@ typedef struct native_store {
     native_shared_file_page *shared_file_pages;
     uint32_t shared_file_page_count;
     uint32_t shared_file_page_capacity;
+    /* Transient context for PIC shared library loading.  Set by
+     * native_store_load_library before calling native_load_module,
+     * then cleared afterward. */
+    native_library_load_context library_load_ctx;
 } native_store;
 
 void native_exec_request_init(native_exec_request *request);
@@ -444,6 +492,40 @@ int native_store_shared_file_page(native_store *store,
                                   uint64_t file_offset,
                                   exec_memory_page **page_out);
 
+/* ---- shared library loading ---- */
+
+/* Parse the dylink.0 custom section from a PIC wasm binary.  Returns 0
+ * on success, -1 if the section is absent or malformed. */
+int native_parse_dylink(const uint8_t *bytes, size_t size,
+                        native_dylink_info *info);
+
+/* Resolve a library name to a VFS path.  Searches /usr/lib and /lib for
+ * files named <name>.wasm or <name>.so.wasm.  Returns 0 on success with
+ * the resolved path written to path_out, or -ENOENT. */
+int native_store_resolve_library(native_store *store, const char *name,
+                                 char *path_out, size_t path_size);
+
+/* Load a PIC shared library from VFS into the active process.  Parses
+ * dylink.0, allocates memory and table regions, resolves imports,
+ * instantiates, runs constructors, and registers the module.  Returns 0
+ * on success. */
+int native_store_load_library(native_store *store, const char *path,
+                              exec_error *error);
+
+/* Look up a loaded library by name in the active process capsule.
+ * Returns the library entry or NULL. */
+native_loaded_library *native_store_find_library(native_store *store,
+                                                 const char *name);
+
+/* Release a loaded library by handle index.  Decrements the reference
+ * count; when it reaches zero the library's engine and regions are freed. */
+int native_store_unload_library(native_store *store, uint32_t index);
+/* Release dynamic-library instances owned by a process that is being reaped.
+ * Store registrations are process-lifetime providers and must not survive as
+ * inputs to a later fork graph. */
+void native_store_release_process_libraries(
+    native_store *store, native_process_capsule *capsule);
+
 int native_store_getpid(const native_store *store);
 int native_store_getppid(const native_store *store);
 int native_store_set_active_process(native_store *store, int pid);
@@ -464,6 +546,8 @@ int native_store_keep_orphan(native_store *store,
 
 native_linked_module *native_registered_module(native_store *store,
                                                 const char *name);
+waste_exec_engine *native_store_process_engine(native_store *store,
+                                                waste_exec_engine *engine);
 
 waste_exec_engine *native_selected_engine(native_store *store,
                                            const char *id);

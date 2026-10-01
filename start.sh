@@ -52,6 +52,7 @@ C_ENGINE_DIY_POSIX_TESTS="$REPO_ROOT/tests/diy-posix-test"
 C_ENGINE_BROWSER_TEST="$REPO_ROOT/tests/c-engine-browser-runtime.cjs"
 C_ENGINE_BASH_GENERATOR="$REPO_ROOT/src/html-rt/tools/generate-c-engine-bash-html.py"
 C_ENGINE_BASH_BROWSER_TEST="$REPO_ROOT/tests/c-engine-bash-browser-runtime.cjs"
+C_ENGINE_TERMINAL_MODEL_TEST="$REPO_ROOT/tests/c-engine-terminal-model.cjs"
 C_ENGINE_BASH_RUNTIME_WAST="$HTML_BUILD/bash-runtime.wast"
 C_ENGINE_BASH_HTML="$HTML_BUILD/bash.html"
 C_ENGINE_BASH_LOG="$LOG_DIR/c-engine-bash.log"
@@ -84,8 +85,8 @@ Engine (C):
   --cli-test       run the full core spec test suite via the CLI runner
   --html-test      generate the full C-engine browser test dashboard
   --html-bash      generate the self-contained C-engine Bash page
-  --build-coreutils
-                   build all GNU coreutils Wasm utilities and install to repo
+  --build-aux      build all auxiliary Wasm utilities (coreutils, rogue, ncurses, ldd)
+                   and install to repo
 
 OCaml:
   --compile        compile the OCaml interpreter to Wasm
@@ -1056,82 +1057,166 @@ generate_c_engine_dashboard_html() {
     "A self-contained C-engine dashboard was generated with the same groups as the OCaml-Wasm dashboard, including signaling/POSIX and libc tests.\n\nOutput: $C_ENGINE_OCAML_LAYOUT_HTML\nLog: $C_ENGINE_HTML_LOG"
 }
 
-# ── Coreutils build helpers ──────────────────────────────────────────────
+# ── Auxiliary utility build helpers ──────────────────────────────────────
 
-COREUTILS_UTILITIES=(true false pwd echo printf basename dirname cat wc ls date)
-COREUTILS_STAGING="$REPO_ROOT/src/html-rt/src/bash"
-COREUTILS_LOG="$LOG_DIR/coreutils-build.log"
+AUX_UTILITIES=(true false pwd echo printf basename dirname cat wc ls date rogue libncurses ldd upload download)
+AUX_STAGING="$REPO_ROOT/src/html-rt/src/bash"
+AUX_LOG="$LOG_DIR/aux-build.log"
 
-build_single_coreutils() {
+# Return the staged file path for a given utility name.
+aux_staged_path() {
+  local utility="$1"
+  case "$utility" in
+    libncurses) printf '%s' "$AUX_STAGING/libncurses.so.wasm" ;;
+    *)          printf '%s' "$AUX_STAGING/${utility}.wasm" ;;
+  esac
+}
+
+build_single_aux() {
   local utility="$1"
   if ! have_command clang || ! have_command make || ! have_command python3 ||
       ! have_command wasm-as || ! have_command wasm-merge || ! have_command wasm-dis ||
       ! wasm_ld_is_usable; then
-    show_message "Coreutils build" \
+    show_message "Aux build" \
       "clang, make, wasm-ld, wasm-as, wasm-merge, wasm-dis, and Python 3 are required."
     return 1
   fi
   mkdir -p "$HTML_BUILD"
-  : >"$COREUTILS_LOG"
-  if ! run_logged_step "Build and audit coreutils $utility" \
-      "$COREUTILS_LOG" make -C "$REPO_ROOT/src/html-rt" \
-      BUILD_DIR="$HTML_BUILD" "coreutils-${utility}-probe"; then
-    show_message "Coreutils build failed" \
-      "Could not build coreutils $utility.\n\nLog: $COREUTILS_LOG"
-    return 1
-  fi
-  local report_dir="$REPO_ROOT/build/coreutils/utility-probe"
-  local linked="$report_dir/${utility}-linked.wasm"
-  if [[ ! -f "$linked" ]]; then
-    show_message "Coreutils build failed" \
-      "Linked artifact not found: $linked"
-    return 1
-  fi
-  cp "$linked" "$COREUTILS_STAGING/${utility}.wasm"
-  printf 'Installed %s → %s\n' "$linked" "$COREUTILS_STAGING/${utility}.wasm"
+  : >"$AUX_LOG"
+
+  case "$utility" in
+    libncurses)
+      if ! run_logged_step "Build ncurses shared library" \
+          "$AUX_LOG" python3 "$REPO_ROOT/src/html-rt/tools/build-ncurses.py" \
+          --repo-root "$REPO_ROOT" --output "$REPO_ROOT/build/ncurses"; then
+        show_message "Aux build failed" \
+          "Could not build libncurses.\n\nLog: $AUX_LOG"
+        return 1
+      fi
+      local ncurses_out="$REPO_ROOT/build/ncurses/vfs/libncurses.so.wasm"
+      if [[ ! -f "$ncurses_out" ]]; then
+        show_message "Aux build failed" \
+          "Linked artifact not found: $ncurses_out"
+        return 1
+      fi
+      cp "$ncurses_out" "$AUX_STAGING/libncurses.so.wasm"
+      printf 'Installed %s → %s\n' "$ncurses_out" "$AUX_STAGING/libncurses.so.wasm"
+      ;;
+    rogue)
+      if ! run_logged_step "Build rogue executable" \
+          "$AUX_LOG" python3 "$REPO_ROOT/src/html-rt/tools/build-rogue.py" \
+          --repo-root "$REPO_ROOT" --output "$REPO_ROOT/build/rogue"; then
+        show_message "Aux build failed" \
+          "Could not build rogue.\n\nLog: $AUX_LOG"
+        return 1
+      fi
+      local rogue_out="$REPO_ROOT/build/rogue/vfs/rogue"
+      if [[ ! -f "$rogue_out" ]]; then
+        show_message "Aux build failed" \
+          "Linked artifact not found: $rogue_out"
+        return 1
+      fi
+      cp "$rogue_out" "$AUX_STAGING/rogue.wasm"
+      printf 'Installed %s → %s\n' "$rogue_out" "$AUX_STAGING/rogue.wasm"
+      ;;
+    ldd)
+      if ! run_logged_step "Build ldd dependency utility" \
+          "$AUX_LOG" python3 "$REPO_ROOT/src/html-rt/tools/build-ldd.py" \
+          --repo-root "$REPO_ROOT" --output "$REPO_ROOT/build/ldd"; then
+        show_message "Aux build failed" \
+          "Could not build ldd.\n\nLog: $AUX_LOG"
+        return 1
+      fi
+      local ldd_out="$REPO_ROOT/build/ldd/vfs/ldd"
+      if [[ ! -f "$ldd_out" ]]; then
+        show_message "Aux build failed" \
+          "Linked artifact not found: $ldd_out"
+        return 1
+      fi
+      cp "$ldd_out" "$AUX_STAGING/ldd.wasm"
+      printf 'Installed %s → %s\n' "$ldd_out" "$AUX_STAGING/ldd.wasm"
+      ;;
+    upload|download)
+      if ! run_logged_step "Build upload/download utilities" \
+          "$AUX_LOG" python3 "$REPO_ROOT/src/html-rt/tools/build-upload-download.py" \
+          --repo-root "$REPO_ROOT" --output "$REPO_ROOT/build/upload-download"; then
+        show_message "Aux build failed" \
+          "Could not build upload/download.\n\nLog: $AUX_LOG"
+        return 1
+      fi
+      local ud_out="$REPO_ROOT/build/upload-download/vfs/${utility}"
+      if [[ ! -f "$ud_out" ]]; then
+        show_message "Aux build failed" \
+          "Linked artifact not found: $ud_out"
+        return 1
+      fi
+      cp "$ud_out" "$AUX_STAGING/${utility}.wasm"
+      printf 'Installed %s → %s\n' "$ud_out" "$AUX_STAGING/${utility}.wasm"
+      ;;
+    *)
+      if ! run_logged_step "Build and audit coreutils $utility" \
+          "$AUX_LOG" make -C "$REPO_ROOT/src/html-rt" \
+          BUILD_DIR="$HTML_BUILD" "coreutils-${utility}-probe"; then
+        show_message "Aux build failed" \
+          "Could not build coreutils $utility.\n\nLog: $AUX_LOG"
+        return 1
+      fi
+      local report_dir="$REPO_ROOT/build/coreutils/utility-probe"
+      local linked="$report_dir/${utility}-linked.wasm"
+      if [[ ! -f "$linked" ]]; then
+        show_message "Aux build failed" \
+          "Linked artifact not found: $linked"
+        return 1
+      fi
+      cp "$linked" "$AUX_STAGING/${utility}.wasm"
+      printf 'Installed %s → %s\n' "$linked" "$AUX_STAGING/${utility}.wasm"
+      ;;
+  esac
 }
 
-build_all_coreutils() {
+build_all_aux() {
   local failed=()
-  for utility in "${COREUTILS_UTILITIES[@]}"; do
-    if ! build_single_coreutils "$utility"; then
+  for utility in "${AUX_UTILITIES[@]}"; do
+    if ! build_single_aux "$utility"; then
       failed+=("$utility")
     fi
   done
   if ((${#failed[@]} > 0)); then
-    show_message "Coreutils build" \
+    show_message "Aux build" \
       "Failed utilities: ${failed[*]}"
     return 1
   fi
-  show_message "Coreutils build" \
-    "All ${#COREUTILS_UTILITIES[@]} utilities built and installed:\n${COREUTILS_UTILITIES[*]}"
+  show_message "Aux build" \
+    "All ${#AUX_UTILITIES[@]} utilities built and installed:\n${AUX_UTILITIES[*]}"
 }
 
-coreutils_menu() {
+aux_menu() {
   if ! have_command whiptail || [[ ! -t 0 || ! -t 1 ]]; then
-    build_all_coreutils
+    build_all_aux
     return
   fi
   while true; do
-    local items=("all" "Build all coreutils (${COREUTILS_UTILITIES[*]})")
-    for utility in "${COREUTILS_UTILITIES[@]}"; do
+    local items=("all" "Build all aux (${AUX_UTILITIES[*]})")
+    for utility in "${AUX_UTILITIES[@]}"; do
       local status="not built"
-      if [[ -f "$COREUTILS_STAGING/${utility}.wasm" ]]; then
-        status="$(stat -c '%Y' "$COREUTILS_STAGING/${utility}.wasm" 2>/dev/null | xargs -I{} date -d @{} '+%Y-%m-%d %H:%M' 2>/dev/null || echo 'built')"
+      local staged
+      staged="$(aux_staged_path "$utility")"
+      if [[ -f "$staged" ]]; then
+        status="$(stat -c '%Y' "$staged" 2>/dev/null | xargs -I{} date -d @{} '+%Y-%m-%d %H:%M' 2>/dev/null || echo 'built')"
       fi
       items+=("$utility" "Build $utility ($status)")
     done
     items+=("back" "Return to main menu")
 
     local choice
-    choice="$(whiptail --title "Coreutils" --menu \
-      "Build GNU coreutils Wasm utilities" 20 70 10 \
+    choice="$(whiptail --title "Aux" --menu \
+      "Build auxiliary Wasm utilities" 22 70 14 \
       -- "${items[@]}" 3>&1 1>&2 2>&3)" || return 0
 
     case "$choice" in
-      all)  build_all_coreutils || true ;;
+      all)  build_all_aux || true ;;
       back) return 0 ;;
-      *)    build_single_coreutils "$choice" || true ;;
+      *)    build_single_aux "$choice" || true ;;
     esac
   done
 }
@@ -1148,7 +1233,8 @@ generate_c_engine_bash_html() {
   fi
   if [[ ! -f "$REPO_ROOT/examples/bash.wat" || ! -f "$BASH_RUNTIME_BUILDER" ||
         ! -f "$C_ENGINE_BASH_GENERATOR" ||
-        ! -f "$C_ENGINE_BASH_BROWSER_TEST" ]]; then
+        ! -f "$C_ENGINE_BASH_BROWSER_TEST" ||
+        ! -f "$C_ENGINE_TERMINAL_MODEL_TEST" ]]; then
     show_message "C-engine Bash" \
       "Bash source or a generation tool is missing."
     return 1
@@ -1189,16 +1275,18 @@ generate_c_engine_bash_html() {
     return 1
   fi
 
-  # Verify pre-built coreutils Wasm files are present.
-  local coreutils_missing=()
-  for util_name in "${COREUTILS_UTILITIES[@]}"; do
-    if [[ ! -f "$REPO_ROOT/src/html-rt/src/bash/${util_name}.wasm" ]]; then
-      coreutils_missing+=("$util_name")
+  # Verify pre-built auxiliary Wasm files are present.
+  local aux_missing=()
+  for util_name in "${AUX_UTILITIES[@]}"; do
+    local staged
+    staged="$(aux_staged_path "$util_name")"
+    if [[ ! -f "$staged" ]]; then
+      aux_missing+=("$util_name")
     fi
   done
-  if ((${#coreutils_missing[@]} > 0)); then
+  if ((${#aux_missing[@]} > 0)); then
     show_message "C-engine Bash failed" \
-      "Pre-built coreutils Wasm files missing: ${coreutils_missing[*]}\n\nRun ./start.sh --build-coreutils to build them."
+      "Pre-built auxiliary Wasm files missing: ${aux_missing[*]}\n\nRun ./start.sh --build-aux to build them."
     return 1
   fi
 
@@ -1225,6 +1313,13 @@ generate_c_engine_bash_html() {
       "$C_ENGINE_BASH_LOG" bash "$C_ENGINE_BUILD_SH" bash; then
     show_message "C-engine Bash generation failed" \
       "Could not amalgamate the static page.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
+  if ! run_logged_step "Run the C-engine terminal model test" \
+      "$C_ENGINE_BASH_LOG" node "$C_ENGINE_TERMINAL_MODEL_TEST"; then
+    show_message "C-engine terminal model test failed" \
+      "The VT model did not preserve cursor, alternate-screen, character-set, and ncurses REP drawing semantics.\n\nLog: $C_ENGINE_BASH_LOG"
     return 1
   fi
 
@@ -1259,6 +1354,14 @@ generate_c_engine_bash_html() {
     return 1
   fi
 
+  if ! run_logged_step "Run the C-engine Bash readline arrow-key test" \
+      "$C_ENGINE_BASH_LOG" node "$C_ENGINE_BASH_BROWSER_TEST" \
+      --readline-arrow; then
+    show_message "C-engine Bash readline arrow-key test failed" \
+      "The generated runtime did not deliver a grouped cursor-key sequence to Readline, recall and execute history, accept a later command, and exit cleanly.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
   if ! run_logged_step "Run the C-engine Bash heredoc/pipe test" \
       "$C_ENGINE_BASH_LOG" node "$C_ENGINE_BASH_BROWSER_TEST" \
       --heredoc --full-package; then
@@ -1272,6 +1375,14 @@ generate_c_engine_bash_html() {
       --coreutils-matrix --full-package; then
     show_message "C-engine Bash aggregate command matrix failed" \
       "One shell lifetime did not execute all packaged Coreutils utilities plus wat and wast with the expected output and status.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
+  if ! run_logged_step "Run the C-engine Bash shared-library/Rogue test" \
+      "$C_ENGINE_BASH_LOG" node "$C_ENGINE_BASH_BROWSER_TEST" \
+      --shared-library; then
+    show_message "C-engine Bash shared-library test failed" \
+      "The generated runtime did not stage /bin/rogue and libncurses, relocate the PIC executable and shared object, render Rogue, accept terminal input, and return to Bash with status 0.\n\nLog: $C_ENGINE_BASH_LOG"
     return 1
   fi
 
@@ -1541,7 +1652,7 @@ main_menu() {
       cli-test    "Run the full test suite in the cli runtime" \
       html-test   "Compile engine into static HTML for browser tests" \
       html-bash   "Compile engine and example bash into static HTML" \
-      coreutils   "Build GNU coreutils Wasm utilities" \
+      aux         "Build auxiliary Wasm utilities" \
       ----    "── OCaml ───────────────────────────────────" \
       ocaml-compile "Compile the OCaml interpreter to Wasm" \
       ocaml-test    "Run the full test suite with OCaml interpreter" \
@@ -1556,7 +1667,7 @@ main_menu() {
       cli-test) run_cli_tests || true ;;
       html-test) generate_c_engine_dashboard_html || true ;;
       html-bash) generate_c_engine_bash_html || true ;;
-      coreutils) coreutils_menu ;;
+      aux) aux_menu ;;
       ocaml-compile) compile_interpreter || true ;;
       ocaml-test) test_suite_menu ;;
       ocaml-html) generate_browser_test_html || true ;;
@@ -1591,7 +1702,7 @@ main() {
     --cli-test) run_cli_tests ;;
     --compile) compile_interpreter ;;
     --build-libc) build_waste_libc ;;
-    --build-coreutils) build_all_coreutils ;;
+    --build-aux) build_all_aux ;;
     --generate-html) generate_browser_test_html ;;
     --generate-bash-html) generate_bash_html ;;
     --c-engine-tests)

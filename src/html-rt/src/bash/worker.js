@@ -172,7 +172,10 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime) {
     exp.waste_wast_free?.(cwdPtr);
     if (staged !== 0) throw new Error("C engine initial cwd staging failed");
   }
+  stageVfsPath("/usr", 2, 0o755, 0);
   stageVfsPath("/usr/bin", 2, 0o755, 0);
+  stageVfsPath("/usr/lib", 2, 0o755, 0);
+  stageVfsPath("/lib", 2, 0o755, 0);
   if (packagedFiles && packagedFiles.length) {
     stageVfsPath("/usr/share", 2, 0o755, 0);
     stageVfsPath("/usr/share/waste", 2, 0o755, 0);
@@ -283,6 +286,30 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime) {
   flushPendingEvents();
   self.postMessage({type: "started"});
   while (yielded) {
+    const waitKind = exp.waste_wast_wait_kind();
+    if (waitKind === 5) { /* EXEC_YIELD_HOST_IO */
+      const ioKind = exp.waste_wast_host_io_kind();
+      const vb = exp.waste_wast_host_io_verbose && exp.waste_wast_host_io_verbose();
+      const pathPtr = exp.waste_wast_host_io_path_ptr();
+      const pathLen = exp.waste_wast_host_io_path_len();
+      const path = decoder.decode(new Uint8Array(engineMemory.buffer, pathPtr, pathLen));
+      if (vb) console.log("[worker] host-io yield: kind=" + ioKind +
+        " (1=UPLOAD, 2=DOWNLOAD) path=" + path + " waitKind=" + waitKind);
+      if (ioKind === 2) { /* HOST_IO_DOWNLOAD */
+        const dataPtr = exp.waste_wast_host_io_data_ptr();
+        const dataLen = exp.waste_wast_host_io_data_len();
+        const data = new Uint8Array(engineMemory.buffer, dataPtr, dataLen).slice();
+        if (vb) console.log("[download] sending to main thread, name=" + path +
+          " size=" + dataLen);
+        self.postMessage({type: "host-download", name: path, bytes: data,
+          verbose: vb}, [data.buffer]);
+        exp.waste_wast_host_io_complete();
+        ioPending = true; /* resume immediately — no browser response needed */
+      } else if (ioKind === 1) { /* HOST_IO_UPLOAD */
+        if (vb) console.log("[upload] sending request to main thread, destPath=" + path);
+        self.postMessage({type: "host-upload-request", destPath: path, verbose: vb});
+      }
+    }
     await waitForIO();
     if (terminated) break;
     yielded = exp.waste_wast_resume();
@@ -357,6 +384,16 @@ self.onmessage = function(e) {
       exp.waste_wast_resize_terminal(msg.columns, msg.rows);
       if (ioResolve) { ioResolve(); ioResolve = null; }
     }
+  } else if (msg.type === "host-upload-response") {
+    if (msg.cancelled) {
+      exp.waste_wast_host_io_cancel();
+    } else {
+      const bytes = new Uint8Array(msg.bytes);
+      const ptr = exp.waste_wast_alloc(bytes.length);
+      new Uint8Array(engineMemory.buffer, ptr, bytes.length).set(bytes);
+      exp.waste_wast_host_io_provide_upload(ptr, bytes.length);
+    }
+    if (ioResolve) { ioResolve(); ioResolve = null; }
   } else if (msg.type === "stop") {
     terminated = true;
     if (ioResolve) { ioResolve(); ioResolve = null; }

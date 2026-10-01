@@ -1,0 +1,50 @@
+diff --git a/daemon.c b/daemon.c
+--- a/daemon.c
++++ b/daemon.c
+@@ -109,7 +109,7 @@ do_daemons(int flag)
+ 	 * Executing each one, giving it the proper arguments
+ 	 */
+ 	if (dev->d_type == flag && dev->d_time == DAEMON)
+-	    (*dev->d_func)(dev->d_arg);
++	    (*dev->d_func)();
+ }
+
+ /*
+@@ -176,6 +176,6 @@ do_fuses(int flag)
+ 	if (flag == wire->d_type && wire->d_time > 0 && --wire->d_time == 0)
+ 	{
+ 	    wire->d_type = EMPTY;
+-	    (*wire->d_func)(wire->d_arg);
++	    (*wire->d_func)();
+ 	}
+ }
+diff --git a/potions.c b/potions.c
+--- a/potions.c
++++ b/potions.c
+@@ -22,6 +22,12 @@ typedef struct
+     char *pa_high, *pa_straight;
+ } PACT;
+
++/* Wasm indirect calls require an exact function signature.  This is the only
++ * delayed action that uses d_arg; adapt it to the legacy void(void) daemon
++ * callback type instead of calling every daemon as void(int). */
++static void
++turn_see_daemon(void) { (void) turn_see(TRUE); }
++
+ static PACT p_actions[] =
+ {
+ 	{ ISHUH,	unconfuse,	HUHDURATION,	/* P_CONFUSE */
+@@ -114 +120 @@ quaff()
+-	    fuse((void(*)())turn_see, TRUE, HUHDURATION, AFTER);
++	    fuse(turn_see_daemon, TRUE, HUHDURATION, AFTER);
+diff --git a/mach_dep.c b/mach_dep.c
+--- a/mach_dep.c
++++ b/mach_dep.c
+@@ -152,6 +152,7 @@ setup()
+ #endif
+
+     raw();				/* Raw mode */
++    curs_set(0);			/* The player glyph is its own cursor */
+     noecho();				/* Echo off */
+     keypad(stdscr,1);
+     getltchars();			/* get the local tty chars */

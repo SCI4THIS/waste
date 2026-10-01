@@ -2,6 +2,8 @@
 
 #include "include/helper.h"
 
+i32 toascii(i32 character) { return character & 0x7f; }
+
 u32 waste_fd_set_size(void)  { return sizeof(waste_fd_set); }
 u32 waste_timeval_size(void) { return sizeof(waste_timeval); }
 u32 waste_timespec_size(void){ return sizeof(waste_timespec); }

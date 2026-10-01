@@ -185,8 +185,11 @@ enum {
 
 struct waste_exec_engine {
     /* Cloned process engines share immutable decoded code/type/export tables;
-     * exec_free releases only mutable owned state when this is set. */
+     * static_ref_count keeps those tables alive until the last clone is
+     * released. shared_static remains for compatibility with synthetic test
+     * engines that do not own a reference counter. */
     uint8_t shared_static;
+    uint32_t *static_ref_count;
     exec_func_type *types;
     uint32_t type_count;
     exec_func *funcs;

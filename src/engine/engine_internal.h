@@ -49,6 +49,10 @@ typedef enum {
      * this after the caller's path/argv/envp have been copied into owned
      * storage; it is never exposed as browser I/O. */
     EXEC_YIELD_EXEC,
+    /* Guest requested a browser-side host I/O operation (file upload or
+     * download dialog).  The worker inspects the pending request, messages
+     * the main thread, and resumes once the user completes or cancels. */
+    EXEC_YIELD_HOST_IO,
 } exec_yield_reason;
 
 typedef struct {

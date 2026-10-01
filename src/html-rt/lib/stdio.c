@@ -45,6 +45,7 @@ extern i32 open(const char *path, i32 flags, ...);
 extern i32 close(i32 descriptor);
 extern i32 read(i32 descriptor, void *buffer, u32 count);
 extern i32 write(i32 descriptor, const void *buffer, u32 count);
+extern i32 lseek(i32 descriptor, i32 offset, i32 whence);
 #endif
 
 enum {
@@ -324,6 +325,52 @@ i32 setvbuf(FILE *file, char *buffer, i32 mode, u32 size) {
   return 0;
 }
 
+void setbuf(FILE *file, char *buffer) {
+  if (buffer) (void)setvbuf(file, buffer, 0, 4096);
+}
+
+i32 fseek(FILE *file, long offset, i32 whence) {
+  if (!file || file->magic != FILE_MAGIC) return -1;
+#ifdef WASTE_POSIX_IO
+  if (file->descriptor >= 0) {
+    i32 position = lseek(file->descriptor, (i32)offset, whence);
+    if (position < 0) { file->error = 1; return -1; }
+    file->position = (u32)position;
+    file->end_of_file = 0;
+    return 0;
+  }
+#endif
+  long base = whence == 1 ? (long)file->position :
+              whence == 2 ? (long)file->length : 0;
+  long position = base + offset;
+  if (position < 0 || (u32)position > file->length) return -1;
+  file->position = (u32)position;
+  file->end_of_file = 0;
+  return 0;
+}
+
+i32 fseeko(FILE *file, i32 offset, i32 whence) {
+  return fseek(file, (long)offset, whence);
+}
+
+long ftell(FILE *file) {
+  if (!file || file->magic != FILE_MAGIC) return -1;
+#ifdef WASTE_POSIX_IO
+  if (file->descriptor >= 0) {
+    i32 position = lseek(file->descriptor, 0, 1);
+    if (position < 0) { file->error = 1; return -1; }
+    file->position = (u32)position;
+  }
+#endif
+  return (long)file->position;
+}
+
+i32 ftello(FILE *file) { return (i32)ftell(file); }
+
+void rewind(FILE *file) {
+  if (fseek(file, 0, 0) == 0) clearerr(file);
+}
+
 char *fgets(char *destination, i32 count, FILE *file) {
   if (!destination || count <= 0 || !file) return 0;
 #ifdef WASTE_POSIX_IO
@@ -476,6 +523,135 @@ i32 sprintf(char *destination, const char *format, ...) {
   va_list arguments; va_start(arguments, format);
   i32 result = format_variadic(destination, 0xffffffffU, format, arguments);
   va_end(arguments); return result;
+}
+
+i32 vsprintf(char *destination, const char *format, va_list arguments) {
+  return vsnprintf(destination, 0xffffffffU, format, arguments);
+}
+
+static i32 scan_space(i32 character) {
+  return character == ' ' || character == '\t' || character == '\n' ||
+         character == '\r' || character == '\f' || character == '\v';
+}
+
+static i32 scan_digit(i32 character) {
+  if (character >= '0' && character <= '9') return character - '0';
+  if (character >= 'a' && character <= 'f') return character - 'a' + 10;
+  if (character >= 'A' && character <= 'F') return character - 'A' + 10;
+  return -1;
+}
+
+static u32 scan_integer(const char **input, i32 base, i32 *negative,
+                        i32 *matched) {
+  const char *cursor = *input;
+  *negative = 0;
+  if (*cursor == '+' || *cursor == '-') {
+    *negative = *cursor == '-';
+    cursor++;
+  }
+  if (base == 0) {
+    base = 10;
+    if (cursor[0] == '0' && (cursor[1] == 'x' || cursor[1] == 'X')) {
+      base = 16; cursor += 2;
+    } else if (cursor[0] == '0') base = 8;
+  } else if (base == 16 && cursor[0] == '0' &&
+             (cursor[1] == 'x' || cursor[1] == 'X')) cursor += 2;
+  u32 value = 0;
+  i32 count = 0;
+  for (;;) {
+    i32 digit = scan_digit((unsigned char)*cursor);
+    if (digit < 0 || digit >= base) break;
+    value = value * (u32)base + (u32)digit;
+    cursor++; count++;
+  }
+  *matched = count != 0;
+  if (*matched) *input = cursor;
+  return value;
+}
+
+i32 vsscanf(const char *input, const char *format, va_list arguments) {
+  i32 assigned = 0;
+  const char *cursor = input;
+  while (*format) {
+    if (scan_space((unsigned char)*format)) {
+      while (scan_space((unsigned char)*format)) format++;
+      while (scan_space((unsigned char)*cursor)) cursor++;
+      continue;
+    }
+    if (*format != '%') {
+      if (*cursor != *format) break;
+      cursor++; format++; continue;
+    }
+    format++;
+    if (*format == '%') {
+      if (*cursor != '%') break;
+      cursor++; format++; continue;
+    }
+    i32 suppress = 0, width = 0, short_value = 0, long_value = 0;
+    if (*format == '*') { suppress = 1; format++; }
+    while (*format >= '0' && *format <= '9')
+      width = width * 10 + (*format++ - '0');
+    if (*format == 'h') { short_value = 1; format++; }
+    else if (*format == 'l') { long_value = 1; format++; }
+    i32 conversion = (unsigned char)*format++;
+    if (conversion != 'c' && conversion != 'n')
+      while (scan_space((unsigned char)*cursor)) cursor++;
+    if (conversion == 's') {
+      if (!*cursor) break;
+      char *destination = suppress ? 0 : va_arg(arguments, char *);
+      i32 count = 0;
+      while (*cursor && !scan_space((unsigned char)*cursor) &&
+             (!width || count < width)) {
+        if (destination) destination[count] = *cursor;
+        cursor++; count++;
+      }
+      if (!count) break;
+      if (destination) { destination[count] = 0; assigned++; }
+    } else if (conversion == 'c') {
+      i32 count = width ? width : 1;
+      if (!*cursor) break;
+      char *destination = suppress ? 0 : va_arg(arguments, char *);
+      for (i32 i = 0; i < count; i++) {
+        if (!*cursor) return assigned;
+        if (destination) destination[i] = *cursor;
+        cursor++;
+      }
+      if (destination) assigned++;
+    } else if (conversion == 'n') {
+      if (!suppress) *va_arg(arguments, i32 *) = (i32)(cursor - input);
+    } else {
+      i32 base = conversion == 'x' || conversion == 'X' ? 16 :
+                 conversion == 'o' ? 8 : conversion == 'i' ? 0 : 10;
+      i32 negative = 0, matched = 0;
+      u32 value = scan_integer(&cursor, base, &negative, &matched);
+      if (!matched) break;
+      if (!suppress) {
+        void *destination = va_arg(arguments, void *);
+        i32 signed_conversion = conversion == 'd' || conversion == 'i';
+        i32 result = negative ? -(i32)value : (i32)value;
+        if (short_value) *(unsigned short *)destination =
+            (unsigned short)(signed_conversion ? result : (i32)value);
+        else if (long_value) *(long *)destination =
+            signed_conversion ? (long)result : (long)value;
+        else *(i32 *)destination = signed_conversion ? result : (i32)value;
+        assigned++;
+      }
+    }
+  }
+  return assigned;
+}
+
+i32 sscanf(const char *input, const char *format, ...) {
+  va_list arguments; va_start(arguments, format);
+  i32 result = vsscanf(input, format, arguments);
+  va_end(arguments); return result;
+}
+
+void perror(const char *prefix) {
+  extern char *strerror(i32);
+  if (prefix && *prefix) { fputs(prefix, standard_error); fputs(": ", standard_error); }
+  fputs(strerror(*__errno_location()), standard_error);
+  fputc('\n', standard_error);
 }
 
 i32 vfprintf(FILE *file, const char *format, va_list arguments) {

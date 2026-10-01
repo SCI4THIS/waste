@@ -144,6 +144,11 @@ async function startShell(event) {
       }
       buildMtime = vfsMtimes["waste-wast.wasm"];
       for (const name of Object.keys(g.tar_hash)) {
+        /* tarball.js exposes directory members as entries ending in '/'.
+           They are metadata, not files.  Treating usr/ as a regular file
+           replaces the engine-created /usr directory and leaves all of its
+           children behind an ENOTDIR prefix. */
+        if (name.endsWith("/")) continue;
         /* worker.js and waste-wast.wasm are host runtime assets, not guest VFS
            files.  Keep package-owned guest paths exact and install every
            Coreutils executable in the normal command-search locations. */
@@ -152,14 +157,20 @@ async function startShell(event) {
         const bytes = await g.tar_hash[name].arrayBuffer();
         const isProbe = name === "waste-probe.wasm";
         const utilityMatch = /^(true|false|pwd|echo|printf|basename|dirname|cat|wc|ls|date)\.wasm$/.exec(name);
+        const isLibrary = name.endsWith(".so.wasm");
+        const isExecutable = !isProbe && !utilityMatch && !isLibrary &&
+          name.endsWith(".wasm") && !name.startsWith("usr/");
         const paths = isProbe ? ["/bin/waste-probe"] :
           utilityMatch ? [`/usr/bin/${utilityMatch[1]}`, `/bin/${utilityMatch[1]}`] :
+          isLibrary ? [`/usr/lib/${name}`, `/lib/${name}`] :
+          isExecutable ? [`/usr/bin/${name.replace(/\.wasm$/, "")}`,
+                          `/bin/${name.replace(/\.wasm$/, "")}`] :
           name.startsWith("usr/") ? [`/${name}`] :
           ["/usr/share/waste/" + name];
         for (const path of paths) {
           const mtime = vfsMtimes[name];
           vfsFiles.push({path, bytes, kind: 1,
-            mode: isProbe || utilityMatch ? 0o755 : 0o644,
+            mode: isProbe || utilityMatch || isExecutable ? 0o755 : 0o644,
             mtimeSec: mtime?.sec, mtimeNsec: mtime?.nsec});
         }
       }
@@ -189,6 +200,14 @@ async function startShell(event) {
     worker.onmessage = ({data}) => {
       if (data.type === "output") {
         appendRaw(data.text);
+        /* Full-screen programs use the alternate terminal buffer and may
+           cause a browser to leave focus on the document when they return.
+           Reclaim keyboard input when a new Bash prompt appears, unless the
+           user deliberately selected a diagnostics control. */
+        if (/bash-[^\r\n]*[#$] ?/.test(data.text) &&
+            !document.activeElement?.closest?.(".diagnostics")) {
+          terminal.focus({preventScroll: true});
+        }
         if (starting && /bash-[^\r\n]*[#$] ?/.test(data.text)) {
           starting = false;
           clearInterval(statusTimer);
@@ -209,6 +228,49 @@ async function startShell(event) {
       else if (data.type === "io-ready") {
         evidenceWorkerReady = true;
         if (evidenceStartedAt) appendRaw("");
+      }
+      else if (data.type === "host-download") {
+        if (data.verbose) console.log("[download] trigger browser save, name=" +
+          data.name + " size=" + data.bytes.length);
+        const blob = new Blob([data.bytes], {type: "application/octet-stream"});
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = data.name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+      else if (data.type === "host-upload-request") {
+        if (data.verbose) console.log("[upload] open file picker, destPath=" +
+          data.destPath);
+        const uploadVerbose = data.verbose;
+        const input = document.createElement("input");
+        input.type = "file";
+        input.onchange = () => {
+          const file = input.files[0];
+          if (!file) {
+            if (uploadVerbose) console.log("[upload] no file selected");
+            worker.postMessage({type: "host-upload-response", cancelled: true});
+            return;
+          }
+          if (uploadVerbose) console.log("[upload] reading " +
+            file.name + " (" + file.size + " bytes)");
+          const reader = new FileReader();
+          reader.onload = () => {
+            if (uploadVerbose) console.log("[upload] sending " +
+              reader.result.byteLength + " bytes to worker");
+            worker.postMessage({type: "host-upload-response",
+              bytes: new Uint8Array(reader.result)});
+          };
+          reader.readAsArrayBuffer(file);
+        };
+        input.addEventListener("cancel", () => {
+          if (uploadVerbose) console.log("[upload] file dialog cancelled");
+          worker.postMessage({type: "host-upload-response", cancelled: true});
+        });
+        input.click();
       }
       else if (data.type === "done") {
         if (data.error) append(data.error);
@@ -298,8 +360,14 @@ document.querySelector("#stop").onclick = () => finish("stopped");
 /* The engine owns canonical editing and echo. The canvas only translates
  * browser events into terminal bytes; visible output still comes exclusively
  * from the guest terminal path. */
-terminal.addEventListener("keydown", event => {
+function handleTerminalKeydown(event) {
   if (event.metaKey) return;
+  const keySequence = model.keySequence(event.key);
+  if (keySequence) {
+    sendInputBytes(new TextEncoder().encode(keySequence));
+    event.preventDefault();
+    return;
+  }
   if (event.key === "Enter") { sendInputBytes(new Uint8Array([10])); event.preventDefault(); return; }
   if (event.key === "Backspace") { sendInputBytes(new Uint8Array([127])); event.preventDefault(); return; }
   if (event.key === "Tab") { sendInputBytes(new Uint8Array([9])); event.preventDefault(); return; }
@@ -309,6 +377,20 @@ terminal.addEventListener("keydown", event => {
     event.preventDefault(); return;
   }
   if (event.key.length === 1) { sendInputBytes(new TextEncoder().encode(event.key)); event.preventDefault(); }
+}
+
+terminal.addEventListener("keydown", handleTerminalKeydown);
+/* Keep the full-screen terminal usable if focus falls back to the document
+   during an alternate-screen teardown.  Events targeted at the canvas have
+   already been handled above, and diagnostics controls retain normal browser
+   keyboard behavior. */
+window.addEventListener("keydown", event => {
+  if (event.target === terminal || event.target?.closest?.(".diagnostics")) return;
+  handleTerminalKeydown(event);
+});
+terminal.addEventListener("pointerdown", () => terminal.focus());
+document.querySelector(".terminal-shell").addEventListener("pointerdown", event => {
+  if (!event.target.closest(".diagnostics")) terminal.focus();
 });
 terminal.addEventListener("paste", event => {
   sendInputBytes(new TextEncoder().encode(event.clipboardData?.getData("text") || ""));

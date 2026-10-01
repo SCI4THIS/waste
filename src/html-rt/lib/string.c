@@ -15,6 +15,7 @@ char *strcpy(char*d,const char*s){if(!valid_pointer(d))return d;if(!valid_pointe
 char *stpcpy(char*d,const char*s){u32 i=0;do d[i]=s[i];while(s[i++]);return d+i-1;}
 char *strncpy(char*d,const char*s,u32 n){if(!valid_pointer(d))return d;if(!valid_pointer(s)){if(n)*d=0;return d;}u32 i=0;for(;i<n&&s[i];i++)d[i]=s[i];for(;i<n;i++)d[i]=0;return d;}
 char *strcat(char*d,const char*s){strcpy(d+c_length(d),s);return d;}
+char *strncat(char*d,const char*s,u32 n){char*out=d+c_length(d);u32 i=0;while(i<n&&s[i]){out[i]=s[i];i++;}out[i]=0;return d;}
 i32 strcmp(const char*a,const char*b){if(!valid_pointer(a)||!valid_pointer(b))return a==b?0:valid_pointer(a)?1:-1;u32 i=0;while(a[i]&&a[i]==b[i])i++;return(unsigned char)a[i]-(unsigned char)b[i];}
 i32 strncmp(const char*a,const char*b,u32 n){if(!valid_pointer(a)||!valid_pointer(b))return a==b?0:valid_pointer(a)?1:-1;for(u32 i=0;i<n;i++){if(a[i]!=b[i]||!a[i])return(unsigned char)a[i]-(unsigned char)b[i];}return 0;}
 i32 strcasecmp(const char*a,const char*b){u32 i=0;while(a[i]&&lower_ascii(a[i])==lower_ascii(b[i]))i++;return lower_ascii((unsigned char)a[i])-lower_ascii((unsigned char)b[i]);}

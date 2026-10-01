@@ -258,6 +258,8 @@ void *reallocarray(void *pointer, size_t count, size_t size) {
 u32 random_state=0x6d2b79f5U;
 void waste_random_seed(u32 seed){random_state=seed?seed:1;}
 u32 arc4random(void){u32 x=random_state;x^=x<<13;x^=x>>17;x^=x<<5;return random_state=x;}
+i32 rand(void){return (i32)(arc4random()&0x7fffffffU);}
+void srand(u32 seed){waste_random_seed(seed);}
 
 /* ---- Temporary files ---- */
 
@@ -317,8 +319,23 @@ __attribute__((noinline)) static u64 multiply_high(u64 a,u64 b){volatile u64 lo=
 void __multi3(u64*out,u64 a0,u64 a1,u64 b0,u64 b1){out[0]=a0*b0;out[1]=multiply_high(a0,b0)+a0*b1+a1*b0;}
 void imaxdiv(i64*out,i64 numerator,i64 denominator){out[0]=numerator/denominator;out[1]=numerator%denominator;}
 
-char *getenv(const char *name) { (void)name; return (void *)0; }
-char *secure_getenv(const char *name) { (void)name; return (void *)0; }
+char **environ;
+
+void waste_environ_set(char **environment) { environ = environment; }
+
+char *getenv(const char *name) {
+  u32 name_length;
+  if (!name || !*name || !environ) return 0;
+  name_length = c_length(name);
+  for (u32 i = 0; environ[i]; i++) {
+    char *entry = environ[i];
+    u32 at = 0;
+    while (at < name_length && entry[at] == name[at]) at++;
+    if (at == name_length && entry[at] == '=') return entry + at + 1;
+  }
+  return 0;
+}
+char *secure_getenv(const char *name) { return getenv(name); }
 i32 setenv(const char *name,const char *value,i32 overwrite){
   (void)name;(void)value;(void)overwrite;return 0;
 }

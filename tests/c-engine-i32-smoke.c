@@ -177,7 +177,6 @@ static int test_decoded_module_instances(const uint8_t *bytes, size_t size) {
                                     &error) == EXEC_OK &&
                    source_value == clone_value;
     }
-    exec_free(clone);
     ok = run(first, "store-load", 16, 0x12345678, 0x12345678, EXEC_OK) &&
          run(second, "load-data", 16, 0, 0, EXEC_OK) &&
          run(first, "global", 91, 0, 91, EXEC_OK) &&
@@ -187,6 +186,12 @@ static int test_decoded_module_instances(const uint8_t *bytes, size_t size) {
          run(second, "size", 0, 0, 1, EXEC_OK) &&
          run(first, "load-data", 8, 0, 0x12345678, EXEC_OK) &&
          run(second, "load-data", 8, 0, 0x12345678, EXEC_OK);
+    /* A process clone owns the immutable decoded functions/types it shares;
+     * releasing the source instance must not leave the clone dangling. */
+    exec_free(first);
+    first = NULL;
+    clone_ok = clone_ok && run(clone, "size", 0, 0, 1, EXEC_OK);
+    exec_free(clone);
     ok = clone_ok && ok;
     if (!ok) fprintf(stderr, "decoded module instance isolation failed\n");
     exec_free(first);

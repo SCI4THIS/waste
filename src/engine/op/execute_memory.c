@@ -948,8 +948,12 @@ exec_status exec_memory_bulk(waste_exec_context *context,
             !address_value(&n_v, length_is_64, &n))
             return exec_fail(err, EXEC_ERROR_TRAP,
                              "memory.copy operand type mismatch");
-        uint64_t dst_size = (uint64_t)dst_memory->linear_pages * EXEC_PAGE_SIZE;
-        uint64_t src_size = (uint64_t)src_memory->linear_pages * EXEC_PAGE_SIZE;
+        uint64_t dst_pages = dst_memory->process_virtual_memory ?
+            dst_memory->pages : dst_memory->linear_pages;
+        uint64_t src_pages = src_memory->process_virtual_memory ?
+            src_memory->pages : src_memory->linear_pages;
+        uint64_t dst_size = dst_pages * EXEC_PAGE_SIZE;
+        uint64_t src_size = src_pages * EXEC_PAGE_SIZE;
         if (dst > dst_size || n > dst_size - dst ||
             src > src_size || n > src_size - src || n > SIZE_MAX)
             return exec_fail(err, EXEC_ERROR_TRAP,
@@ -974,7 +978,9 @@ exec_status exec_memory_bulk(waste_exec_context *context,
             value.type != WASM_VALTYPE_I32)
             return exec_fail(err, EXEC_ERROR_TRAP,
                              "memory.fill operand type mismatch");
-        uint64_t size = (uint64_t)memory->linear_pages * EXEC_PAGE_SIZE;
+        uint64_t visible_pages = memory->process_virtual_memory ?
+            memory->pages : memory->linear_pages;
+        uint64_t size = visible_pages * EXEC_PAGE_SIZE;
         if (dst > size || n > size - dst || n > SIZE_MAX)
             return exec_fail(err, EXEC_ERROR_TRAP,
                              "out of bounds memory access");
@@ -1002,7 +1008,9 @@ exec_status exec_memory_bulk(waste_exec_context *context,
                              "memory.init operand type mismatch");
         uint32_t data_length = eng->data_dropped[instr->u32_imm] ? 0 :
             eng->data_seg_lengths[instr->u32_imm];
-        uint64_t size = (uint64_t)memory->linear_pages * EXEC_PAGE_SIZE;
+        uint64_t visible_pages = memory->process_virtual_memory ?
+            memory->pages : memory->linear_pages;
+        uint64_t size = visible_pages * EXEC_PAGE_SIZE;
         if (dst > size || n > size - dst ||
             src > data_length || n > data_length - src)
             return exec_fail(err, EXEC_ERROR_TRAP,

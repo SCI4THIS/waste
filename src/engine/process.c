@@ -423,7 +423,8 @@ int native_store_suspend_process_handler(native_store *store,
 int native_store_suspend_process_handler_for_yield(
         native_store *store, exec_yield_reason reason) {
     native_process_capsule *capsule;
-    if (reason != EXEC_YIELD_READ && reason != EXEC_YIELD_SELECT)
+    if (reason != EXEC_YIELD_READ && reason != EXEC_YIELD_SELECT
+            && reason != EXEC_YIELD_HOST_IO)
         return -POSIX_EINVAL;
     if (native_store_suspend_process_handler(
             store, NATIVE_PROCESS_BROWSER_BLOCKED) != 0)
@@ -475,6 +476,23 @@ void native_process_capsule_init(native_process_capsule *capsule) {
     if (!capsule) return;
     memset(capsule, 0, sizeof(*capsule));
     capsule->state = NATIVE_PROCESS_RUNNABLE;
+}
+
+static waste_exec_engine *native_process_capsule_resolve_engine(
+        const native_process_capsule *capsule, waste_exec_engine *engine) {
+    if (!capsule || !engine) return engine;
+    if (capsule->engine_source == engine) return capsule->engine;
+    for (uint32_t i = 0; i < capsule->linked_engine_count; i++)
+        if (capsule->linked_engine_sources[i] == engine)
+            return capsule->linked_engines[i];
+    return engine;
+}
+
+waste_exec_engine *native_store_process_engine(native_store *store,
+                                                waste_exec_engine *engine) {
+    native_process *process = active_process(store);
+    return native_process_capsule_resolve_engine(
+        process ? &process->capsule : NULL, engine);
 }
 
 void native_process_capsule_clear_regions(native_process_capsule *capsule) {
@@ -577,6 +595,7 @@ int native_process_capsule_select_entry(native_process_capsule *capsule,
             (uint64_t)engine->func_count)
         return -POSIX_EINVAL;
     capsule->engine = engine;
+    if (!capsule->engine_source) capsule->engine_source = engine;
     (void)native_process_capsule_bind_memory(capsule);
     capsule->root_func_idx = func_idx;
     capsule->root_arg_count = arg_count;
@@ -977,6 +996,8 @@ int native_process_capsule_clone(native_process_capsule *destination,
     if (!destination || !source) return 0;
     native_process_capsule_init(destination);
     destination->engine = source->engine;
+    destination->engine_source = source->engine_source ?
+        source->engine_source : source->engine;
     if (source->engine) {
         if (!exec_clone_engine) return 0;
         memset(&error, 0, sizeof(error));
@@ -1053,6 +1074,22 @@ int native_process_capsule_clone(native_process_capsule *destination,
          * wait marker into that fresh scheduling state. */
         destination->handler.wait_reason = EXEC_YIELD_NONE;
     }
+    /* Copy loaded library metadata.  Engine pointers still reference the
+     * parent's engines; clone_process_graph remaps them to cloned copies. */
+    if (source->loaded_library_count) {
+        destination->loaded_libraries = malloc(
+            (size_t)source->loaded_library_count *
+                sizeof(*destination->loaded_libraries));
+        if (!destination->loaded_libraries) {
+            native_process_capsule_destroy(destination);
+            return 0;
+        }
+        memcpy(destination->loaded_libraries, source->loaded_libraries,
+               (size_t)source->loaded_library_count *
+                   sizeof(*destination->loaded_libraries));
+        destination->loaded_library_count = source->loaded_library_count;
+        destination->loaded_library_capacity = source->loaded_library_count;
+    }
     /* An image is immutable and may be retained by both capsules until the
      * later execution-capsule stage gives each process a private image. */
     /* A cloned engine is the child image for this bounded fork model; do not
@@ -1080,6 +1117,7 @@ void native_process_capsule_destroy(native_process_capsule *capsule) {
         if (capsule->linked_engines[i] && exec_free)
             exec_free(capsule->linked_engines[i]);
     free(capsule->linked_engines);
+    free(capsule->linked_engine_sources);
     if (capsule->continuations) {
         for (uint32_t i = 0; i < capsule->continuation_count; i++)
             if (exec_continuation_destroy)
@@ -1091,6 +1129,10 @@ void native_process_capsule_destroy(native_process_capsule *capsule) {
         for (uint32_t i = 0; i < capsule->file_mapping_count; i++)
             posix_kernel_file_release(capsule->file_mappings[i].file_object);
     free(capsule->file_mappings);
+    /* Free the loaded library metadata.  Engine pointers within are either
+     * store-owned (parent process) or linked_engines-owned (forked child);
+     * both are freed through their respective owners, not here. */
+    free(capsule->loaded_libraries);
     native_process_capsule_clear_regions(capsule);
     memset(capsule, 0, sizeof(*capsule));
 }
@@ -1176,11 +1218,36 @@ int native_store_commit_process_image(native_store *store,
                 &process->capsule, stack_first + 1, 16,
                 NATIVE_PROCESS_REGION_STACK) != 0)
             return -POSIX_ENOMEM;
+        /* Shared objects are loaded into the process address space before
+         * the executable is instantiated.  Rebuild their region metadata
+         * after replacing the old image's module/startup/stack layout so
+         * the access checker continues to admit their sparse high pages. */
+        for (uint32_t i = 0;
+             i < process->capsule.loaded_library_count; i++) {
+            const native_loaded_library *library =
+                &process->capsule.loaded_libraries[i];
+            uint64_t first_page;
+            uint64_t last_byte;
+            uint64_t last_page;
+            if (!library->memory_size) continue;
+            first_page = library->memory_base / EXEC_PAGE_SIZE;
+            last_byte = (uint64_t)library->memory_base +
+                        library->memory_size;
+            last_page = (last_byte + EXEC_PAGE_SIZE - 1) /
+                        EXEC_PAGE_SIZE;
+            if (last_page <= first_page ||
+                native_process_capsule_reserve_region(
+                    &process->capsule, first_page,
+                    last_page - first_page,
+                    NATIVE_PROCESS_REGION_LIBRARY) != 0)
+                return -POSIX_ENOMEM;
+        }
     }
     posix_kernel_close_on_exec(process->kernel);
     release_image(process->capsule.image);
     process->capsule.image = image;
     process->capsule.engine = image->engine;
+    process->capsule.engine_source = NULL;
     process->capsule.root_func_idx = image->entry_func;
     process->capsule.generation++;
     process->capsule.state = NATIVE_PROCESS_RUNNABLE;
@@ -1325,14 +1392,22 @@ int native_store_clone_process_graph(native_store *store, int parent_pid,
         return -POSIX_EINVAL;
     uint32_t count = (uint32_t)store->module_count + 1;
     exec_clone_binding *bindings = calloc(count, sizeof(*bindings));
-    waste_exec_engine **owned = NULL;
+    waste_exec_engine **owned = calloc(count, sizeof(*owned));
+    waste_exec_engine **owned_sources = calloc(count, sizeof(*owned_sources));
     uint32_t owned_count = 0;
-    if (!bindings) return -POSIX_ENOMEM;
+    if (!bindings || !owned || !owned_sources) {
+        free(bindings);
+        free(owned);
+        free(owned_sources);
+        return -POSIX_ENOMEM;
+    }
     bindings[0].source = parent->capsule.engine;
     bindings[0].clone = child->capsule.engine;
     uint32_t used = 1;
     for (int i = 0; i < store->module_count; i++) {
-        waste_exec_engine *source = store->modules[i].engine;
+        waste_exec_engine *canonical = store->modules[i].engine;
+        waste_exec_engine *source = native_process_capsule_resolve_engine(
+            &parent->capsule, canonical);
         if (!source || mapped_engine(bindings, used, source)) continue;
         waste_exec_engine *clone = NULL;
         exec_error error;
@@ -1341,22 +1416,13 @@ int native_store_clone_process_graph(native_store *store, int parent_pid,
             for (uint32_t j = 0; j < owned_count; j++)
                 if (exec_free) exec_free(owned[j]);
             free(owned);
+            free(owned_sources);
             free(bindings);
             return -POSIX_ENOMEM;
         }
         bindings[used++] = (exec_clone_binding){source, clone};
-        waste_exec_engine **grown = realloc(owned,
-            (size_t)(owned_count + 1) * sizeof(*owned));
-        if (!grown) {
-            if (exec_free) exec_free(clone);
-            for (uint32_t j = 0; j < owned_count; j++)
-                if (exec_free) exec_free(owned[j]);
-            free(owned);
-            free(bindings);
-            return -POSIX_ENOMEM;
-        }
-        owned = grown;
-        owned[owned_count++] = clone;
+        owned[owned_count] = clone;
+        owned_sources[owned_count++] = canonical;
     }
     for (uint32_t i = 0; i < used; i++) {
         exec_error error;
@@ -1366,6 +1432,7 @@ int native_store_clone_process_graph(native_store *store, int parent_pid,
             for (uint32_t j = 0; j < owned_count; j++)
                 if (exec_free) exec_free(owned[j]);
             free(owned);
+            free(owned_sources);
             free(bindings);
             return -POSIX_ENOMEM;
         }
@@ -1376,14 +1443,24 @@ int native_store_clone_process_graph(native_store *store, int parent_pid,
             for (uint32_t j = 0; j < owned_count; j++)
                 if (exec_free) exec_free(owned[j]);
             free(owned);
+            free(owned_sources);
             free(bindings);
             child->capsule.linked_engines = NULL;
+            child->capsule.linked_engine_sources = NULL;
             child->capsule.linked_engine_count = 0;
             return -POSIX_EINVAL;
         }
     }
     child->capsule.linked_engines = owned;
+    child->capsule.linked_engine_sources = owned_sources;
     child->capsule.linked_engine_count = owned_count;
+    /* Remap the child's loaded library engines to their cloned copies. */
+    for (uint32_t i = 0; i < child->capsule.loaded_library_count; i++) {
+        waste_exec_engine *cloned = mapped_engine(
+            bindings, used, child->capsule.loaded_libraries[i].engine);
+        if (cloned)
+            child->capsule.loaded_libraries[i].engine = cloned;
+    }
     free(bindings);
     return 0;
 }
@@ -1448,6 +1525,7 @@ int native_store_wait_process(native_store *store, int pid, int options,
     *status_out = candidate->exit_status;
     store->last_wait_pid = child_pid;
     store->last_wait_status = candidate->exit_status;
+    native_store_release_process_libraries(store, &candidate->capsule);
     native_process_capsule_destroy(&candidate->capsule);
     posix_kernel_destroy(candidate->kernel);
     memset(candidate, 0, sizeof(*candidate));

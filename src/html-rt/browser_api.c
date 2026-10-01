@@ -667,6 +667,22 @@ static int g_process_parent_arg_count;
 static uint8_t *g_boot_executable;
 static size_t g_boot_executable_size;
 
+/* ---- Host I/O request state for upload/download dialogs ---- */
+#define HOST_IO_NONE     0
+#define HOST_IO_UPLOAD   1
+#define HOST_IO_DOWNLOAD 2
+
+/* Not static: accessed by posix_stubs.c host functions. */
+struct {
+    int kind;                            /* HOST_IO_NONE / UPLOAD / DOWNLOAD */
+    char path[POSIX_PATH_NODE_NAME_MAX]; /* dest path (upload) or filename (download) */
+    int path_len;
+    uint8_t *data;                       /* download: file bytes; upload: received bytes */
+    size_t data_len;
+    int result;                          /* 0=pending, 1=completed, -1=cancelled */
+    int verbose;                         /* guest passed --verbose */
+} g_host_io;
+
 /* Boot-time packaged VFS manifest.  The browser submits only bounded path
  * metadata; file contents and executable bytes remain separate staged images
  * until the VFS data plane is added in Stage 7. */
@@ -938,6 +954,21 @@ static void browser_yield_cleanup(void) {
     memset(&g_yield_context, 0, sizeof(g_yield_context));
 }
 
+static waste_exec_engine *browser_image_runtime_export(
+        native_store *store, waste_exec_engine *image, const char *name,
+        uint32_t *index, exec_error *error) {
+    native_linked_module *env;
+    waste_exec_engine *runtime;
+    if (exec_find_export(image, name, index, error) == EXEC_OK)
+        return image;
+    env = native_registered_module(store, "env");
+    runtime = env ? native_store_process_engine(store, env->engine) : NULL;
+    if (!runtime || runtime->memory != image->memory) return NULL;
+    if (error) memset(error, 0, sizeof(*error));
+    return exec_find_export(runtime, name, index, error) == EXEC_OK ?
+        runtime : NULL;
+}
+
 static exec_status browser_wast_handler_step(
         const uint8_t *source, size_t source_size, size_t offset,
         unsigned line, size_t *next_offset, unsigned *next_line,
@@ -1068,6 +1099,17 @@ static exec_status browser_invoke_process(browser_wast_context *context,
                                           "parent-invoke-return");
             if (!g_process_fork_active &&
                 active_engine == g_process_parent_engine &&
+                status != EXEC_OK && status != EXEC_YIELD &&
+                status != EXEC_ERROR_EXIT) {
+                char invoke_event[256];
+                snprintf(invoke_event, sizeof(invoke_event),
+                         "parent-invoke-error-s%d-f%llu-%s", status,
+                         error ? (unsigned long long)error->memory_fault_address : 0,
+                         error && error->message[0] ? error->message : "unknown");
+                waste_browser_record_transition(invoke_event);
+            }
+            if (!g_process_fork_active &&
+                active_engine == g_process_parent_engine &&
                 status == EXEC_YIELD) {
                 char yield_event[32];
                 snprintf(yield_event, sizeof(yield_event), "parent-yield-r%u",
@@ -1154,6 +1196,7 @@ static exec_status browser_invoke_process(browser_wast_context *context,
              * WAST-level init sequence the launcher performs for Bash. */
             {
                 uint32_t init_func;
+                waste_exec_engine *init_engine;
                 wasm_value init_args[4];
                 int init_result_count = 0;
                 exec_error init_error;
@@ -1168,6 +1211,20 @@ static exec_status browser_invoke_process(browser_wast_context *context,
                     && heap_global->value.i32 > (int32_t)heap_base) {
                     heap_base = (uint32_t)heap_global->value.i32;
                 }
+                /* The exec startup block is materialized at the top of the
+                 * image's initial linear memory.  Starting malloc at the
+                 * module's __heap_base would let a growing heap overwrite
+                 * argv, envp, and the startup metadata before memory.grow is
+                 * needed.  Place the process heap immediately after that
+                 * immutable block instead. */
+                if (image->startup_size) {
+                    uint64_t startup_end = (uint64_t)image->startup_ptr +
+                                           image->startup_size;
+                    uint64_t aligned_end = (startup_end + 15u) & ~15u;
+                    if (aligned_end <= UINT32_MAX &&
+                        aligned_end > heap_base)
+                        heap_base = (uint32_t)aligned_end;
+                }
                 {
                     char heap_event[128];
                     snprintf(heap_event, sizeof(heap_event),
@@ -1175,11 +1232,13 @@ static exec_status browser_invoke_process(browser_wast_context *context,
                     waste_browser_record_transition(heap_event);
                 }
                 memset(&init_error, 0, sizeof(init_error));
-                if (exec_find_export(image->engine, "waste_allocator_init",
-                                     &init_func, &init_error) == EXEC_OK) {
+                init_engine = browser_image_runtime_export(
+                    &context->store, image->engine, "waste_allocator_init",
+                    &init_func, &init_error);
+                if (init_engine) {
                     init_args[0].type = WASM_VALTYPE_I32;
                     init_args[0].i32 = (int32_t)heap_base;
-                    exec_status init_st = exec_invoke(image->engine, init_func,
+                    exec_status init_st = exec_invoke(init_engine, init_func,
                                       init_args, 1, NULL,
                                       &init_result_count, &init_error);
                     if (init_st != EXEC_OK) {
@@ -1191,11 +1250,35 @@ static exec_status browser_invoke_process(browser_wast_context *context,
                 }
                 waste_browser_record_transition("image-alloc-ok");
                 memset(&init_error, 0, sizeof(init_error));
-                if (exec_find_export(image->engine, "waste_stdio_init",
-                                     &init_func, &init_error) == EXEC_OK) {
+                init_engine = browser_image_runtime_export(
+                    &context->store, image->engine, "waste_environ_set",
+                    &init_func, &init_error);
+                if (init_engine) {
+                    init_args[0].type = WASM_VALTYPE_I32;
+                    init_args[0].i32 = (int32_t)(image->startup_ptr + 44u +
+                        (image->argc + 1u) * sizeof(uint32_t));
+                    exec_status init_st = exec_invoke(init_engine, init_func,
+                                      init_args, 1, NULL,
+                                      &init_result_count, &init_error);
+                    if (init_st != EXEC_OK) {
+                        char ev[128];
+                        snprintf(ev, sizeof(ev), "image-env-FAIL-s%d-%s",
+                                 init_st, init_error.message);
+                        waste_browser_record_transition(ev);
+                    } else {
+                        waste_browser_record_transition("image-env-ok");
+                    }
+                } else {
+                    waste_browser_record_transition("image-env-missing");
+                }
+                memset(&init_error, 0, sizeof(init_error));
+                init_engine = browser_image_runtime_export(
+                    &context->store, image->engine, "waste_stdio_init",
+                    &init_func, &init_error);
+                if (init_engine) {
                     init_args[0].type = WASM_VALTYPE_I32;
                     init_args[0].i32 = 4096;
-                    exec_status init_st = exec_invoke(image->engine, init_func,
+                    exec_status init_st = exec_invoke(init_engine, init_func,
                                       init_args, 1, NULL,
                                       &init_result_count, &init_error);
                     if (init_st != EXEC_OK) {
@@ -1207,15 +1290,21 @@ static exec_status browser_invoke_process(browser_wast_context *context,
                 }
                 waste_browser_record_transition("image-stdio-ok");
                 memset(&init_error, 0, sizeof(init_error));
-                if (exec_find_export(image->engine, "waste_stdio_bind",
-                                     &init_func, &init_error) == EXEC_OK) {
+                /* Only an image that owns its stdin/stdout/stderr pointer
+                 * slots may request them to be populated.  A dynamically
+                 * linked image uses waste_stdin/out/err from the resident
+                 * libc and must not write FILE pointers to addresses 0,1,2. */
+                init_engine = exec_find_export(
+                    image->engine, "waste_stdio_bind", &init_func,
+                    &init_error) == EXEC_OK ? image->engine : NULL;
+                if (init_engine) {
                     init_args[0].type = WASM_VALTYPE_I32;
                     init_args[0].i32 = 0;
                     init_args[1].type = WASM_VALTYPE_I32;
                     init_args[1].i32 = 1;
                     init_args[2].type = WASM_VALTYPE_I32;
                     init_args[2].i32 = 2;
-                    exec_status init_st = exec_invoke(image->engine, init_func,
+                    exec_status init_st = exec_invoke(init_engine, init_func,
                                       init_args, 3, NULL,
                                       &init_result_count, &init_error);
                     if (init_st != EXEC_OK) {
@@ -1223,9 +1312,12 @@ static exec_status browser_invoke_process(browser_wast_context *context,
                         snprintf(ev, sizeof(ev), "image-bind-FAIL-s%d-%s",
                                  init_st, init_error.message);
                         waste_browser_record_transition(ev);
+                    } else {
+                        waste_browser_record_transition("image-bind-ok");
                     }
+                } else {
+                    waste_browser_record_transition("image-bind-missing");
                 }
-                waste_browser_record_transition("image-bind-ok");
             }
             active_engine = image->engine;
             active_func_idx = image->entry_func;
@@ -1859,6 +1951,64 @@ uint32_t waste_wast_wait_kind(void) {
         stored_reason != EXEC_YIELD_NONE)
         return g_yield_active ? (uint32_t)stored_reason : EXEC_YIELD_NONE;
     return g_yield_active ? (uint32_t)g_yield_reason : EXEC_YIELD_NONE;
+}
+
+/* ---- Host I/O query/response exports for upload/download ---- */
+
+__attribute__((export_name("waste_wast_host_io_kind")))
+uint32_t waste_wast_host_io_kind(void) {
+    return (uint32_t)g_host_io.kind;
+}
+
+__attribute__((export_name("waste_wast_host_io_path_ptr")))
+uint32_t waste_wast_host_io_path_ptr(void) {
+    return (uint32_t)(uintptr_t)g_host_io.path;
+}
+
+__attribute__((export_name("waste_wast_host_io_path_len")))
+uint32_t waste_wast_host_io_path_len(void) {
+    return (uint32_t)g_host_io.path_len;
+}
+
+__attribute__((export_name("waste_wast_host_io_data_ptr")))
+uint32_t waste_wast_host_io_data_ptr(void) {
+    return (uint32_t)(uintptr_t)g_host_io.data;
+}
+
+__attribute__((export_name("waste_wast_host_io_data_len")))
+uint32_t waste_wast_host_io_data_len(void) {
+    return (uint32_t)g_host_io.data_len;
+}
+
+__attribute__((export_name("waste_wast_host_io_provide_upload")))
+int32_t waste_wast_host_io_provide_upload(uint32_t ptr, uint32_t len) {
+    if (g_host_io.kind != HOST_IO_UPLOAD || g_host_io.result != 0)
+        return -1;
+    uint8_t *copy = (uint8_t *)malloc(len);
+    if (!copy) return -1;
+    memcpy(copy, (const void *)(uintptr_t)ptr, len);
+    free(g_host_io.data);
+    g_host_io.data = copy;
+    g_host_io.data_len = len;
+    g_host_io.result = 1;
+    return 0;
+}
+
+__attribute__((export_name("waste_wast_host_io_verbose")))
+uint32_t waste_wast_host_io_verbose(void) {
+    return (uint32_t)g_host_io.verbose;
+}
+
+__attribute__((export_name("waste_wast_host_io_cancel")))
+int32_t waste_wast_host_io_cancel(void) {
+    g_host_io.result = -1;
+    return 0;
+}
+
+__attribute__((export_name("waste_wast_host_io_complete")))
+int32_t waste_wast_host_io_complete(void) {
+    g_host_io.result = 1;
+    return 0;
 }
 
 __attribute__((export_name("waste_wast_enable_terminal")))

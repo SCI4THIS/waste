@@ -15,34 +15,38 @@
     </div>
   </div>
   <main>
-    <h1>WASTE Bash (C engine)</h1>
-    <p class="subtitle">A self-contained C WebAssembly engine, shared runtime namespace, guest libc, and Bash. No server or network access is required.</p>
-    <section class="panel">
-      <form id="start-form">
-        <button id="start" type="submit">Restart Bash</button>
-      </form>
-      <div class="controls">
-        <button id="pause" type="button" disabled>Pause</button>
-        <button id="resume" type="button" disabled>Resume</button>
-        <select id="signal" disabled>
-          <option value="2">SIGINT</option><option value="15">SIGTERM</option>
-          <option value="1">SIGHUP</option><option value="14">SIGALRM</option>
-          <option value="28">SIGWINCH</option>
-        </select>
-        <button id="send-signal" type="button" disabled>Send signal</button>
-        <button id="stop" type="button" disabled>Stop worker</button>
-        <button id="run-evidence" type="button" disabled>Run loader evidence</button>
-        <button id="download-evidence" type="button">Download evidence log</button>
-        <span id="status">idle</span>
-      </div>
-      <p id="evidence-status" class="subtitle">The evidence action runs WAT and WAST direct/shebang probes in the browser VFS.</p>
-      <canvas id="terminal-canvas" tabindex="0" aria-label="WASTE Bash terminal"></canvas>
-      <pre id="terminal-transcript" aria-live="polite"></pre>
-      <form id="terminal-form" style="margin-top:10px">
-        <label for="terminal-input">input</label>
-        <input id="terminal-input" autocomplete="off" spellcheck="false" disabled>
-        <button id="send-input" type="submit" disabled>Send</button>
-      </form>
+    <section class="terminal-shell" aria-label="WASTE Bash">
+      <canvas id="terminal-canvas" tabindex="0" autofocus
+        aria-label="WASTE Bash terminal"></canvas>
+      <details class="diagnostics">
+        <summary>Diagnostics</summary>
+        <div class="diagnostics-body">
+          <form id="start-form">
+            <button id="start" type="submit">Restart Bash</button>
+          </form>
+          <div class="controls">
+            <button id="pause" type="button" disabled>Pause</button>
+            <button id="resume" type="button" disabled>Resume</button>
+            <select id="signal" disabled>
+              <option value="2">SIGINT</option><option value="15">SIGTERM</option>
+              <option value="1">SIGHUP</option><option value="14">SIGALRM</option>
+              <option value="28">SIGWINCH</option>
+            </select>
+            <button id="send-signal" type="button" disabled>Send signal</button>
+            <button id="stop" type="button" disabled>Stop worker</button>
+            <button id="run-evidence" type="button" disabled>Run loader evidence</button>
+            <button id="download-evidence" type="button">Download evidence log</button>
+            <span id="status">idle</span>
+          </div>
+          <p id="evidence-status" class="subtitle">The evidence action runs WAT and WAST direct/shebang probes in the browser VFS.</p>
+          <pre id="terminal-transcript" aria-live="polite"></pre>
+          <form id="terminal-form">
+            <label for="terminal-input">input</label>
+            <input id="terminal-input" autocomplete="off" spellcheck="false" disabled>
+            <button id="send-input" type="submit" disabled>Send</button>
+          </form>
+        </div>
+      </details>
     </section>
   </main>
   <script src="../../../../submodules/tarballjs/tarball.js"></script>

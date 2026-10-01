@@ -324,6 +324,16 @@ Completion update (2026-09-21):
   parity gate. Stage 2 is complete; remaining visual screenshot validation is
   isolated to Stage 1.
 
+Rendering regression update (2026-09-30):
+
+- Added CSI `REP` (`CSI Ps b`) support. ncurses uses it to draw Rogue room
+  borders and floor runs compactly, for example one `-` followed by
+  `CSI 23 b` for a 24-character wall.
+- Character-set designation sequences such as `ESC ( B` now consume their
+  final designator byte instead of drawing a stray `B` cell.
+- The terminal-model fixture reproduces Rogue's room-border byte sequence,
+  and `./start.sh --html-bash` now runs that fixture before its browser gates.
+
 ## Stage 3: Put existing Bash on the WebGL terminal
 
 Status: complete (canvas byte-input cutover and browser gates)
@@ -359,6 +369,23 @@ Gate:
   transcript rather than depending solely on canvas pixels.
 - The canvas remains the only normal display and input surface; the bounded
   transcript is observational and cannot alter terminal state.
+
+Fullscreen/input update (2026-09-30):
+
+- The terminal shell now occupies the complete browser viewport. The renderer
+  fits the fixed terminal grid against both available width and height, so the
+  page itself does not scroll and glyph cells retain their intended aspect.
+- Restart, signal, loader-evidence, fallback input, status, and raw transcript
+  controls remain available in a collapsed diagnostics panel rather than
+  surrounding the normal terminal surface.
+- With canvas focus, Escape, arrows, Home/End, Insert/Delete, Page Up/Down,
+  and F1-F12 are encoded as terminal byte sequences and suppress browser
+  navigation/scrolling. Printable, Tab, Enter, Backspace, and Ctrl sequences
+  retain the same behavior.
+- The VT model now tracks DECCKM (`CSI ? 1 h/l`) and application-keypad
+  (`ESC =`/`ESC >`) state. Arrow/Home/End encoding switches between normal
+  `CSI` and ncurses application `SS3` sequences, and the model fixture covers
+  both modes.
 
 ## Stage 4: Implement engine-owned TTY and termios semantics
 
@@ -995,8 +1022,7 @@ Implementation update (2026-09-21, ABI audit unblocker):
 
 ## Stage 9: General scheduling, pipelines, and guest ncurses
 
-Status: in progress (pipeline/redirection gate complete; guest ncurses
-remaining)
+Status: complete (pipeline/redirection and guest ncurses/Rogue gates pass)
 
 Move beyond the bounded single-child proof to the process behavior required by
 a practical interactive shell and full-screen terminal programs.
@@ -1046,9 +1072,17 @@ Implementation update (2026-09-28, pipeline and zombie FD slice):
   digit count, redirect exit status 0, cat output with file contents, and a
   usable prompt afterward.
 - Baseline, command-not-found, coreutils-ls, and pipeline-probe browser gates
-  all pass.  The remaining Stage 9 work is compiling guest ncurses against the
-  WASTE libc/TTY ABI and adding a fixture that exercises alternate-screen entry,
-  raw key input, terminal restoration, and prompt return.
+  all pass. Guest ncurses and Rogue now run through the same TTY byte stream.
+  The required shared-library fixture enters the alternate screen, renders a
+  dungeon, delivers application-mode ArrowUp, observes a second input wait,
+  advances one guaranteed turn with `.`, observes a third input wait, quits,
+  restores terminal state, and returns to a usable Bash prompt. Rogue's legacy
+  daemon dispatcher had called argument-less callbacks through a `void (int)`
+  indirect-call signature, which native ABIs tolerated but WebAssembly traps;
+  `submodules/rogue-waste.patch` normalizes the callbacks to exact
+  `void (void)` signatures and adapts the one argument-using callback. As
+  separate lifetime hardening, immutable decoded engine metadata is now
+  reference-counted until the last process clone is released.
 
 ## Verification required after every stage
 

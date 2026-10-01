@@ -144,6 +144,8 @@ int posix_kernel_path_set_cwd(struct posix_kernel *kernel, const char *path);
 int posix_kernel_path_set_mtime(struct posix_kernel *kernel,
                                 const uint8_t *path, size_t length,
                                 int64_t seconds, int64_t nanoseconds);
+int posix_kernel_path_chmod(struct posix_kernel *kernel, const uint8_t *path,
+                            size_t length, uint32_t mode);
 int posix_kernel_path_stat(struct posix_kernel *kernel, const uint8_t *path,
                            size_t length, int follow,
                            posix_path_metadata *metadata);
@@ -157,5 +159,13 @@ int posix_kernel_path_snapshot(struct posix_kernel *kernel,
                                size_t maximum_size, uint8_t **data_out,
                                size_t *length_out,
                                posix_path_metadata *metadata_out);
+/* Copy one resolved readable regular file into an owned snapshot.  Unlike
+ * posix_kernel_path_snapshot(), this is suitable for loader inputs such as
+ * shared libraries that need read permission but not an execute bit. */
+int posix_kernel_path_read_snapshot(struct posix_kernel *kernel,
+                                    const uint8_t *path, size_t length,
+                                    size_t maximum_size, uint8_t **data_out,
+                                    size_t *length_out,
+                                    posix_path_metadata *metadata_out);
 
 #endif /* WASTE_POSIX_PATH_H */

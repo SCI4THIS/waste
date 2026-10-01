@@ -24,6 +24,8 @@ double strtod(const char *, char **);
 float strtof(const char *, char **);
 long double strtold(const char *, char **);
 int abs(int);
+int rand(void);
+void srand(unsigned int);
 char *getenv(const char *);
 char *secure_getenv(const char *);
 extern char **environ;

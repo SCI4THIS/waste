@@ -26,6 +26,8 @@ PACKAGE_FILES = [
     ("/usr/share/waste/coreutils-source-package.json", "build/coreutils/coreutils-source-package.json", 0o644),
     ("/usr/share/licenses/coreutils/COPYING", "submodules/coreutils/COPYING", 0o644),
 ]
+# Files that the engine itself excludes from auto-discovery.
+EXCLUDED_WASM = {"waste-wast", "waste-probe"}
 
 
 def script_json(value) -> str:
@@ -201,24 +203,30 @@ HTML = r'''<!doctype html>
         stageVfsPath("/usr", 2, 0o755, 0);
         stageVfsPath("/usr/bin", 2, 0o755, 0);
         stageVfsPath("/usr/share", 2, 0o755, 0);
+        stageVfsPath("/usr/lib", 2, 0o755, 0);
         stageVfsPath("/usr/share/waste", 2, 0o755, 0);
         stageVfsPath("/usr/share/licenses", 2, 0o755, 0);
         stageVfsPath("/usr/share/licenses/coreutils", 2, 0o755, 0);
+        stageVfsPath("/lib", 2, 0o755, 0);
         stageVfsPath("/bin/wat", 1, 0o755, 0);
         stageVfsPath("/bin/wast", 1, 0o755, 0);
 
         for (const [name, source] of Object.entries(coreutilsMap)) {
           const utilityBytes = decodeB64(source.data);
-          const utilityPath = new TextEncoder().encode(`/bin/${name}`);
-          const pathPtr = exp.waste_wast_alloc(utilityPath.length);
-          const utilityPtr = exp.waste_wast_alloc(utilityBytes.length);
-          if (!pathPtr || !utilityPtr) throw new Error("coreutils VFS staging allocation failed");
-          new Uint8Array(engineMemory.buffer, pathPtr, utilityPath.length).set(utilityPath);
-          new Uint8Array(engineMemory.buffer, utilityPtr, utilityBytes.length).set(utilityBytes);
-          const staged = exp.waste_wast_stage_file(pathPtr, utilityPath.length,
-            utilityPtr, utilityBytes.length, 0o755);
-          if (staged !== 0) throw new Error(`staging /bin/${name} failed: ${staged}`);
-          stageVfsMtime(source.mtimeSec, source.mtimeNsec);
+          for (const utilityName of [`/usr/bin/${name}`, `/bin/${name}`]) {
+            const utilityPath = new TextEncoder().encode(utilityName);
+            const pathPtr = exp.waste_wast_alloc(utilityPath.length);
+            const utilityPtr = exp.waste_wast_alloc(utilityBytes.length);
+            if (!pathPtr || !utilityPtr) throw new Error("utility VFS staging allocation failed");
+            new Uint8Array(engineMemory.buffer, pathPtr, utilityPath.length).set(utilityPath);
+            new Uint8Array(engineMemory.buffer, utilityPtr, utilityBytes.length).set(utilityBytes);
+            const staged = exp.waste_wast_stage_file(pathPtr, utilityPath.length,
+              utilityPtr, utilityBytes.length, 0o755);
+            exp.waste_wast_free?.(pathPtr);
+            exp.waste_wast_free?.(utilityPtr);
+            if (staged !== 0) throw new Error(`staging ${utilityName} failed: ${staged}`);
+            stageVfsMtime(source.mtimeSec, source.mtimeNsec);
+          }
         }
         for (const file of packagedFiles || []) {
           const pathBytes = new TextEncoder().encode(file.path);
@@ -245,6 +253,30 @@ HTML = r'''<!doctype html>
 
         let yielded = exp.waste_wast_run_script(scriptPtr, sourceBytes.length);
         while (yielded) {
+          const waitKind = exp.waste_wast_wait_kind ? exp.waste_wast_wait_kind() : 0;
+          if (waitKind === 5 && exp.waste_wast_host_io_kind) {
+            const ioKind = exp.waste_wast_host_io_kind();
+            const vb = exp.waste_wast_host_io_verbose && exp.waste_wast_host_io_verbose();
+            const pathPtr = exp.waste_wast_host_io_path_ptr();
+            const pathLen = exp.waste_wast_host_io_path_len();
+            const path = decoder.decode(new Uint8Array(engineMemory.buffer, pathPtr, pathLen));
+            if (vb) console.log("[worker] host-io yield: kind=" + ioKind +
+              " (1=UPLOAD, 2=DOWNLOAD) path=" + path + " waitKind=" + waitKind);
+            if (ioKind === 2) {
+              const dataPtr = exp.waste_wast_host_io_data_ptr();
+              const dataLen = exp.waste_wast_host_io_data_len();
+              const data = new Uint8Array(engineMemory.buffer, dataPtr, dataLen).slice();
+              if (vb) console.log("[download] sending to main thread, name=" + path +
+                " size=" + dataLen);
+              self.postMessage({type: "host-download", name: path, bytes: data,
+                verbose: vb}, [data.buffer]);
+              exp.waste_wast_host_io_complete();
+              ioPending = true;
+            } else if (ioKind === 1) {
+              if (vb) console.log("[upload] sending request to main thread, destPath=" + path);
+              self.postMessage({type: "host-upload-request", destPath: path, verbose: vb});
+            }
+          }
           await waitForIO();
           if (terminated) break;
           yielded = exp.waste_wast_resume();
@@ -289,6 +321,16 @@ HTML = r'''<!doctype html>
           else ioPending = true;
         } else if (msg.type === "signal") {
           exp.waste_wast_raise_signal(msg.signal);
+          if (ioResolve) { ioResolve(); ioResolve = null; }
+        } else if (msg.type === "host-upload-response") {
+          if (msg.cancelled) {
+            exp.waste_wast_host_io_cancel();
+          } else {
+            const bytes = new Uint8Array(msg.bytes);
+            const ptr = exp.waste_wast_alloc(bytes.length);
+            new Uint8Array(engineMemory.buffer, ptr, bytes.length).set(bytes);
+            exp.waste_wast_host_io_provide_upload(ptr, bytes.length);
+          }
           if (ioResolve) { ioResolve(); ioResolve = null; }
         } else if (msg.type === "stop") {
           terminated = true;
@@ -363,6 +405,49 @@ HTML = r'''<!doctype html>
           }
           else if (data.type === "started" && starting) {
             status.textContent = `C engine loaded; running Bash (${((Date.now() - startedEpoch) / 1000).toFixed(1)} s by Date)`;
+          }
+          else if (data.type === "host-download") {
+            if (data.verbose) console.log("[download] trigger browser save, name=" +
+              data.name + " size=" + data.bytes.length);
+            const blob = new Blob([data.bytes], {type: "application/octet-stream"});
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = data.name;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          }
+          else if (data.type === "host-upload-request") {
+            if (data.verbose) console.log("[upload] open file picker, destPath=" +
+              data.destPath);
+            const uploadVerbose = data.verbose;
+            const input = document.createElement("input");
+            input.type = "file";
+            input.onchange = () => {
+              const file = input.files[0];
+              if (!file) {
+                if (uploadVerbose) console.log("[upload] no file selected");
+                worker.postMessage({type: "host-upload-response", cancelled: true});
+                return;
+              }
+              if (uploadVerbose) console.log("[upload] reading " +
+                file.name + " (" + file.size + " bytes)");
+              const reader = new FileReader();
+              reader.onload = () => {
+                if (uploadVerbose) console.log("[upload] sending " +
+                  reader.result.byteLength + " bytes to worker");
+                worker.postMessage({type: "host-upload-response",
+                  bytes: new Uint8Array(reader.result)});
+              };
+              reader.readAsArrayBuffer(file);
+            };
+            input.addEventListener("cancel", () => {
+              if (uploadVerbose) console.log("[upload] file dialog cancelled");
+              worker.postMessage({type: "host-upload-response", cancelled: true});
+            });
+            input.click();
           }
           else if (data.type === "done") {
             if (data.error) append(data.error);
@@ -442,6 +527,23 @@ def main() -> None:
             f"coreutils Wasm files missing from {coreutils_dir}: {', '.join(missing)}\n"
             "Run ./start.sh --build-coreutils to build them.")
 
+    # Auto-discover additional executables (.wasm but not .so.wasm) and
+    # shared libraries (.so.wasm) from the same directory.
+    extra_executables: dict[str, Path] = {}
+    library_files: list[tuple[str, Path]] = []
+    for wasm_file in sorted(coreutils_dir.glob("*.wasm")):
+        if wasm_file.name.endswith(".so.wasm"):
+            library_files.append((wasm_file.name, wasm_file))
+            continue
+        stem = wasm_file.stem
+        if stem in coreutils_paths or stem in EXCLUDED_WASM:
+            continue
+        extra_executables[stem] = wasm_file
+    if extra_executables:
+        print(f"extra executables: {', '.join(extra_executables)}")
+    if library_files:
+        print(f"shared libraries: {', '.join(n for n, _ in library_files)}")
+
     packaged_files = []
     for vfs_path, relative_path, mode in PACKAGE_FILES:
         package_path = args.repo_root / relative_path
@@ -455,6 +557,14 @@ def main() -> None:
             "data": base64.b64encode(package_path.read_bytes()).decode("ascii"),
             "mtimeSec": package_path.stat().st_mtime_ns // 1_000_000_000,
             "mtimeNsec": package_path.stat().st_mtime_ns % 1_000_000_000,
+        })
+    for lib_name, lib_path in library_files:
+        packaged_files.append({
+            "path": f"/usr/lib/{lib_name}",
+            "mode": 0o644,
+            "data": base64.b64encode(lib_path.read_bytes()).decode("ascii"),
+            "mtimeSec": lib_path.stat().st_mtime_ns // 1_000_000_000,
+            "mtimeNsec": lib_path.stat().st_mtime_ns % 1_000_000_000,
         })
 
     if args.output_dir:
@@ -472,17 +582,20 @@ def main() -> None:
                 pass
             shutil.copy2(src, dst)
 
+        all_executables = {**coreutils_paths, **extra_executables}
         safe_copy(args.wasm, out_dir / "waste-wast.wasm")
         safe_copy(args.launch, out_dir / "launch.wast")
-        for name, src in coreutils_paths.items():
+        for name, src in all_executables.items():
             safe_copy(src, out_dir / f"{name}.wasm")
+        for name, src in library_files:
+            safe_copy(src, out_dir / name)
 
         wasm_size = args.wasm.stat().st_size
         launch_size = args.launch.stat().st_size
         print(f"Copied staging files to {out_dir}")
         print(f"  waste-wast.wasm: {wasm_size:,} bytes")
         print(f"  launch.wast: {launch_size:,} bytes")
-        for name, src in coreutils_paths.items():
+        for name, src in all_executables.items():
             print(f"  {name}.wasm: {src.stat().st_size:,} bytes")
     else:
         launch_text = args.launch.read_text(encoding="utf-8")
@@ -500,7 +613,7 @@ def main() -> None:
                 "data": base64.b64encode(src.read_bytes()).decode("ascii"),
                 "mtimeSec": src.stat().st_mtime_ns // 1_000_000_000,
                 "mtimeNsec": src.stat().st_mtime_ns % 1_000_000_000,
-            } for name, src in coreutils_paths.items()},
+            } for name, src in {**coreutils_paths, **extra_executables}.items()},
             "packagedFiles": packaged_files,
         }
 

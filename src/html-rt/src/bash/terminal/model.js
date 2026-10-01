@@ -30,10 +30,13 @@
       this.saved = {x: 0, y: 0, fg: PALETTE[7], bg: PALETTE[0], bold: false,
         underline: false, inverse: false};
       this.cursorVisible = true;
+      this.applicationCursorKeys = false;
+      this.applicationKeypad = false;
       this.state = "normal";
       this.csi = "";
       this.osc = "";
       this.oscEscaped = false;
+      this.lastGraphic = null;
       this.decoder = new TextDecoder("utf-8", {fatal: false});
       this.current = {fg: PALETTE[7], bg: PALETTE[0], bold: false,
         underline: false, inverse: false};
@@ -108,15 +111,40 @@
       else this.y++;
     }
 
-    put(code) {
+    put(code, cellOverride = null) {
       if (code < 0x20 || code === 0x7f) return;
-      const cell = {...this.current, code};
-      if (cell.inverse) [cell.fg, cell.bg] = [cell.bg, cell.fg];
+      const cell = cellOverride ? {...cellOverride} : {...this.current, code};
+      if (!cellOverride && cell.inverse) [cell.fg, cell.bg] = [cell.bg, cell.fg];
       this.active.cells[this.index(this.x, this.y)] = cell;
+      this.lastGraphic = {...cell};
       if (this.x === this.columns - 1) {
         this.active.x = 0;
         this.lineFeed();
       } else this.x++;
+    }
+
+    repeatLast(count) {
+      if (!this.lastGraphic) return;
+      count = clamp(count || 1, 1, this.columns * this.rows);
+      for (let i = 0; i < count; i++)
+        this.put(this.lastGraphic.code, this.lastGraphic);
+    }
+
+    keySequence(key) {
+      const cursorPrefix = this.applicationCursorKeys ? "\x1bO" : "\x1b[";
+      const sequences = {
+        ArrowUp: cursorPrefix + "A", ArrowDown: cursorPrefix + "B",
+        ArrowRight: cursorPrefix + "C", ArrowLeft: cursorPrefix + "D",
+        Home: cursorPrefix + "H", End: cursorPrefix + "F",
+        Insert: "\x1b[2~", Delete: "\x1b[3~",
+        PageUp: "\x1b[5~", PageDown: "\x1b[6~",
+        Escape: "\x1b", F1: "\x1bOP", F2: "\x1bOQ",
+        F3: "\x1bOR", F4: "\x1bOS", F5: "\x1b[15~",
+        F6: "\x1b[17~", F7: "\x1b[18~", F8: "\x1b[19~",
+        F9: "\x1b[20~", F10: "\x1b[21~", F11: "\x1b[23~",
+        F12: "\x1b[24~",
+      };
+      return sequences[key] || null;
     }
 
     write(bytes) {
@@ -143,14 +171,23 @@
         else this.state = "normal";
         return;
       }
+      if (this.state === "charset") {
+        /* ESC ( F and ESC ) F select a G0/G1 character set.  WASTE renders
+         * Unicode directly, so designation changes no glyph mapping yet,
+         * but the final designator byte must be consumed rather than drawn. */
+        this.state = "normal";
+        return;
+      }
       if (this.state === "esc") {
         if (code === 91) { this.state = "csi"; this.csi = ""; return; }
         if (code === 93) { this.state = "osc"; this.osc = ""; return; }
+        if (code === 40 || code === 41) { this.state = "charset"; return; }
         if (code === 55) this.saveCursor();
         else if (code === 56) this.restoreCursor();
         else if (code === 99) this.fullReset();
-        else if (code === 7) this.state = "normal";
-        else this.state = "normal";
+        else if (code === 61) this.applicationKeypad = true;
+        else if (code === 62) this.applicationKeypad = false;
+        this.state = "normal";
         return;
       }
       if (code === 27) { this.state = "esc"; return; }
@@ -186,10 +223,14 @@
           this.y = (values[0] || 1) - 1; this.x = (values[1] || 1) - 1; break;
         case "J": this.eraseDisplay(first); break;
         case "K": this.eraseLine(first); break;
+        case "X": this.eraseCharacters(first || 1); break;
+        case "b": this.repeatLast(first || 1); break;
         case "m": this.sgr(values); break;
         case "s": this.saveCursor(); break;
         case "u": this.restoreCursor(); break;
         case "h": case "l":
+          if (privateMode && values.includes(1))
+            this.applicationCursorKeys = final === "h";
           if (privateMode && (values.includes(1049) || values.includes(47))) {
             if (final === "h") this.enterAlternate(); else this.leaveAlternate();
           }
@@ -199,6 +240,15 @@
           /* Scroll regions are intentionally treated as the full screen. */
           this.y = 0; this.x = 0; break;
         default: break;
+      }
+    }
+
+    eraseCharacters(count) {
+      const end = this.x + clamp(count, 1, this.columns - this.x);
+      for (let x = this.x; x < end; x++) {
+        const cell = {...this.current, code: 32};
+        if (cell.inverse) [cell.fg, cell.bg] = [cell.bg, cell.fg];
+        this.active.cells[this.index(x, this.y)] = cell;
       }
     }
 
@@ -272,6 +322,8 @@
     fullReset() {
       this.resetScreen(this.primary); this.resetScreen(this.alternate);
       this.active = this.primary; this.cursorVisible = true; this.state = "normal";
+      this.applicationCursorKeys = false; this.applicationKeypad = false;
+      this.lastGraphic = null;
       this.current = {fg: PALETTE[7], bg: PALETTE[0], bold: false, underline: false, inverse: false};
     }
   }

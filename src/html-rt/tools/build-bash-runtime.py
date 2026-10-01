@@ -179,13 +179,14 @@ def runtime_module(interactive: bool) -> str:
         b"TERM=xterm",
     )
     environment = b"\0".join(environment_entries) + b"\0"
-    # The merged Bash artifact consumes char ** environment slots at its
-    # eight-byte ABI stride even though each Wasm pointer is i32.
+    # wasm32 char ** entries are packed i32 pointers. Padding each pointer to
+    # eight bytes makes Bash see the first zero pad as the envp terminator, so
+    # only HOME survives and Bash synthesizes defaults such as TERM=dumb.
     environment_pointers = b"".join(
-        (ENV_STRING_ADDRESS + offset).to_bytes(4, "little") + b"\0\0\0\0"
+        (ENV_STRING_ADDRESS + offset).to_bytes(4, "little")
         for offset in (0, *(sum(len(entry) + 1 for entry in environment_entries[:index])
                             for index in range(1, len(environment_entries))))
-    ) + b"\0\0\0\0\0\0\0\0"
+    ) + b"\0\0\0\0"
     root_profile = b"root\0x\0root\0/root\0/bin/bash\0waste\0"
     if interactive:
         pointers = (

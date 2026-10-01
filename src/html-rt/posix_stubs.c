@@ -452,7 +452,7 @@ static void native_posix_set_errno(native_store *store,
     int result_count = 0;
     waste_exec_engine *errno_engine = (waste_exec_engine *)caller;
     native_linked_module *env = native_registered_module(store, "env");
-    if (env) errno_engine = env->engine;
+    if (env) errno_engine = native_store_process_engine(store, env->engine);
     if (exec_find_export(errno_engine, "__errno_location", &index, &ignored) != EXEC_OK)
         return;
     if (exec_invoke(errno_engine, index, NULL, 0,
@@ -1472,6 +1472,26 @@ static exec_status native_posix_mkdir(void *data, const wasm_value *args,
     return native_posix_result(result < 0 ? -1 : 0, results, result_count);
 }
 
+static exec_status native_posix_chmod(void *data, const wasm_value *args,
+                                      int arg_count, wasm_value *results,
+                                      int *result_count, exec_error *error,
+                                      const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    char *path = NULL; size_t length; int errno_value = 0;
+    if (arg_count != 2 || !native_posix_guest_path(caller,
+            (uint32_t)args[0].i32, &path, &length, &errno_value)) {
+        native_posix_set_errno(store, caller, errno_value);
+        return native_posix_result(-1, results, result_count);
+    }
+    int result = store->kernel ? posix_kernel_path_chmod(
+        store->kernel, (const uint8_t *)path, length,
+        (uint32_t)args[1].i32) : -POSIX_ENOSYS;
+    if (result < 0) native_posix_set_errno(store, caller, -result);
+    free(path);
+    (void)error;
+    return native_posix_result(result < 0 ? -1 : 0, results, result_count);
+}
+
 static exec_status native_posix_unlink(void *data, const wasm_value *args,
                                        int arg_count, wasm_value *results,
                                        int *result_count, exec_error *error,
@@ -2190,6 +2210,300 @@ static exec_status native_posix_startup_v1(void *data, const wasm_value *args,
                                result_count);
 }
 
+/* ---- dynamic loading host functions ---- */
+
+/* dlopen_v1(path_ptr, path_len, flags) -> handle
+ * Handle is 1-based library index; 0 means failure. */
+static exec_status native_posix_dlopen_v1(void *data, const wasm_value *args,
+                                           int arg_count, wasm_value *results,
+                                           int *result_count,
+                                           exec_error *error,
+                                           const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    exec_memory *memory = (void *)0;
+    native_process_capsule *capsule;
+    char resolved[NATIVE_EXEC_PATH_MAX];
+    int status;
+    if (!store || arg_count < 3)
+        return native_posix_result(0, results, result_count);
+    if (native_posix_memory(caller, &memory, error) != EXEC_OK)
+        return error->status;
+    capsule = native_store_active_capsule(store);
+    if (!capsule) return native_posix_result(0, results, result_count);
+    uint32_t path_ptr = (uint32_t)args[0].i32;
+    uint32_t path_len = (uint32_t)args[1].i32;
+    /* int flags = args[2].i32; -- reserved for RTLD_* flags */
+    if (path_len == 0 || path_len >= NATIVE_EXEC_PATH_MAX)
+        return native_posix_result(0, results, result_count);
+    char path[NATIVE_EXEC_PATH_MAX];
+    if (!native_posix_read_guest(memory, path_ptr, path, path_len))
+        return native_posix_result(0, results, result_count);
+    path[path_len] = '\0';
+    /* If the path is absolute and exists, use it directly; otherwise
+     * resolve as a library name through the search path. */
+    const char *load_path = path;
+    if (path[0] != '/') {
+        status = native_store_resolve_library(store, path, resolved,
+                                              sizeof(resolved));
+        if (status != 0) return native_posix_result(0, results, result_count);
+        load_path = resolved;
+    }
+    /* Check if already loaded — return existing handle. */
+    for (uint32_t i = 0; i < capsule->loaded_library_count; i++) {
+        if (strcmp(capsule->loaded_libraries[i].path, load_path) == 0) {
+            capsule->loaded_libraries[i].ref_count++;
+            return native_posix_result((int32_t)(i + 1), results,
+                                       result_count);
+        }
+    }
+    status = native_store_load_library(store, load_path, error);
+    if (status != 0) return native_posix_result(0, results, result_count);
+    /* The library was appended at the end of the loaded list. */
+    return native_posix_result((int32_t)capsule->loaded_library_count,
+                               results, result_count);
+}
+
+/* dlsym_v1(handle, name_ptr, name_len) -> address
+ * For function exports: installs a trampoline in the shared table and
+ * returns the table index (usable as a wasm function pointer).
+ * For global exports: returns the global's i32 value (typically a
+ * relocated memory address).  Returns 0 on failure. */
+static exec_status native_posix_dlsym_v1(void *data, const wasm_value *args,
+                                          int arg_count, wasm_value *results,
+                                          int *result_count,
+                                          exec_error *error,
+                                          const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    exec_memory *memory = (void *)0;
+    native_process_capsule *capsule;
+    if (!store || arg_count < 3)
+        return native_posix_result(0, results, result_count);
+    if (native_posix_memory(caller, &memory, error) != EXEC_OK)
+        return error->status;
+    capsule = native_store_active_capsule(store);
+    if (!capsule) return native_posix_result(0, results, result_count);
+    uint32_t handle = (uint32_t)args[0].i32;
+    uint32_t name_ptr = (uint32_t)args[1].i32;
+    uint32_t name_len = (uint32_t)args[2].i32;
+    if (handle == 0 || handle > capsule->loaded_library_count ||
+        name_len == 0 || name_len >= WAST_MAX_EXPORT_NAME)
+        return native_posix_result(0, results, result_count);
+    native_loaded_library *lib = &capsule->loaded_libraries[handle - 1];
+    if (!lib->engine) return native_posix_result(0, results, result_count);
+    char name[WAST_MAX_EXPORT_NAME];
+    if (!native_posix_read_guest(memory, name_ptr, name, name_len))
+        return native_posix_result(0, results, result_count);
+    name[name_len] = '\0';
+    /* Try function export first. */
+    uint32_t func_idx = 0;
+    exec_error lookup_err = {0};
+    if (exec_find_export(lib->engine, name, &func_idx, &lookup_err) ==
+        EXEC_OK) {
+        /* Search the shared table for an existing entry matching this
+         * engine + function index. */
+        exec_table *shared_table = capsule->engine &&
+            capsule->engine->table_count > 0 ?
+            capsule->engine->tables[0] : NULL;
+        if (shared_table) {
+            for (uint64_t i = 0; i < shared_table->size; i++) {
+                if (shared_table->elements[i].owner == lib->engine &&
+                    shared_table->elements[i].func_idx == func_idx)
+                    return native_posix_result((int32_t)i, results,
+                                               result_count);
+            }
+            /* Not found in table — grow the table and install it. */
+            uint64_t slot = shared_table->size;
+            exec_table_element *grown = realloc(
+                shared_table->elements,
+                (size_t)(slot + 1) * sizeof(*grown));
+            if (!grown)
+                return native_posix_result(0, results, result_count);
+            shared_table->elements = grown;
+            shared_table->elements[slot].owner = lib->engine;
+            shared_table->elements[slot].func_idx = func_idx;
+            shared_table->elements[slot].type = WASM_VALTYPE_FUNCREF;
+            shared_table->elements[slot].dynamic_type = WASM_VALTYPE_FUNCREF;
+            shared_table->size = slot + 1;
+            if (!shared_table->has_max ||
+                shared_table->max_size < slot + 1)
+                shared_table->max_size = slot + 1;
+            return native_posix_result((int32_t)slot, results, result_count);
+        }
+        return native_posix_result(0, results, result_count);
+    }
+    /* Try global export (data symbol). */
+    exec_global *global = NULL;
+    memset(&lookup_err, 0, sizeof(lookup_err));
+    if (exec_find_export_global(lib->engine, name, &global, &lookup_err) ==
+        EXEC_OK && global) {
+        return native_posix_result(global->value.i32, results, result_count);
+    }
+    return native_posix_result(0, results, result_count);
+}
+
+/* dlclose_v1(handle) -> status (0 success, negative errno on failure) */
+static exec_status native_posix_dlclose_v1(void *data, const wasm_value *args,
+                                            int arg_count, wasm_value *results,
+                                            int *result_count,
+                                            exec_error *error,
+                                            const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    native_process_capsule *capsule;
+    (void)error; (void)caller;
+    if (!store || arg_count < 1)
+        return native_posix_result(-POSIX_EINVAL, results, result_count);
+    capsule = native_store_active_capsule(store);
+    if (!capsule) return native_posix_result(-POSIX_EINVAL, results,
+                                              result_count);
+    uint32_t handle = (uint32_t)args[0].i32;
+    if (handle == 0 || handle > capsule->loaded_library_count)
+        return native_posix_result(-POSIX_EINVAL, results, result_count);
+    return native_posix_result(
+        native_store_unload_library(store, handle - 1), results,
+        result_count);
+}
+
+/* ---- Host I/O stubs for browser upload/download dialogs ---- */
+
+/* Defined in browser_api.c */
+extern struct {
+    int kind;
+    char path[POSIX_PATH_NODE_NAME_MAX];
+    int path_len;
+    uint8_t *data;
+    size_t data_len;
+    int result;
+    int verbose;
+} g_host_io;
+
+#define HOST_IO_NONE     0
+#define HOST_IO_UPLOAD   1
+#define HOST_IO_DOWNLOAD 2
+
+static exec_status native_posix_host_upload_v1(
+        void *data, const wasm_value *args, int arg_count,
+        wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    exec_memory *memory = (void *)0;
+    (void)caller;
+    if (arg_count < 3) {
+        return native_posix_result(-1, results, result_count);
+    }
+    int flags = (int)args[2].i32;
+    int vb = flags & 1;
+
+    if (vb) waste_browser_record_transition("host-upload-entry");
+
+    /* Resume path: data has been provided or request was cancelled. */
+    if (g_host_io.kind == HOST_IO_UPLOAD && g_host_io.result != 0) {
+        if (vb) waste_browser_record_transition("host-upload-resume");
+        int32_t ret = -1;
+        if (g_host_io.result == 1 && g_host_io.data && store->kernel) {
+            posix_path_metadata metadata = {
+                POSIX_NODE_REGULAR, 0644u, 0, 0,
+                (int64_t)g_host_io.data_len, 0, 0, 0, 0, 0
+            };
+            int status = posix_kernel_path_add_data(
+                store->kernel, g_host_io.path, &metadata,
+                g_host_io.data, g_host_io.data_len);
+            ret = status == 0 ? (int32_t)g_host_io.data_len : -1;
+        }
+        free(g_host_io.data);
+        g_host_io.data = NULL;
+        g_host_io.data_len = 0;
+        g_host_io.kind = HOST_IO_NONE;
+        g_host_io.result = 0;
+        return native_posix_result(ret, results, result_count);
+    }
+
+    /* First call: store the dest path and yield. */
+    if (native_posix_memory(caller, &memory, error) != EXEC_OK)
+        return native_posix_result(-1, results, result_count);
+
+    uint32_t path_ptr = (uint32_t)args[0].i32;
+    uint32_t path_len = (uint32_t)args[1].i32;
+    if (path_len == 0 || path_len >= POSIX_PATH_NODE_NAME_MAX)
+        return native_posix_result(-1, results, result_count);
+    if (!native_posix_read_guest(memory, path_ptr,
+                                 g_host_io.path, path_len))
+        return native_posix_result(-1, results, result_count);
+    g_host_io.path[path_len] = '\0';
+    g_host_io.path_len = (int)path_len;
+    g_host_io.kind = HOST_IO_UPLOAD;
+    g_host_io.result = 0;
+    g_host_io.verbose = vb;
+    free(g_host_io.data);
+    g_host_io.data = NULL;
+    g_host_io.data_len = 0;
+    if (vb) waste_browser_record_transition("host-upload-yield");
+    error->yield_reason = EXEC_YIELD_HOST_IO;
+    return EXEC_YIELD;
+}
+
+static exec_status native_posix_host_download_v1(
+        void *data, const wasm_value *args, int arg_count,
+        wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    exec_memory *memory = (void *)0;
+    (void)data;
+    if (arg_count < 5) {
+        return native_posix_result(-1, results, result_count);
+    }
+    int flags = (int)args[4].i32;
+    int vb = flags & 1;
+
+    if (vb) waste_browser_record_transition("host-download-entry");
+
+    /* Resume path: browser has consumed the data (or cancelled). */
+    if (g_host_io.kind == HOST_IO_DOWNLOAD && g_host_io.result != 0) {
+        if (vb) waste_browser_record_transition("host-download-resume");
+        int32_t ret = g_host_io.result == -1 ? -1 : 0;
+        free(g_host_io.data);
+        g_host_io.data = NULL;
+        g_host_io.data_len = 0;
+        g_host_io.kind = HOST_IO_NONE;
+        g_host_io.result = 0;
+        return native_posix_result(ret, results, result_count);
+    }
+
+    /* First call: copy name and data from guest memory, then yield. */
+    if (native_posix_memory(caller, &memory, error) != EXEC_OK)
+        return native_posix_result(-1, results, result_count);
+
+    uint32_t name_ptr = (uint32_t)args[0].i32;
+    uint32_t name_len = (uint32_t)args[1].i32;
+    uint32_t data_ptr = (uint32_t)args[2].i32;
+    uint32_t data_len = (uint32_t)args[3].i32;
+    if (name_len == 0 || name_len >= POSIX_PATH_NODE_NAME_MAX)
+        return native_posix_result(-1, results, result_count);
+    if (!native_posix_read_guest(memory, name_ptr,
+                                 g_host_io.path, name_len))
+        return native_posix_result(-1, results, result_count);
+    g_host_io.path[name_len] = '\0';
+    g_host_io.path_len = (int)name_len;
+
+    uint8_t *copy = NULL;
+    if (data_len > 0) {
+        copy = (uint8_t *)malloc(data_len);
+        if (!copy)
+            return native_posix_result(-1, results, result_count);
+        if (!native_posix_read_guest(memory, data_ptr, copy, data_len)) {
+            free(copy);
+            return native_posix_result(-1, results, result_count);
+        }
+    }
+    free(g_host_io.data);
+    g_host_io.data = copy;
+    g_host_io.data_len = data_len;
+    g_host_io.kind = HOST_IO_DOWNLOAD;
+    g_host_io.result = 0;
+    g_host_io.verbose = vb;
+    if (vb) waste_browser_record_transition("host-download-yield");
+    error->yield_reason = EXEC_YIELD_HOST_IO;
+    return EXEC_YIELD;
+}
+
 /* ---- POSIX function dispatch tables ---- */
 
 static exec_host_func native_posix_function(const char *module,
@@ -2216,6 +2530,11 @@ static exec_host_func native_posix_function(const char *module,
         if (strcmp(name, "fchdir_v1") == 0) return native_posix_fchdir;
         if (strcmp(name, "fcntl_v1") == 0) return native_posix_fcntl;
         if (strcmp(name, "pipe_v1") == 0) return native_posix_pipe_v1;
+        if (strcmp(name, "dlopen_v1") == 0) return native_posix_dlopen_v1;
+        if (strcmp(name, "dlsym_v1") == 0) return native_posix_dlsym_v1;
+        if (strcmp(name, "dlclose_v1") == 0) return native_posix_dlclose_v1;
+        if (strcmp(name, "host_upload_v1") == 0) return native_posix_host_upload_v1;
+        if (strcmp(name, "host_download_v1") == 0) return native_posix_host_download_v1;
         return (void *)0;
     }
     if (strcmp(module, "env") != 0) return (void *)0;
@@ -2274,6 +2593,7 @@ static exec_host_func native_posix_function(const char *module,
     if (strcmp(name, "stat") == 0) return native_posix_stat;
     if (strcmp(name, "lstat") == 0) return native_posix_lstat;
     if (strcmp(name, "fstat") == 0) return native_posix_fstat;
+    if (strcmp(name, "chmod") == 0) return native_posix_chmod;
     if (strcmp(name, "mkdir") == 0) return native_posix_mkdir;
     if (strcmp(name, "unlink") == 0) return native_posix_unlink;
     if (strcmp(name, "rename") == 0) return native_posix_rename;

@@ -295,6 +295,91 @@ static int native_executable_has_asyncify_name(const char *name) {
     return 0;
 }
 
+static int native_executable_runtime_module(const char *name) {
+    return name &&
+        (strcmp(name, "env") == 0 ||
+         strcmp(name, "waste_kernel") == 0 ||
+         strcmp(name, "waste-runtime") == 0 ||
+         strcmp(name, "spectest") == 0 ||
+         strcmp(name, "GOT.mem") == 0 ||
+         strcmp(name, "GOT.func") == 0);
+}
+
+static exec_status native_store_grow_table(exec_table *table,
+                                           uint64_t minimum,
+                                           exec_error *error);
+
+/* Load named shared-library dependencies before instantiating an executable.
+ * wasm-ld records these as ordinary import-module names (for example
+ * "libncurses").  Reserve the executable's statically linked table range
+ * before allocating dependency slots, then register each provider before
+ * native_load_module resolves the executable's function imports. */
+static exec_status native_store_load_executable_dependencies(
+        native_store *store, const uint8_t *bytes, size_t size,
+        exec_error *error) {
+    wasm_module decoded;
+    wasm_decode_error decode_error;
+    wasm_module_init(&decoded);
+    if (wasm_decode_module(bytes, size, &decoded, &decode_error) !=
+        WASM_DECODE_OK) {
+        wasm_module_dispose(&decoded);
+        return exec_fail(error, EXEC_ERROR_FORMAT,
+                         "cannot decode executable dependencies");
+    }
+    {
+        native_process_capsule *capsule =
+            native_store_active_capsule(store);
+        exec_table *process_table = capsule && capsule->engine &&
+            capsule->engine->table_count ? capsule->engine->tables[0] : NULL;
+        for (uint32_t i = 0; process_table && i < decoded.import_count; i++) {
+            const wasm_import *request = &decoded.imports[i];
+            if (request->kind == WASM_IMPORT_TABLE &&
+                strcmp(request->module, "env") == 0 &&
+                strcmp(request->name, "__indirect_function_table") == 0 &&
+                process_table->size <
+                    request->descriptor.table.limits.minimum) {
+                exec_status grow_status = native_store_grow_table(
+                    process_table,
+                    request->descriptor.table.limits.minimum, error);
+                if (grow_status != EXEC_OK) {
+                    wasm_module_dispose(&decoded);
+                    return grow_status;
+                }
+            }
+        }
+    }
+    for (uint32_t i = 0; i < decoded.import_count; i++) {
+        const char *module = decoded.imports[i].module;
+        char path[POSIX_PATH_NODE_NAME_MAX];
+        if (native_executable_runtime_module(module) ||
+            native_store_find_library(store, module))
+            continue;
+        if (native_store_resolve_library(store, module, path,
+                                         sizeof(path)) != 0) {
+            if (error) {
+                error->status = EXEC_ERROR_NOT_FOUND;
+                snprintf(error->message, sizeof(error->message),
+                         "shared library %.160s is not present in the VFS",
+                         module);
+            }
+            wasm_module_dispose(&decoded);
+            return EXEC_ERROR_NOT_FOUND;
+        }
+        if (native_store_load_library(store, path, error) != 0) {
+            if (error && !error->message[0]) {
+                error->status = EXEC_ERROR_NOT_FOUND;
+                snprintf(error->message, sizeof(error->message),
+                         "could not load shared library %.160s", module);
+            }
+            wasm_module_dispose(&decoded);
+            return error && error->status ? error->status :
+                EXEC_ERROR_NOT_FOUND;
+        }
+    }
+    wasm_module_dispose(&decoded);
+    return EXEC_OK;
+}
+
 const native_executable *native_store_find_executable(
         const native_store *store, const char *path) {
     if (!store || !native_executable_path_valid(path)) return NULL;
@@ -547,7 +632,10 @@ exec_status native_store_instantiate_executable(
         return exec_fail(error, EXEC_ERROR_FORMAT,
                          "executable is neither Wasm nor WAT");
     }
-    status = native_load_module(store, NULL, image_bytes, image_size,
+    status = native_store_load_executable_dependencies(
+        store, image_bytes, image_size, error);
+    if (status == EXEC_OK)
+        status = native_load_module(store, NULL, image_bytes, image_size,
                                 &engine, error);
     free(compiled_bytes);
     free(vfs_bytes);
@@ -693,8 +781,19 @@ static exec_status native_linked_call(void *data, const wasm_value *args,
                                        const waste_exec_engine *caller) {
     (void)caller;
     native_linked_func *function = (native_linked_func *)data;
-    return exec_invoke(function->engine, function->func_idx, args, arg_count,
-                       results, result_count, error);
+    exec_status status = exec_invoke(
+        function->engine, function->func_idx, args, arg_count,
+        results, result_count, error);
+    if (status != EXEC_OK && status != EXEC_YIELD &&
+        status != EXEC_ERROR_EXIT && error) {
+        char detail[sizeof(error->message)];
+        snprintf(detail, sizeof(detail), "%.110s%s%.48s.%.80s",
+                 error->message[0] ? error->message : "linked call failed",
+                 " via ",
+                 function->module, function->name);
+        snprintf(error->message, sizeof(error->message), "%s", detail);
+    }
+    return status;
 }
 
 /* ---- spectest helpers ---- */
@@ -944,6 +1043,209 @@ const wast_module *native_find_definition(const wast_script *script,
 
 /* ---- module loading ---- */
 
+static uint32_t native_store_engine_memory_base(native_store *store,
+                                                 waste_exec_engine *engine) {
+    native_process_capsule *capsule = native_store_active_capsule(store);
+    if (!capsule || !engine) return 0;
+    for (uint32_t i = 0; i < capsule->loaded_library_count; i++)
+        if (capsule->loaded_libraries[i].engine == engine)
+            return capsule->loaded_libraries[i].memory_base;
+    return 0;
+}
+
+static int native_store_find_global_symbol(native_store *store,
+                                            waste_exec_engine *self,
+                                            const char *name,
+                                            exec_global **global_out,
+                                            uint32_t *base_out) {
+    exec_error ignored = {0};
+    if (exec_find_export_global(self, name, global_out, &ignored) == EXEC_OK) {
+        *base_out = store->library_load_ctx.active ?
+            (uint32_t)store->library_load_ctx.memory_base_global.value.i32 :
+            native_store_engine_memory_base(store, self);
+        return 1;
+    }
+    for (int i = 0; i < store->module_count; i++) {
+        waste_exec_engine *engine = native_store_process_engine(
+            store, store->modules[i].engine);
+        memset(&ignored, 0, sizeof(ignored));
+        if (engine && engine != self &&
+            exec_find_export_global(engine, name, global_out, &ignored) ==
+                EXEC_OK) {
+            *base_out = native_store_engine_memory_base(store, engine);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int native_store_find_function_symbol(native_store *store,
+                                              waste_exec_engine *self,
+                                              const char *name,
+                                              waste_exec_engine **owner_out,
+                                              uint32_t *index_out) {
+    exec_error ignored = {0};
+    if (exec_find_export(self, name, index_out, &ignored) == EXEC_OK) {
+        *owner_out = self;
+        return 1;
+    }
+    for (int i = 0; i < store->module_count; i++) {
+        waste_exec_engine *engine = native_store_process_engine(
+            store, store->modules[i].engine);
+        memset(&ignored, 0, sizeof(ignored));
+        if (engine && engine != self &&
+            exec_find_export(engine, name, index_out, &ignored) == EXEC_OK) {
+            *owner_out = engine;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int native_store_function_address(native_store *store,
+                                         waste_exec_engine *owner,
+                                         uint32_t function_index,
+                                         uint32_t *address_out) {
+    native_process_capsule *capsule = native_store_active_capsule(store);
+    exec_table *table = capsule && capsule->engine &&
+        capsule->engine->table_count ? capsule->engine->tables[0] : NULL;
+    if (!table) return 0;
+    for (uint64_t i = 1; i < table->size; i++) {
+        if (table->elements[i].owner == owner &&
+            table->elements[i].func_idx == function_index) {
+            *address_out = (uint32_t)i;
+            return 1;
+        }
+    }
+    uint64_t slot = table->size;
+    if (slot >= UINT32_MAX) return 0;
+    exec_table_element *elements = realloc(
+        table->elements, (size_t)(slot + 1) * sizeof(*elements));
+    if (!elements) return 0;
+    table->elements = elements;
+    memset(&table->elements[slot], 0, sizeof(table->elements[slot]));
+    table->elements[slot].owner = owner;
+    table->elements[slot].func_idx = function_index;
+    table->elements[slot].type = WASM_VALTYPE_FUNCREF;
+    table->elements[slot].dynamic_type = WASM_VALTYPE_FUNCREF;
+    table->size = slot + 1;
+    if (!table->has_max || table->max_size < table->size)
+        table->max_size = table->size;
+    *address_out = (uint32_t)slot;
+    return 1;
+}
+
+static exec_status native_store_grow_table(exec_table *table,
+                                           uint64_t minimum,
+                                           exec_error *error) {
+    exec_table_element *elements;
+    if (!table || minimum > UINT32_MAX)
+        return exec_fail(error, EXEC_ERROR_TRAP,
+                         "function table size is invalid");
+    if (table->size >= minimum) return EXEC_OK;
+    elements = realloc(table->elements,
+                       (size_t)minimum * sizeof(*elements));
+    if (!elements)
+        return exec_fail(error, EXEC_ERROR_TRAP,
+                         "cannot grow the function table");
+    memset(&elements[table->size], 0,
+           (size_t)(minimum - table->size) * sizeof(*elements));
+    table->elements = elements;
+    table->size = minimum;
+    if (!table->has_max || table->max_size < minimum)
+        table->max_size = minimum;
+    return EXEC_OK;
+}
+
+static int native_store_find_imported_function_symbol(
+        const wasm_module *decoded, const char *name, uint32_t *index_out) {
+    uint32_t function_index = 0;
+    if (!decoded || !name || !index_out) return 0;
+    for (uint32_t i = 0; i < decoded->import_count; i++) {
+        const wasm_import *request = &decoded->imports[i];
+        if (request->kind != WASM_IMPORT_FUNCTION) continue;
+        if (strcmp(request->name, name) == 0) {
+            *index_out = function_index;
+            return 1;
+        }
+        function_index++;
+    }
+    return 0;
+}
+
+static exec_status native_store_patch_got(native_store *store,
+                                          const wasm_module *decoded,
+                                          exec_global_import *globals,
+                                          waste_exec_engine *engine,
+                                          exec_error *error) {
+    uint32_t global_slot = 0;
+    for (uint32_t i = 0; i < decoded->import_count; i++) {
+        const wasm_import *request = &decoded->imports[i];
+        if (request->kind != WASM_IMPORT_GLOBAL) continue;
+        exec_global *got = globals[global_slot++].global;
+        if (strcmp(request->module, "GOT.mem") == 0) {
+            exec_global *symbol = NULL;
+            uint32_t memory_base = 0;
+            if (!got || !native_store_find_global_symbol(
+                    store, engine, request->name, &symbol, &memory_base)) {
+                if (error) {
+                    error->status = EXEC_ERROR_NOT_FOUND;
+                    snprintf(error->message, sizeof(error->message),
+                             "unresolved GOT.mem symbol %.160s",
+                             request->name);
+                }
+                return EXEC_ERROR_NOT_FOUND;
+            }
+            got->value.type = WASM_VALTYPE_I32;
+            got->value.i32 = (int32_t)(memory_base +
+                                       (uint32_t)symbol->value.i32);
+        } else if (strcmp(request->module, "GOT.func") == 0) {
+            waste_exec_engine *owner = NULL;
+            uint32_t function_index = 0, address = 0;
+            if (!got) {
+                if (error) {
+                    error->status = EXEC_ERROR_NOT_FOUND;
+                    snprintf(error->message, sizeof(error->message),
+                             "unresolved GOT.func symbol %.160s",
+                             request->name);
+                }
+                return EXEC_ERROR_NOT_FOUND;
+            }
+            if (!native_store_find_function_symbol(
+                    store, engine, request->name, &owner, &function_index)) {
+                /* A PIC executable can take the address of a function that
+                 * it also imports normally (for example exit).  Its own
+                 * imported function index is a valid shared-table target and
+                 * preserves the already-resolved host/module binding. */
+                if (!native_store_find_imported_function_symbol(
+                        decoded, request->name, &function_index)) {
+                    if (error) {
+                        error->status = EXEC_ERROR_NOT_FOUND;
+                        snprintf(error->message, sizeof(error->message),
+                                 "unresolved GOT.func symbol %.160s",
+                                 request->name);
+                    }
+                    return EXEC_ERROR_NOT_FOUND;
+                }
+                owner = engine;
+            }
+            if (!native_store_function_address(
+                    store, owner, function_index, &address)) {
+                if (error) {
+                    error->status = EXEC_ERROR_NOT_FOUND;
+                    snprintf(error->message, sizeof(error->message),
+                             "unresolved GOT.func symbol %.160s",
+                             request->name);
+                }
+                return EXEC_ERROR_NOT_FOUND;
+            }
+            got->value.type = WASM_VALTYPE_I32;
+            got->value.i32 = (int32_t)address;
+        }
+    }
+    return EXEC_OK;
+}
+
 exec_status native_load_module(native_store *store,
                                 const wast_module *module,
                                 const uint8_t *bytes, size_t size,
@@ -1019,8 +1321,17 @@ exec_status native_load_module(native_store *store,
      * output and literal binary modules. */
     for (uint32_t i = 0; i < decoded_import_count; i++) {
         const wasm_import *request = &decoded_imports[i];
+        native_linked_module process_provider = {0};
         native_linked_module *provider = native_registered_module(
             store, request->module);
+        native_loaded_library *loaded_provider =
+            native_store_find_library(store, request->module);
+        if (loaded_provider) {
+            process_provider.engine = loaded_provider->engine;
+            provider = &process_provider;
+        }
+        waste_exec_engine *provider_engine = provider ?
+            native_store_process_engine(store, provider->engine) : NULL;
         if (request->kind == WASM_IMPORT_FUNCTION) {
             native_host_binding host_binding = {0};
             int host_resolved = store->host_resolver &&
@@ -1039,7 +1350,7 @@ exec_status native_load_module(native_store *store,
             } else if (provider) {
                 uint32_t index = 0, type_index = 0;
                 exec_status status = exec_find_export(
-                    provider->engine, request->name, &index, error);
+                    provider_engine, request->name, &index, error);
                 if (status != EXEC_OK && host_resolved) {
                     functions[nf].function = host_binding.function;
                     functions[nf].host_data = host_binding.host_data;
@@ -1058,13 +1369,19 @@ exec_status native_load_module(native_store *store,
                     goto fail;
                 }
                 status = exec_get_func_type_index(
-                    provider->engine, index, &type_index, error);
+                    provider_engine, index, &type_index, error);
                 if (status != EXEC_OK) goto fail;
-                call_block->calls[nf].engine = provider->engine;
+                call_block->calls[nf].engine = provider_engine;
                 call_block->calls[nf].func_idx = index;
+                snprintf(call_block->calls[nf].module,
+                         sizeof(call_block->calls[nf].module), "%s",
+                         request->module);
+                snprintf(call_block->calls[nf].name,
+                         sizeof(call_block->calls[nf].name), "%s",
+                         request->name);
                 functions[nf].function = native_linked_call;
                 functions[nf].host_data = &call_block->calls[nf];
-                functions[nf].type_owner = provider->engine;
+                functions[nf].type_owner = provider_engine;
                 functions[nf].type_index = type_index;
                 functions[nf].has_wasm_type = 1;
             }
@@ -1083,8 +1400,46 @@ exec_status native_load_module(native_store *store,
                 (strcmp(request->module, "spectest") == 0 &&
                  strcmp(request->name, "table") == 0 ?
                  &store->spectest_table : NULL);
-            if (provider && exec_find_export_table(
-                    provider->engine, request->name, &value, error) != EXEC_OK)
+            if (strcmp(request->module, "env") == 0 &&
+                strcmp(request->name, "__indirect_function_table") == 0) {
+                native_process_capsule *capsule =
+                    native_store_active_capsule(store);
+                if (capsule && capsule->engine &&
+                    capsule->engine->table_count)
+                    value = capsule->engine->tables[0];
+                if (!value) {
+                    native_linked_module *runtime =
+                        native_registered_module(store, "waste-runtime");
+                    exec_error ignored = {0};
+                if (runtime)
+                        (void)exec_find_export_table(
+                            native_store_process_engine(store,
+                                runtime->engine), "table", &value, &ignored);
+                }
+            }
+            if (!value && provider && exec_find_export_table(
+                    provider_engine, request->name, &value, error) != EXEC_OK) {
+                if (error) {
+                    error->status = EXEC_ERROR_NOT_FOUND;
+                    snprintf(error->message, sizeof(error->message),
+                             "unresolved table import %.96s.%.96s",
+                             request->module, request->name);
+                }
+                goto fail;
+            }
+            if (!value) {
+                if (error) {
+                    error->status = EXEC_ERROR_NOT_FOUND;
+                    snprintf(error->message, sizeof(error->message),
+                             "unresolved table import %.96s.%.96s",
+                             request->module, request->name);
+                }
+                goto fail;
+            }
+            if (value->size < request->descriptor.table.limits.minimum &&
+                native_store_grow_table(
+                    value, request->descriptor.table.limits.minimum,
+                    error) != EXEC_OK)
                 goto fail;
             tables[nt++] = (exec_table_import){request->module,
                                                request->name, value};
@@ -1093,25 +1448,129 @@ exec_status native_load_module(native_store *store,
                 (strcmp(request->module, "spectest") == 0 &&
                  strcmp(request->name, "memory") == 0 ?
                  &store->spectest_memory : NULL);
-            if (provider && exec_find_export_memory(
-                    provider->engine, request->name, &value, error) != EXEC_OK)
+            if (strcmp(request->module, "env") == 0 &&
+                strcmp(request->name, "memory") == 0) {
+                native_process_capsule *capsule =
+                    native_store_active_capsule(store);
+                if (capsule && capsule->engine)
+                    value = capsule->engine->memory;
+                if (!value) {
+                    native_linked_module *runtime =
+                        native_registered_module(store, "waste-runtime");
+                    exec_error ignored = {0};
+                if (runtime)
+                        (void)exec_find_export_memory(
+                            native_store_process_engine(store,
+                                runtime->engine), "memory", &value, &ignored);
+                }
+            }
+            if (!value && provider && exec_find_export_memory(
+                    provider_engine, request->name, &value, error) != EXEC_OK) {
+                if (error) {
+                    error->status = EXEC_ERROR_NOT_FOUND;
+                    snprintf(error->message, sizeof(error->message),
+                             "unresolved memory import %.96s.%.96s",
+                             request->module, request->name);
+                }
                 goto fail;
+            }
+            if (!value) {
+                if (error) {
+                    error->status = EXEC_ERROR_NOT_FOUND;
+                    snprintf(error->message, sizeof(error->message),
+                             "unresolved memory import %.96s.%.96s",
+                             request->module, request->name);
+                }
+                goto fail;
+            }
+            /* A process memory reserves a sparse virtual address space in
+             * memory->pages, while linear_pages remains the Wasm-visible
+             * memory size.  Executables linked with --import-memory may
+             * require a larger initial linear memory than the runtime image
+             * that owns the address space.  Grow the linear mapping before
+             * wasm_load_module validates the import and applies data
+             * segments. */
+            if (value->process_virtual_memory &&
+                value->linear_pages < request->descriptor.memory.limits.minimum) {
+                exec_status resize_status = exec_memory_resize_pages(
+                    value, request->descriptor.memory.limits.minimum, error);
+                if (resize_status != EXEC_OK) goto fail;
+            }
             memories[nm++] = (exec_memory_import){request->module,
                                                   request->name, value};
         } else if (request->kind == WASM_IMPORT_GLOBAL) {
-            exec_global *value = provider ? NULL :
-                (strcmp(request->module, "spectest") == 0 ?
-                 native_spectest_global(store, request->name) : NULL);
-            if (provider && exec_find_export_global(
-                    provider->engine, request->name, &value, error) != EXEC_OK)
+            exec_global *value = NULL;
+            /* PIC shared library globals: __memory_base, __table_base, and
+             * __stack_pointer are provided by the library load context. */
+            if (store->library_load_ctx.active &&
+                strcmp(request->module, "env") == 0) {
+                if (strcmp(request->name, "__memory_base") == 0)
+                    value = &store->library_load_ctx.memory_base_global;
+                else if (strcmp(request->name, "__table_base") == 0)
+                    value = &store->library_load_ctx.table_base_global;
+                else if (strcmp(request->name, "__stack_pointer") == 0)
+                    value = store->library_load_ctx.stack_pointer;
+            }
+            /* GOT.func and GOT.mem globals are resolved as mutable i32
+             * globals.  The loader fills them after instantiation. */
+            if (!value && (strcmp(request->module, "GOT.func") == 0 ||
+                           strcmp(request->module, "GOT.mem") == 0)) {
+                /* For now, unresolved GOT entries are provided as zero-
+                 * initialized mutable globals.  The loader patches them
+                 * after all libraries are instantiated. */
+                exec_global *got = calloc(1, sizeof(*got));
+                if (got) {
+                    got->value.type = WASM_VALTYPE_I32;
+                    got->value.i32 = 0;
+                    got->mutable_ = 1;
+                }
+                value = got;
+            }
+            if (!value && !provider)
+                value = strcmp(request->module, "spectest") == 0 ?
+                    native_spectest_global(store, request->name) : NULL;
+            if (!value && provider && exec_find_export_global(
+                    provider_engine, request->name, &value, error) != EXEC_OK) {
+                if (error) {
+                    error->status = EXEC_ERROR_NOT_FOUND;
+                    snprintf(error->message, sizeof(error->message),
+                             "unresolved global import %.96s.%.96s",
+                             request->module, request->name);
+                }
                 goto fail;
+            }
+            if (!value) {
+                if (error) {
+                    error->status = EXEC_ERROR_NOT_FOUND;
+                    snprintf(error->message, sizeof(error->message),
+                             "unresolved global import %.96s.%.96s",
+                             request->module, request->name);
+                }
+                goto fail;
+            }
             globals[ng++] = (exec_global_import){request->module,
                                                   request->name, value};
         } else if (request->kind == WASM_IMPORT_TAG) {
             exec_tag *value = NULL;
             if (provider && exec_find_export_tag(
-                    provider->engine, request->name, &value, error) != EXEC_OK)
+                    provider_engine, request->name, &value, error) != EXEC_OK) {
+                if (error) {
+                    error->status = EXEC_ERROR_NOT_FOUND;
+                    snprintf(error->message, sizeof(error->message),
+                             "unresolved tag import %.96s.%.96s",
+                             request->module, request->name);
+                }
                 goto fail;
+            }
+            if (!value) {
+                if (error) {
+                    error->status = EXEC_ERROR_NOT_FOUND;
+                    snprintf(error->message, sizeof(error->message),
+                             "unresolved tag import %.96s.%.96s",
+                             request->module, request->name);
+                }
+                goto fail;
+            }
             tags[ntag++] = (exec_tag_import){request->module,
                                               request->name, value};
         }
@@ -1123,6 +1582,18 @@ exec_status native_load_module(native_store *store,
         load_status = wasm_instantiate_module(
             &decoded, &imports, engine_out, error);
         if (load_status != EXEC_OK && !*engine_out) goto fail;
+        /* wasm-ld uses GOT.mem/GOT.func imports for both shared objects and
+         * position-independent executables.  Patch every instantiated
+         * module; modules without GOT imports make this a no-op. */
+        if (load_status == EXEC_OK) {
+            load_status = native_store_patch_got(
+                store, &decoded, globals, *engine_out, error);
+            if (load_status != EXEC_OK) {
+                exec_free(*engine_out);
+                *engine_out = NULL;
+                goto fail;
+            }
+        }
     }
     free(functions); free(globals); free(memories); free(tables); free(tags);
     wasm_module_dispose(&decoded);
@@ -1169,4 +1640,484 @@ uint8_t *encode_group_module(const wast_group *group, size_t *size_out,
         return wasm;
     }
     return wast_encode_module(&group->module, size_out, error);
+}
+
+/* ---- shared library loading ---- */
+
+#include "wasm/reader.h"
+
+int native_parse_dylink(const uint8_t *bytes, size_t size,
+                        native_dylink_info *info) {
+    if (!bytes || !info || size < 8) return -1;
+    memset(info, 0, sizeof(*info));
+    /* Validate wasm magic and version. */
+    if (bytes[0] != 0x00 || bytes[1] != 0x61 ||
+        bytes[2] != 0x73 || bytes[3] != 0x6d) return -1;
+    wasm_reader reader;
+    wasm_reader_init(&reader, bytes + 8, size - 8);
+    /* Walk sections looking for custom section (id 0) named "dylink.0". */
+    while (wasm_reader_remaining(&reader) > 0) {
+        uint8_t section_id;
+        uint32_t section_size;
+        if (!wasm_reader_read_u8(&reader, &section_id) ||
+            !wasm_reader_read_u32(&reader, &section_size))
+            return -1;
+        wasm_reader section;
+        if (!wasm_reader_read_subreader(&reader, section_size, &section))
+            return -1;
+        if (section_id != 0) continue;
+        uint32_t name_length;
+        const uint8_t *name_bytes;
+        if (!wasm_reader_read_u32(&section, &name_length) ||
+            !wasm_reader_read_bytes(&section, name_length, &name_bytes))
+            continue;
+        if (name_length == 8 &&
+            memcmp(name_bytes, "dylink.0", 8) == 0) {
+            /* WASM_DYLINK_MEM_INFO sub-section (type 1). */
+            uint8_t subsection_type;
+            uint32_t subsection_size;
+            if (!wasm_reader_read_u8(&section, &subsection_type) ||
+                !wasm_reader_read_u32(&section, &subsection_size))
+                return -1;
+            if (subsection_type != 1) return -1;
+            wasm_reader sub;
+            if (!wasm_reader_read_subreader(&section, subsection_size, &sub))
+                return -1;
+            if (!wasm_reader_read_u32(&sub, &info->memory_size) ||
+                !wasm_reader_read_u32(&sub, &info->memory_alignment) ||
+                !wasm_reader_read_u32(&sub, &info->table_size) ||
+                !wasm_reader_read_u32(&sub, &info->table_alignment))
+                return -1;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+int native_store_resolve_library(native_store *store, const char *name,
+                                 char *path_out, size_t path_size) {
+    if (!store || !name || !path_out || !path_size) return -POSIX_EINVAL;
+    struct posix_kernel *kernel = store->kernel;
+    if (!kernel) return -POSIX_ENOSYS;
+    /* Try search paths in order. */
+    const char *prefixes[] = {"/usr/lib/", "/lib/"};
+    const char *suffixes[] = {"", ".wasm", ".so.wasm"};
+    for (int p = 0; p < 2; p++) {
+        for (int s = 0; s < 3; s++) {
+            char trial[POSIX_PATH_NODE_NAME_MAX];
+            int n = snprintf(trial, sizeof(trial), "%s%s%s",
+                             prefixes[p], name, suffixes[s]);
+            if (n < 0 || (size_t)n >= sizeof(trial)) continue;
+            posix_path_metadata meta;
+            if (posix_kernel_path_stat(kernel, (const uint8_t *)trial,
+                                       (size_t)n, 1, &meta) == 0 &&
+                meta.kind == POSIX_NODE_REGULAR) {
+                size_t len = (size_t)n;
+                if (len + 1 > path_size) continue;
+                memcpy(path_out, trial, len + 1);
+                return 0;
+            }
+        }
+    }
+    return -POSIX_ENOENT;
+}
+
+static int native_store_allocate_library_region(
+        native_process_capsule *capsule, uint64_t page_count,
+        uint64_t *first_page_out) {
+    uint64_t limit;
+    uint64_t candidate;
+    if (!capsule || !page_count || !first_page_out) return -POSIX_EINVAL;
+    limit = capsule->virtual_page_limit ? capsule->virtual_page_limit :
+        EXEC_MEM32_MAX_PAGES;
+    /* The process layout owns the top sixteen pages as stack and the page
+     * immediately below them as a guard.  Keep DSOs below that fixed range
+     * even while exec preflight is running against a capsule whose old
+     * image-region metadata may subsequently be rebuilt. */
+    if (limit <= 17 || page_count > limit - 17) return -POSIX_ENOMEM;
+    candidate = limit - 17 - page_count;
+    for (;;) {
+        if (!native_process_capsule_region_is_reserved(
+                capsule, candidate, page_count, NULL)) {
+            int result = native_process_capsule_reserve_region(
+                capsule, candidate, page_count,
+                NATIVE_PROCESS_REGION_LIBRARY);
+            if (result == 0) *first_page_out = candidate;
+            return result;
+        }
+        if (candidate == 0) break;
+        candidate--;
+    }
+    return -POSIX_ENOMEM;
+}
+
+native_loaded_library *native_store_find_library(native_store *store,
+                                                 const char *name) {
+    if (!store || !name) return NULL;
+    native_process_capsule *capsule = native_store_active_capsule(store);
+    if (!capsule) return NULL;
+    for (uint32_t i = 0; i < capsule->loaded_library_count; i++) {
+        if (strcmp(capsule->loaded_libraries[i].name, name) == 0)
+            return &capsule->loaded_libraries[i];
+    }
+    return NULL;
+}
+
+int native_store_load_library(native_store *store, const char *path,
+                              exec_error *error) {
+    if (!store || !path) {
+        if (error) {
+            error->status = EXEC_ERROR_FORMAT;
+            snprintf(error->message, sizeof(error->message),
+                     "invalid shared-library request");
+        }
+        return -POSIX_EINVAL;
+    }
+    native_process_capsule *capsule = native_store_active_capsule(store);
+    if (!capsule) {
+        if (error) {
+            error->status = EXEC_ERROR_FORMAT;
+            snprintf(error->message, sizeof(error->message),
+                     "shared-library load has no active process");
+        }
+        return -POSIX_EINVAL;
+    }
+
+    /* Check if already loaded. */
+    for (uint32_t i = 0; i < capsule->loaded_library_count; i++) {
+        if (strcmp(capsule->loaded_libraries[i].path, path) == 0) {
+            capsule->loaded_libraries[i].ref_count++;
+            return 0;
+        }
+    }
+    if (capsule->loaded_library_count >= NATIVE_LOADED_LIBRARY_MAX) {
+        if (error) {
+            error->status = EXEC_ERROR_TRAP;
+            snprintf(error->message, sizeof(error->message),
+                     "shared-library table is full");
+        }
+        return -POSIX_ENOMEM;
+    }
+
+    /* Load bytes from VFS. */
+    uint8_t *bytes = NULL;
+    size_t size = 0;
+    posix_path_metadata meta;
+    size_t path_len = strlen(path);
+    int err = posix_kernel_path_read_snapshot(
+        store->kernel, (const uint8_t *)path, path_len,
+        NATIVE_EXEC_BYTES_MAX, &bytes, &size, &meta);
+    if (err != 0) {
+        if (error) {
+            error->status = EXEC_ERROR_NOT_FOUND;
+            snprintf(error->message, sizeof(error->message),
+                     "cannot read shared library %.180s (errno %d)", path,
+                     -err);
+        }
+        return err;
+    }
+
+    /* Parse dylink.0 section. */
+    native_dylink_info dylink;
+    if (native_parse_dylink(bytes, size, &dylink) != 0) {
+        free(bytes);
+        if (error)
+            snprintf(error->message, sizeof(error->message),
+                     "missing dylink.0 section in %.200s", path);
+        return -POSIX_ENOEXEC;
+    }
+
+    /* Allocate memory region for library data. */
+    uint32_t memory_pages = (dylink.memory_size + 65535) / 65536;
+    if (memory_pages == 0) memory_pages = 1;
+    uint32_t memory_base = 0;
+    if (dylink.memory_size > 0) {
+        uint64_t memory_first_page = 0;
+        exec_memory *shared_memory = capsule->engine ?
+            capsule->engine->memory : NULL;
+        int region_status = shared_memory ?
+            native_store_allocate_library_region(
+                capsule, memory_pages, &memory_first_page) : -POSIX_ENOMEM;
+        uint64_t required_pages = memory_first_page + memory_pages;
+        if (region_status != 0 ||
+            (required_pages > shared_memory->pages &&
+             exec_memory_reserve_virtual_pages(
+                 shared_memory, required_pages, NULL) != EXEC_OK) ||
+            exec_memory_map_pages(
+                shared_memory, memory_first_page, memory_pages,
+                EXEC_MEMORY_PROT_READ | EXEC_MEMORY_PROT_WRITE, 0, NULL) !=
+                EXEC_OK) {
+            free(bytes);
+            if (error) {
+                error->status = EXEC_ERROR_TRAP;
+                snprintf(error->message, sizeof(error->message),
+                         "cannot reserve %u pages for %.160s", memory_pages,
+                         path);
+            }
+            return -POSIX_ENOMEM;
+        }
+        memory_base = (uint32_t)(memory_first_page * EXEC_PAGE_SIZE);
+        /* Align within the page if needed. */
+        if (dylink.memory_alignment > 0) {
+            uint32_t align = 1u << dylink.memory_alignment;
+            uint32_t remainder = memory_base % align;
+            if (remainder) memory_base += align - remainder;
+        }
+    }
+
+    /* Allocate table space for the library's indirect-callable functions.
+     * The shared table lives in the process's main engine; grow it by
+     * dylink.table_size so __table_base points past existing entries. */
+    uint32_t table_base = 0;
+    if (dylink.table_size > 0 && capsule->engine &&
+        capsule->engine->table_count > 0) {
+        exec_table *shared_table = capsule->engine->tables[0];
+        if (shared_table) {
+            uint64_t old_size = shared_table->size;
+            uint64_t new_size = old_size + dylink.table_size;
+            if (new_size < old_size || native_store_grow_table(
+                    shared_table, new_size, error) != EXEC_OK) {
+                free(bytes);
+                if (error) {
+                    error->status = EXEC_ERROR_TRAP;
+                    snprintf(error->message, sizeof(error->message),
+                             "cannot grow the function table for %.150s",
+                             path);
+                }
+                return -POSIX_ENOMEM;
+            }
+            table_base = (uint32_t)old_size;
+        }
+    }
+
+    /* Set up the library load context so native_load_module resolves
+     * __memory_base and __table_base during import resolution. */
+    store->library_load_ctx.active = 1;
+    store->library_load_ctx.memory_base_global.value.type = WASM_VALTYPE_I32;
+    store->library_load_ctx.memory_base_global.value.i32 =
+        (int32_t)memory_base;
+    store->library_load_ctx.memory_base_global.mutable_ = 0;
+    store->library_load_ctx.table_base_global.value.type = WASM_VALTYPE_I32;
+    store->library_load_ctx.table_base_global.value.i32 = (int32_t)table_base;
+    store->library_load_ctx.table_base_global.mutable_ = 0;
+    /* The stack pointer comes from the main module's exported
+     * __stack_pointer global.  Look it up from the first linked engine
+     * in the process capsule. */
+    store->library_load_ctx.stack_pointer = NULL;
+    if (capsule->engine) {
+        exec_global *sp = NULL;
+        exec_error ignored = {0};
+        if (exec_find_export_global(capsule->engine, "__stack_pointer",
+                                    &sp, &ignored) == EXEC_OK)
+            store->library_load_ctx.stack_pointer = sp;
+    }
+
+    /* Load the module through the normal resolution pipeline. */
+    waste_exec_engine *lib_engine = NULL;
+    exec_status status = native_load_module(store, NULL, bytes, size,
+                                            &lib_engine, error);
+    store->library_load_ctx.active = 0;
+    free(bytes);
+
+    if (status != EXEC_OK) {
+        if (error && !error->message[0]) {
+            error->status = status;
+            snprintf(error->message, sizeof(error->message),
+                     "cannot instantiate shared library %.160s", path);
+        }
+        return -POSIX_ENOEXEC;
+    }
+
+    /* wasm-ld PIC modules initialize passive data in their start function,
+     * then expose a second phase that rebases pointer-bearing data after the
+     * loader has supplied __memory_base and patched GOT globals.  This must
+     * run before constructors consume any of those pointers. */
+    uint32_t relocs_idx;
+    if (exec_find_export(lib_engine, "__wasm_apply_data_relocs",
+                         &relocs_idx, NULL) == EXEC_OK) {
+        exec_error reloc_error = {0};
+        exec_status reloc_status = exec_invoke(
+            lib_engine, relocs_idx, NULL, 0, NULL, 0, &reloc_error);
+        if (reloc_status != EXEC_OK) {
+            if (error) {
+                *error = reloc_error;
+                if (!error->message[0])
+                    snprintf(error->message, sizeof(error->message),
+                             "shared-library relocation failed for %.140s",
+                             path);
+            }
+            exec_free(lib_engine);
+            return -POSIX_ENOEXEC;
+        }
+    }
+
+    /* Run __wasm_call_ctors if exported. */
+    uint32_t ctors_idx;
+    if (exec_find_export(lib_engine, "__wasm_call_ctors",
+                         &ctors_idx, NULL) == EXEC_OK) {
+        exec_error ctor_error = {0};
+        exec_status ctor_status = exec_invoke(
+            lib_engine, ctors_idx, NULL, 0, NULL, 0, &ctor_error);
+        if (ctor_status != EXEC_OK) {
+            if (error) {
+                *error = ctor_error;
+                if (!error->message[0])
+                    snprintf(error->message, sizeof(error->message),
+                             "shared-library constructor failed for %.140s",
+                             path);
+            }
+            exec_free(lib_engine);
+            return -POSIX_ENOEXEC;
+        }
+    }
+
+    /* Extract the library name from the path for registration. */
+    const char *basename = path;
+    for (const char *p = path; *p; p++)
+        if (*p == '/') basename = p + 1;
+    char reg_name[WAST_MAX_EXPORT_NAME];
+    snprintf(reg_name, sizeof(reg_name), "%s", basename);
+    /* Strip .so.wasm or .wasm suffix for the registration name. */
+    size_t rlen = strlen(reg_name);
+    if (rlen > 8 && strcmp(reg_name + rlen - 8, ".so.wasm") == 0)
+        reg_name[rlen - 8] = '\0';
+    else if (rlen > 5 && strcmp(reg_name + rlen - 5, ".wasm") == 0)
+        reg_name[rlen - 5] = '\0';
+
+    /* Register the library engine in the store so subsequent modules
+     * can import from it.  native_store_add takes wast_module pointers;
+     * inline the registration to avoid synthesizing that struct. */
+    if (store->module_count == store->module_capacity) {
+        int next_cap = store->module_capacity ?
+                       store->module_capacity * 2 : 16;
+        native_linked_module *next = realloc(
+            store->modules, (size_t)next_cap * sizeof(*next));
+        if (!next) return -POSIX_ENOMEM;
+        store->modules = next;
+        store->module_capacity = next_cap;
+    }
+    native_linked_module *linked =
+        &store->modules[store->module_count++];
+    memset(linked, 0, sizeof(*linked));
+    linked->engine = lib_engine;
+    linked->module = NULL;
+    snprintf(linked->id, sizeof(linked->id), "%s", reg_name);
+    snprintf(linked->registered, sizeof(linked->registered), "%s",
+             reg_name);
+
+    /* Record in the capsule's loaded library list. */
+    if (!capsule->loaded_libraries) {
+        capsule->loaded_libraries = calloc(NATIVE_LOADED_LIBRARY_MAX,
+                                           sizeof(*capsule->loaded_libraries));
+        if (!capsule->loaded_libraries) return -POSIX_ENOMEM;
+        capsule->loaded_library_capacity = NATIVE_LOADED_LIBRARY_MAX;
+    }
+    native_loaded_library *lib =
+        &capsule->loaded_libraries[capsule->loaded_library_count++];
+    snprintf(lib->name, sizeof(lib->name), "%s", reg_name);
+    snprintf(lib->path, sizeof(lib->path), "%s", path);
+    lib->engine = lib_engine;
+    lib->memory_base = memory_base;
+    lib->table_base = table_base;
+    lib->memory_size = dylink.memory_size;
+    lib->table_size = dylink.table_size;
+    lib->ref_count = 1;
+    lib->initialized = 1;
+    return 0;
+}
+
+static void native_store_run_library_dtors(waste_exec_engine *engine) {
+    if (!engine) return;
+    uint32_t dtors_idx;
+    exec_error dtor_error = {0};
+    if (exec_find_export(engine, "__wasm_call_dtors",
+                         &dtors_idx, NULL) == EXEC_OK)
+        (void)exec_invoke(engine, dtors_idx, NULL, 0, NULL, 0,
+                          &dtor_error);
+}
+
+static int native_store_unregister_engine(native_store *store,
+                                          waste_exec_engine *engine) {
+    int removed = 0;
+    if (!store || !engine) return 0;
+    for (int i = 0; i < store->module_count;) {
+        if (store->modules[i].engine != engine) {
+            i++;
+            continue;
+        }
+        if (i + 1 < store->module_count)
+            memmove(&store->modules[i], &store->modules[i + 1],
+                    (size_t)(store->module_count - i - 1) *
+                        sizeof(*store->modules));
+        store->module_count--;
+        memset(&store->modules[store->module_count], 0,
+               sizeof(*store->modules));
+        removed = 1;
+    }
+    return removed;
+}
+
+void native_store_release_process_libraries(
+        native_store *store, native_process_capsule *capsule) {
+    if (!store || !capsule) return;
+    for (uint32_t i = capsule->loaded_library_count; i > 0; i--) {
+        native_loaded_library *lib = &capsule->loaded_libraries[i - 1];
+        waste_exec_engine *engine = lib->engine;
+        if (!engine) continue;
+        native_store_run_library_dtors(engine);
+        /* Process exit releases its complete address space even though an
+         * ordinary dlclose currently leaves virtual ranges reserved.  DSO
+         * engines import the process memory, so explicitly remove their data
+         * mappings before the process graph is destroyed or cloned again. */
+        if (lib->memory_size && engine->memory) {
+            uint64_t first_page = lib->memory_base / EXEC_PAGE_SIZE;
+            uint64_t last_byte = (uint64_t)lib->memory_base +
+                                 lib->memory_size;
+            uint64_t last_page = (last_byte + EXEC_PAGE_SIZE - 1) /
+                                 EXEC_PAGE_SIZE;
+            if (last_page > first_page)
+                (void)exec_memory_unmap_pages(
+                    engine->memory, first_page, last_page - first_page, NULL);
+        }
+        /* A provider loaded by this process is registered with its exact
+         * engine pointer.  Inherited providers point at graph clones instead;
+         * native_process_capsule_destroy owns and releases those clones. */
+        if (native_store_unregister_engine(store, engine))
+            exec_free(engine);
+        lib->engine = NULL;
+        lib->ref_count = 0;
+        lib->initialized = 0;
+        lib->name[0] = '\0';
+        lib->path[0] = '\0';
+    }
+    capsule->loaded_library_count = 0;
+}
+
+int native_store_unload_library(native_store *store, uint32_t index) {
+    if (!store) return -POSIX_EINVAL;
+    native_process_capsule *capsule = native_store_active_capsule(store);
+    if (!capsule) return -POSIX_EINVAL;
+    if (index >= capsule->loaded_library_count) return -POSIX_EINVAL;
+    native_loaded_library *lib = &capsule->loaded_libraries[index];
+    if (lib->ref_count > 1) { lib->ref_count--; return 0; }
+
+    waste_exec_engine *engine = lib->engine;
+
+    /* Run __wasm_call_dtors if the library exports a destructor. */
+    native_store_run_library_dtors(engine);
+
+    /* Remove the store module registration so future import resolution
+     * no longer finds this library's exports. */
+    (void)native_store_unregister_engine(store, engine);
+
+    /* Free the engine.  Memory/table regions remain allocated — reclaiming
+     * regions from the middle of linear memory is not yet supported. */
+    if (engine) exec_free(engine);
+
+    /* Mark the slot as unused.  The slot is not compacted so that existing
+     * dlopen handles (1-based indices) remain stable for other callers. */
+    lib->ref_count = 0;
+    lib->engine = NULL;
+    lib->name[0] = '\0';
+    return 0;
 }

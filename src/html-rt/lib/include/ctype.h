@@ -30,5 +30,6 @@ static inline int isxdigit(int c) {
 }
 static inline int tolower(int c) { return isupper(c) ? c + ('a' - 'A') : c; }
 static inline int toupper(int c) { return islower(c) ? c - ('a' - 'A') : c; }
+int toascii(int);
 
 #endif
