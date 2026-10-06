@@ -20,50 +20,7 @@ extern void *realloc(void *pointer, size_t size);
 extern void free(void *pointer);
 extern i32 *__errno_location(void);
 
-/* --- Guest POSIX ABI types (wasm32) --- */
-
-#define WASTE_FD_SETSIZE 1024
-#define WASTE_NFDBITS    32
-
-typedef struct { u32 fds_bits[WASTE_FD_SETSIZE / WASTE_NFDBITS]; } waste_fd_set;
-typedef struct { i64 tv_sec;  i32 tv_usec; } waste_timeval;
-typedef struct { i64 tv_sec;  i32 tv_nsec; } waste_timespec;
-typedef struct { u32 sig[4]; } waste_sigset_t;
-
-/* Stable Wasm32 pathname/stat ABI; do not use the host struct stat. */
-typedef struct {
-  u64 st_dev; u64 st_ino;
-  u32 st_mode; u32 st_nlink; u32 st_uid; u32 st_gid;
-  u64 st_rdev;
-  i64 st_size; i64 st_blksize; i64 st_blocks;
-  i64 st_atime_sec; i64 st_atime_nsec;
-  i64 st_mtime_sec; i64 st_mtime_nsec;
-  i64 st_ctime_sec; i64 st_ctime_nsec;
-  u8 reserved[16];
-} waste_stat;
-
-typedef struct {
-  u32 kind; u32 mode; u32 uid; u32 gid; i64 size; u64 inode;
-  i64 mtime_sec; i64 mtime_nsec;
-} waste_path_metadata;
-
-_Static_assert(sizeof(waste_fd_set)   == 128, "fd_set must be 128 bytes");
-_Static_assert(sizeof(waste_timeval)  ==  16, "timeval must be 16 bytes");
-_Static_assert(sizeof(waste_timespec) ==  16, "timespec must be 16 bytes");
-_Static_assert(sizeof(waste_sigset_t) ==  16, "sigset_t must be 16 bytes");
-_Static_assert(sizeof(waste_stat) == 128, "stat must be 128 bytes");
-_Static_assert(_Alignof(waste_stat) == 8, "stat alignment");
-_Static_assert(offsetof(waste_stat, st_mode) == 16, "stat mode offset");
-_Static_assert(offsetof(waste_stat, st_size) == 40, "stat size offset");
-_Static_assert(offsetof(waste_stat, st_atime_sec) == 64, "stat atime offset");
-_Static_assert(offsetof(waste_stat, st_ctime_nsec) == 104, "stat ctime offset");
-_Static_assert(sizeof(waste_path_metadata) == 48, "path metadata must be 48 bytes");
-
-#define WASTE_EFAULT 14
-#define WASTE_ENOENT 2
-#define WASTE_EACCES 13
-#define WASTE_ENOTDIR 20
-#define WASTE_ENOSYS 38
+#include <waste/abi/posix.h>
 
 /* --- Inline helpers shared across multiple libc files --- */
 

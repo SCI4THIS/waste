@@ -11,10 +11,10 @@ const root = path.resolve(__dirname, "..");
 const context = {};
 vm.createContext(context);
 vm.runInContext(fs.readFileSync(
-  path.join(root, "src/html-rt/src/bash/terminal/glf.js"), "utf8"), context,
+  path.join(root, "src/html-rt/src/terminal/glf.js"), "utf8"), context,
   {filename: "terminal/glf.js"});
 vm.runInContext(fs.readFileSync(
-  path.join(root, "src/html-rt/src/bash/terminal/renderer.js"), "utf8"), context,
+  path.join(root, "src/html-rt/src/terminal/renderer.js"), "utf8"), context,
   {filename: "terminal/renderer.js"});
 
 if (!context.glf || !context.WasteTerminalLookupCmap) {

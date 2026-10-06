@@ -1,0 +1,61 @@
+{
+  "fixture": "tests/guest-session-terminal-readiness.wast",
+  "events": [
+    {
+      "after": "RAW\n",
+      "waitKind": 2,
+      "pid": 1,
+      "text": "hello"
+    },
+    {
+      "after": "LINE\n",
+      "waitKind": 2,
+      "pid": 1,
+      "text": "ab",
+      "stillWaiting": true
+    },
+    {
+      "waitKind": 2,
+      "pid": 1,
+      "text": "c\n"
+    },
+    {
+      "after": "EDIT\n",
+      "waitKind": 2,
+      "pid": 1,
+      "text": "xy\bZ\n"
+    },
+    {
+      "after": "KILL\n",
+      "waitKind": 2,
+      "pid": 1,
+      "text": "xx\u007fy\u0015R\r"
+    },
+    {
+      "after": "MIN\n",
+      "waitKind": 1,
+      "pid": 1,
+      "text": "xy",
+      "stillWaiting": true
+    },
+    {
+      "waitKind": 1,
+      "pid": 1,
+      "text": "z"
+    },
+    {
+      "after": "EOF\n",
+      "waitKind": 2,
+      "pid": 1,
+      "text": "partial\u0004"
+    }
+  ],
+  "output": "RAW\nLINE\nEDIT\nKILL\nMIN\nEOF\nhello",
+  "assertions": 90,
+  "exitStatus": 0,
+  "nativeCounts": {
+    "inputBytes": 32,
+    "readWaits": 2,
+    "selectWaits": 6
+  }
+}

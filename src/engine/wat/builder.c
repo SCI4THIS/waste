@@ -87,8 +87,12 @@ static int decode_string(const char *source, size_t source_length,
 }
 
 wat_context *wast_builder_context_create(void) {
-    wat_context *context = (wat_context *)calloc(1, sizeof(*context));
+    wat_context *context = (wat_context *)malloc(sizeof(*context));
     if (!context) return NULL;
+    /* Trailing workspace is bounded by zeroed live counts, and each entry is
+     * assigned before use. Clearing only state keeps short command parses
+     * independent of the maximum name/fixup workspace size. */
+    memset(context, 0, offsetof(wat_context, labels));
     context->lex.line = 1;
     context->lex.column = 1;
     context->paren_line = 1;

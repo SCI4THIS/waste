@@ -148,13 +148,7 @@ int main(int argc, char **argv, char **envp) {
 
 
 def ensure_sysroot(repo_root: Path, output_base: Path) -> Path:
-    """Build or locate the WASTE application sysroot."""
-    for candidate in [
-        output_base / "sysroot",
-        repo_root / "build" / "coreutils" / "sysroot",
-    ]:
-        if (candidate / "bin" / "waste-wasm-clang").is_file():
-            return candidate
+    """Refresh from the mounted SDK; never reuse an unchecked old sysroot."""
     build_sysroot = repo_root / "src" / "html-rt" / "tools" / "build-waste-sysroot.py"
     sysroot = output_base / "sysroot"
     subprocess.run(
@@ -209,6 +203,7 @@ def build_utility(name: str, source: str, cc: str, crt_obj: Path,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--install", action="store_true", help="Explicitly install audited outputs into src/vfs")
     parser.add_argument("--repo-root", type=Path, default=Path("."))
     parser.add_argument("--output", type=Path,
                         default=Path("build/upload-download"))
@@ -248,6 +243,11 @@ def main() -> int:
         print(f"staged: {vfs_stage / name}")
 
     print(f"\nVFS paths: /bin/upload, /bin/download")
+    if args.install:
+        subprocess.run(["python3", str(repo_root / "src/html-rt/tools/vfs.py"),
+                        "install", "--component", "upload", "--source",
+                        str(vfs_stage / "upload"), "--component", "download", "--source",
+                        str(vfs_stage / "download")], check=True)
     return 0
 
 

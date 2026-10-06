@@ -14,11 +14,12 @@ WASM_CC_FLAGS := --target=wasm32 -O2 -std=c11 -Wall -Wextra \
 
 # Engine core sources (platform-independent)
 ENGINE_SOURCES := $(ENGINE_DIR)/wasm/load.c \
+	$(ENGINE_DIR)/vfs.c \
 	$(ENGINE_DIR)/source.c \
 	$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/encode.c \
 	$(ENGINE_DIR)/wast/stream.c $(ENGINE_DIR)/wast/command.c \
 	$(ENGINE_DIR)/store.c $(ENGINE_DIR)/checkpoint.c $(ENGINE_DIR)/process.c $(ENGINE_DIR)/lib/path.c \
-	$(ENGINE_DIR)/wast/runner.c $(ENGINE_DIR)/wast/assert.c \
+	$(ENGINE_DIR)/wast/runner.c $(ENGINE_DIR)/wast/assert.c $(ENGINE_DIR)/wast/handler.c \
 	$(ENGINE_DIR)/wat/builder.c $(ENGINE_DIR)/wat/literal.c \
 	$(ENGINE_DIR)/wasm/leb.c $(ENGINE_DIR)/wasm/reader.c \
 	$(ENGINE_DIR)/wasm/writer.c $(ENGINE_DIR)/wasm/module.c \
@@ -32,11 +33,11 @@ ENGINE_SOURCES := $(ENGINE_DIR)/wasm/load.c \
 	$(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_DIR)/instance.c \
 	$(ENGINE_DIR)/api.c
 
-ENGINE_HEADERS := $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
+ENGINE_HEADERS := $(ENGINE_DIR)/lib/json.h $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
 	$(ENGINE_DIR)/source.h \
 	$(ENGINE_DIR)/wasm/encode.h $(ENGINE_DIR)/engine_internal.h \
 	$(ENGINE_DIR)/wast/runner.h $(ENGINE_DIR)/wast/stream.h \
-	$(ENGINE_DIR)/wast/assert.h $(ENGINE_DIR)/wast/command.h \
+	$(ENGINE_DIR)/wast/assert.h $(ENGINE_DIR)/wast/command.h $(ENGINE_DIR)/wast/handler.h \
 	$(ENGINE_DIR)/wasm/opcode.h \
 	$(ENGINE_DIR)/wat/context.h $(ENGINE_DIR)/wat/literal.h \
 	$(ENGINE_DIR)/wat/builder.h \
@@ -46,9 +47,10 @@ ENGINE_HEADERS := $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
 	$(ENGINE_DIR)/op/validate.h $(WAST_GEN_DIR)/dispatch_gen.h \
 	$(ENGINE_DIR)/instantiate.h $(ENGINE_DIR)/runtime_internal.h
 
-ENGINE_HEADERS += $(ENGINE_DIR)/include/waste.h
+ENGINE_HEADERS += $(ENGINE_DIR)/process_driver.h $(ENGINE_DIR)/vfs.h $(ENGINE_DIR)/guest_posix.h $(ENGINE_DIR)/include/waste.h
+ENGINE_HEADERS += $(ENGINE_DIR)/wast/setup.h
 ENGINE_HEADERS += $(ENGINE_DIR)/lib/include/kernel.h \
-	$(ENGINE_DIR)/lib/include/select.h
+	$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h
 
 # Freestanding library: shared (portable) sources from engine
 LIB_SHARED_SRC := $(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdio.c \
@@ -58,12 +60,12 @@ LIB_SHARED_SRC := $(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdio.c \
 LIB_WASM_SRC := lib/stdlib.c lib/stdio.c lib/unistd.c
 
 # Object files
-ENGINE_OBJS := $(BUILD_DIR)/store.o $(BUILD_DIR)/checkpoint.o $(BUILD_DIR)/process.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/select.o $(BUILD_DIR)/path.o \
-	$(BUILD_DIR)/source.o \
+ENGINE_OBJS := $(BUILD_DIR)/process_driver.o $(BUILD_DIR)/guest_posix.o $(BUILD_DIR)/store.o $(BUILD_DIR)/checkpoint.o $(BUILD_DIR)/process.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/select.o $(BUILD_DIR)/path.o \
+	$(BUILD_DIR)/source.o $(BUILD_DIR)/vfs.o \
 	$(BUILD_DIR)/wasm_load.o \
 	$(BUILD_DIR)/wast_runner.o $(BUILD_DIR)/wasm_encode.o \
 	$(BUILD_DIR)/wast_stream.o $(BUILD_DIR)/wast_command.o \
-	$(BUILD_DIR)/wast_assert.o \
+	$(BUILD_DIR)/wast_assert.o $(BUILD_DIR)/wast_handler.o \
 	$(BUILD_DIR)/wasm_opcode.o \
 	$(BUILD_DIR)/wat_builder.o $(BUILD_DIR)/wat_literal.o \
 	$(BUILD_DIR)/wasm_leb.o $(BUILD_DIR)/wasm_reader.o \
@@ -76,7 +78,9 @@ ENGINE_OBJS := $(BUILD_DIR)/store.o $(BUILD_DIR)/checkpoint.o $(BUILD_DIR)/proce
 	$(BUILD_DIR)/dispatch_gen.o \
 	$(BUILD_DIR)/instance.o $(BUILD_DIR)/api.o
 
-RT_OBJS := $(BUILD_DIR)/browser_api.o $(BUILD_DIR)/posix_stubs.o
+RT_OBJS := $(BUILD_DIR)/browser_api.o $(BUILD_DIR)/posix_stubs.o $(BUILD_DIR)/test_suite.o
+
+ENGINE_HEADERS += $(ENGINE_DIR)/test_suite.h
 
 WASM_LIB_SHARED_O := $(patsubst $(ENGINE_DIR)/lib/%.c,$(BUILD_DIR)/lib_shared_%.o,$(LIB_SHARED_SRC))
 WASM_LIB_WASM_O := $(patsubst lib/%.c,$(BUILD_DIR)/lib_wasm_%.o,$(LIB_WASM_SRC))
@@ -113,8 +117,12 @@ COREUTILS_STAGE_STAMP := $(COREUTILS_BUILD_DIR)/source/.waste-stage-stamp
 WASTE_SYSROOT_TOOL := tools/build-waste-sysroot.py
 WASTE_SYSROOT_DIR := $(COREUTILS_BUILD_DIR)/sysroot
 WASTE_SYSROOT_CC := $(WASTE_SYSROOT_DIR)/bin/waste-wasm-clang
-WASTE_SYSROOT_HEADERS := $(shell find $(REPO_ROOT)/src/html-rt/lib/include \
-	-type f -name '*.h' -print)
+WASTE_SYSROOT_HEADERS := $(shell find $(REPO_ROOT)/src/vfs/usr/include \
+	$(REPO_ROOT)/src/vfs/usr/lib/waste/cc/include \
+	$(REPO_ROOT)/src/html-rt/profiles/coreutils/include -type f -name '*.h' -print) \
+	$(REPO_ROOT)/src/vfs/usr/share/waste/sdk.json tools/guest_sdk.py \
+	tools/guest_providers.py tools/wasm_signatures.py tools/sdk-api-policy.json
+LIBC_SOURCES += $(WASTE_SYSROOT_HEADERS)
 COREUTILS_CONFIGURE_TOOL := tools/configure-coreutils.py
 COREUTILS_CONFIGURE_DIR := $(COREUTILS_BUILD_DIR)/configure
 COREUTILS_CONFIGURE_REPORT := $(COREUTILS_CONFIGURE_DIR)/configure-report.json
@@ -127,7 +135,10 @@ COREUTILS_SOURCE_ARCHIVE := $(COREUTILS_BUILD_DIR)/coreutils-corresponding-sourc
 COREUTILS_SOURCE_MAPPING := $(COREUTILS_BUILD_DIR)/coreutils-source-package.json
 COREUTILS_SOURCE_STAMP := $(COREUTILS_BUILD_DIR)/.source-package-stamp
 COREUTILS_SOURCE_INPUTS := $(shell find $(REPO_ROOT)/src/engine $(REPO_ROOT)/src/html-rt \
+	$(REPO_ROOT)/src/vfs/usr/include $(REPO_ROOT)/src/vfs/usr/lib/waste/cc/include \
+	$(REPO_ROOT)/src/vfs/usr/share/licenses/clang \
 	-type f ! -name '*.wasm' ! -name '*.pyc' ! -path '*/__pycache__/*' -print)
+COREUTILS_SOURCE_INPUTS += $(REPO_ROOT)/src/vfs/usr/share/waste/sdk.json
 COREUTILS_UTILITY_DIR := $(COREUTILS_BUILD_DIR)/utility-probe
 COREUTILS_UTILITY_REPORT := $(COREUTILS_UTILITY_DIR)/true-report.json
 COREUTILS_FALSE_REPORT := $(COREUTILS_UTILITY_DIR)/false-report.json
@@ -166,6 +177,10 @@ gen:
 
 # ---- Compile engine sources to Wasm objects ----
 
+$(BUILD_DIR)/process_driver.o: $(ENGINE_DIR)/process_driver.c $(ENGINE_HEADERS)
+	mkdir -p $(BUILD_DIR)
+	clang $(WASM_CC_FLAGS) -c $< -o $@
+
 $(BUILD_DIR)/store.o: $(ENGINE_DIR)/store.c $(ENGINE_HEADERS)
 	mkdir -p $(BUILD_DIR)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
@@ -199,6 +214,9 @@ $(BUILD_DIR)/wasm_load.o: $(ENGINE_DIR)/wasm/load.c $(ENGINE_HEADERS)
 $(BUILD_DIR)/source.o: $(ENGINE_DIR)/source.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
+$(BUILD_DIR)/vfs.o: $(ENGINE_DIR)/vfs.c $(ENGINE_HEADERS)
+	clang $(WASM_CC_FLAGS) -c $< -o $@
+
 $(BUILD_DIR)/wast_runner.o: $(ENGINE_DIR)/wast/runner.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
@@ -212,6 +230,9 @@ $(BUILD_DIR)/wast_command.o: $(ENGINE_DIR)/wast/command.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
 $(BUILD_DIR)/wast_assert.o: $(ENGINE_DIR)/wast/assert.c $(ENGINE_HEADERS)
+	clang $(WASM_CC_FLAGS) -c $< -o $@
+
+$(BUILD_DIR)/wast_handler.o: $(ENGINE_DIR)/wast/handler.c $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
 $(BUILD_DIR)/wasm_opcode.o: $(ENGINE_DIR)/wasm/opcode.c $(ENGINE_HEADERS)
@@ -276,11 +297,18 @@ $(BUILD_DIR)/instance.o: $(ENGINE_DIR)/instance.c $(ENGINE_HEADERS)
 
 # ---- Compile html-rt sources to Wasm objects ----
 
+$(BUILD_DIR)/test_suite.o: $(ENGINE_DIR)/test_suite.c $(ENGINE_DIR)/test_suite.h $(ENGINE_DIR)/lib/json.h
+	mkdir -p $(BUILD_DIR)
+	clang $(WASM_CC_FLAGS) -c $< -o $@
+
 $(BUILD_DIR)/browser_api.o: browser_api.c $(ENGINE_HEADERS) posix_stubs.h
 	clang $(WASM_CC_FLAGS) -I. -c $< -o $@
 
 $(BUILD_DIR)/posix_stubs.o: posix_stubs.c posix_stubs.h $(ENGINE_HEADERS)
 	clang $(WASM_CC_FLAGS) -I. -c $< -o $@
+
+$(BUILD_DIR)/guest_posix.o: $(ENGINE_DIR)/guest_posix.c $(ENGINE_HEADERS)
+	clang $(WASM_CC_FLAGS) -c $< -o $@
 
 # ---- Compile freestanding library objects ----
 
@@ -290,7 +318,7 @@ $(BUILD_DIR)/lib_shared_%.o: $(ENGINE_DIR)/lib/%.c
 
 $(BUILD_DIR)/lib_wasm_%.o: lib/%.c
 	mkdir -p $(BUILD_DIR)
-	clang $(WASM_CC_FLAGS) -c $< -o $@
+	clang $(WASM_CC_FLAGS) -I$(REPO_ROOT)/src/vfs/usr/include -c $< -o $@
 
 # ---- Compile generated parser to Wasm objects ----
 
@@ -415,6 +443,8 @@ COREUTILS_REPORTS := $(COREUTILS_UTILITY_REPORT) $(COREUTILS_FALSE_REPORT) \
 	$(COREUTILS_DIRNAME_REPORT) $(COREUTILS_CAT_REPORT) $(COREUTILS_WC_REPORT) \
 	$(COREUTILS_LS_REPORT) $(COREUTILS_DATE_REPORT)
 
+$(COREUTILS_REPORTS): tools/audit-wasm-imports.py
+
 build-coreutils: coreutils-provenance coreutils-utility-probe coreutils-false-probe \
 		coreutils-pwd-probe coreutils-echo-probe coreutils-printf-probe \
 		coreutils-basename-probe coreutils-dirname-probe coreutils-cat-probe \
@@ -423,6 +453,41 @@ build-coreutils: coreutils-provenance coreutils-utility-probe coreutils-false-pr
 
 # Stable names for the sectioned build entry points documented in Stage 8H.
 coreutils-wasm: build-coreutils
+
+.PHONY: vfs-audit vfs-install-launch vfs-install-app coreutils-install vfs-tests-install vfs-tests-check
+vfs-tests-install: waste-libc wast-browser
+	$(PYTHON) tools/build-test-corpus.py --install
+
+vfs-tests-check:
+	$(PYTHON) tools/build-test-corpus.py --audit
+	$(PYTHON) $(REPO_ROOT)/tests/test-corpus-check.py
+
+vfs-audit:
+	$(PYTHON) tools/vfs.py audit
+
+.PHONY: guest-sdk-install guest-sdk-check
+guest-sdk-install: $(LIBC_OUTPUT)
+	$(PYTHON) tools/build-guest-sdk.py --install
+
+guest-sdk-check: $(LIBC_OUTPUT)
+	$(PYTHON) tools/build-guest-sdk.py --audit
+	$(PYTHON) $(REPO_ROOT)/tests/guest-sdk-check.py
+	$(PYTHON) tools/audit-guest-providers.py --strict
+
+
+vfs-install-launch:
+	$(PYTHON) tools/vfs.py install --component launch --source $(BUILD_DIR)/bash-runtime.wast
+
+vfs-install-app:
+	$(PYTHON) tools/vfs.py install --component app --source $(REPO_ROOT)/src/html-rt/src
+
+# Explicit install, separate from compilation and from HTML construction.
+coreutils-install: build-coreutils coreutils-source-package
+	$(PYTHON) tools/vfs.py install \
+		--review-import waste_kernel:dlopen_v1:function \
+		--review-import waste_kernel:dlsym_v1:function \
+		--review-import waste_kernel:dlclose_v1:function \
+		$(foreach utility,true false pwd echo printf basename dirname cat wc ls date,--component $(utility) --source $(COREUTILS_BUILD_DIR)/utility-probe/$(utility)-linked.wasm)
 coreutils-audit: $(COREUTILS_REPORTS)
 	$(PYTHON) -c 'import json; reports=[json.load(open(p)) for p in "$(COREUTILS_REPORTS)".split()]; assert all(p["status"] == "passed" for p in reports), "coreutils audit failed"'
 

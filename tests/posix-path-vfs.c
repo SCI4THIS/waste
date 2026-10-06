@@ -128,19 +128,30 @@ int main(void) {
     CHECK(posix_kernel_path_access(first, (const uint8_t *)"/data/readme", 12, POSIX_W_OK, 0) == -POSIX_EACCES);
     CHECK(posix_kernel_path_access(first, (const uint8_t *)"/data/secret", 12, POSIX_F_OK, 0) == 0);
     CHECK(posix_kernel_path_access(first, (const uint8_t *)"/missing", 8, POSIX_F_OK, 0) == -POSIX_ENOENT);
-    CHECK(posix_kernel_path_stat(first, (const uint8_t *)"/bin/tool/child", 15, 1, &actual) == -POSIX_ENOTDIR);
+    /* Traversal through a regular file is now exercised through guest
+     * imports in engine-regressions/path-vfs.wast. Keep the mtime boundary:
+     * the guest libc does not yet provide an equivalent supported import. */
+    CHECK(posix_kernel_path_set_mtime(first, (const uint8_t *)"/bin/tool/child", 15,
+                                      1700000456, 0) == -POSIX_ENOTDIR);
+    /* open() must follow symlinks at the leaf (path_find does not): the
+     * previous behavior returned ENOENT because POSIX_NODE_SYMLINK was
+     * neither REGULAR nor DIRECTORY.  Now /data/alias -> /data/readme
+     * resolves to a readable fd. */
+    int alias_fd = posix_kernel_open(first, (const uint8_t *)"/data/alias", 11, 0, 0);
+    CHECK(alias_fd >= 0);
+    uint8_t alias_readback[8] = {0};
+    CHECK(alias_fd >= 0 &&
+          posix_kernel_read(first, alias_fd, alias_readback, 5) == 5 &&
+          memcmp(alias_readback, "hello", 5) == 0);
+    CHECK(alias_fd < 0 || posix_kernel_close(first, alias_fd) == 0);
 
     CHECK(posix_kernel_path_set_cwd(first, "/data") == 0);
     char cwd[POSIX_PATH_NODE_NAME_MAX];
     CHECK(posix_kernel_getcwd(first, cwd, sizeof(cwd)) == 0 &&
           strcmp(cwd, "/data") == 0);
-    CHECK(posix_kernel_path_stat(first, (const uint8_t *)"././readme", 10, 1, &actual) == 0);
-    CHECK(posix_kernel_path_stat(first, (const uint8_t *)"../bin/../bin/tool", sizeof("../bin/../bin/tool") - 1, 1, &actual) == 0);
-    CHECK(posix_kernel_path_stat(first, (const uint8_t *)"../../../../bin/tool", 20, 1, &actual) == 0);
-    CHECK(posix_kernel_path_stat(first, (const uint8_t *)"//bin///tool", 12, 1, &actual) == 0);
-    CHECK(posix_kernel_path_set_cwd(first, "/data/readme") == -POSIX_ENOTDIR);
+    /* Relative normalization, rejected chdir and invalid access modes now
+     * run through the real guest ABI. Empty/overlong spans stay C checks. */
     CHECK(posix_kernel_path_stat(first, (const uint8_t *)"", 0, 1, &actual) == -POSIX_EINVAL);
-    CHECK(posix_kernel_path_access(first, (const uint8_t *)"/bin/tool", 9, 8, 0) == -POSIX_EINVAL);
 
     CHECK(posix_kernel_path_stat(second, (const uint8_t *)"/bin/tool", 9, 1, &actual) == -POSIX_ENOENT);
     CHECK(posix_kernel_path_add(second, "/bin/tool", &regular) == 0);

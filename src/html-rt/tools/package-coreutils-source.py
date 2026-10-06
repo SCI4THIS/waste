@@ -24,6 +24,10 @@ REPOSITORY_INPUTS = [
     "submodules/coreutils-waste.patch",
     "src/engine",
     "src/html-rt",
+    "src/vfs/usr/include",
+    "src/vfs/usr/lib/waste/cc/include",
+    "src/vfs/usr/share/waste/sdk.json",
+    "src/vfs/usr/share/licenses/clang",
 ]
 
 
@@ -104,7 +108,7 @@ def audit_bundle(output: Path) -> None:
         "waste/src/html-rt/tools/build-coreutils-runtime.py",
         "waste/src/html-rt/tools/coreutils-waste.config.site",
         "waste/src/html-rt/lib/waste-crt.c",
-        "waste/src/html-rt/lib/include/unistd.h",
+        "waste/src/vfs/usr/include/unistd.h",
         "waste/docs/coreutils-source-distribution.md",
         "waste/build/coreutils/provenance.json",
         "waste/build/coreutils/configure/configure-report.json",

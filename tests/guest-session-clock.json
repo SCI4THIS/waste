@@ -1,0 +1,9 @@
+{
+  "fixture": "tests/guest-session-clock.wast",
+  "clockRealtimeNs": 1234567890123456789,
+  "clockMonotonicNs": 42000000000,
+  "events": [],
+  "output": "FROZEN\r\n",
+  "assertions": 5,
+  "exitStatus": 0
+}

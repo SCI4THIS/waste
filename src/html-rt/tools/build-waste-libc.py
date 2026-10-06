@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from libc_sources import libc_source_paths
+from libc_sources import guest_include_flags, libc_source_paths
 
 
 def named_module(source: str) -> str:
@@ -52,6 +52,7 @@ def main() -> None:
         subprocess.run(
             [
                 "clang", "--target=wasm32", "-O2", "-nostdlib", "-fno-builtin",
+                *guest_include_flags(root),
                 *(str(path) for path in libc_source_paths(root)),
                 "-Wl,--no-entry", "-Wl,--import-memory", "-Wl,--initial-memory=262144",
                 "-Wl,--allow-undefined", "-Wl,--export-all", "-Wl,--strip-all",

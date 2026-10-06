@@ -32,9 +32,8 @@ static void test_ready_before_wait(void) {
     posix_fd_set_bit(1, &writefds);
     posix_timeval timeout = {5, 0};
 
-    int result = posix_kernel_select(kernel, 2, NULL, &writefds, NULL,
-                                     &timeout);
-    CHECK(result == 1, "ready descriptor returned %d", result);
+    /* Guest count/bit observations moved to guest-session-waits.wast 2–4. */
+    (void)posix_kernel_select(kernel, 2, NULL, &writefds, NULL, &timeout);
     CHECK(!posix_kernel_wait_active(kernel), "ready call left wait active");
     posix_kernel_destroy(kernel);
 }
@@ -61,9 +60,8 @@ static void test_ready_after_yield(void) {
           "terminal enqueue failed");
     CHECK(posix_kernel_wait_poll(kernel) == POSIX_WAIT_READY,
           "readiness event did not wake wait");
-    result = posix_kernel_select(kernel, 1, &readfds, NULL, NULL, &timeout);
-    CHECK(result == 1, "resume poll returned %d", result);
-    CHECK(posix_fd_isset(0, &readfds), "resumed output omitted fd 0");
+    /* Resume count/output bit moved to the real input session, WAST 5–6. */
+    (void)posix_kernel_select(kernel, 1, &readfds, NULL, NULL, &timeout);
     CHECK(!posix_kernel_wait_active(kernel), "ready resume left wait active");
     CHECK(posix_kernel_wait_generation(kernel) == generation,
           "wait generation changed across readiness wakeup");
@@ -85,10 +83,9 @@ static void test_timeout(void) {
     clock.now += 500000;
     CHECK(posix_kernel_wait_poll(kernel) == POSIX_WAIT_TIMEOUT,
           "expired wait was not timed out");
-    result = posix_kernel_select(kernel, 1, &readfds, NULL, NULL, &timeout);
-    CHECK(result == 0, "expired select returned %d", result);
+    /* Timeout count/output bit moved to exact-deadline session WAST 8–10. */
+    (void)posix_kernel_select(kernel, 1, &readfds, NULL, NULL, &timeout);
     CHECK(!posix_kernel_wait_active(kernel), "timeout left wait active");
-    CHECK(!posix_fd_isset(0, &readfds), "timeout output was not cleared");
     posix_kernel_destroy(kernel);
 }
 

@@ -23,7 +23,7 @@
 /* This is a bounded in-engine inode table, not a package manifest limit.
  * Leave room for the base runtime, packaged commands and aliases, and files
  * created by the guest after boot. */
-#define POSIX_PATH_NODE_MAX 128
+#define POSIX_PATH_NODE_MAX 1024
 #define POSIX_PATH_NODE_NAME_MAX 256
 
 #define POSIX_F_OK 0

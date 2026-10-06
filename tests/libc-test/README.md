@@ -11,16 +11,53 @@ Build the module and regenerate the test fixture with:
 ./start.sh --build-libc
 ```
 
-Run the generated fixture against either interpreter build with:
+Run the installed clients directly with the native C engine:
+
+```sh
+make -C src/cli-rt libc-native
+make -C src/cli-rt libc-sanitize
+build/cli-rt/waste-test --vfs-root=src/vfs --group=libc-test --list
+build/cli-rt/waste-test --vfs-root=src/vfs libc-test/matching-sort.wast
+```
+
+The focused gates require every authored client in the installed manifest,
+matching client bytes, and every parsed assertion in order. They preserve
+the two tracked XFAIL fixtures while checking their five individual failing
+expectations, so a further failure inside either file fails the gate. Reports
+are saved under `build/cli-rt/`. Refresh edited clients with
+`make -C src/html-rt vfs-tests-install vfs-tests-check`; ordinary runs consume
+the installed tree without building HTML or OCaml artifacts.
+
+The same 14 fixtures are available through `/bin/waste-test --group=libc-test`
+in the offline Bash page. Keep compiled
+guest header/layout checks and focused artifact checks; see
+[the libc harness audit](../../docs/libc-harness-coverage.md) and
+[the coverage ledger](../../docs/test-coverage.md). OCaml is used only for
+Wasm/WAT/WAST language verification. No additional OCaml kernel or libc-host
+capabilities will be developed; its existing kernel is planned for removal in
+[deferred cleanup](../../docs/active-ocaml-language-oracle-plan.md).
+
+The following direct/threaded OCaml commands reproduce legacy checks for
+coverage accounting during retirement:
 
 ```sh
 node tests/libc-test/libc-runtime.cjs
 node tests/libc-test/libc-runtime.cjs threaded
-node tests/libc-test/allocator-native.cjs
 ```
 
 The first two commands run all libc suites; pass an exact generated fixture
 name as the second argument after the mode to isolate one, for example
 `node tests/libc-test/libc-runtime.cjs sequential matching-sort.wast`. The
-generated fixtures are embedded in the `libc-test` group of the offline browser
-dashboard.
+generated fixtures are mounted in the `libc-test` group used by the Bash page's
+Installed tests panel.
+
+The separate allocator gate instantiates the actual guest-libc Wasm artifact
+in the host WebAssembly implementation and remains a focused Node check:
+
+```sh
+node tests/libc-test/allocator-native.cjs
+```
+
+Its 5,000-allocation stress loop checks live ranges, endpoint bytes and memory
+growth. It does not use OCaml and is distinct from the installed allocator
+WAST client.

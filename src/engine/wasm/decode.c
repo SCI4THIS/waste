@@ -1,4 +1,5 @@
 #include "decode.h"
+#include "wat/name.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -138,9 +139,7 @@ static int decode_name(wasm_reader *reader,
         !wasm_reader_read_bytes(reader, length, &bytes) ||
         !valid_utf8(bytes, length))
         return 0;
-    memcpy(out, bytes, length);
-    out[length] = '\0';
-    return 1;
+    return wast_name_from_bytes(bytes, length, out, WAST_MAX_EXPORT_NAME);
 }
 
 static int decode_limits(wasm_reader *reader, wasm_import_limits *limits) {

@@ -1,0 +1,30 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "events": [
+    {
+      "after": "bash-5.2# ",
+      "text": "printf 'alpha\\nbeta\\n' > /tmp/pipe-source.txt; /bin/cat /tmp/pipe-source.txt | /bin/wc -l; printf '__PIPE_STATUS_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/ls -1 /bin > /tmp/session-list.txt; /bin/cat /tmp/session-list.txt; printf '__REDIRECT_STATUS_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "echo __AFTER_PIPE__\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "exit\n"
+    }
+  ],
+  "contains": [
+    "\u001b[?2004l\r2\r\n",
+    "__PIPE_STATUS_0__\r\n",
+    "__REDIRECT_STATUS_0__\r\n",
+    "\u001b[?2004l\r__AFTER_PIPE__\r\n"
+  ],
+  "assertions": 7,
+  "exitStatus": 0,
+  "processes": 4
+}

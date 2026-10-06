@@ -78,6 +78,28 @@ int main(void) {
     store.next_pid = 2;
 
     {
+        exec_memory borrowed_memory;
+        waste_exec_engine *importer = calloc(1, sizeof(*importer));
+        native_process_capsule parent;
+        native_process_capsule child;
+        memset(&borrowed_memory, 0, sizeof(borrowed_memory));
+        native_process_capsule_init(&parent);
+        native_process_capsule_init(&child);
+        check(importer != NULL, "allocate imported-memory clone fixture");
+        if (!importer) return 2;
+        importer->memory_count = importer->import_memory_count = 1;
+        importer->memory = importer->memories[0] = &borrowed_memory;
+        borrowed_memory.access_check_context = &parent;
+        parent.engine = importer;
+        check(native_process_capsule_clone(&child, &parent) == 1 &&
+              child.engine && child.engine->memory == &borrowed_memory &&
+              borrowed_memory.access_check_context == &parent,
+              "fork does not attach child access checks to borrowed parent memory");
+        native_process_capsule_destroy(&child);
+        exec_free(importer);
+    }
+
+    {
         native_process_capsule regions;
         native_process_capsule region_clone;
         native_process_region_kind region_kind = 0;
@@ -834,6 +856,8 @@ int main(void) {
               "process fork clones the shared-page image");
         child_capsule = native_store_active_capsule(&store);
         child_engine = child_capsule ? child_capsule->engine : NULL;
+        check(child_engine && child_capsule->owned_fork_engine == child_engine,
+              "capsule owns the fork root clone independently of its selected engine");
         check(child_capsule && child_capsule->file_mapping_count == 1 &&
               child_capsule->file_mappings[0].address == EXEC_PAGE_SIZE * 4 &&
               child_capsule->file_mappings[0].file_offset == EXEC_PAGE_SIZE &&
@@ -871,7 +895,7 @@ int main(void) {
               "forked MAP_SHARED page writes reach the parent");
         parent_capsule->engine = NULL;
         if (child_capsule) child_capsule->engine = NULL;
-        if (child_engine) exec_free(child_engine);
+        /* Reaping, not the harness, releases the fork root clone. */
         exec_memory_release(parent_private);
         exec_memory_release(parent_shared);
         check(native_store_set_active_process(&store, shared_child) == 0 &&

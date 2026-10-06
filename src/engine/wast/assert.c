@@ -216,7 +216,7 @@ exec_status wast_run_assertion_with_invoke(
         if (error) {
             error->status = EXEC_ERROR_TRAP;
             snprintf(error->message, sizeof(error->message),
-                     "global result mismatch for %s", assertion->func_name);
+                     "global result mismatch for %.220s", assertion->func_name);
         }
         return EXEC_ERROR_TRAP;
     }
@@ -254,7 +254,7 @@ exec_status wast_run_assertion_with_invoke(
         if (st == EXEC_OK && error) {
             error->status = EXEC_ERROR_TRAP;
             snprintf(error->message, sizeof(error->message),
-                     "expected trap from %s", assertion->func_name);
+                     "expected trap from %.220s", assertion->func_name);
         }
         return st == EXEC_OK ? EXEC_ERROR_TRAP : st;
     }
@@ -297,7 +297,7 @@ exec_status wast_run_assertion_with_invoke(
         }
         else
             snprintf(error->message, sizeof(error->message),
-                     "result mismatch for %s", assertion->func_name);
+                     "result mismatch for %.220s", assertion->func_name);
     }
     return EXEC_ERROR_TRAP;
 }

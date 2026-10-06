@@ -1,1 +1,0 @@
-../../../../build/html-rt/bash-runtime.wast

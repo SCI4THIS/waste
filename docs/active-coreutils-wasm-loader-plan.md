@@ -736,7 +736,8 @@ Implementation update (2026-09-21, parser-side shebang boundary):
   assertion.
 - Fixed the dashboard asset boundary in `src/html-rt/tools/amalgamate.py`:
   when the test staging directory has no terminal copy, amalgamation now uses
-  the canonical `src/html-rt/src/bash/terminal` sources. `./start.sh
+  the canonical `src/html-rt/src/terminal` sources (flattened during the VFS
+  refactor's Stage 2). `./start.sh
   --html-test` now completes and produces `build/html-rt/test.html`; the Bash
   page also regenerates and passes both its smoke and continuation checks.
   Running the full staged browser payload reaches the complete suite, with the
@@ -1467,6 +1468,18 @@ Implementation update (2026-09-23, target sysroot and CRT seam):
   (`39c7d73e4e62b05e229515294f628ae8d8d93bff6cb5d322637047e74a4ac45a` in the
   current toolchain), and generated manifest/module reports contain no host
   paths. Python bytecode, shell syntax, and `git diff --check` gates pass.
+
+Implementation update (2026-10-05, CRT fixture link dependencies):
+
+- The CRT later gained calls to `waste_stdin`, `waste_stdout`, `waste_stderr`,
+  and `fflush`; the small hello fixture did not link the full guest libc and
+  the `coreutils-crt-fixture` target consequently failed with four undefined
+  symbols. Added fixture-local no-op providers because this program writes
+  through `env.write` and does not exercise stdio. Production utility links
+  still resolve these functions from waste-libc. The rebuilt fixture passes
+  the import audit with only `env.exit`, `env.write`, and
+  `waste_kernel.startup_v1`; runtime execution of the CRT fixture remains
+  separate from this build/import-closure gate.
 
 The next 8D increment is the reviewed out-of-tree coreutils configure probe;
 it must consume this sysroot and record every forced answer before any utility

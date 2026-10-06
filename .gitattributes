@@ -1,0 +1,5 @@
+# Unified-diff context uses a single space to represent an unchanged blank
+# line. Do not diagnose that patch syntax as trailing whitespace in the patch
+# artifact itself; the patched source remains subject to normal whitespace
+# checks.
+submodules/*.patch whitespace=-blank-at-eol

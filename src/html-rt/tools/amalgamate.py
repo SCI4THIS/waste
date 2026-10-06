@@ -18,7 +18,7 @@ from pathlib import Path
 def main() -> int:
     parser = argparse.ArgumentParser(description="Amalgamate HTML page")
     parser.add_argument("--page-dir", type=Path, required=True,
-                        help="Staging page directory (contains index.html, style.css, app.js)")
+                        help="Authored frontend directory")
     parser.add_argument("--tarball-js", type=Path, required=True,
                         help="Path to tarball.js")
     parser.add_argument("--loader-js", type=Path, required=True,
@@ -37,53 +37,43 @@ def main() -> int:
     index_html = page_dir / "index.html"
     style_css = page_dir / "style.css"
     app_js = page_dir / "app.js"
-    # The Bash page owns the canonical terminal sources.  The browser test
-    # page reuses them, but does not keep a second generated copy in its
-    # staging directory.
     terminal_dir = page_dir / "terminal"
-    if not (terminal_dir / "model.js").is_file():
-        terminal_dir = page_dir.parent / "bash" / "terminal"
     terminal_model_js = terminal_dir / "model.js"
     terminal_glf_js = terminal_dir / "glf.js"
     terminal_renderer_js = terminal_dir / "renderer.js"
+    test_suite_js = page_dir / "test-suite.js"
 
-    for f in [index_html, style_css, app_js, args.tarball_js,
-              terminal_model_js, terminal_glf_js, terminal_renderer_js,
-              args.loader_js,
-              args.manifest_tar_gz, args.zlibaux_wasm]:
+    sources = [index_html, style_css, app_js, args.tarball_js, args.loader_js,
+               args.manifest_tar_gz, args.zlibaux_wasm, terminal_model_js,
+               terminal_glf_js, terminal_renderer_js, test_suite_js]
+    for f in sources:
         if not f.is_file():
             print(f"error: required file not found: {f}", file=sys.stderr)
             return 1
 
     html = index_html.read_text(encoding="utf-8")
 
-    # 1. Inline style.css
-    css = style_css.read_text(encoding="utf-8")
-    html = html.replace(
-        '<link rel="stylesheet" href="style.css">',
-        "<style>\n" + css + "\n  </style>"
-    )
+    def inline(tag: str, source: str, replacement: str = "script") -> None:
+        nonlocal html
+        if html.count(tag) != 1:
+            raise ValueError(f"expected one {tag} in {index_html}")
+        html = html.replace(tag, f"<{replacement}>\n{source}\n</{replacement}>")
+
+    # 1. The Bash theme is installed in /waste/app and is loaded after the
+    # compressed VFS is unpacked. The index keeps only loading-overlay CSS.
+    html = html.replace(f'<link rel="stylesheet" href="{style_css.name}">', "")
 
     # 2. Inline tarball.js
     tarball_js = args.tarball_js.read_text(encoding="utf-8")
-    html = html.replace(
-        '<script src="../../../../submodules/tarballjs/tarball.js"></script>',
-        "<script>\n" + tarball_js + "\n</script>"
-    )
+    inline('<script src="tarball.js"></script>', tarball_js)
 
     # 3. Inline loader.js
     loader_js = args.loader_js.read_text(encoding="utf-8")
-    html = html.replace(
-        '<script src="../shared/loader.js"></script>',
-        "<script>\n" + loader_js + "\n</script>"
-    )
+    inline('<script src="loader.js"></script>', loader_js)
 
-    # 4. Inline app.js
-    app = app_js.read_text(encoding="utf-8")
-    html = html.replace(
-        '<script src="app.js"></script>',
-        "<script>\n" + app + "\n</script>"
-    )
+    # 4. The Bash runtime executes from the extracted package, not from HTML.
+    inline(f'<script src="{app_js.name}"></script>', "")
+    inline('<script src="test-suite.js"></script>', "")
 
     # 4b. Inline the terminal model and renderer.  These are intentionally
     # separate source files for Node fixtures, but the final page must remain
@@ -92,8 +82,7 @@ def main() -> int:
             (terminal_model_js, '<script src="terminal/model.js"></script>'),
             (terminal_glf_js, '<script src="terminal/glf.js"></script>'),
             (terminal_renderer_js, '<script src="terminal/renderer.js"></script>')]:
-        source = source_path.read_text(encoding="utf-8")
-        html = html.replace(tag, "<script>\n" + source + "\n</script>")
+        inline(tag, "")
 
     # 5. Split manifest.tar.gz into chunks and base64 encode as data URIs
     tar_data = args.manifest_tar_gz.read_bytes()
@@ -117,6 +106,9 @@ def main() -> int:
 
     # 7. Flip is_staging to false
     html = html.replace("is_staging: true", "is_staging: false")
+
+    if '<script src=' in html or '<link rel="stylesheet"' in html:
+        raise ValueError("offline page still contains external script/style references")
 
     # Write output
     args.output.parent.mkdir(parents=True, exist_ok=True)

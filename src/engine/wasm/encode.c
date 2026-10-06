@@ -1,6 +1,7 @@
 #include "wasm/encode.h"
 #include "wasm/writer.h"
 #include "runtime_internal.h"
+#include "wat/name.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +12,7 @@ typedef struct {
     int is_func;
 } func_sig;
 
-static void name(wasm_writer *w,const char *s){size_t n=strlen(s);if(n>UINT32_MAX){w->failed=1;return;}wasm_writer_write_u32(w,(uint32_t)n);wasm_writer_write_bytes(w,s,n);}
+static void name(wasm_writer *w,const char *s){uint8_t bytes[WAST_MAX_EXPORT_NAME];size_t n=0;if(!wast_name_to_bytes(s,bytes,sizeof(bytes),&n)||n>UINT32_MAX){w->failed=1;return;}wasm_writer_write_u32(w,(uint32_t)n);wasm_writer_write_bytes(w,bytes,n);}
 static void section(wasm_writer *out,uint8_t id,wasm_writer *s){
     if(s->failed||s->len>UINT32_MAX)out->failed=1;
     else if(s->len){wasm_writer_write_u8(out,id);wasm_writer_write_u32(out,(uint32_t)s->len);wasm_writer_write_bytes(out,s->data,s->len);}

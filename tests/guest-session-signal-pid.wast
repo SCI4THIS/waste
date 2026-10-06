@@ -1,0 +1,42 @@
+;; Arbitrary-PID signal routing: the first pause receives SIGUSR1 via the
+;; store's by-PID route (signalPid=1), the second receives SIGUSR2 via the
+;; legacy active-kernel route (signalPid omitted).  Identical module runs
+;; natively, through browser exports and through the production worker.
+(module
+  (import "env" "write" (func $write (param i32 i32 i32) (result i32)))
+  (import "env" "pselect" (func $select (param i32 i32 i32 i32 i32 i32) (result i32)))
+  (import "env" "sigaction" (func $action (param i32 i32 i32) (result i32)))
+  (import "env" "tcgetattr" (func $get (param i32 i32) (result i32)))
+  (import "env" "tcsetattr" (func $set (param i32 i32 i32) (result i32)))
+  (import "env" "exit" (func $exit (param i32)))
+  (memory (export "memory") 1)
+  (global $caught (mut i32) (i32.const 0))
+  (data (i32.const 64) "A\0aB\0a")
+  ;; env.sigaction stores the Wasm function index of $handler, not a table slot.
+  (data (i32.const 128) "\07\00\00\00")
+  (func (export "__errno_location") (result i32) (i32.const 0))
+  (func $handler (param $signal i32) (global.set $caught (local.get $signal)))
+  (func (export "setup") (result i32)
+    ;; Disable ONLCR etc. so marker bytes reach the host transcript verbatim.
+    (drop (call $get (i32.const 0) (i32.const 256)))
+    (i32.store (i32.const 256) (i32.const 0))
+    (i32.store (i32.const 260) (i32.const 0))
+    (i32.store (i32.const 268) (i32.const 0))
+    (i32.store8 (i32.const 279) (i32.const 1))
+    (drop (call $set (i32.const 0) (i32.const 0) (i32.const 256)))
+    (drop (call $action (i32.const 10) (i32.const 128) (i32.const 0)))
+    (call $action (i32.const 12) (i32.const 128) (i32.const 0)))
+  (func $pause (param $marker i32) (result i32)
+    (global.set $caught (i32.const 0))
+    (drop (call $write (i32.const 1) (local.get $marker) (i32.const 2)))
+    (if (i32.ne (call $select (i32.const 0) (i32.const 0) (i32.const 0)
+          (i32.const 0) (i32.const 0) (i32.const 0)) (i32.const -4))
+      (then (return (i32.const -1))))
+    (global.get $caught))
+  (func (export "by_pid") (result i32) (call $pause (i32.const 64)))
+  (func (export "by_active") (result i32) (call $pause (i32.const 66)))
+  (func (export "done") (call $exit (i32.const 0))))
+(assert_return (invoke "setup") (i32.const 0))
+(assert_return (invoke "by_pid") (i32.const 10))
+(assert_return (invoke "by_active") (i32.const 12))
+(invoke "done")

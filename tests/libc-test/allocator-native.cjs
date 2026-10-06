@@ -5,8 +5,22 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "../..");
 const wasmPath = path.join(root, "build/html-rt/waste-libc/waste-libc.wasm");
+const bytes = fs.readFileSync(wasmPath);
+const imports = Object.create(null);
+let importCalls = 0;
+// The merged artifact imports POSIX functions unrelated to allocation. Fail
+// immediately if the allocator reaches one; this supplies no kernel behavior.
+for (const entry of WebAssembly.Module.imports(new WebAssembly.Module(bytes))) {
+  if (entry.kind !== "function" || !["env", "waste_kernel"].includes(entry.module))
+    throw new Error(`unexpected allocator artifact import ${entry.module}:${entry.name} (${entry.kind})`);
+  imports[entry.module] ??= Object.create(null);
+  imports[entry.module][entry.name] = () => {
+    importCalls++;
+    throw new Error(`allocator stress called kernel import ${entry.module}:${entry.name}`);
+  };
+}
 
-WebAssembly.instantiate(fs.readFileSync(wasmPath)).then(({instance}) => {
+WebAssembly.instantiate(bytes, imports).then(({instance}) => {
   const api = instance.exports;
   if (api.waste_allocator_init(235120) !== 1) throw new Error("allocator initialization failed");
   let memory = new Uint8Array(api.memory.buffer);
@@ -42,6 +56,12 @@ WebAssembly.instantiate(fs.readFileSync(wasmPath)).then(({instance}) => {
       throw new Error(`allocation ${allocation.index} was corrupted at completion`);
     api.free(allocation.pointer);
   }
+  if (importCalls !== 0) throw new Error(`allocator made ${importCalls} kernel calls`);
+  // A real wrapper must hit the guard, rather than accepting a constant stub.
+  let guarded = false;
+  try { api.isatty(0); }
+  catch (error) { guarded = error.message === "allocator stress called kernel import waste_kernel:isatty_v1"; }
+  if (!guarded || importCalls !== 1) throw new Error("allocator import guard did not reject a kernel call");
   console.log(
     `native allocator stress: pass (${api.waste_memory_pages()} pages, ` +
     `${api.waste_memory_grow_calls()} one-page grows)`

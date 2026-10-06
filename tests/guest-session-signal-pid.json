@@ -1,0 +1,11 @@
+{
+  "fixture": "tests/guest-session-signal-pid.wast",
+  "events": [
+    {"after": "A\n", "waitKind": 2, "pid": 1, "signal": 10, "signalPid": 1},
+    {"after": "B\n", "waitKind": 2, "pid": 1, "signal": 12}
+  ],
+  "output": "A\nB\n",
+  "assertions": 4,
+  "processes": 0,
+  "exitStatus": 0
+}

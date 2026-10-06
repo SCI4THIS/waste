@@ -1,5 +1,5 @@
-/* Minimal external-image ABI probe.  It intentionally depends only on the
- * stable env.write import so exec-image work can be tested before coreutils. */
+/* Minimal external-image ABI probe for write, exit, descriptor flags, and the
+ * versioned startup block, independent of the coreutils runtime. */
 typedef unsigned int u32;
 
 __attribute__((import_module("env"), import_name("write")))
@@ -44,6 +44,7 @@ static int probe_write_u32(u32 value) {
 
 __attribute__((export_name("_start")))
 int waste_probe_start(void) {
+  if (probe_write_text("WASTE_PROBE_ENTRY_OK\n") != 0) return 1;
   int block = waste_probe_startup();
   if (block < 0) return probe_write_text("WASTE_PROBE_STARTUP_MISSING\n") == 0 ? 1 : 1;
   u32 *startup = (u32 *)(unsigned long)(u32)block;
@@ -72,13 +73,26 @@ int waste_probe_start(void) {
    * their descriptor flags in the new image before emitting the success
    * marker.  This also exercises the engine fcntl boundary without exposing
    * host descriptor pointers to the guest. */
-  if (waste_probe_fcntl(0, WASTE_PROBE_F_GETFD, 0) != 0 ||
-      waste_probe_fcntl(1, WASTE_PROBE_F_GETFD, 0) != 0 ||
-      waste_probe_fcntl(2, WASTE_PROBE_F_GETFD, 0) != 0 ||
-      waste_probe_fcntl(2, WASTE_PROBE_F_SETFD, WASTE_PROBE_FD_CLOEXEC) != 0 ||
-      waste_probe_fcntl(2, WASTE_PROBE_F_GETFD, 0) != WASTE_PROBE_FD_CLOEXEC ||
-      waste_probe_fcntl(2, WASTE_PROBE_F_SETFD, 0) != 0 ||
-      waste_probe_fcntl(2, WASTE_PROBE_F_GETFD, 0) != 0 ||
+  int fd0_flags = waste_probe_fcntl(0, WASTE_PROBE_F_GETFD, 0);
+  int fd1_flags = waste_probe_fcntl(1, WASTE_PROBE_F_GETFD, 0);
+  int fd2_flags = waste_probe_fcntl(2, WASTE_PROBE_F_GETFD, 0);
+  int fd2_set_cloexec = waste_probe_fcntl(2, WASTE_PROBE_F_SETFD,
+                                           WASTE_PROBE_FD_CLOEXEC);
+  int fd2_cloexec_flags = waste_probe_fcntl(2, WASTE_PROBE_F_GETFD, 0);
+  int fd2_clear_cloexec = waste_probe_fcntl(2, WASTE_PROBE_F_SETFD, 0);
+  int fd2_final_flags = waste_probe_fcntl(2, WASTE_PROBE_F_GETFD, 0);
+  if (probe_write_text("WASTE_PROBE_FD_FLAGS=") != 0 ||
+      probe_write_u32((u32)fd0_flags) != 0 || probe_write_text(",") != 0 ||
+      probe_write_u32((u32)fd1_flags) != 0 || probe_write_text(",") != 0 ||
+      probe_write_u32((u32)fd2_flags) != 0 || probe_write_text(",") != 0 ||
+      probe_write_u32((u32)fd2_set_cloexec) != 0 || probe_write_text(",") != 0 ||
+      probe_write_u32((u32)fd2_cloexec_flags) != 0 || probe_write_text(",") != 0 ||
+      probe_write_u32((u32)fd2_clear_cloexec) != 0 || probe_write_text(",") != 0 ||
+      probe_write_u32((u32)fd2_final_flags) != 0 || probe_write_text("\n") != 0)
+    return 1;
+  if (fd0_flags != 0 || fd1_flags != 0 || fd2_flags != 0 ||
+      fd2_set_cloexec != 0 || fd2_cloexec_flags != WASTE_PROBE_FD_CLOEXEC ||
+      fd2_clear_cloexec != 0 || fd2_final_flags != 0 ||
       probe_write_text("WASTE_PROBE_FDS_OK\n") != 0)
     return 1;
   if (argc == 0 || !argv || !envp || !cwd ||

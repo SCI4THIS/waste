@@ -15,6 +15,7 @@
 #include "wat/context.h"
 #include "wat/builder.h"
 #include "wat/literal.h"
+#include "wat/name.h"
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -97,6 +98,23 @@ static void emit_global_init_ref(wast_script *script, index_space space,
 static void report_validation_error(wast_script *script, const char *message);
 static constexpr_check check_global_constexpr(wast_script *script,
                                               const wast_global *initializer);
+
+/* STRING tokens retain their source spelling for data/custom payload decoding.
+ * Names decode WAT escapes and use the injective internal C-string encoding. */
+static void copy_wat_name(wast_script *script, wat_context *context,
+                          char destination[WAST_MAX_EXPORT_NAME],
+                          const char *source) {
+    uint8_t decoded[WAST_MAX_EXPORT_NAME];
+    size_t length = 0;
+    if (!wast_builder_decode_string(context, source, decoded, &length,
+                                    sizeof(decoded)) ||
+        !wast_name_from_bytes(decoded, length, destination,
+                              WAST_MAX_EXPORT_NAME)) {
+        destination[0] = '\0';
+        report_validation_error(script, "WAT name exceeds supported representation");
+        return;
+    }
+}
 
 /* Forward declarations for helpers defined after %% */
 static wast_group *cur_group(wast_script *s);
@@ -261,8 +279,9 @@ static void set_register_name(wast_script *script, const char *name,
 
 static void start_new_group(wast_script *s) {
     wast_script *script = s;
+    int first_group = s->group_capacity == 0;
     if (s->group_count == s->group_capacity) {
-        int next_capacity = s->group_capacity ? s->group_capacity * 2 : 8;
+        int next_capacity = s->group_capacity ? s->group_capacity * 2 : 1;
         if (next_capacity < s->group_capacity ||
             (size_t)next_capacity > SIZE_MAX / sizeof(*s->groups)) {
             if (!s->error[0])
@@ -270,8 +289,12 @@ static void start_new_group(wast_script *s) {
                          "too many WAST module groups");
             return;
         }
-        wast_group *next = realloc(s->groups,
-                                   (size_t)next_capacity * sizeof(*next));
+        /* Command-stream parses usually need one group. Its large fixed
+         * module arrays can remain untouched until used; calloc supplies the
+         * same zero state without forcing a native page fault for every byte
+         * of an assertion-only command's empty module. */
+        wast_group *next = first_group ? calloc(1, sizeof(*next)) :
+            realloc(s->groups, (size_t)next_capacity * sizeof(*next));
         if (!next) {
             if (!s->error[0])
                 snprintf(s->error, sizeof(s->error),
@@ -283,7 +306,7 @@ static void start_new_group(wast_script *s) {
     }
     WAT_STATE(cur_group) = s->group_count++;
     wast_group *g = &s->groups[WAT_STATE(cur_group)];
-    memset(g, 0, sizeof(*g));
+    if (!first_group) memset(g, 0, sizeof(*g));
     g->module.start_func = -1;
     g->assertion_start = s->assertion_count;
     g->assertion_count = 0;
@@ -1599,6 +1622,26 @@ static uint32_t resolve_data(wast_script *script, const char *s) {
     }
     return (uint32_t)strtoul(s,NULL,10);
 }
+/* Resource bounds are parser errors, even inside assert_invalid. Never
+ * accept a truncated module or leak an unretained data payload. */
+static int can_append_data_segment(wast_script *script, wast_module *mod) {
+    if (mod->data_count < WAST_MAX_DATA_SEGS) return 1;
+    if (!script->error[0])
+        snprintf(script->error, sizeof(script->error),
+                 "data segment capacity exceeded (%d)", WAST_MAX_DATA_SEGS);
+    free(WAT_STATE(cur_data).bytes);
+    WAT_STATE(cur_data).bytes = NULL;
+    return 0;
+}
+
+static int can_append_elem_segment(wast_script *script, wast_module *mod) {
+    if (mod->elem_count < WAST_MAX_ELEM_SEGS) return 1;
+    if (!script->error[0])
+        snprintf(script->error, sizeof(script->error),
+                 "element segment capacity exceeded (%d)", WAST_MAX_ELEM_SEGS);
+    return 0;
+}
+
 static void record_data_name(wast_script *script, const char *name) {
     if (WAT_STATE(data_name_count) >= WAST_MAX_DATA_SEGS) return;
     snprintf(WAT_STATE(data_names)[WAT_STATE(data_name_count)++], WAST_MAX_EXPORT_NAME,
@@ -2229,6 +2272,7 @@ static void emit_blocktype(wast_script *script, int bt) {
 %token KW_MEMORY_INIT KW_MEMORY_COPY KW_MEMORY_FILL
 %token KW_TABLE_GET KW_TABLE_SET KW_TABLE_GROW KW_TABLE_SIZE
 %token KW_TABLE_INIT KW_TABLE_COPY KW_TABLE_FILL
+%token KW_DATA_DROP KW_ELEM_DROP
 %token KW_MODULE KW_FUNC KW_EXPORT KW_IMPORT KW_PARAM KW_RESULT
 %token KW_TABLE KW_MEMORY KW_GLOBAL KW_DATA KW_ELEM KW_TYPE KW_START KW_TAG
 %token KW_LOCAL KW_MUT KW_DECLARE KW_ITEM KW_OFFSET_KW KW_REGISTER
@@ -2252,7 +2296,7 @@ static void emit_blocktype(wast_script *script, int bt) {
  * Type declarations for non-terminal symbols
  * --------------------------------------------------------------------- */
 
-%type <valtype_val>   valtype table_reftype
+%type <valtype_val>   valtype table_reftype elem_reftype
 %type <value_val>     const_val result_const f32_val f64_val
 %type <lane_list_val> lane_vals lane_val
 %type <int_val>       lane_type blocktype block_param_type block_result_type
@@ -2278,6 +2322,9 @@ script:
     commands
   | INLINE_MODULE_START {
         begin_module(script);
+        /* A bare inline module in a WAST script is a definition, just like
+         * an explicit (module definition ...), and is not instantiated. */
+        cur_group(script)->module.is_definition = 1;
     } module_fields {
         apply_func_fixups(script);
         script->command_count = 1;
@@ -2298,8 +2345,7 @@ command:
         WAT_STATE(cur_assert).kind = WAST_ASSERT_RETURN;
         WAT_STATE(in_assert) = 1;
     } STRING {
-        strncpy(WAT_STATE(invoke_name), $4, WAST_MAX_EXPORT_NAME - 1);
-        WAT_STATE(invoke_name)[WAST_MAX_EXPORT_NAME - 1] = '\0';
+        copy_wat_name(script, context, WAT_STATE(invoke_name), $4);
     } const_list RPAREN {
         append_assert(script);
     }
@@ -2309,7 +2355,7 @@ command:
         WAT_STATE(in_assert) = 1;
     } ID STRING {
         snprintf(WAT_STATE(cur_assert).module_id, WAST_MAX_EXPORT_NAME, "%s", $4);
-        snprintf(WAT_STATE(invoke_name), WAST_MAX_EXPORT_NAME, "%s", $5);
+        copy_wat_name(script, context, WAT_STATE(invoke_name), $5);
     } const_list RPAREN {
         append_assert(script);
     }
@@ -2458,8 +2504,8 @@ func_fields:
     /* empty */
   | func_inline_export func_fields
   | LPAREN KW_IMPORT STRING STRING RPAREN {
-        snprintf(WAT_STATE(cur_func).import_module, WAST_MAX_EXPORT_NAME, "%s", $3);
-        snprintf(WAT_STATE(cur_func).import_name,   WAST_MAX_EXPORT_NAME, "%s", $4);
+        copy_wat_name(script, context, WAT_STATE(cur_func).import_module, $3);
+        copy_wat_name(script, context, WAT_STATE(cur_func).import_name, $4);
         WAT_STATE(cur_func).is_import = 1;
     } func_import_fields
   | LPAREN KW_TYPE any_idx RPAREN {
@@ -2474,10 +2520,7 @@ func_fields:
 func_inline_export:
     LPAREN KW_EXPORT STRING RPAREN {
         if (WAT_STATE(in_func) && !WAT_STATE(cur_func).has_export_name) {
-            size_t n = strlen($3);
-            if (n >= WAST_MAX_EXPORT_NAME) n = WAST_MAX_EXPORT_NAME - 1;
-            memcpy(WAT_STATE(cur_func).export_name, $3, n);
-            WAT_STATE(cur_func).export_name[n] = '\0';
+            copy_wat_name(script, context, WAT_STATE(cur_func).export_name, $3);
             WAT_STATE(cur_func).has_export_name = 1;
         }
     }
@@ -2672,6 +2715,14 @@ plain_instr:
   | KW_MEMORY_FILL index_ref { emit_byte(script,0xFC); emit_leb_u32(script,11); emit_index_ref(script,IDX_MEMORY,$2,@2.first_line,@2.first_column); }
   | KW_MEMORY_COPY { emit_byte(script,0xFC); emit_leb_u32(script,10); emit_byte(script,0x00); emit_byte(script,0x00); }
   | KW_MEMORY_COPY index_ref index_ref { emit_byte(script,0xFC); emit_leb_u32(script,10); emit_index_ref(script,IDX_MEMORY,$2,@2.first_line,@2.first_column); emit_index_ref(script,IDX_MEMORY,$3,@3.first_line,@3.first_column); }
+  | KW_DATA_DROP index_ref { emit_byte(script,0xFC); emit_leb_u32(script,9); emit_index_ref(script,IDX_DATA,$2,@2.first_line,@2.first_column); }
+  | KW_ELEM_DROP index_ref { emit_byte(script,0xFC); emit_leb_u32(script,13); emit_index_ref(script,IDX_ELEM,$2,@2.first_line,@2.first_column); }
+  | KW_TABLE_COPY { emit_byte(script,0xFC); emit_leb_u32(script,14); emit_byte(script,0x00); emit_byte(script,0x00); }
+  | KW_TABLE_COPY index_ref index_ref { emit_byte(script,0xFC); emit_leb_u32(script,14); emit_index_ref(script,IDX_TABLE,$2,@2.first_line,@2.first_column); emit_index_ref(script,IDX_TABLE,$3,@3.first_line,@3.first_column); }
+  | KW_TABLE_FILL { emit_byte(script,0xFC); emit_leb_u32(script,17); emit_byte(script,0x00); }
+  | KW_TABLE_FILL index_ref { emit_byte(script,0xFC); emit_leb_u32(script,17); emit_index_ref(script,IDX_TABLE,$2,@2.first_line,@2.first_column); }
+  | KW_TABLE_INIT index_ref { emit_byte(script,0xFC); emit_leb_u32(script,12); emit_index_ref(script,IDX_ELEM,$2,@2.first_line,@2.first_column); emit_byte(script,0x00); }
+  | KW_TABLE_INIT index_ref index_ref { emit_byte(script,0xFC); emit_leb_u32(script,12); emit_index_ref(script,IDX_ELEM,$3,@3.first_line,@3.first_column); emit_index_ref(script,IDX_TABLE,$2,@2.first_line,@2.first_column); }
   | KW_MEMORY_INIT index_ref { emit_byte(script,0xFC); emit_leb_u32(script,8); emit_index_ref(script,IDX_DATA,$2,@2.first_line,@2.first_column); emit_byte(script,0x00); }
   | KW_MEMORY_INIT index_ref index_ref { emit_byte(script,0xFC); emit_leb_u32(script,8); emit_index_ref(script,IDX_DATA,$3,@3.first_line,@3.first_column); emit_index_ref(script,IDX_MEMORY,$2,@2.first_line,@2.first_column); }
   | OP index_ref {
@@ -3285,6 +3336,9 @@ fold_instr:
         } else if (strcmp($1, "table.init") == 0) {
             emit_byte(script, 0xfc); emit_leb_u32(script, 12);
             emit_leb_u32(script, (uint32_t)$2); emit_byte(script, 0x00);
+        } else if (strcmp($1, "table.fill") == 0) {
+            emit_byte(script, 0xFC); emit_leb_u32(script, 17);
+            emit_leb_u32(script, (uint32_t)$2);
         } else {
             if (!emit_atom_op(script, $1) && script->strict_wat_mode)
                 report_validation_error(script,"unknown instruction operator");
@@ -3313,6 +3367,10 @@ fold_instr:
         } else if (strcmp($1, "memory.size") == 0) {
             emit_byte(script, 0x3F);
             emit_index_ref(script, IDX_MEMORY, $2, @2.first_line, @2.first_column);
+        } else if (strcmp($1, "table.init") == 0) {
+            emit_byte(script, 0xFC); emit_leb_u32(script, 12);
+            emit_index_ref(script, IDX_ELEM, $2, @2.first_line, @2.first_column);
+            emit_leb_u32(script, 0);
         } else if (strcmp($1, "data.drop") == 0) {
             emit_byte(script, 0xFC); emit_leb_u32(script, 9);
             emit_index_ref(script, IDX_DATA, $2, @2.first_line, @2.first_column);
@@ -3433,6 +3491,9 @@ fold_instr:
             emit_byte(script, 0xfc); emit_leb_u32(script, 12);
             emit_leb_u32(script, (uint32_t)$2);
             emit_byte(script, 0x00);
+        } else if (strcmp($1, "table.fill") == 0) {
+            emit_byte(script, 0xFC); emit_leb_u32(script, 17);
+            emit_leb_u32(script, (uint32_t)$2);
         } else {
             char type_name[32];
             snprintf(type_name, sizeof(type_name), "%lld", (long long)$2);
@@ -3443,7 +3504,15 @@ fold_instr:
   | FOLD_ATOM_START any_int any_nat fold_arg_list RPAREN {
         char type_name[32];
         snprintf(type_name, sizeof(type_name), "%lld", (long long)$2);
-        if (strcmp($1, "struct.get") == 0 ||
+        if (strcmp($1, "table.init") == 0) {
+            emit_byte(script, 0xFC); emit_leb_u32(script, 12);
+            emit_leb_u32(script, (uint32_t)$3);
+            emit_leb_u32(script, (uint32_t)$2);
+        } else if (strcmp($1, "table.copy") == 0) {
+            emit_byte(script, 0xFC); emit_leb_u32(script, 14);
+            emit_leb_u32(script, (uint32_t)$2);
+            emit_leb_u32(script, (uint32_t)$3);
+        } else if (strcmp($1, "struct.get") == 0 ||
             strcmp($1, "struct.get_s") == 0 ||
             strcmp($1, "struct.get_u") == 0 ||
             strcmp($1, "struct.set") == 0) {
@@ -3512,7 +3581,15 @@ fold_instr:
   | FOLD_ATOM_START any_int ID fold_arg_list RPAREN {
         char type_name[32];
         snprintf(type_name, sizeof(type_name), "%lld", (long long)$2);
-        if (strcmp($1, "struct.get") == 0 || strcmp($1, "struct.get_s") == 0 ||
+        if (strcmp($1, "table.init") == 0) {
+            emit_byte(script, 0xFC); emit_leb_u32(script, 12);
+            emit_index_ref(script, IDX_ELEM, $3, @3.first_line, @3.first_column);
+            emit_leb_u32(script, (uint32_t)$2);
+        } else if (strcmp($1, "table.copy") == 0) {
+            emit_byte(script, 0xFC); emit_leb_u32(script, 14);
+            emit_leb_u32(script, (uint32_t)$2);
+            emit_index_ref(script, IDX_TABLE, $3, @3.first_line, @3.first_column);
+        } else if (strcmp($1, "struct.get") == 0 || strcmp($1, "struct.get_s") == 0 ||
             strcmp($1, "struct.get_u") == 0 || strcmp($1, "struct.set") == 0) {
             emit_gc_struct_access(script, $1, type_name, @2.first_line, @2.first_column, $3);
         }
@@ -3849,7 +3926,14 @@ gc_casttype:
     }
     ;
 
+/* Element expression types exclude the separate elemkind func syntax. */
 table_reftype:
+    elem_reftype { $$ = $1; }
+  | KW_FUNC      { $$ = WASM_VALTYPE_FUNCREF; }
+  | KW_EXTERN    { $$ = WASM_VALTYPE_EXTERNREF; }
+    ;
+
+elem_reftype:
     KW_FUNCREF   { $$ = WASM_VALTYPE_FUNCREF; }
   | KW_EXTERNREF { $$ = WASM_VALTYPE_EXTERNREF; }
   | KW_ANYREF    { $$ = WASM_VALTYPE_ANYREF; }
@@ -3857,8 +3941,6 @@ table_reftype:
   | KW_I31REF    { $$ = WASM_VALTYPE_I31REF; }
   | KW_STRUCTREF { $$ = WASM_VALTYPE_STRUCTREF; }
   | KW_ARRAYREF  { $$ = WASM_VALTYPE_ARRAYREF; }
-  | KW_FUNC      { $$ = WASM_VALTYPE_FUNCREF; }
-  | KW_EXTERN    { $$ = WASM_VALTYPE_EXTERNREF; }
   | LPAREN KW_REF_TYPE KW_NULL KW_FUNC RPAREN { $$ = WASM_VALTYPE_FUNCREF; }
   | LPAREN KW_REF_TYPE KW_NULL KW_EXTERN RPAREN { $$ = WASM_VALTYPE_EXTERNREF; }
   | LPAREN KW_REF_TYPE KW_NULL KW_ANY RPAREN { $$ = WASM_VALTYPE_ANYREF; }
@@ -4161,8 +4243,8 @@ storage_type:
 /* --- import (top-level) --- */
 import_item:
     LPAREN KW_IMPORT STRING STRING {
-        snprintf(WAT_STATE(import_module), WAST_MAX_EXPORT_NAME, "%s", $3);
-        snprintf(WAT_STATE(import_name),   WAST_MAX_EXPORT_NAME, "%s", $4);
+        copy_wat_name(script, context, WAT_STATE(import_module), $3);
+        copy_wat_name(script, context, WAT_STATE(import_name), $4);
     }
     import_desc RPAREN
     ;
@@ -4258,10 +4340,10 @@ memory_item:
             m->limits = $12;
             m->is_import = 1;
             snprintf(m->id, WAST_MAX_EXPORT_NAME, "%s", $2);
-            snprintf(m->export_name, WAST_MAX_EXPORT_NAME, "%s", $5);
+            copy_wat_name(script, context, m->export_name, $5);
             m->has_export_name = 1;
-            snprintf(m->import_module, WAST_MAX_EXPORT_NAME, "%s", $9);
-            snprintf(m->import_name, WAST_MAX_EXPORT_NAME, "%s", $10);
+            copy_wat_name(script, context, m->import_module, $9);
+            copy_wat_name(script, context, m->import_name, $10);
             if (WAT_STATE(memory_name_count) < WAST_MAX_MEMORIES)
                 snprintf(WAT_STATE(memory_names)[WAT_STATE(memory_name_count)++], WAST_MAX_EXPORT_NAME, "%s", $2);
         }
@@ -4273,8 +4355,8 @@ memory_item:
             wast_memory *m = &mod->memories[mod->memory_count++];
             memset(m, 0, sizeof(*m));
             m->limits = $8;
-            snprintf(m->import_module, WAST_MAX_EXPORT_NAME, "%s", $5);
-            snprintf(m->import_name,   WAST_MAX_EXPORT_NAME, "%s", $6);
+            copy_wat_name(script, context, m->import_module, $5);
+            copy_wat_name(script, context, m->import_name, $6);
             m->is_import = 1;
             snprintf(m->id, WAST_MAX_EXPORT_NAME, "%s", $2);
             if (WAT_STATE(memory_name_count) < WAST_MAX_MEMORIES) snprintf(WAT_STATE(memory_names)[WAT_STATE(memory_name_count)++],WAST_MAX_EXPORT_NAME,"%s",$2);
@@ -4286,7 +4368,7 @@ memory_item:
             wast_memory *m = &mod->memories[mod->memory_count++];
             memset(m, 0, sizeof(*m));
             m->limits = $7;
-            snprintf(m->export_name, WAST_MAX_EXPORT_NAME, "%s", $5);
+            copy_wat_name(script, context, m->export_name, $5);
             m->has_export_name = 1;
             snprintf(m->id, WAST_MAX_EXPORT_NAME, "%s", $2);
             if (WAT_STATE(memory_name_count) < WAST_MAX_MEMORIES) snprintf(WAT_STATE(memory_names)[WAT_STATE(memory_name_count)++],WAST_MAX_EXPORT_NAME,"%s",$2);
@@ -4315,7 +4397,7 @@ memory_item:
             snprintf(m->id, WAST_MAX_EXPORT_NAME, "%s", $2);
             if (WAT_STATE(memory_name_count) < WAST_MAX_MEMORIES) snprintf(WAT_STATE(memory_names)[WAT_STATE(memory_name_count)++],WAST_MAX_EXPORT_NAME,"%s",$2);
         }
-        if (mod->data_count < WAST_MAX_DATA_SEGS) {
+        if (can_append_data_segment(script, mod)) {
             WAT_STATE(cur_data).memory_index = mod->memory_count - 1;
             WAT_STATE(cur_data).offset_expr[0] = 0x41;
             WAT_STATE(cur_data).offset_expr[1] = 0x00;
@@ -4344,7 +4426,7 @@ memory_item:
                 snprintf(WAT_STATE(memory_names)[WAT_STATE(memory_name_count)++],
                          WAST_MAX_EXPORT_NAME, "%s", $2);
         }
-        if (mod->data_count < WAST_MAX_DATA_SEGS) {
+        if (can_append_data_segment(script, mod)) {
             WAT_STATE(cur_data).memory_index = mod->memory_count - 1;
             WAT_STATE(cur_data).offset_expr[0] = 0x42;
             WAT_STATE(cur_data).offset_expr[1] = 0x00;
@@ -4395,13 +4477,13 @@ global_fields:
         $$ = 0;
     }
   | LPAREN KW_IMPORT STRING STRING RPAREN global_type {
-        snprintf(WAT_STATE(cur_global).import_module, WAST_MAX_EXPORT_NAME, "%s", $3);
-        snprintf(WAT_STATE(cur_global).import_name, WAST_MAX_EXPORT_NAME, "%s", $4);
+        copy_wat_name(script, context, WAT_STATE(cur_global).import_module, $3);
+        copy_wat_name(script, context, WAT_STATE(cur_global).import_name, $4);
         WAT_STATE(cur_global).is_import = 1;
         $$ = 1;
     }
   | LPAREN KW_EXPORT STRING RPAREN global_fields {
-        snprintf(WAT_STATE(cur_global).export_name, WAST_MAX_EXPORT_NAME, "%s", $3);
+        copy_wat_name(script, context, WAT_STATE(cur_global).export_name, $3);
         WAT_STATE(cur_global).has_export_name = 1;
         $$ = $5;
     }
@@ -4445,8 +4527,8 @@ table_item:
             memset(t, 0, sizeof(*t));
             t->limits = $9;
             t->reftype = $10;
-            snprintf(t->import_module, WAST_MAX_EXPORT_NAME, "%s", $6);
-            snprintf(t->import_name,   WAST_MAX_EXPORT_NAME, "%s", $7);
+            copy_wat_name(script, context, t->import_module, $6);
+            copy_wat_name(script, context, t->import_name, $7);
             t->is_import = 1;
             snprintf(t->id, WAST_MAX_EXPORT_NAME, "%s", $3);
             if (WAT_STATE(table_name_count) < WAST_MAX_TABLES) snprintf(WAT_STATE(table_names)[WAT_STATE(table_name_count)++],WAST_MAX_EXPORT_NAME,"%s",$3);
@@ -4459,7 +4541,7 @@ table_item:
             memset(t, 0, sizeof(*t));
             t->limits = $8;
             t->reftype = $9;
-            snprintf(t->export_name, WAST_MAX_EXPORT_NAME, "%s", $6);
+            copy_wat_name(script, context, t->export_name, $6);
             t->has_export_name = 1;
             snprintf(t->id, WAST_MAX_EXPORT_NAME, "%s", $3);
             if (WAT_STATE(table_name_count) < WAST_MAX_TABLES) snprintf(WAT_STATE(table_names)[WAT_STATE(table_name_count)++],WAST_MAX_EXPORT_NAME,"%s",$3);
@@ -4474,7 +4556,7 @@ table_item:
             t->limits = $8;
             t->reftype = $9;
             set_table_null_init(t, $11);
-            snprintf(t->export_name, WAST_MAX_EXPORT_NAME, "%s", $6);
+            copy_wat_name(script, context, t->export_name, $6);
             t->has_export_name = 1;
             snprintf(t->id, WAST_MAX_EXPORT_NAME, "%s", $3);
             if (WAT_STATE(table_name_count) < WAST_MAX_TABLES) snprintf(WAT_STATE(table_names)[WAT_STATE(table_name_count)++],WAST_MAX_EXPORT_NAME,"%s",$3);
@@ -4488,10 +4570,10 @@ table_item:
             memset(t, 0, sizeof(*t));
             t->limits = $13;
             t->reftype = $14;
-            snprintf(t->export_name, WAST_MAX_EXPORT_NAME, "%s", $6);
+            copy_wat_name(script, context, t->export_name, $6);
             t->has_export_name = 1;
-            snprintf(t->import_module, WAST_MAX_EXPORT_NAME, "%s", $10);
-            snprintf(t->import_name,   WAST_MAX_EXPORT_NAME, "%s", $11);
+            copy_wat_name(script, context, t->import_module, $10);
+            copy_wat_name(script, context, t->import_name, $11);
             t->is_import = 1;
             snprintf(t->id, WAST_MAX_EXPORT_NAME, "%s", $3);
             if (WAT_STATE(table_name_count) < WAST_MAX_TABLES) snprintf(WAT_STATE(table_names)[WAT_STATE(table_name_count)++],WAST_MAX_EXPORT_NAME,"%s",$3);
@@ -4547,7 +4629,7 @@ table_item:
             set_table_index_init(script, t, (uint32_t)(mod->table_count - 1),
                                  0xd2, IDX_FUNC, $11,
                                  @11.first_line, @11.first_column);
-            snprintf(t->export_name, WAST_MAX_EXPORT_NAME, "%s", $6);
+            copy_wat_name(script, context, t->export_name, $6);
             t->has_export_name = 1;
             snprintf(t->id, WAST_MAX_EXPORT_NAME, "%s", $3);
             if (WAT_STATE(table_name_count) < WAST_MAX_TABLES) snprintf(WAT_STATE(table_names)[WAT_STATE(table_name_count)++],WAST_MAX_EXPORT_NAME,"%s",$3);
@@ -4597,6 +4679,8 @@ table_item:
         memset(&WAT_STATE(cur_elem), 0, sizeof(WAT_STATE(cur_elem)));
         WAT_STATE(cur_elem).reftype = $4;
     } elem_func_list RPAREN RPAREN {
+        /* Shorthand segments inherit the declared table type. */
+        WAT_STATE(cur_elem).reftype = $4;
         /* Shorthand defines both the table and an active segment at offset 0. */
         wast_module *mod = &cur_group(script)->module;
         if (mod->table_count < WAST_MAX_TABLES) {
@@ -4607,7 +4691,7 @@ table_item:
             snprintf(t->id, WAST_MAX_EXPORT_NAME, "%s", $3);
             if (WAT_STATE(table_name_count) < WAST_MAX_TABLES) snprintf(WAT_STATE(table_names)[WAT_STATE(table_name_count)++],WAST_MAX_EXPORT_NAME,"%s",$3);
         }
-        if (mod->elem_count < WAST_MAX_ELEM_SEGS) {
+        if (can_append_elem_segment(script, mod)) {
             /* The shorthand segment initializes the table declared by this
              * field, not necessarily table 0.  table_count includes imported
              * and previously declared tables, so the new table's index is the
@@ -4621,10 +4705,41 @@ table_item:
             if (WAT_STATE(elem_name_count) < WAST_MAX_ELEM_SEGS) WAT_STATE(elem_names)[WAT_STATE(elem_name_count)++][0]='\0';
         }
     }
+  | LPAREN KW_TABLE opt_id LPAREN KW_EXPORT STRING RPAREN table_reftype LPAREN KW_ELEM {
+        memset(&WAT_STATE(cur_elem), 0, sizeof(WAT_STATE(cur_elem)));
+        WAT_STATE(cur_elem).reftype = $8;
+    } elem_func_list RPAREN RPAREN {
+        WAT_STATE(cur_elem).reftype = $8;
+        wast_module *mod = &cur_group(script)->module;
+        if (mod->table_count < WAST_MAX_TABLES) {
+            wast_table *t = &mod->tables[mod->table_count++];
+            memset(t, 0, sizeof(*t));
+            t->limits.min = (uint32_t)WAT_STATE(cur_elem).ref_count;
+            t->reftype = WAT_STATE(cur_elem).reftype;
+            copy_wat_name(script, context, t->export_name, $6);
+            t->has_export_name = 1;
+            snprintf(t->id, WAST_MAX_EXPORT_NAME, "%s", $3);
+            if (WAT_STATE(table_name_count) < WAST_MAX_TABLES)
+                snprintf(WAT_STATE(table_names)[WAT_STATE(table_name_count)++],
+                         WAST_MAX_EXPORT_NAME, "%s", $3);
+        }
+        if (can_append_elem_segment(script, mod)) {
+            WAT_STATE(cur_elem).table_index = mod->table_count - 1;
+            WAT_STATE(cur_elem).offset_expr[0] = 0x41;
+            WAT_STATE(cur_elem).offset_expr[1] = 0x00;
+            WAT_STATE(cur_elem).offset_expr[2] = 0x0B;
+            WAT_STATE(cur_elem).offset_len = 3;
+            mod->elem[mod->elem_count++] = WAT_STATE(cur_elem);
+            if (WAT_STATE(elem_name_count) < WAST_MAX_ELEM_SEGS)
+                WAT_STATE(elem_names)[WAT_STATE(elem_name_count)++][0] = '\0';
+        }
+    }
   | LPAREN KW_TABLE opt_id KW_I64 table_reftype LPAREN KW_ELEM {
         memset(&WAT_STATE(cur_elem), 0, sizeof(WAT_STATE(cur_elem)));
         WAT_STATE(cur_elem).reftype = $5;
     } elem_func_list RPAREN RPAREN {
+        /* Shorthand segments inherit the declared table type. */
+        WAT_STATE(cur_elem).reftype = $5;
         wast_module *mod = &cur_group(script)->module;
         if (mod->table_count < WAST_MAX_TABLES) {
             wast_table *t = &mod->tables[mod->table_count++];
@@ -4637,7 +4752,37 @@ table_item:
                 snprintf(WAT_STATE(table_names)[WAT_STATE(table_name_count)++],
                          WAST_MAX_EXPORT_NAME, "%s", $3);
         }
-        if (mod->elem_count < WAST_MAX_ELEM_SEGS) {
+        if (can_append_elem_segment(script, mod)) {
+            WAT_STATE(cur_elem).table_index = mod->table_count - 1;
+            WAT_STATE(cur_elem).offset_expr[0] = 0x42;
+            WAT_STATE(cur_elem).offset_expr[1] = 0x00;
+            WAT_STATE(cur_elem).offset_expr[2] = 0x0b;
+            WAT_STATE(cur_elem).offset_len = 3;
+            mod->elem[mod->elem_count++] = WAT_STATE(cur_elem);
+            if (WAT_STATE(elem_name_count) < WAST_MAX_ELEM_SEGS)
+                WAT_STATE(elem_names)[WAT_STATE(elem_name_count)++][0] = '\0';
+        }
+    }
+  | LPAREN KW_TABLE opt_id LPAREN KW_EXPORT STRING RPAREN KW_I64 table_reftype LPAREN KW_ELEM {
+        memset(&WAT_STATE(cur_elem), 0, sizeof(WAT_STATE(cur_elem)));
+        WAT_STATE(cur_elem).reftype = $9;
+    } elem_func_list RPAREN RPAREN {
+        WAT_STATE(cur_elem).reftype = $9;
+        wast_module *mod = &cur_group(script)->module;
+        if (mod->table_count < WAST_MAX_TABLES) {
+            wast_table *t = &mod->tables[mod->table_count++];
+            memset(t, 0, sizeof(*t));
+            t->limits.min = (uint64_t)WAT_STATE(cur_elem).ref_count;
+            t->limits.is_64 = 1;
+            t->reftype = WAT_STATE(cur_elem).reftype;
+            copy_wat_name(script, context, t->export_name, $6);
+            t->has_export_name = 1;
+            snprintf(t->id, WAST_MAX_EXPORT_NAME, "%s", $3);
+            if (WAT_STATE(table_name_count) < WAST_MAX_TABLES)
+                snprintf(WAT_STATE(table_names)[WAT_STATE(table_name_count)++],
+                         WAST_MAX_EXPORT_NAME, "%s", $3);
+        }
+        if (can_append_elem_segment(script, mod)) {
             WAT_STATE(cur_elem).table_index = mod->table_count - 1;
             WAT_STATE(cur_elem).offset_expr[0] = 0x42;
             WAT_STATE(cur_elem).offset_expr[1] = 0x00;
@@ -4656,7 +4801,7 @@ data_item:
         wast_module *mod = &cur_group(script)->module;
         WAT_STATE(cur_data).memory_index = (int)resolve_memory(script, $5);
         snprintf(WAT_STATE(cur_data).name, WAST_MAX_EXPORT_NAME, "%s", $3);
-        if (mod->data_count < WAST_MAX_DATA_SEGS) {
+        if (can_append_data_segment(script, mod)) {
             record_data_name(script, $3);
             mod->data[mod->data_count++] = WAT_STATE(cur_data);
         }
@@ -4664,7 +4809,7 @@ data_item:
   | LPAREN KW_DATA opt_id data_offset data_string_list RPAREN {
         wast_module *mod = &cur_group(script)->module;
         snprintf(WAT_STATE(cur_data).name, WAST_MAX_EXPORT_NAME, "%s", $3);
-        if (mod->data_count < WAST_MAX_DATA_SEGS) {
+        if (can_append_data_segment(script, mod)) {
             record_data_name(script, $3);
             mod->data[mod->data_count++] = WAT_STATE(cur_data);
         }
@@ -4676,7 +4821,7 @@ data_item:
         /* passive data segment */
         wast_module *mod = &cur_group(script)->module;
         snprintf(WAT_STATE(cur_data).name, WAST_MAX_EXPORT_NAME, "%s", $3);
-        if (mod->data_count < WAST_MAX_DATA_SEGS) {
+        if (can_append_data_segment(script, mod)) {
             record_data_name(script, $3);
             mod->data[mod->data_count++] = WAT_STATE(cur_data);
         }
@@ -4817,19 +4962,19 @@ data_string_list:
 elem_item:
     LPAREN KW_ELEM opt_id elem_offset elem_func_list RPAREN {
         wast_module *mod = &cur_group(script)->module;
-        if (mod->elem_count < WAST_MAX_ELEM_SEGS) {
+        if (can_append_elem_segment(script, mod)) {
             mod->elem[mod->elem_count++] = WAT_STATE(cur_elem);
             if (WAT_STATE(elem_name_count) < WAST_MAX_ELEM_SEGS) snprintf(WAT_STATE(elem_names)[WAT_STATE(elem_name_count)++],WAST_MAX_EXPORT_NAME,"%s",$3);
         }
     }
   | LPAREN KW_ELEM opt_id KW_FUNC {
-        /* passive funcref elem segment: (elem func $f ...) */
+        /* Passive elemkind func declares (ref func): (elem func $f ...). */
         memset(&WAT_STATE(cur_elem), 0, sizeof(WAT_STATE(cur_elem)));
         WAT_STATE(cur_elem).is_passive = 1;
-        WAT_STATE(cur_elem).reftype = WASM_VALTYPE_FUNCREF;
-    } elem_funcs RPAREN {
+        WAT_STATE(cur_elem).reftype = WASM_VALTYPE_FUNCREF_NONNULL;
+    } elem_funcs_opt RPAREN {
         wast_module *mod = &cur_group(script)->module;
-        if (mod->elem_count < WAST_MAX_ELEM_SEGS) {
+        if (can_append_elem_segment(script, mod)) {
             mod->elem[mod->elem_count++] = WAT_STATE(cur_elem);
             if (WAT_STATE(elem_name_count) < WAST_MAX_ELEM_SEGS)
                 snprintf(WAT_STATE(elem_names)[WAT_STATE(elem_name_count)++], WAST_MAX_EXPORT_NAME, "%s", $3);
@@ -4838,42 +4983,42 @@ elem_item:
   | LPAREN KW_ELEM opt_id KW_DECLARE KW_FUNC {
         memset(&WAT_STATE(cur_elem), 0, sizeof(WAT_STATE(cur_elem)));
         WAT_STATE(cur_elem).is_declarative = 1;
-        WAT_STATE(cur_elem).reftype = WASM_VALTYPE_FUNCREF;
-    } elem_funcs RPAREN {
+        WAT_STATE(cur_elem).reftype = WASM_VALTYPE_FUNCREF_NONNULL;
+    } elem_funcs_opt RPAREN {
         wast_module *mod = &cur_group(script)->module;
-        if (mod->elem_count < WAST_MAX_ELEM_SEGS) {
+        if (can_append_elem_segment(script, mod)) {
             mod->elem[mod->elem_count++] = WAT_STATE(cur_elem);
             if (WAT_STATE(elem_name_count) < WAST_MAX_ELEM_SEGS)
                 snprintf(WAT_STATE(elem_names)[WAT_STATE(elem_name_count)++], WAST_MAX_EXPORT_NAME, "%s", $3);
         }
     }
-  | LPAREN KW_ELEM opt_id KW_DECLARE reftype {
+  | LPAREN KW_ELEM opt_id KW_DECLARE elem_reftype {
         memset(&WAT_STATE(cur_elem), 0, sizeof(WAT_STATE(cur_elem)));
         WAT_STATE(cur_elem).is_declarative = 1;
-        WAT_STATE(cur_elem).reftype = heap_reftype_to_value_type($5);
+        WAT_STATE(cur_elem).reftype = $5;
     } elem_item_list RPAREN {
         /* declarative element segment */
         wast_module *mod = &cur_group(script)->module;
-        if (mod->elem_count < WAST_MAX_ELEM_SEGS) {
+        if (can_append_elem_segment(script, mod)) {
             mod->elem[mod->elem_count++] = WAT_STATE(cur_elem);
             if (WAT_STATE(elem_name_count) < WAST_MAX_ELEM_SEGS) snprintf(WAT_STATE(elem_names)[WAT_STATE(elem_name_count)++],WAST_MAX_EXPORT_NAME,"%s",$3);
         }
     }
-  | LPAREN KW_ELEM opt_id reftype {
+  | LPAREN KW_ELEM opt_id elem_reftype {
         memset(&WAT_STATE(cur_elem), 0, sizeof(WAT_STATE(cur_elem)));
         WAT_STATE(cur_elem).is_passive = 1;
-        WAT_STATE(cur_elem).reftype = heap_reftype_to_value_type($4);
+        WAT_STATE(cur_elem).reftype = $4;
     } elem_item_list RPAREN {
         /* passive element segment */
         wast_module *mod = &cur_group(script)->module;
-        if (mod->elem_count < WAST_MAX_ELEM_SEGS) {
+        if (can_append_elem_segment(script, mod)) {
             mod->elem[mod->elem_count++] = WAT_STATE(cur_elem);
             if (WAT_STATE(elem_name_count) < WAST_MAX_ELEM_SEGS) snprintf(WAT_STATE(elem_names)[WAT_STATE(elem_name_count)++],WAST_MAX_EXPORT_NAME,"%s",$3);
         }
     }
   | LPAREN KW_ELEM opt_id RPAREN {
         wast_module *mod=&cur_group(script)->module;
-        if(mod->elem_count<WAST_MAX_ELEM_SEGS){memset(&WAT_STATE(cur_elem),0,sizeof(WAT_STATE(cur_elem)));WAT_STATE(cur_elem).is_passive=1;WAT_STATE(cur_elem).reftype=WASM_VALTYPE_FUNCREF;mod->elem[mod->elem_count++]=WAT_STATE(cur_elem);
+        if (can_append_elem_segment(script, mod)){memset(&WAT_STATE(cur_elem),0,sizeof(WAT_STATE(cur_elem)));WAT_STATE(cur_elem).is_passive=1;WAT_STATE(cur_elem).reftype=WASM_VALTYPE_FUNCREF;mod->elem[mod->elem_count++]=WAT_STATE(cur_elem);
             if(WAT_STATE(elem_name_count)<WAST_MAX_ELEM_SEGS)snprintf(WAT_STATE(elem_names)[WAT_STATE(elem_name_count)++],WAST_MAX_EXPORT_NAME,"%s",$3);}
     }
     ;
@@ -5003,10 +5148,10 @@ elem_offset:
     ;
 
 elem_func_list:
-    /* empty */
-  | KW_FUNC
-  | KW_FUNC elem_funcs
-  | elem_funcs
+    /* empty */ { WAT_STATE(cur_elem).reftype = WASM_VALTYPE_FUNCREF_NONNULL; }
+  | KW_FUNC { WAT_STATE(cur_elem).reftype = WASM_VALTYPE_FUNCREF_NONNULL; }
+  | KW_FUNC elem_funcs { WAT_STATE(cur_elem).reftype = WASM_VALTYPE_FUNCREF_NONNULL; }
+  | elem_funcs { WAT_STATE(cur_elem).reftype = WASM_VALTYPE_FUNCREF_NONNULL; }
   /* expression-form entries: (ref.func $f) (ref.null func) ... directly after (elem */
   | elem_expr_items
   /* (elem (table $t) offset funcref (ref.func ...)) — reftype + item list */
@@ -5101,6 +5246,11 @@ elem_expr_item:
             WAT_STATE(cur_elem).ref_count++;
         }
     }
+    ;
+
+elem_funcs_opt:
+    /* empty */
+  | elem_funcs
     ;
 
 elem_funcs:
@@ -5208,14 +5358,16 @@ export_item:
         wast_module *mod = &cur_group(script)->module;
         if (mod->export_count < WAST_MAX_EXPORTS) {
             wast_export *e = &mod->exports[mod->export_count++];
-            snprintf(e->name, WAST_MAX_EXPORT_NAME, "%s", $3);
+            copy_wat_name(script, context, e->name, $3);
             e->kind = WAT_STATE(export_kind);
             e->index = WAT_STATE(export_index);
             if (e->kind == 4 && e->index < (uint32_t)mod->tag_count) {
                 wast_tag *tag = &mod->tags[e->index];
-                snprintf(tag->export_name, WAST_MAX_EXPORT_NAME, "%s", $3);
+                copy_wat_name(script, context, tag->export_name, $3);
                 tag->has_export_name = 1;
             }
+        } else {
+            report_validation_error(script, "too many exports");
         }
     }
     ;
@@ -5265,18 +5417,21 @@ tag_attr_list:
   | tag_attr_list LPAREN KW_EXPORT STRING RPAREN {
         ensure_group(script);
         wast_module *mod = &cur_group(script)->module;
+        copy_wat_name(script, context, WAT_STATE(cur_tag).export_name, $4);
         /* Check for duplicate export name (tag exports aren't encoded but
          * must still participate in the uniqueness check). */
         for (int i = 0; i < mod->export_count; i++)
-            if (strcmp(mod->exports[i].name, $4) == 0)
+            if (strcmp(mod->exports[i].name,
+                       WAT_STATE(cur_tag).export_name) == 0)
                 report_validation_error(script, "duplicate export name");
         if (mod->export_count < WAST_MAX_EXPORTS) {
             wast_export *e = &mod->exports[mod->export_count++];
-            snprintf(e->name, WAST_MAX_EXPORT_NAME, "%s", $4);
+            copy_wat_name(script, context, e->name, $4);
             e->kind = 4; /* tag */
             e->index = (uint32_t)mod->tag_count;
+        } else {
+            report_validation_error(script, "too many exports");
         }
-        snprintf(WAT_STATE(cur_tag).export_name, WAST_MAX_EXPORT_NAME, "%s", $4);
         WAT_STATE(cur_tag).has_export_name = 1;
     }
   | tag_attr_list LPAREN KW_TYPE any_idx RPAREN {
@@ -5287,8 +5442,8 @@ tag_attr_list:
     } tag_valtype_list RPAREN
   | tag_attr_list LPAREN KW_RESULT tag_result_list RPAREN
   | tag_attr_list LPAREN KW_IMPORT STRING STRING RPAREN {
-        snprintf(WAT_STATE(cur_tag).import_module, WAST_MAX_EXPORT_NAME, "%s", $4);
-        snprintf(WAT_STATE(cur_tag).import_name, WAST_MAX_EXPORT_NAME, "%s", $5);
+        copy_wat_name(script, context, WAT_STATE(cur_tag).import_module, $4);
+        copy_wat_name(script, context, WAT_STATE(cur_tag).import_name, $5);
         WAT_STATE(cur_tag).is_import = 1;
     }
     ;
@@ -5513,26 +5668,24 @@ assert_cmd:
 
 action:
     LPAREN KW_INVOKE STRING {
-        strncpy(WAT_STATE(invoke_name), $3, WAST_MAX_EXPORT_NAME - 1);
-        WAT_STATE(invoke_name)[WAST_MAX_EXPORT_NAME - 1] = '\0';
+        copy_wat_name(script, context, WAT_STATE(invoke_name), $3);
         WAT_STATE(in_assert) = 1;
     }
     const_list RPAREN
   | LPAREN KW_INVOKE ID STRING {
         snprintf(WAT_STATE(cur_assert).module_id, WAST_MAX_EXPORT_NAME, "%s", $3);
-        snprintf(WAT_STATE(invoke_name), WAST_MAX_EXPORT_NAME, "%s", $4);
+        copy_wat_name(script, context, WAT_STATE(invoke_name), $4);
         WAT_STATE(in_assert) = 1;
     }
     const_list RPAREN
   | LPAREN KW_GET STRING RPAREN {
         WAT_STATE(cur_assert).action_kind = WAST_ACTION_GET;
-        strncpy(WAT_STATE(invoke_name), $3, WAST_MAX_EXPORT_NAME - 1);
-        WAT_STATE(invoke_name)[WAST_MAX_EXPORT_NAME - 1] = '\0';
+        copy_wat_name(script, context, WAT_STATE(invoke_name), $3);
     }
   | LPAREN KW_GET ID STRING RPAREN {
         WAT_STATE(cur_assert).action_kind = WAST_ACTION_GET;
         snprintf(WAT_STATE(cur_assert).module_id, WAST_MAX_EXPORT_NAME, "%s", $3);
-        snprintf(WAT_STATE(invoke_name), WAST_MAX_EXPORT_NAME, "%s", $4);
+        copy_wat_name(script, context, WAT_STATE(invoke_name), $4);
     }
   | LPAREN KW_MODULE {
         begin_module(script);

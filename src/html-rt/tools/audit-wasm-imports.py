@@ -9,7 +9,8 @@ from pathlib import Path
 
 
 IMPORT_RE = re.compile(r'^\s*\(import "([^"]+)" "([^"]+)" ', re.MULTILINE)
-ASYNCIFY_RE = re.compile(r'(?i)asyncify|unwind|rewind')
+# Match transform/runtime hooks, not ordinary libc rewind() or diagnostic text.
+ASYNCIFY_RE = re.compile(r'(?i)asyncify(?:_[a-z0-9_]+)?')
 
 
 def main() -> int:

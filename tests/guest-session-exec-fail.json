@@ -1,0 +1,29 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "events": [
+    {
+      "after": "bash-5.2# ",
+      "text": "waste-definitely-missing-command; printf '__MISSING_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "printf '(module garbage)' > /tmp/bad.wat; /bin/wat /tmp/bad.wat; printf '__BAD_WAT_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/true; printf '__RECOVER_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "exit 3\n"
+    }
+  ],
+  "contains": [
+    "__MISSING_127__\r\n",
+    "__BAD_WAT_126__\r\n",
+    "__RECOVER_0__\r\n"
+  ],
+  "assertions": 7,
+  "exitStatus": 3,
+  "processes": 3
+}

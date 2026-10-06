@@ -1,0 +1,34 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "files": [
+    {"path": "/tmp/handler.wast", "source": "tests/guest-session-handler.wast", "mode": 493},
+    {"path": "/tmp/handler-read.wast", "source": "tests/guest-session-handler-read.wast", "mode": 493},
+    {"path": "/tmp/handler-mismatch.wast", "source": "tests/guest-session-handler-mismatch.wast", "mode": 493},
+    {"path": "/tmp/handler.wat", "source": "tests/guest-session-handler.wat", "mode": 493},
+    {"path": "/tmp/handler-script", "source": "tests/guest-session-handler-shebang.wat", "mode": 493}
+  ],
+  "events": [
+    {"after": "bash-5.2# ", "text": "/bin/wat /tmp/handler.wat; printf '__WAT_%s__\\n' \"$?\"\n"},
+    {"after": "bash-5.2# ", "text": "/tmp/handler.wat; printf '__DIRECT_%s__\\n' \"$?\"\n"},
+    {"after": "bash-5.2# ", "text": "/tmp/handler-script; printf '__SHEBANG_%s__\\n' \"$?\"\n"},
+    {"after": "bash-5.2# ", "text": "/bin/wast /tmp/handler.wast; printf '__WAST_%s__\\n' \"$?\"\n"},
+    {"after": "bash-5.2# ", "text": "/tmp/handler.wast; printf '__REPEAT_%s__\\n' \"$?\"\n"},
+    {"after": "bash-5.2# ", "text": "/tmp/handler-read.wast; printf '__READ_%s__\\n' \"$?\"\n"},
+    {"after": "HANDLER_FIRST\n", "text": "A", "pid": 7},
+    {"after": "HANDLER_SECOND\n", "text": "B", "pid": 7},
+    {"after": "HANDLER_TRAP\n", "text": "C", "pid": 7},
+    {"after": "HANDLER_SELECT\n", "text": "Z", "pid": 7, "waitKind": 2},
+    {"after": "bash-5.2# ", "text": "/bin/wast /tmp/handler-mismatch.wast; printf '__MISMATCH_%s__\\n' \"$?\"\n"},
+    {"after": "HANDLER_MISMATCH\n", "text": "A", "pid": 8},
+    {"after": "bash-5.2# ", "text": "/bin/true; printf '__RECOVER_%s__\\n' \"$?\"\n"},
+    {"after": "bash-5.2# ", "text": "exit 3\n"}
+  ],
+  "contains": ["WAT_OK\r\n", "WAT_SHEBANG_OK\r\n", "__WAT_0__\r\n", "__DIRECT_0__\r\n", "__SHEBANG_0__\r\n", "__WAST_0__\r\n", "__REPEAT_0__\r\n", "__READ_0__\r\n", "__MISMATCH_1__\r\n", "__RECOVER_0__\r\n"],
+  "assertions": 23,
+  "expectedPassed": 22,
+  "expectedHandlerError": "result mismatch for byte (actual 65, expected 66)",
+  "expectedError": "result mismatch for byte (actual 65, expected 66)",
+  "exitStatus": 3,
+  "processes": 8,
+  "execs": 8
+}

@@ -2,6 +2,14 @@
 
 Status: complete (2026-09-24; ready to archive/remove after check-in)
 
+Scope update (2026-10-04): OCaml is used only for Wasm/WAT/WAST language
+verification. Kernel/libc comparisons and OCaml harness extensions in the
+dated implementation reports below are historical evidence, not ongoing
+requirements. No additional OCaml kernel development is planned; its existing
+kernel will be removed in [deferred cleanup](active-ocaml-language-oracle-plan.md).
+C memory/process/POSIX contracts use native/browser C parity and private
+sanitizer/ABI fixtures.
+
 Dependencies: C engine process capsules, imported-memory aliasing, VFS file
 objects, and explicit evaluator continuation
 
@@ -305,7 +313,7 @@ Closure update (2026-09-24, native official acceptance pass):
 Closure update (2026-09-24, browser official comparison):
 
 - Rebuilt the self-contained browser engine and ran
-  `node tests/c-engine-browser-runtime.cjs build/html-rt/test.html`.
+  `node tests/c-engine-browser-runtime.cjs`.
   Every `core/*` official WAST fixture passed, including bulk memory,
   memory64, multi-memory, linking, SIMD memory, and the imported-memory
   cases. This closes the browser portion of the VM-A/B/C official
@@ -486,8 +494,9 @@ Implementation update (2026-09-23, native conformance slice):
 
 Implementation update (2026-09-23, headless browser conformance slice):
 
-- Built the self-contained browser dashboard with `./start.sh --html-test` and
-  ran `node tests/c-engine-browser-runtime.cjs build/html-rt/test.html`.
+- Built the browser C engine and ran the focused worker corpus with
+  `node tests/c-engine-browser-runtime.cjs` (the standalone dashboard was
+  subsequently retired in Stage 7).
 - The browser run passed the relevant memory behavior groups, including
   `core/memory.wast`, `memory64/*` memory tests, `memory_grow.wast`,
   `memory_size.wast`, `memory_trap.wast`, all multi-memory memory groups,
@@ -2444,7 +2453,7 @@ coverage to the end:
 | --- | --- | --- | --- |
 | Scalar, SIMD, bulk, grow, memory64 | ASan/UBSan | C dashboard | Official OCaml interpreter |
 | Imported-memory aliasing | Focused module fixtures | C dashboard | Official linking tests |
-| Fork and copy-on-write | Kernel fixture | Bash/process fixture | OCaml POSIX behavior where available |
+| Fork and copy-on-write | C kernel fixture | C Bash/process fixture | POSIX contract fixtures and private ownership invariants |
 | Anonymous and file mappings | Kernel/libc fixture | Offline browser fixture | POSIX contract fixtures |
 | Checkpoint topology | Store fixture | Fork/exec fixture | Pre/post state invariants |
 | Coreutils process image | CLI/import audit | Bash page | Pinned native GNU behavior |

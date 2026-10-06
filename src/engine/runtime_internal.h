@@ -250,6 +250,7 @@ struct waste_exec_engine {
     uint32_t local_frame_capacities[EXEC_MAX_CALL_DEPTH];
     uint32_t active_call_depth;
     uint32_t call_func_trace[EXEC_MAX_CALL_DEPTH];
+    exec_execution_control *execution_control;
     uint64_t frame_generations[EXEC_MAX_CALL_DEPTH];
     exec_jump_snapshot *jump_snapshots;
     uint32_t jump_snapshot_count;

@@ -96,7 +96,7 @@
   (import "env" "sigaddset" (func (;53;) (type 0)))
   (import "env" "sigprocmask" (func (;54;) (type 6)))
   (import "env" "exit" (func (;55;) (type 3)))
-  (import "env" "fcntl" (func (;56;) (type 6)))
+  (import "waste_kernel" "fcntl_varargs_v1" (func (;56;) (type 6)))
   (import "env" "fpurge" (func (;57;) (type 4)))
   (import "env" "ferror" (func (;58;) (type 4)))
   (import "env" "clearerr" (func (;59;) (type 3)))

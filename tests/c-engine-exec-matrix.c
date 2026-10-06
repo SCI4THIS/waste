@@ -193,10 +193,25 @@ int main(int argc, char **argv) {
           "startup block materialized");
     if (image && image->engine && image->engine->memory) {
         uint8_t startup_byte = 0;
+        uint8_t cwd_pointer_bytes[4] = {0};
+        uint8_t cwd_bytes[2] = {0};
+        uint32_t cwd_pointer;
         CHECK(exec_memory_read(image->engine->memory, 100, &startup_byte, 1,
                                &error) == EXEC_OK &&
                   startup_byte == (uint8_t)image->startup_ptr,
               "startup hook received block pointer");
+        CHECK(exec_memory_read(image->engine->memory, image->startup_ptr + 20u,
+                               cwd_pointer_bytes, sizeof(cwd_pointer_bytes),
+                               &error) == EXEC_OK,
+              "startup cwd pointer is readable");
+        cwd_pointer = (uint32_t)cwd_pointer_bytes[0] |
+            ((uint32_t)cwd_pointer_bytes[1] << 8) |
+            ((uint32_t)cwd_pointer_bytes[2] << 16) |
+            ((uint32_t)cwd_pointer_bytes[3] << 24);
+        CHECK(exec_memory_read(image->engine->memory, cwd_pointer, cwd_bytes,
+                               sizeof(cwd_bytes), &error) == EXEC_OK &&
+                  memcmp(cwd_bytes, "/", sizeof(cwd_bytes)) == 0,
+              "startup cwd pointer follows argv and envp strings");
     }
     if (image) native_process_image_release(image);
 
@@ -473,8 +488,12 @@ int main(int argc, char **argv) {
               "process graph binding preserves parent and child tables");
         parent_capsule->engine = NULL;
         if (child_capsule) child_capsule->engine = NULL;
-        if (child_engine) exec_free(child_engine);
         store.active_pid = 1;
+        CHECK(native_store_set_active_process(&store, graph_child) == 0 &&
+              native_store_exit_process(&store, 0) == 0 &&
+              native_store_set_active_process(&store, 1) == 0 &&
+              native_store_wait_process(&store, graph_child, 0, &status) == graph_child,
+              "reaping releases the owned fork root without a harness-side free");
     }
 
     CHECK(native_store_fork_process(&store, &child) == 0,

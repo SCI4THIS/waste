@@ -10,12 +10,12 @@ from pathlib import Path
 
 
 REQUIRED_FILES = {
-    "true.wasm", "false.wasm", "pwd.wasm", "echo.wasm", "printf.wasm",
-    "basename.wasm", "dirname.wasm", "cat.wasm", "wc.wasm", "ls.wasm",
-    "date.wasm",
+    "usr/bin/true", "usr/bin/false", "usr/bin/pwd", "usr/bin/echo", "usr/bin/printf",
+    "usr/bin/basename", "usr/bin/dirname", "usr/bin/cat", "usr/bin/wc", "usr/bin/ls",
+    "usr/bin/date",
     "usr/share/waste/coreutils-provenance.json",
     "usr/share/waste/coreutils-source-package.json",
-    "usr/share/waste/waste-interpreters.json",
+    "vfs-manifest.json",
     "usr/share/licenses/coreutils/COPYING",
 }
 REQUIRED_INTERPRETERS = {"/bin/wat", "/bin/wast"}
@@ -27,7 +27,10 @@ def audit_members(members: list[tarfile.TarInfo]) -> None:
     if missing:
         raise SystemExit("package missing: " + ", ".join(missing))
     ordered = [member.name for member in members]
-    if ordered != sorted(ordered):
+    # GNU tar emits a deterministic depth-first path order. Compare path
+    # components so a directory subtree sorts before a sibling whose name
+    # merely shares its prefix (for example waste/app and waste-wast.wasm).
+    if ordered != sorted(ordered, key=lambda name: tuple(name.rstrip("/").split("/"))):
         raise SystemExit("package entries are not sorted")
     for member in members:
         if member.uid != 0 or member.gid != 0 or member.uname or member.gname:
@@ -42,8 +45,8 @@ def audit_archive(path: Path) -> None:
         audit_members(members)
         by_name = {member.name.removeprefix("./"): member for member in members}
         handlers = json.loads(archive.extractfile(
-            by_name["usr/share/waste/waste-interpreters.json"]).read())
-        if set(handlers.get("interpreters", [])) != REQUIRED_INTERPRETERS:
+            by_name["vfs-manifest.json"]).read())
+        if {e["path"] for e in handlers["entries"] if e["role"] == "interpreter"} != REQUIRED_INTERPRETERS:
             raise SystemExit("interpreter manifest does not list /bin/wat and /bin/wast")
         provenance = json.loads(archive.extractfile(
             by_name["usr/share/waste/coreutils-provenance.json"]).read())

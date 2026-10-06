@@ -1,0 +1,7 @@
+{
+  "fixture": "tests/guest-test-capability.wast",
+  "testSuiteCapability": true,
+  "events": [],
+  "assertions": 6,
+  "exitStatus": 0
+}

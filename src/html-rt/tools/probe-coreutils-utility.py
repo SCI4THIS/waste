@@ -32,6 +32,9 @@ WASTE_RUNTIME_IMPORTS = (
     "waste_kernel:pselect_v1", "waste_kernel:select_v1",
     "waste_kernel:open_v1", "waste_kernel:pipe_v1",
     "waste_kernel:realtime_v1",
+    # Shared guest-libc now retains its already implemented dl* wrappers.
+    # These versioned imports are bound by the existing browser kernel loader.
+    "waste_kernel:dlopen_v1", "waste_kernel:dlsym_v1", "waste_kernel:dlclose_v1",
     "waste_kernel:tcgetattr_v1", "waste_kernel:tcsetattr_v1",
 )
 RUNTIME_BUILDER = "src/html-rt/tools/build-coreutils-runtime.py"
@@ -123,7 +126,7 @@ def main() -> int:
         if preflight_result.returncode == 0:
             crt_object.parent.mkdir(parents=True, exist_ok=True)
             crt_result = subprocess.run(
-                [str(coreutils_build / "sysroot/bin/waste-wasm-clang"), "-c",
+                [str(coreutils_build / "sysroot/bin/waste-coreutils-clang"), "-c",
                  "-DWASTE_MAIN_TWO_ARGS", str(crt_source), "-o", str(crt_object)],
                 stdout=log, stderr=subprocess.STDOUT, check=False,
             )
@@ -180,7 +183,7 @@ def main() -> int:
                     # Relink after stripping conflicting objects.
                     # Do NOT link a separate allocator — waste-libc
                     # provides malloc/free/calloc/realloc.
-                    cc = str(coreutils_build / "sysroot/bin/waste-wasm-clang")
+                    cc = str(coreutils_build / "sysroot/bin/waste-coreutils-clang")
                     utility_objects = [build / "src" / f"{args.utility}.o"]
                     if args.utility in ("true", "false"):
                         # Coreutils builds true and false from their shared

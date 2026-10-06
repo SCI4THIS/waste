@@ -1,7 +1,7 @@
 /* dirent.c — Engine-owned directory traversal. */
 
 #include "include/helper.h"
-#include "include/dirent.h"
+#include <dirent.h>
 
 extern i32 open(const char *path, i32 flags, ...);
 extern i32 close(i32 descriptor);

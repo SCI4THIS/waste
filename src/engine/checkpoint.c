@@ -511,6 +511,7 @@ exec_status native_store_checkpoint_capture(native_store *store,
     }
     if (!add_memory(impl, &store->spectest_memory) ||
         !add_table(impl, &store->spectest_table) ||
+        !add_table(impl, &store->spectest_table64) ||
         !add_global(impl, &store->spectest_i32) ||
         !add_global(impl, &store->spectest_i64) ||
         !add_global(impl, &store->spectest_f32) ||

@@ -1,0 +1,13 @@
+{
+  "fixture": "tests/guest-session-transfer.wast",
+  "events": [],
+  "output": "",
+  "assertions": 5,
+  "exitStatus": 0,
+  "hostIo": [
+    {"kind": "upload", "bytes": [65, 66, 67, 68, 69, 70, 71, 72]},
+    {"kind": "upload", "cancel": true},
+    {"kind": "download", "expectedBytes": [65, 66, 67, 68, 69, 70, 71, 72]},
+    {"kind": "download", "cancel": true}
+  ]
+}

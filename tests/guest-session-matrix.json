@@ -1,0 +1,88 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "events": [
+    {
+      "after": "bash-5.2# ",
+      "text": "printf 'CAT_PAYLOAD\\n' > /tmp/session-cat.txt; printf 'one two\\nthree\\n' > /tmp/session-wc.txt\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/true; printf '__MATRIX_TRUE_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/false; printf '__MATRIX_FALSE_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/pwd; printf '__MATRIX_PWD_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/echo MATRIX_ECHO; printf '__MATRIX_ECHO_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/printf 'MATRIX_PRINTF\\n'; printf '__MATRIX_PRINTF_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/basename /alpha/MATRIX_BASE; printf '__MATRIX_BASENAME_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/dirname /alpha/beta/file; printf '__MATRIX_DIRNAME_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/cat /tmp/session-cat.txt; printf '__MATRIX_CAT_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/wc -l -w -c /tmp/session-wc.txt; printf '__MATRIX_WC_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/ls -1 /bin; printf '__MATRIX_LS_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/date -u +%Y; printf '__MATRIX_DATE_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "echo __AFTER"
+    },
+    {
+      "after": "__AFTER",
+      "text": "_MATRIX__\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "exit 9\n"
+    }
+  ],
+  "contains": [
+    "/root\r\n",
+    "MATRIX_ECHO\r\n",
+    "MATRIX_PRINTF\r\n",
+    "MATRIX_BASE\r\n",
+    "/alpha/beta\r\n",
+    "CAT_PAYLOAD\r\n",
+    "__MATRIX_TRUE_0__\r\n",
+    "__MATRIX_PWD_0__\r\n",
+    "__MATRIX_ECHO_0__\r\n",
+    "__MATRIX_PRINTF_0__\r\n",
+    "__MATRIX_BASENAME_0__\r\n",
+    "__MATRIX_DIRNAME_0__\r\n",
+    "__MATRIX_CAT_0__\r\n",
+    "__MATRIX_WC_0__\r\n",
+    "__MATRIX_LS_0__\r\n",
+    "__MATRIX_DATE_0__\r\n",
+    "__MATRIX_FALSE_1__\r\n",
+    "\u001b[?2004l\r__AFTER_MATRIX__\r\n"
+  ],
+  "assertions": 7,
+  "exitStatus": 9,
+  "processes": 11
+}

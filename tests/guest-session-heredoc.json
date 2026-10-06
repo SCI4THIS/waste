@@ -1,0 +1,39 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "events": [
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/cat > hello.txt <<EOF\nHello world!\nEOF\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/cat hello.txt; printf '__HEREDOC_STATUS_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "read value <<EOF\nHello builtin heredoc!\nEOF\nprintf '__BUILTIN_HEREDOC_%s__\\n' \"$value\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/cat <<EOF\nHello stdout heredoc!\nEOF\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "echo __AFTER_HEREDOC__\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "exit\n"
+    }
+  ],
+  "contains": [
+    "Hello world!\r\n",
+    "__HEREDOC_STATUS_0__\r\n",
+    "__BUILTIN_HEREDOC_Hello builtin heredoc!__\r\n",
+    "Hello stdout heredoc!\r\n",
+    "\u001b[?2004l\r__AFTER_HEREDOC__\r\n"
+  ],
+  "assertions": 7,
+  "exitStatus": 0,
+  "processes": 3
+}

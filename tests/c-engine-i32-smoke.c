@@ -26,35 +26,6 @@ static int run(waste_exec_engine *engine, const char *name, int32_t a, int32_t b
     return 1;
 }
 
-static int run_pair(waste_exec_engine *engine) {
-    wasm_value args[2] = {{.type=WASM_VALTYPE_I32, .i32=11}, {.type=WASM_VALTYPE_I32, .i32=22}};
-    wasm_value results[WAST_MAX_RESULTS]; uint32_t function; int count = 0; exec_error error = {0};
-    exec_status status = exec_find_export(engine, "pair", &function, &error);
-    if (status == EXEC_OK) status = exec_invoke(engine, function, args, 2, results, &count, &error);
-    if (status != EXEC_OK || count != 2 || results[0].i32 != 11 || results[1].i32 != 22) {
-        fprintf(stderr, "pair failed: status=%d count=%d error=%s\n", status, count, error.message);
-        return 0;
-    }
-    return 1;
-}
-
-static int run_scalar_globals(waste_exec_engine *engine) {
-    const char *names[] = {"global-i64", "global-f32", "global-f64"};
-    wasm_valtype types[] = {WASM_VALTYPE_I64, WASM_VALTYPE_F32, WASM_VALTYPE_F64};
-    wasm_value args[2] = {{.type=WASM_VALTYPE_I32}, {.type=WASM_VALTYPE_I32}};
-    for (int i = 0; i < 3; i++) {
-        uint32_t function; wasm_value result[1]; int count=0; exec_error error={0};
-        exec_status status=exec_find_export(engine,names[i],&function,&error);
-        if (status==EXEC_OK) status=exec_invoke(engine,function,args,2,result,&count,&error);
-        int match = result[0].type == types[i];
-        if (i==0) match = match && result[0].i64 == INT64_C(0x1122334455667788);
-        if (i==1) match = match && result[0].f32 == -3.5f;
-        if (i==2) match = match && result[0].f64 == 9.25;
-        if (status!=EXEC_OK || count!=1 || !match) { fprintf(stderr,"%s failed: %s\n",names[i],error.message); return 0; }
-    }
-    return 1;
-}
-
 static exec_status host_add(void *data, const wasm_value *args, int count,
                             wasm_value *results, int *result_count, exec_error *error,
                             const waste_exec_engine *caller) {
@@ -412,40 +383,9 @@ int main(int argc, char **argv) {
     int isolated = test_decoded_module_instances(bytes, (size_t)length);
     int public_api = test_public_api(bytes, (size_t)length);
     int memory_access = test_memory_access_contract();
-    waste_exec_engine *engine = NULL; exec_error error = {0};
-    exec_status status = exec_load(bytes, (size_t)length, &engine, &error); free(bytes);
-    if (status != EXEC_OK) { fprintf(stderr, "load: %s\n", error.message); return 1; }
-    int ok = run(engine, "add", INT32_MAX, 1, INT32_MIN, EXEC_OK) &&
-             run(engine, "rotl", 1, 31, INT32_MIN, EXEC_OK) &&
-             run(engine, "locals", 11, 22, 22, EXEC_OK) &&
-             run(engine, "choose", 7, 9, 7, EXEC_OK) &&
-             run(engine, "call", 20, 22, 42, EXEC_OK) &&
-             run(engine, "early", 7, 9, 7, EXEC_OK) &&
-             run(engine, "ifelse", 1, 9, 1, EXEC_OK) &&
-             run(engine, "ifelse", 0, 9, 9, EXEC_OK) &&
-             run(engine, "branch", 7, 9, 7, EXEC_OK) &&
-             run(engine, "branch-if", 7, 1, 7, EXEC_OK) &&
-             run(engine, "branch-if", 7, 0, 0, EXEC_OK) &&
-             run(engine, "countdown", 5, 0, 0, EXEC_OK) &&
-             run(engine, "branch-table", 33, 0, 33, EXEC_OK) &&
-             run(engine, "branch-table", 44, 9, 44, EXEC_OK) &&
-             run(engine, "multi-call", 44, 9, 35, EXEC_OK) &&
-             run(engine, "multi-block", 44, 9, 35, EXEC_OK) &&
-             run_pair(engine) &&
-             run_scalar_globals(engine) &&
-             run(engine, "global-null", 0, 0, 1, EXEC_OK) &&
-             run(engine, "load-data", 8, 0, 0x12345678, EXEC_OK) &&
-             run(engine, "load8-s", 12, 0, -128, EXEC_OK) &&
-             run(engine, "store-load", 16, 0x76543210, 0x76543210, EXEC_OK) &&
-             run(engine, "global", 91, 0, 91, EXEC_OK) &&
-             run(engine, "size", 0, 0, 1, EXEC_OK) &&
-             run(engine, "grow", 1, 0, 1, EXEC_OK) &&
-             run(engine, "size", 0, 0, 2, EXEC_OK) &&
-             run(engine, "grow", 1, 0, -1, EXEC_OK) &&
-             run(engine, "load-data", 131071, 0, 0, EXEC_ERROR_TRAP) &&
-             run(engine, "div_s", INT32_MIN, -1, 0, EXEC_ERROR_TRAP) &&
-             run(engine, "div_u", 1, 0, 0, EXEC_ERROR_TRAP);
-    exec_free(engine);
-    return isolated && public_api && memory_access && ok && test_imports(argv[2]) &&
-           test_extern_aliases(argv[3],argv[4]) ? 0 : 1;
+    free(bytes);
+    /* Language-level smoke assertions live under engine-regressions.
+     * Keep direct C API/ownership checks and host callback coverage here. */
+    return isolated && public_api && memory_access && test_imports(argv[2]) &&
+           test_extern_aliases(argv[3], argv[4]) ? 0 : 1;
 }

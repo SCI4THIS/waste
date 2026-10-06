@@ -1,0 +1,10 @@
+{
+  "fixture": "tests/guest-session-signal-pgid-backgrounded.wast",
+  "events": [
+    {"after": "B\n", "waitKind": 2, "pid": 2, "signal": 10, "signalPgid": 99}
+  ],
+  "output": "B\n",
+  "assertions": 3,
+  "processes": 1,
+  "exitStatus": 0
+}

@@ -1,0 +1,11 @@
+{
+  "fixture": "tests/guest-session-io.wast",
+  "events": [
+    {"after": "FIRST\n", "bytes": [0]},
+    {"after": "SECOND\n", "bytes": [255]},
+    {"after": "EOF\n", "eof": true}
+  ],
+  "output": "FIRST\nSECOND\nEOF\n",
+  "assertions": 7,
+  "exitStatus": 7
+}

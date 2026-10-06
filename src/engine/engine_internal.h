@@ -28,7 +28,33 @@ typedef enum {
     /* Host import requested a yield; interpreter frames are saved on the engine
      * for resume.  POSIX read and descriptor waits use this path. */
     EXEC_YIELD,
+    /* Runtime execution policy stopped the session; never a guest trap. */
+    EXEC_ERROR_INTERRUPTED,
 } exec_status;
+
+typedef enum {
+    EXEC_STOP_NONE = 0,
+    EXEC_STOP_TIMEOUT,
+    EXEC_STOP_CANCELLED
+} exec_stop_reason;
+
+/* Borrowed per-session policy. Clones/providers share its instruction counter,
+ * not a platform clock or signal handler. poll runs only at bounded safepoints. */
+typedef struct {
+    exec_stop_reason (*poll)(void *);
+    void *context;
+    uint32_t remaining;
+    exec_stop_reason stopped;
+    /* Cooperative pump: when non-zero, the dispatch-loop safepoint checks
+     * the provided clock; if `pump_quantum_ns` has elapsed since the last
+     * pump point, the loop saves a yield frame and returns EXEC_YIELD with
+     * reason EXEC_YIELD_PUMP so the embedder can drain its event loop. */
+    uint64_t pump_quantum_ns;
+    uint64_t last_pump_ns;
+    uint64_t (*pump_clock_now)(void *);
+    void *pump_clock_context;
+} exec_execution_control;
+
 
 typedef enum {
     EXEC_MEMORY_FAULT_NONE = 0,
@@ -53,6 +79,11 @@ typedef enum {
      * download dialog).  The worker inspects the pending request, messages
      * the main thread, and resumes once the user completes or cancels. */
     EXEC_YIELD_HOST_IO,
+    /* Cooperative pump yield emitted at the dispatch-loop safepoint when the
+     * wall-clock pump quantum elapses.  Lets the embedder drain its event
+     * loop (process cancel messages, user input) and resume via the normal
+     * yield_frames path.  Never set by guest syscalls. */
+    EXEC_YIELD_PUMP,
 } exec_yield_reason;
 
 typedef struct {
@@ -77,6 +108,9 @@ typedef struct {
     uint8_t memory_fault_access;
     exec_yield_reason yield_reason;
 } exec_error;
+
+exec_status exec_execution_check(exec_execution_control *control,
+                                  exec_error *error);
 
 typedef exec_status (*exec_host_func)(void *host_data,
                                       const wasm_value *args, int arg_count,
@@ -204,6 +238,7 @@ typedef struct {
     size_t table_count;
     const exec_tag_import *tags;
     size_t tag_count;
+    exec_execution_control *execution_control;
 } exec_imports;
 
 /*

@@ -100,7 +100,7 @@ def main() -> int:
         "build": rel(output, root),
         "sysroot": rel(sysroot, root),
         "target": "wasm32-unknown-none",
-        "compiler": rel(sysroot / "bin" / "waste-wasm-clang", root),
+        "compiler": rel(sysroot / "bin" / "waste-coreutils-clang", root),
         "config_site": rel(site, root),
         "forced_answers": FORCED_ANSWERS,
         "bootstrap_prerequisites": prerequisites,
@@ -126,8 +126,8 @@ def main() -> int:
         environment = os.environ.copy()
         environment.update({
             "CONFIG_SITE": str(site),
-            "CC": str(sysroot / "bin" / "waste-wasm-clang"),
-            "CPP": str(sysroot / "bin" / "waste-wasm-clang") + " -E",
+            "CC": str(sysroot / "bin" / "waste-coreutils-clang"),
+            "CPP": str(sysroot / "bin" / "waste-coreutils-clang") + " -E",
         })
         command = [
             str(configure), "--host=wasm32-unknown-none",

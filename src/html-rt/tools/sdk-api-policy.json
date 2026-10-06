@@ -1,0 +1,412 @@
+{
+  "format": 1,
+  "unavailable_groups": [
+    {
+      "reason": "Browser overrides lseek with Bash i64 ABI; default off_t is i32",
+      "names": "lseek"
+    },
+    {
+      "reason": "Browser overrides __fpurge with an i32-returning no-op",
+      "names": "__fpurge"
+    },
+    {
+      "reason": "No implementation in the installed ncurses configuration",
+      "names": "_traceattr _traceattr2 _tracechar _tracechtype _tracechtype2 _tracef alloc_pair alloc_pair_sp define_key define_key_sp extended_color_content extended_color_content_sp extended_pair_content extended_pair_content_sp extended_slk_color extended_slk_color_sp find_pair find_pair_sp free_pair free_pair_sp init_extended_color init_extended_color_sp init_extended_pair init_extended_pair_sp is_term_resized is_term_resized_sp reset_color_pairs reset_color_pairs_sp resize_term resize_term_sp resizeterm resizeterm_sp slk_attr_off slk_attr_on tgoto_sp tparm_sp trace use_legacy_coding use_legacy_coding_sp use_window"
+    },
+    {
+      "reason": "Package-owned gnulib API; not provided by WASTE guest libc",
+      "names": "btoc32 c32_apply_type_test c32_get_type_test c32isalnum c32isalpha c32isblank c32iscntrl c32isdigit c32isgraph c32islower c32isprint c32ispunct c32isspace c32isupper c32isxdigit c32tolower c32toupper c32width canonicalize_file_name duplocale endmntent error error_at_line freelocale getmntent getopt getopt_long getopt_long_only hasmntopt imaxabs lutimens mbslen memset_explicit newlocale qsort_r setlocale_null_r setmntent str_endswith utimens wmempcpy"
+    },
+    {
+      "reason": "No WASTE runtime provider; declaration only, not a supported guest capability",
+      "names": "__freadahead __freading __fwriting clock creat difftime exp fchownat fdopendir freopen fscanf futimesat getchar inet_addr inet_aton inet_ntop inet_pton iswalpha iswblank iswcntrl iswdigit iswspace link log nanosleep openat pause posix_spawn posix_spawn_file_actions_addclose posix_spawn_file_actions_adddup2 posix_spawn_file_actions_addopen posix_spawn_file_actions_destroy posix_spawn_file_actions_init posix_spawnattr_destroy posix_spawnattr_getflags posix_spawnattr_getsigdefault posix_spawnattr_getsigmask posix_spawnattr_init posix_spawnattr_setflags posix_spawnattr_setsigdefault posix_spawnattr_setsigmask posix_spawnp pow pthread_cond_broadcast pthread_cond_destroy pthread_cond_init pthread_cond_signal pthread_cond_wait pthread_create pthread_getspecific pthread_join pthread_key_create pthread_key_delete pthread_mutex_timedlock pthread_mutexattr_destroy pthread_mutexattr_init pthread_mutexattr_settype pthread_once pthread_rwlock_destroy pthread_rwlock_init pthread_rwlock_rdlock pthread_rwlock_unlock pthread_rwlock_wrlock pthread_rwlockattr_destroy pthread_rwlockattr_init pthread_rwlockattr_setkind_np pthread_self pthread_setspecific pthread_sigmask putenv readlinkat renameat rewinddir sched_get_priority_max sched_get_priority_min sched_yield strtoul symlink symlinkat tdelete tdestroy tfind tsearch twalk unlinkat utime vfork vfscanf wait wcscat"
+    },
+    {
+      "reason": "Browser abort adapter returns normally; no terminating guest implementation",
+      "names": "abort"
+    }
+  ],
+  "capability_notes": {
+    "default": "Existing partial WASTE application ABI; availability and Wasm signatures do not imply full C/POSIX conformance.",
+    "locale": "Fixed C.UTF-8 facade; setlocale ignores the requested locale/category, uselocale is a compatibility stub. No locale object lifecycle API.",
+    "wide_characters": "Existing limited classification/conversion subset; no claim of complete Unicode classification or stateful encodings.",
+    "stdio": "Guest-owned opaque FILE; formatting/scanning implement the existing subset, not all standard conversions.",
+    "filesystem": "Engine-owned in-memory namespace and descriptors; adapters enforce their supported flags and errno. No host filesystem access.",
+    "threads": "Guest mutex helpers are single-threaded compatibility stubs; pthread creation, conditions, rwlocks and TLS APIs are unavailable.",
+    "network": "Current syscall wrappers are unsupported without a capability provider; no raw socket or DNS capability is added by headers.",
+    "processes": "Existing browser engine fork/exec/wait model; native guest execution parity remains Stage 6. posix_spawn and vfork unavailable.",
+    "dynamic_loading": "Existing engine-owned handles and installed Wasm DSO loader; no native host-library loading.",
+    "mapping": "Existing engine mappings, i64 offsets and bounded permissions; MAP_FIXED unsupported. No claim of host mmap semantics.",
+    "ncurses": "Configured pinned DSO, unsigned four-byte NCURSES_BOOL. Missing optional/debug/SP entry points are compile-time unavailable.",
+    "assert": "Default assert uses compiler trap; no diagnostic text or SIGABRT delivery. NDEBUG omits evaluation. Legacy package abort remains unchanged.",
+    "signals": "Engine-owned 128-bit signal sets, block/unblock/setmask and blocked-pending queries; SIGKILL/SIGSTOP cannot be blocked. Caught handlers are serviced at the existing pselect boundary, whose handler slot uses an engine function index; arbitrary compiled C function-pointer and sigaction flag conformance is not established."
+  },
+  "browser_adapter_review": {
+    "prefer_over_module": [
+      "lseek",
+      "__fpurge"
+    ],
+    "source": "src/engine/guest_posix.c",
+    "sha256": "81bd570d43bda1c6c5cbb51d909124cada6bb8619b8cabd139695e1ec285033c",
+    "additional_sources": {
+      "src/engine/guest_posix.h": "16f60601d2b870a6de8dcea78f4361f13c137b59a69dd4ed7ce8f7673b266fa2",
+      "src/html-rt/posix_stubs.c": "b8e2cb738c3d8d664705a432bcdbdf2330b7773cb1ef24946e9f3aea68db3d2b"
+    },
+    "signatures": {
+      "lseek": {
+        "params": [
+          127,
+          126,
+          127
+        ],
+        "results": [
+          126
+        ]
+      },
+      "__fpurge": {
+        "params": [
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "fork": {
+        "params": [],
+        "results": [
+          127
+        ]
+      },
+      "getpid": {
+        "params": [],
+        "results": [
+          127
+        ]
+      },
+      "getdtablesize": {
+        "params": [],
+        "results": [
+          127
+        ]
+      },
+      "_exit": {
+        "params": [
+          127
+        ],
+        "results": []
+      },
+      "atexit": {
+        "params": [
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "close": {
+        "params": [
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "dup": {
+        "params": [
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "exit": {
+        "params": [
+          127
+        ],
+        "results": []
+      },
+      "raise": {
+        "params": [
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "rmdir": {
+        "params": [
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "shm_unlink": {
+        "params": [
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "sigemptyset": {
+        "params": [
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "sleep": {
+        "params": [
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "unlink": {
+        "params": [
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "chmod": {
+        "params": [
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "dup2": {
+        "params": [
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "fchmod": {
+        "params": [
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "fstat": {
+        "params": [
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "kill": {
+        "params": [
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "mkdir": {
+        "params": [
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "munmap": {
+        "params": [
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "rename": {
+        "params": [
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "sigaddset": {
+        "params": [
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "sigdelset": {
+        "params": [
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "sigismember": {
+        "params": [
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "read": {
+        "params": [
+          127,
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "write": {
+        "params": [
+          127,
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "waitpid": {
+        "params": [
+          127,
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "shm_open": {
+        "params": [
+          127,
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "sigaction": {
+        "params": [
+          127,
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "sigprocmask": {
+        "params": [
+          127,
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "msync": {
+        "params": [
+          127,
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "mprotect": {
+        "params": [
+          127,
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "mmap": {
+        "params": [
+          127,
+          127,
+          127,
+          127,
+          127,
+          126
+        ],
+        "results": [
+          127
+        ]
+      },
+      "sigfillset": {
+        "params": [
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "sigpending": {
+        "params": [
+          127
+        ],
+        "results": [
+          127
+        ]
+      }
+    }
+  },
+  "compatibility_stubs": [
+    {
+      "names": "atexit sleep",
+      "behavior": "Browser compatibility no-op returning zero; no callback registration, delay or signal-set state."
+    },
+    {
+      "names": "fchmod",
+      "behavior": "Browser adapter returns -1; mode update unavailable."
+    },
+    {
+      "names": "getdtablesize",
+      "behavior": "Browser adapter returns fixed 64."
+    },
+    {
+      "names": "setenv unsetenv pthread_mutex_init pthread_mutex_destroy pthread_mutex_lock pthread_mutex_trylock pthread_mutex_unlock posix_fadvise",
+      "behavior": "Guest libc compatibility no-op returning success; no environment mutation, synchronization or cache advice."
+    },
+    {
+      "names": "uselocale",
+      "behavior": "Fixed locale compatibility facade; no locale switch."
+    },
+    {
+      "names": "sigaction",
+      "behavior": "Browser handles handler/mask prefix; sa_flags not implemented."
+    }
+  ]
+}

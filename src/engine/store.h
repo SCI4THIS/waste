@@ -15,6 +15,9 @@ typedef struct {
 
 typedef struct native_call_block {
     native_linked_func *calls;
+    /* Loader-created GOT globals are borrowed by instantiated/cloned engines,
+     * just like call bindings. Keep their storage until store teardown. */
+    exec_global *got_globals;
     struct native_call_block *next;
 } native_call_block;
 
@@ -163,7 +166,7 @@ typedef struct {
  * instantiated PIC module; memory_base and table_base record the offsets
  * assigned by the loader so that dlsym can compute addresses. */
 typedef struct {
-    char name[NATIVE_EXEC_PATH_MAX];
+    char name[WAST_MAX_EXPORT_NAME];
     char path[NATIVE_EXEC_PATH_MAX];
     waste_exec_engine *engine;
     uint32_t memory_base;
@@ -199,6 +202,10 @@ typedef struct {
 typedef struct {
     waste_exec_engine *engine;
     waste_exec_engine *engine_source;
+    /* Fork's root clone is not a store module or a linked-provider clone.
+     * Retain its owner across exec/handler replacement until capsule teardown;
+     * linked table/function bindings can still refer to that original clone. */
+    waste_exec_engine *owned_fork_engine;
     native_process_image *image;
     uint32_t root_func_idx;
     wasm_value root_args[WAST_MAX_ARGS];
@@ -259,6 +266,27 @@ typedef int (*native_host_resolver)(const char *module, const char *name,
                                      void *context, native_host_binding *out);
 
 struct posix_kernel;
+struct guest_posix_platform;
+
+/* Host upload/download yield state.  The upload import copies the destination
+ * path on first entry and yields; the host supplies bytes (or cancels) and the
+ * resume path writes the file through the kernel.  Download is the mirror. */
+typedef enum {
+    NATIVE_HOST_IO_NONE = 0,
+    NATIVE_HOST_IO_UPLOAD = 1,
+    NATIVE_HOST_IO_DOWNLOAD = 2,
+    NATIVE_HOST_IO_TEST_SUITE = 3
+} native_host_io_kind;
+
+typedef struct {
+    int kind;
+    char path[POSIX_PATH_NODE_NAME_MAX];
+    int path_len;
+    uint8_t *data;
+    size_t data_len;
+    int result;   /* 0 pending, 1 completed, -1 cancelled */
+    int verbose;
+} native_host_io_state;
 
 typedef struct native_store {
     native_linked_module *modules;
@@ -271,6 +299,7 @@ typedef struct native_store {
     /* Spectest provider (for WAST script conformance tests). */
     exec_memory spectest_memory;
     exec_table spectest_table;
+    exec_table spectest_table64;
     exec_global spectest_i32;
     exec_global spectest_i64;
     exec_global spectest_f32;
@@ -279,6 +308,11 @@ typedef struct native_store {
        registered Wasm module. */
     native_host_resolver host_resolver;
     void *host_context;
+    /* Borrowed immutable adapter table and sandbox-owned callback context.
+     * Their lifetime must enclose this store, including resumed invocations. */
+    const struct guest_posix_platform *guest_platform;
+    void *guest_platform_data;
+    exec_execution_control execution_control;
     /* Per-sandbox POSIX kernel: descriptor table, readiness, and wait state. */
     struct posix_kernel *kernel;
     posix_shm_namespace *shm_namespace;
@@ -304,6 +338,8 @@ typedef struct native_store {
      * native_store_load_library before calling native_load_module,
      * then cleared afterward. */
     native_library_load_context library_load_ctx;
+    native_host_io_state host_io;
+    int test_suite_enabled; /* runtime opt-in; no nested batch capability */
 } native_store;
 
 void native_exec_request_init(native_exec_request *request);
@@ -534,6 +570,11 @@ int native_store_clone_process_graph(native_store *store, int parent_pid,
                                      int child_pid);
 int native_store_exit_process(native_store *store, int status);
 int native_store_signal_process(native_store *store, int pid, int signal);
+/* Fan a signal across every live process whose kernel pgid matches.  Returns
+ * the number of delivered members (zero if the group is empty), or a negative
+ * POSIX errno for invalid arguments.  Shared by guest killpg and host-side
+ * process-group routing (WSC1 control-fd, browser export, worker message). */
+int native_store_signal_process_group(native_store *store, int pgid, int signal);
 int native_store_wait_process(native_store *store, int pid, int options,
                               int *status_out);
 

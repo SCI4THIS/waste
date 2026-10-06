@@ -20,13 +20,7 @@ from libc_sources import LIBC_C_SOURCES
 
 
 def ensure_sysroot(repo_root: Path, output_base: Path) -> Path:
-    """Build or locate the WASTE application sysroot."""
-    for candidate in [
-        output_base / "sysroot",
-        repo_root / "build" / "coreutils" / "sysroot",
-    ]:
-        if (candidate / "bin" / "waste-wasm-clang").is_file():
-            return candidate
+    """Refresh from the mounted SDK; never reuse an unchecked old sysroot."""
     build_sysroot = repo_root / "src" / "html-rt" / "tools" / "build-waste-sysroot.py"
     sysroot = output_base / "sysroot"
     subprocess.run(

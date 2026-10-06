@@ -1,0 +1,17 @@
+{
+  "fixture": "tests/guest-session-terminal-control.wast",
+  "events": [
+    {"after": "RESIZE\n", "waitKind": 2, "pid": 1, "resize": [120, 40]},
+    {"after": "SAME\n", "waitKind": 2, "pid": 1, "resize": [120, 40]},
+    {"waitKind": 2, "pid": 1, "signal": 28},
+    {"after": "IGNORED\n", "waitKind": 2, "pid": 1, "signal": 10},
+    {"waitKind": 2, "pid": 1, "signal": 12},
+    {"after": "READ\n", "waitKind": 1, "pid": 1, "resize": [100, 30]},
+    {"waitKind": 1, "pid": 1, "bytes": [90]},
+    {"after": "CHILD\n", "waitKind": 2, "pid": 2, "resize": [90, 20]}
+  ],
+  "output": "RESIZE\nSAME\nIGNORED\nREAD\nCHILD\n",
+  "assertions": 9,
+  "processes": 1,
+  "exitStatus": 0
+}

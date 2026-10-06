@@ -1,0 +1,10 @@
+(module
+  (import "env" "open" (func $open (param i32 i32 i32) (result i32)))
+  (memory 1)
+  (data (i32.const 0) "/tmp/suite-leak\00")
+  (func (export "__errno_location") (result i32) i32.const 64)
+  (func (export "errno") (result i32) (i32.load (i32.const 64)))
+  (func (export "absent") (result i32)
+    (call $open (i32.const 0) (i32.const 0) (i32.const 0))))
+(assert_return (invoke "absent") (i32.const -1))
+(assert_return (invoke "errno") (i32.const 2))

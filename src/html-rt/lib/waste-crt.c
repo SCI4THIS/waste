@@ -6,7 +6,7 @@ typedef int i32;
 /* Provide real definitions for stdin/stdout/stderr so wasm-ld places them
    at valid data-segment addresses instead of address 0.  _start() fills
    these with the waste-libc's FILE pointers before calling main(). */
-typedef struct { i32 fd; i32 error; i32 eof; } __waste_crt_FILE;
+typedef struct WasteFile __waste_crt_FILE;
 __waste_crt_FILE *stdin;
 __waste_crt_FILE *stdout;
 __waste_crt_FILE *stderr;

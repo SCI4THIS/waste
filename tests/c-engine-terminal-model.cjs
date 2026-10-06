@@ -9,7 +9,7 @@ const root = path.resolve(__dirname, "..");
 const context = {TextDecoder, console};
 vm.createContext(context);
 vm.runInContext(fs.readFileSync(
-  path.join(root, "src/html-rt/src/bash/terminal/model.js"), "utf8"), context,
+  path.join(root, "src/html-rt/src/terminal/model.js"), "utf8"), context,
   {filename: "terminal/model.js"});
 
 function check(condition, message) {

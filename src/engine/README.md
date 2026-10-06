@@ -27,6 +27,12 @@ The handwritten engine sources are grouped by ownership:
 
 Generated scanner and parser sources stay under `build/engine/gen/`.
 
+The official OCaml interpreter is a reference only for Wasm/WAT/WAST language
+semantics and standard spec-test scaffolding. Kernel and application behavior
+uses C native/browser parity and private sanitizer/ABI checks. Do not add
+OCaml kernel capabilities; its existing kernel is planned for deferred removal
+under [the retirement plan](../../docs/active-ocaml-language-oracle-plan.md).
+
 `op/validate.c` is the single type-relation and function
 operand/control-stack validation pass. It returns distinct invalid and
 unsupported outcomes and records resolved branch, call, type, and immediate

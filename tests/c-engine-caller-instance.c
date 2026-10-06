@@ -7,6 +7,8 @@
  *   3. Nested call: B calls A's export, which calls host → caller has A's memory
  *   4. Two instances of the same decoded module have independent memories
  *
+ * Guest counterparts using real pipe/read/write imports live in
+ * engine-regressions/caller-memory.wast; callback and ownership checks stay here.
  * Built with ASan/UBSan, linked against system libc. */
 
 #include "engine_internal.h"
@@ -50,8 +52,11 @@ static exec_status host_read_caller_mem(
     if ((uint64_t)offset + length > byte_size)
         return exec_fail(error, EXEC_ERROR_TRAP, "out of bounds");
     uint32_t value = 0;
-    const uint8_t *mem = caller->memory->data + offset;
-    for (uint32_t i = 0; i < length && i < 4; i++)
+    uint8_t mem[4] = {0};
+    uint32_t copied = length < 4 ? length : 4;
+    exec_status status = exec_memory_read(caller->memory, offset, mem, copied, error);
+    if (status != EXEC_OK) return status;
+    for (uint32_t i = 0; i < copied; i++)
         value |= (uint32_t)mem[i] << (i * 8);
     results[0].type = WASM_VALTYPE_I32;
     results[0].i32 = (int32_t)value;
@@ -180,8 +185,8 @@ static void test_direct_and_nested(const char *path_a, const char *path_b) {
     /* Verify A and B have different memories */
     CHECK(eng_a->memory != eng_b->memory,
           "A and B should have different memory objects");
-    CHECK(eng_a->memory->data != eng_b->memory->data,
-          "A and B should have different memory data");
+    CHECK(eng_a->memory->page_data[0] != eng_b->memory->page_data[0],
+          "A and B should have different initialized memory pages");
 
     /* Test 4: B.nested_through_a → B calls A.store_and_read,
      * A calls host_read_caller_mem → host sees A's memory */
@@ -192,8 +197,10 @@ static void test_direct_and_nested(const char *path_a, const char *path_b) {
 
     /* Verify A's memory was modified (at offset 16), B's was not */
     uint32_t a_stored = 0, b_stored = 0;
-    memcpy(&a_stored, eng_a->memory->data + 16, 4);
-    memcpy(&b_stored, eng_b->memory->data + 16, 4);
+    CHECK(exec_memory_read(eng_a->memory, 16, &a_stored, 4, &error) == EXEC_OK,
+          "read A memory after nested call: %s", error.message);
+    CHECK(exec_memory_read(eng_b->memory, 16, &b_stored, 4, &error) == EXEC_OK,
+          "read B memory after nested call: %s", error.message);
     CHECK(a_stored == UINT32_C(0x99887766),
           "A memory[16] = 0x%08x (expected 0x99887766)", a_stored);
     CHECK(b_stored == 0,
@@ -252,11 +259,13 @@ static void test_two_instances(const char *path_a) {
     /* Re-verify isolation: inst1's store didn't affect inst2 */
     CHECK(inst1->memory != inst2->memory,
           "instances have different memory objects");
-    CHECK(inst1->memory->data != inst2->memory->data,
-          "instances have different memory data");
+    CHECK(inst1->memory->page_data[0] != inst2->memory->page_data[0],
+          "instances have different initialized memory pages");
     uint32_t m1 = 0, m2 = 0;
-    memcpy(&m1, inst1->memory->data + 16, 4);
-    memcpy(&m2, inst2->memory->data + 16, 4);
+    CHECK(exec_memory_read(inst1->memory, 16, &m1, 4, &error) == EXEC_OK,
+          "read instance 1 memory: %s", error.message);
+    CHECK(exec_memory_read(inst2->memory, 16, &m2, 4, &error) == EXEC_OK,
+          "read instance 2 memory: %s", error.message);
     CHECK(m1 == 0x11111111, "inst1 memory[16] = 0x%08x", m1);
     CHECK(m2 == 0x22222222, "inst2 memory[16] = 0x%08x", m2);
 

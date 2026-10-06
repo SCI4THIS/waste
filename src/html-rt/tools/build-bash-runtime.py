@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from libc_sources import libc_source_paths
+from libc_sources import guest_include_flags, libc_source_paths
 
 
 RUNTIME_MODULE = "waste-runtime"
@@ -37,6 +37,9 @@ ABI_CLEANUP_ADAPTERS = (
     # (table index, function index, pass dispatcher argument)
     (135, 1307, True),
     (138, 453, True),
+    # read_builtin registers pop_scope as an unwind cleanup too. Its native
+    # void(char *) callback needs the dispatcher's int(void *) adapter.
+    (145, 1268, True),
     (455, 2260, False),
     (458, 1336, False),
 )
@@ -254,6 +257,7 @@ def main() -> None:
         run(["wasm-as", str(core_wat), "-o", str(core_wasm), "--enable-bulk-memory"])
         run([
             "clang", "--target=wasm32", "-O2", "-nostdlib", "-fno-builtin",
+            *guest_include_flags(root),
             "-DWASTE_POSIX_IO",
             *(str(path) for path in libc_source_paths(root)),
             "-Wl,--no-entry",

@@ -1,0 +1,55 @@
+{
+  "fixture": "tests/guest-session-terminal-descriptors.wast",
+  "events": [
+    {
+      "after": "DUP\n",
+      "waitKind": 1,
+      "pid": 1,
+      "text": "h",
+      "stillWaiting": true
+    },
+    {
+      "waitKind": 1,
+      "pid": 1,
+      "text": "i"
+    },
+    {
+      "after": "ORIGINAL\n",
+      "waitKind": 1,
+      "pid": 1,
+      "text": "x"
+    },
+    {
+      "after": "SHARED\n",
+      "waitKind": 2,
+      "pid": 1,
+      "text": "AB"
+    },
+    {
+      "after": "LAST\n",
+      "waitKind": 2,
+      "pid": 1,
+      "text": "Z"
+    },
+    {
+      "after": "REOPEN\n",
+      "waitKind": 1,
+      "pid": 1,
+      "text": "Q"
+    },
+    {
+      "after": "FINAL\n",
+      "waitKind": 2,
+      "pid": 1,
+      "text": "R"
+    }
+  ],
+  "output": "DUP\nORIGINAL\nSHARED\nLAST\nREOPEN\nFINAL\n",
+  "assertions": 120,
+  "exitStatus": 0,
+  "nativeCounts": {
+    "inputBytes": 8,
+    "readWaits": 4,
+    "selectWaits": 3
+  }
+}

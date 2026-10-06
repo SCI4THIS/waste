@@ -71,7 +71,8 @@ typedef enum {
     WASTE_ERROR_EXCEPTION,
     WASTE_ERROR_NOT_FOUND,
     WASTE_ERROR_EXIT,
-    WASTE_YIELD
+    WASTE_YIELD,
+    WASTE_ERROR_INTERRUPTED
 } waste_status;
 
 typedef struct {

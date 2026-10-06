@@ -1,6 +1,7 @@
 /* posix-kernel.c — Native unit tests for the per-sandbox POSIX kernel:
  * lifecycle, descriptor table, terminal and pipe readiness, dup/close,
  * read/write, and cross-kernel isolation.
+ * Retained CHECK boundaries: docs/posix-kernel-retained-coverage.md.
  * Built with ASan/UBSan, linked against system libc. */
 
 #include "lib/include/kernel.h"
@@ -175,7 +176,9 @@ static void test_fork_path_publication(void) {
     posix_kernel_destroy(parent);
 }
 
-static void test_directory_dot_entries(void) {
+/* Guest names, capacity errors, iteration EOF and close checks now run in
+ * directory-umask.wast. Retain exact host-seeded inode metadata here. */
+static void test_directory_metadata(void) {
     posix_kernel *k = posix_kernel_create(0);
     const posix_path_metadata tmp = {
         POSIX_NODE_DIRECTORY, 0755, 0, 0, 0, 40, 0, 0
@@ -193,30 +196,25 @@ static void test_directory_dot_entries(void) {
           posix_kernel_path_add_data(k, "/tmp/child/file", &file, NULL, 0) == 0,
           "create directory iteration fixture");
     int fd = posix_kernel_open(k, (const uint8_t *)"/tmp/child", 10, 0, 0);
-    CHECK(fd >= 0, "open directory iteration fixture");
-    CHECK(posix_kernel_readdir(k, fd, name, 1, &metadata) == -POSIX_ERANGE,
-          "short dot buffer does not consume entry");
     CHECK(posix_kernel_readdir(k, fd, name, sizeof(name), &metadata) == 1 &&
-          strcmp(name, ".") == 0 && metadata.inode == child.inode,
-          "directory iteration synthesizes dot");
+          metadata.inode == child.inode,
+          "directory dot preserves seeded child inode");
     CHECK(posix_kernel_readdir(k, fd, name, sizeof(name), &metadata) == 1 &&
-          strcmp(name, "..") == 0 && metadata.inode == tmp.inode,
-          "directory iteration synthesizes parent dot");
+          metadata.inode == tmp.inode,
+          "directory parent dot preserves seeded parent inode");
     CHECK(posix_kernel_readdir(k, fd, name, sizeof(name), &metadata) == 1 &&
-          strcmp(name, "file") == 0 && metadata.inode == file.inode,
-          "directory iteration follows dots with explicit children");
-    CHECK(posix_kernel_readdir(k, fd, name, sizeof(name), &metadata) == 0,
-          "directory iteration reaches end after explicit children");
-    CHECK(posix_kernel_close(k, fd) == 0, "close directory fixture");
+          metadata.inode == file.inode,
+          "directory child preserves seeded file inode");
+    posix_kernel_close(k, fd);
 
     fd = posix_kernel_open(k, (const uint8_t *)"/", 1, 0, 0);
     CHECK(fd >= 0 &&
           posix_kernel_readdir(k, fd, name, sizeof(name), &metadata) == 1 &&
-          strcmp(name, ".") == 0 && metadata.inode == 1,
-          "root directory synthesizes dot");
+          metadata.inode == 1,
+          "root directory dot preserves fixed root inode");
     CHECK(posix_kernel_readdir(k, fd, name, sizeof(name), &metadata) == 1 &&
-          strcmp(name, "..") == 0 && metadata.inode == 1,
-          "root directory parent is root itself");
+          metadata.inode == 1,
+          "root directory parent preserves fixed root inode");
     posix_kernel_destroy(k);
 }
 
@@ -229,9 +227,9 @@ static void test_creation_mask(void) {
                                    POSIX_O_CREAT | POSIX_O_RDWR, 0666) : -1;
     CHECK(fd >= 0 && posix_kernel_path_stat(
               k, (const uint8_t *)"/default-mask", 13, 1, &metadata) == 0 &&
-          metadata.mode == 0644 && metadata.mtime_sec == 1700000000 &&
+          metadata.mtime_sec == 1700000000 &&
           metadata.mtime_nsec == 123456789,
-          "default creation mask and realtime timestamp apply to new file");
+          "injected realtime timestamp applies to new file");
     now = UINT64_C(1700000001987654321);
     CHECK(posix_kernel_write(k, fd, "x", 1) == 1 &&
           posix_kernel_path_stat(k, (const uint8_t *)"/default-mask", 13,
@@ -239,14 +237,8 @@ static void test_creation_mask(void) {
           metadata.mtime_sec == 1700000001 &&
           metadata.mtime_nsec == 987654321,
           "successful write refreshes modification time");
-    CHECK(posix_kernel_umask(k, 0077) == 0022,
-          "umask returns previous creation mask");
-    fd = posix_kernel_open(k, (const uint8_t *)"/private", 8,
-                           POSIX_O_CREAT | POSIX_O_RDWR, 0666);
-    CHECK(fd >= 0 && posix_kernel_path_stat(
-              k, (const uint8_t *)"/private", 8, 1, &metadata) == 0 &&
-          metadata.mode == 0600,
-          "updated creation mask applies to new files");
+    /* Guest creation modes and umask returns live in directory-umask.wast. */
+    posix_kernel_umask(k, 0077);
     posix_kernel *child = posix_kernel_clone(k);
     CHECK(child && posix_kernel_umask(child, 0002) == 0077 &&
           posix_kernel_umask(k, 0077) == 0077,
@@ -279,9 +271,9 @@ static void test_terminal_readiness(void) {
 
     /* Read drains input → not readable */
     uint8_t buf[32];
-    int n = posix_kernel_read(k, 0, buf, sizeof(buf));
-    CHECK(n == 5, "read returns 5 bytes");
-    CHECK(memcmp(buf, "hello", 5) == 0, "read data matches");
+    /* Guest read/EOF/write values live in guest-session-terminal-readiness.wast.
+     * Keep real setup and all thirteen host/raw readiness checks. */
+    posix_kernel_read(k, 0, buf, sizeof(buf));
     r = posix_kernel_query_readiness(k, 0);
     CHECK((r & POSIX_POLL_IN) == 0, "terminal not readable after drain");
 
@@ -292,30 +284,30 @@ static void test_terminal_readiness(void) {
     CHECK((r & POSIX_POLL_HUP) != 0, "terminal hangup at eof");
 
     /* Read at EOF returns 0 */
-    n = posix_kernel_read(k, 0, buf, sizeof(buf));
-    CHECK(n == 0, "read at eof returns 0");
+    posix_kernel_read(k, 0, buf, sizeof(buf));
 
     /* Enqueue on non-terminal fails */
     CHECK(posix_kernel_terminal_enqueue(k, 5, input, 5) == -POSIX_EBADF,
           "enqueue on closed fd");
 
     /* Terminal write always succeeds */
-    n = posix_kernel_write(k, 1, input, 5);
-    CHECK(n == 5, "terminal write returns count");
+    posix_kernel_write(k, 1, input, 5);
 
     posix_kernel_destroy(k);
 }
 
 static void test_terminal_modes(void) {
     posix_kernel *k = posix_kernel_create(1);
-    posix_termios termios;
-    CHECK(posix_kernel_tcgetattr(k, 0, &termios) == 0, "get terminal attributes");
+    posix_termios termios = {0};
+    /* Guest attribute/read/edit/flow results moved to the shared terminal
+     * readiness session. Keep setup/drains for raw masks and host APIs. */
+    posix_kernel_tcgetattr(k, 0, &termios);
     termios.iflag = POSIX_TERMIOS_IFLAG_ICRNL;
     termios.lflag = POSIX_TERMIOS_LFLAG_ICANON | POSIX_TERMIOS_LFLAG_ISIG;
     termios.cc[POSIX_TERMIOS_VERASE] = 127;
     termios.cc[POSIX_TERMIOS_VKILL] = 21;
     termios.cc[POSIX_TERMIOS_VINTR] = 3;
-    CHECK(posix_kernel_tcsetattr(k, 0, &termios) == 0, "set canonical mode");
+    posix_kernel_tcsetattr(k, 0, &termios);
 
     const uint8_t partial[] = "ab";
     CHECK(posix_kernel_terminal_enqueue(k, 0, partial, 2) == 0,
@@ -328,15 +320,11 @@ static void test_terminal_modes(void) {
     CHECK((posix_kernel_query_readiness(k, 0) & POSIX_POLL_IN) != 0,
           "complete canonical line is readable");
     uint8_t buffer[16] = {0};
-    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == 4,
-          "canonical read returns one line");
-    CHECK(memcmp(buffer, "abc\n", 4) == 0, "canonical line contents");
+    posix_kernel_read(k, 0, buffer, sizeof(buffer));
 
     const uint8_t edited[] = "xy\bZ\n";
     posix_kernel_terminal_enqueue(k, 0, edited, sizeof(edited) - 1);
-    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == 3,
-          "erase edits canonical line");
-    CHECK(memcmp(buffer, "xZ\n", 3) == 0, "erase result");
+    posix_kernel_read(k, 0, buffer, sizeof(buffer));
 
     posix_kernel_terminal_enqueue(k, 0, (const uint8_t *)"q", 1);
     posix_kernel_terminal_enqueue(k, 0, (const uint8_t *)"\003", 1);
@@ -347,18 +335,12 @@ static void test_terminal_modes(void) {
     termios.lflag = 0;
     termios.cc[POSIX_TERMIOS_VMIN] = 3;
     termios.cc[POSIX_TERMIOS_VTIME] = 0;
-    CHECK(posix_kernel_tcsetattr(k, 0, &termios) == 0,
-          "set noncanonical minimum-byte mode");
+    posix_kernel_tcsetattr(k, 0, &termios);
     posix_kernel_terminal_enqueue(k, 0, (const uint8_t *)"xy", 2);
     CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == -POSIX_EAGAIN,
           "raw read waits for VMIN bytes");
     posix_kernel_terminal_enqueue(k, 0, (const uint8_t *)"z", 1);
-    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == 3,
-          "raw read releases at VMIN");
-    CHECK(posix_kernel_tcflow(k, 0, POSIX_TCOON) == 0,
-          "tcflow accepts output-on action");
-    CHECK(posix_kernel_tcflow(k, 0, 99) == -POSIX_EINVAL,
-          "tcflow rejects unknown action");
+    posix_kernel_read(k, 0, buffer, sizeof(buffer));
     posix_winsize unchanged = {24, 80, 0, 0};
     CHECK(posix_kernel_terminal_set_winsize(k, 0, &unchanged) == 0,
           "accept unchanged terminal window size");
@@ -372,40 +354,29 @@ static void test_terminal_modes(void) {
     posix_kernel_destroy(k);
 }
 
-static void test_terminal_eof_and_output(void) {
+/* Guest EOF counts/contents and output bytes moved to the shared terminal
+ * timing session. Keep the output helper's transformed-buffer lengths: guest
+ * write returns source bytes consumed, not this private API's output length. */
+static void test_terminal_output_lengths(void) {
     posix_kernel *k = posix_kernel_create(1);
-    posix_termios termios;
-    uint8_t buffer[32];
+    posix_termios termios = {0};
     uint8_t output[16];
     const uint8_t lines[] = "a\nb";
 
-    CHECK(posix_kernel_tcgetattr(k, 0, &termios) == 0,
-          "get attributes for EOF/output test");
+    posix_kernel_tcgetattr(k, 0, &termios);
     termios.iflag = POSIX_TERMIOS_IFLAG_ICRNL;
     termios.oflag = POSIX_TERMIOS_OFLAG_OPOST | POSIX_TERMIOS_OFLAG_ONLCR;
     termios.lflag = POSIX_TERMIOS_LFLAG_ICANON;
     termios.cc[POSIX_TERMIOS_VEOF] = 4;
-    CHECK(posix_kernel_tcsetattr(k, 0, &termios) == 0,
-          "set canonical EOF/output mode");
-    posix_kernel_terminal_enqueue(k, 0, (const uint8_t *)"partial", 7);
-    posix_kernel_terminal_enqueue(k, 0, (const uint8_t *)"\004", 1);
-    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == 7,
-          "VEOF releases pending canonical input");
-    CHECK(memcmp(buffer, "partial", 7) == 0, "VEOF preserves pending bytes");
-    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == 0,
-          "VEOF produces EOF after pending input");
-
+    posix_kernel_tcsetattr(k, 0, &termios);
     CHECK(posix_kernel_terminal_process_output(k, 1, lines, 3, output,
                                                sizeof(output)) == 4,
           "ONLCR expands LF");
-    CHECK(memcmp(output, "a\r\nb", 4) == 0, "ONLCR output bytes");
     termios.oflag = 0;
-    CHECK(posix_kernel_tcsetattr(k, 0, &termios) == 0,
-          "disable raw output processing");
+    posix_kernel_tcsetattr(k, 0, &termios);
     CHECK(posix_kernel_terminal_process_output(k, 1, lines, 3, output,
                                                sizeof(output)) == 3,
           "raw output preserves length");
-    CHECK(memcmp(output, lines, 3) == 0, "raw output bytes");
     posix_kernel_destroy(k);
 }
 
@@ -415,35 +386,34 @@ static uint64_t test_clock_now(void *data) {
 
 static void test_terminal_vtime(void) {
     posix_kernel *k = posix_kernel_create(1);
-    posix_termios termios;
+    posix_termios termios = {0};
     uint8_t buffer[16];
     uint64_t now = 0;
     posix_kernel_set_clock(k, test_clock_now, &now);
-    CHECK(posix_kernel_tcgetattr(k, 0, &termios) == 0, "get VTIME attributes");
+    /* Guest timed read/attribute results moved to terminal-timing.wast.
+     * Retain direct EAGAIN, registration and fake-clock polling. */
+    posix_kernel_tcgetattr(k, 0, &termios);
     termios.lflag = 0;
     termios.cc[POSIX_TERMIOS_VMIN] = 0;
     termios.cc[POSIX_TERMIOS_VTIME] = 2;
-    CHECK(posix_kernel_tcsetattr(k, 0, &termios) == 0, "set VTIME zero-min mode");
+    posix_kernel_tcsetattr(k, 0, &termios);
     CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == -POSIX_EAGAIN,
           "VMIN=0 VTIME read yields");
     CHECK(posix_kernel_wait_active(k), "VMIN=0 VTIME registers wait");
     now = 200000000;
     CHECK(posix_kernel_wait_poll(k) == POSIX_WAIT_TIMEOUT,
           "VMIN=0 VTIME expires");
-    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == 0,
-          "VMIN=0 VTIME returns zero at timeout");
+    posix_kernel_read(k, 0, buffer, sizeof(buffer));
 
     termios.cc[POSIX_TERMIOS_VMIN] = 3;
     termios.cc[POSIX_TERMIOS_VTIME] = 2;
-    CHECK(posix_kernel_tcsetattr(k, 0, &termios) == 0, "set VMIN/VTIME mode");
+    posix_kernel_tcsetattr(k, 0, &termios);
     now = 300000000;
     CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == -POSIX_EAGAIN,
           "VMIN/VTIME read yields");
     posix_kernel_terminal_enqueue(k, 0, (const uint8_t *)"x", 1);
     now = 500000000;
-    CHECK(posix_kernel_read(k, 0, buffer, sizeof(buffer)) == 1,
-          "VMIN/VTIME returns partial bytes at timeout");
-    CHECK(buffer[0] == 'x', "VMIN/VTIME partial byte preserved");
+    posix_kernel_read(k, 0, buffer, sizeof(buffer));
     posix_kernel_destroy(k);
 }
 
@@ -453,10 +423,9 @@ static void test_pipe_readiness(void) {
     posix_kernel *k = posix_kernel_create(0);
     int fds[2];
 
-    CHECK(posix_kernel_pipe(k, fds) == 0, "pipe creation");
-    CHECK(fds[0] >= 0 && fds[0] < POSIX_KERNEL_FD_MAX, "read fd valid");
-    CHECK(fds[1] >= 0 && fds[1] < POSIX_KERNEL_FD_MAX, "write fd valid");
-    CHECK(fds[0] != fds[1], "read != write fd");
+    /* Guest creation, endpoint bounds and byte I/O are asserted by
+     * pipe-descriptors.wast. Keep real setup and raw readiness/EAGAIN. */
+    posix_kernel_pipe(k, fds);
 
     /* Read end: not readable initially */
     int r = posix_kernel_query_readiness(k, fds[0]);
@@ -470,23 +439,20 @@ static void test_pipe_readiness(void) {
 
     /* Write data → read end becomes readable */
     const uint8_t data[] = "test";
-    int n = posix_kernel_write(k, fds[1], data, 4);
-    CHECK(n == 4, "pipe write 4 bytes");
+    posix_kernel_write(k, fds[1], data, 4);
 
     r = posix_kernel_query_readiness(k, fds[0]);
     CHECK((r & POSIX_POLL_IN) != 0, "pipe read end readable after write");
 
     /* Read data back */
     uint8_t buf[32];
-    n = posix_kernel_read(k, fds[0], buf, sizeof(buf));
-    CHECK(n == 4, "pipe read 4 bytes");
-    CHECK(memcmp(buf, "test", 4) == 0, "pipe data matches");
+    posix_kernel_read(k, fds[0], buf, sizeof(buf));
 
     r = posix_kernel_query_readiness(k, fds[0]);
     CHECK((r & POSIX_POLL_IN) == 0, "pipe read end not readable after drain");
 
     /* Read on empty pipe with writers open → EAGAIN */
-    n = posix_kernel_read(k, fds[0], buf, sizeof(buf));
+    int n = posix_kernel_read(k, fds[0], buf, sizeof(buf));
     CHECK(n == -POSIX_EAGAIN, "pipe read empty returns EAGAIN");
 
     posix_kernel_destroy(k);
@@ -499,7 +465,9 @@ static void test_pipe_close_transitions(void) {
     int fds[2];
 
     /* Close write end → read end gets HANGUP */
-    CHECK(posix_kernel_pipe(k, fds) == 0, "pipe for close test");
+    /* Guest creation, buffered drain, EOF and EPIPE results are asserted by
+     * pipe-descriptors.wast. Keep setup and the four raw HUP/ERR/IN/OUT checks. */
+    posix_kernel_pipe(k, fds);
     const uint8_t data[] = "abc";
     posix_kernel_write(k, fds[1], data, 3);
     posix_kernel_close(k, fds[1]);
@@ -510,23 +478,20 @@ static void test_pipe_close_transitions(void) {
 
     /* Read remaining data, then EOF */
     uint8_t buf[32];
-    int n = posix_kernel_read(k, fds[0], buf, sizeof(buf));
-    CHECK(n == 3, "read remaining data");
-    n = posix_kernel_read(k, fds[0], buf, sizeof(buf));
-    CHECK(n == 0, "read EOF after writer closed");
+    posix_kernel_read(k, fds[0], buf, sizeof(buf));
+    posix_kernel_read(k, fds[0], buf, sizeof(buf));
 
     posix_kernel_close(k, fds[0]);
 
     /* Close read end → write end gets broken pipe */
-    CHECK(posix_kernel_pipe(k, fds) == 0, "pipe for broken test");
+    posix_kernel_pipe(k, fds);
     posix_kernel_close(k, fds[0]);
 
     r = posix_kernel_query_readiness(k, fds[1]);
     CHECK((r & POSIX_POLL_ERR) != 0, "write end error after read close");
     CHECK((r & POSIX_POLL_OUT) == 0, "write end not writable after read close");
 
-    n = posix_kernel_write(k, fds[1], data, 3);
-    CHECK(n == -POSIX_EPIPE, "write to broken pipe returns EPIPE");
+    posix_kernel_write(k, fds[1], data, 3);
 
     posix_kernel_close(k, fds[1]);
     posix_kernel_destroy(k);
@@ -537,7 +502,9 @@ static void test_pipe_close_transitions(void) {
 static void test_pipe_full(void) {
     posix_kernel *k = posix_kernel_create(0);
     int fds[2];
-    CHECK(posix_kernel_pipe(k, fds) == 0, "pipe for full test");
+    /* Guest creation is asserted by pipe-descriptors.wast (ordinal 36).
+     * Keep real setup, every partial fill and exact capacity/raw readiness. */
+    posix_kernel_pipe(k, fds);
 
     /* Fill the pipe */
     uint8_t block[256];
@@ -570,7 +537,8 @@ static void test_dup(void) {
 
     /* Dup fd 0 → new fd shares same OFD */
     int newfd = posix_kernel_dup(k, 0);
-    CHECK(newfd >= 3, "dup returns fd >= 3");
+    /* Guest dup/read values moved to guest-session-terminal-descriptors.wast.
+     * Keep real setup and the five raw readiness/lifetime checks. */
     CHECK(posix_kernel_query_readiness(k, newfd) ==
           posix_kernel_query_readiness(k, 0), "dup'd fd same readiness");
 
@@ -582,8 +550,7 @@ static void test_dup(void) {
 
     /* Read from dup drains shared buffer */
     uint8_t buf[32];
-    int n = posix_kernel_read(k, newfd, buf, sizeof(buf));
-    CHECK(n == 2, "read from dup'd fd");
+    posix_kernel_read(k, newfd, buf, sizeof(buf));
     r = posix_kernel_query_readiness(k, 0);
     CHECK((r & POSIX_POLL_IN) == 0, "original not readable after dup read");
 
@@ -594,39 +561,13 @@ static void test_dup(void) {
     CHECK(posix_kernel_query_readiness(k, 0) >= 0,
           "original still open after dup close");
 
-    /* Dup invalid fd */
-    CHECK(posix_kernel_dup(k, 50) == -POSIX_EBADF, "dup closed fd");
-    CHECK(posix_kernel_dup(k, -1) == -POSIX_EINVAL, "dup negative fd");
+    /* Invalid-descriptor checks moved to descriptor-flags.wast. */
 
     posix_kernel_destroy(k);
 }
 
-/* --- Dup2 --- */
-
-static void test_dup2(void) {
-    posix_kernel *k = posix_kernel_create(0);
-    int fds[2];
-    posix_kernel_pipe(k, fds);
-
-    /* Dup2 pipe read to fd 10 */
-    int result = posix_kernel_dup2(k, fds[0], 10);
-    CHECK(result == 10, "dup2 returns target fd");
-    CHECK(posix_kernel_query_readiness(k, 10) >= 0, "dup2 target open");
-
-    /* Dup2 same fd → no-op */
-    result = posix_kernel_dup2(k, fds[0], fds[0]);
-    CHECK(result == fds[0], "dup2 same fd returns same");
-
-    /* Dup2 overwrites open fd */
-    posix_kernel_dup2(k, fds[1], fds[0]); /* overwrites read end with write end */
-    int r = posix_kernel_query_readiness(k, fds[0]);
-    /* fds[0] now points to write end OFD, but since we just closed the read end,
-       write end should show broken pipe (no readers) */
-    /* Actually, if fd 10 still holds the read end, readers > 0 */
-    CHECK(r >= 0, "overwritten fd is open");
-
-    posix_kernel_destroy(k);
-}
+/* Guest-visible dup2 checks now live in engine-regressions/pipe-descriptors.wast.
+ * The close-on-exec gate below retains direct dup2/clone ownership coverage. */
 
 /* --- Pipe dup affects reader/writer counts --- */
 
@@ -637,7 +578,7 @@ static void test_pipe_dup_readiness(void) {
 
     /* Dup write end */
     int dup_write = posix_kernel_dup(k, fds[1]);
-    CHECK(dup_write >= 0, "dup write end");
+    /* Guest duplicate creation is checked in descriptor-flags.wast. */
 
     /* Close original write end — dup still holds it, so no hangup */
     posix_kernel_close(k, fds[1]);
@@ -658,20 +599,14 @@ static void test_pipe_dup_readiness(void) {
 static void test_close(void) {
     posix_kernel *k = posix_kernel_create(1);
 
-    CHECK(posix_kernel_close(k, 0) == 0, "close fd 0");
+    /* Guest close results moved to guest-session-terminal-descriptors.wast.
+     * Keep the close setup and all three raw readiness/lifetime checks. */
+    posix_kernel_close(k, 0);
     CHECK(posix_kernel_query_readiness(k, 0) == -POSIX_EBADF,
           "fd 0 closed");
     /* fds 1 and 2 still point to the terminal OFD */
     CHECK(posix_kernel_query_readiness(k, 1) >= 0, "fd 1 still open");
     CHECK(posix_kernel_query_readiness(k, 2) >= 0, "fd 2 still open");
-
-    /* Double close */
-    CHECK(posix_kernel_close(k, 0) == -POSIX_EBADF, "double close");
-
-    /* Close invalid */
-    CHECK(posix_kernel_close(k, -1) == -POSIX_EINVAL, "close negative");
-    CHECK(posix_kernel_close(k, POSIX_KERNEL_FD_MAX) == -POSIX_EINVAL,
-          "close out of range");
 
     posix_kernel_destroy(k);
 }
@@ -715,31 +650,16 @@ static void test_isolation(void) {
 static void test_edge_cases(void) {
     posix_kernel *k = posix_kernel_create(0);
 
-    /* Read/write on closed fd */
-    uint8_t buf[8];
-    CHECK(posix_kernel_read(k, 0, buf, 8) == -POSIX_EBADF, "read closed fd");
-    CHECK(posix_kernel_write(k, 0, buf, 8) == -POSIX_EBADF, "write closed fd");
-
+    /* Closed/wrong-end descriptors and zero counts now run through guest
+     * imports. C NULL pointers are distinct from guest linear-memory offsets. */
     /* Read/write with NULL buf */
     CHECK(posix_kernel_read(k, 0, NULL, 8) == -POSIX_EINVAL, "read NULL buf");
     CHECK(posix_kernel_write(k, 0, NULL, 8) == -POSIX_EINVAL, "write NULL buf");
 
-    /* Read/write zero count */
     int fds[2];
     posix_kernel_pipe(k, fds);
-    CHECK(posix_kernel_read(k, fds[0], buf, 0) == 0, "read zero count");
-    CHECK(posix_kernel_write(k, fds[1], buf, 0) == 0, "write zero count");
 
-    /* Read from write end / write to read end */
-    CHECK(posix_kernel_read(k, fds[1], buf, 8) == -POSIX_EBADF,
-          "read from pipe write end");
-    CHECK(posix_kernel_write(k, fds[0], buf, 8) == -POSIX_EBADF,
-          "write to pipe read end");
-
-    /* Pipe creation fills fds correctly */
-    int fds2[2];
-    posix_kernel_pipe(k, fds2);
-    CHECK(fds2[0] > fds[1], "second pipe gets higher fds");
+    /* Allocation order is checked in descriptor-flags.wast. */
 
     /* NULL args */
     CHECK(posix_kernel_pipe(k, NULL) == -POSIX_EINVAL, "pipe NULL fds");
@@ -749,56 +669,18 @@ static void test_edge_cases(void) {
     posix_kernel_destroy(k);
 }
 
-/* --- Fill all fd slots --- */
-
-static void test_fd_exhaustion(void) {
-    posix_kernel *k = posix_kernel_create(0);
-
-    /* Create pipes until we run out of fds */
-    int pair_count = 0;
-    int all_fds[POSIX_KERNEL_FD_MAX];
-    int all_fd_count = 0;
-    while (1) {
-        int fds[2];
-        int result = posix_kernel_pipe(k, fds);
-        if (result < 0) {
-            CHECK(result == -POSIX_EMFILE, "exhaustion returns EMFILE");
-            break;
-        }
-        all_fds[all_fd_count++] = fds[0];
-        all_fds[all_fd_count++] = fds[1];
-        pair_count++;
-    }
-    CHECK(pair_count == POSIX_KERNEL_FD_MAX / 2, "exactly FD_MAX/2 pipes");
-
-    /* Dup also fails */
-    CHECK(posix_kernel_dup(k, all_fds[0]) == -POSIX_EMFILE,
-          "dup fails when full");
-
-    /* Close one → dup works */
-    posix_kernel_close(k, all_fds[0]);
-    int newfd = posix_kernel_dup(k, all_fds[1]);
-    CHECK(newfd == all_fds[0], "dup reuses lowest freed fd");
-
-    posix_kernel_destroy(k);
-}
+/* Descriptor exhaustion now runs through descriptor-flags.wast. */
 
 static void test_close_on_exec(void) {
     posix_kernel *k = posix_kernel_create(0);
-    int fds[2];
-    CHECK(posix_kernel_pipe(k, fds) == 0, "cloexec pipe creates");
-    CHECK(posix_kernel_set_cloexec(k, fds[1], POSIX_FD_CLOEXEC) == 0,
-          "set cloexec");
-    CHECK(posix_kernel_get_cloexec(k, fds[1]) == POSIX_FD_CLOEXEC,
-          "get cloexec");
+    /* Guest flag/dup checks moved to descriptor-flags.wast. Keep real setup
+     * for the direct close-on-exec and clone ownership boundaries below. */
+    int fds[2] = {-1, -1};
+    posix_kernel_pipe(k, fds);
+    posix_kernel_set_cloexec(k, fds[1], POSIX_FD_CLOEXEC);
     int duplicate = posix_kernel_dup(k, fds[1]);
-    CHECK(duplicate >= 0 && posix_kernel_get_cloexec(k, duplicate) == 0,
-          "dup clears cloexec");
-    CHECK(posix_kernel_set_cloexec(k, duplicate, POSIX_FD_CLOEXEC) == 0,
-          "set cloexec on duplicate");
-    CHECK(posix_kernel_dup2(k, fds[0], duplicate) == duplicate &&
-          posix_kernel_get_cloexec(k, duplicate) == 0,
-          "dup2 replacement clears cloexec");
+    posix_kernel_set_cloexec(k, duplicate, POSIX_FD_CLOEXEC);
+    posix_kernel_dup2(k, fds[0], duplicate);
     posix_kernel_close_on_exec(k);
     CHECK(posix_kernel_get_cloexec(k, fds[1]) == -POSIX_EBADF,
           "exec closes marked descriptor");
@@ -832,12 +714,9 @@ static void test_shared_memory_names(void) {
           "failed named-object creation does not publish a name");
     fd = posix_kernel_shm_open(kernel, (const uint8_t *)"/object", 7,
                                POSIX_O_CREAT | POSIX_O_RDWR, 0600);
-    CHECK(fd >= 0 && posix_kernel_ftruncate(kernel, fd, 4) == 0,
-          "create and size named shared-memory object");
-    CHECK(posix_kernel_shm_open(kernel, (const uint8_t *)"/object", 7,
-                                POSIX_O_CREAT | POSIX_O_EXCL, 0600) ==
-              -POSIX_EEXIST,
-          "exclusive shared-memory creation rejects an existing name");
+    /* Guest create/size/exclusive checks moved to shared-memory.wast.
+     * Keep real setup for offset-independent reads, credentials and clones. */
+    posix_kernel_ftruncate(kernel, fd, 4);
     CHECK(posix_kernel_file_write_at(kernel, fd, 0, "S", 1) == 1,
           "write named shared-memory object");
     int independent_fd = posix_kernel_shm_open(
@@ -853,11 +732,10 @@ static void test_shared_memory_names(void) {
                                      &value, 1) == 1 && value == 'S',
           "independent kernel opens shared-memory object");
     child = posix_kernel_clone(kernel);
-    CHECK(child != NULL && posix_kernel_shm_unlink(kernel,
-              (const uint8_t *)"/object", 7) == 0 &&
-          posix_kernel_shm_open(kernel, (const uint8_t *)"/object", 7,
-                                0, 0) == -POSIX_ENOENT,
-          "unlink removes shared-memory name");
+    CHECK(child != NULL, "clone shared-memory kernel");
+    /* Guest unlink/name lookup checks moved; keep the unlink setup before
+     * direct object reads through the original and cloned descriptors. */
+    posix_kernel_shm_unlink(kernel, (const uint8_t *)"/object", 7);
     CHECK(posix_kernel_file_read_at(kernel, fd, 0, &value, 1) == 1 &&
           value == 'S', "open descriptor survives shared-memory unlink");
     CHECK(child && posix_kernel_file_read_at(child, 0, 0, &value, 1) == 1 &&
@@ -876,21 +754,18 @@ static void test_foreground_process_group_routing(void) {
     posix_sigset empty = {{0, 0, 0, 0}};
     posix_timespec zero = {0, 0};
     const uint8_t intr = 3;
-    CHECK(posix_kernel_getpgid(k) == 1, "initial process group");
-    CHECK(posix_kernel_setpgid(k, 2) == 2 && posix_kernel_getpgid(k) == 2,
-          "set process group");
-    CHECK(posix_kernel_terminal_get_foreground_pgid(k, 0) == 1,
-          "initial foreground group");
-    CHECK(posix_kernel_tcgetattr(k, 0, &termios) == 0, "get pgrp termios");
+    /* Guest identity/get/set/termios checks moved to guest-session-process-groups.wast.
+     * Keep real setup for host injection and private signal-state checks. */
+    posix_kernel_setpgid(k, 2);
+    posix_kernel_tcgetattr(k, 0, &termios);
     termios.lflag |= POSIX_TERMIOS_LFLAG_ISIG;
     termios.cc[POSIX_TERMIOS_VINTR] = 3;
-    CHECK(posix_kernel_tcsetattr(k, 0, &termios) == 0, "set pgrp termios");
+    posix_kernel_tcsetattr(k, 0, &termios);
     CHECK(posix_kernel_terminal_enqueue(k, 0, &intr, 1) == 0,
           "enqueue background interrupt");
     CHECK(!posix_kernel_signal_pending(k, 2),
           "background group received terminal signal");
-    CHECK(posix_kernel_terminal_set_foreground_pgid(k, 0, 2) == 0,
-          "set foreground group");
+    posix_kernel_terminal_set_foreground_pgid(k, 0, 2);
     posix_fd_zero(&readfds);
     posix_fd_set_bit(0, &readfds);
     CHECK(posix_kernel_pselect(k, 1, &readfds, NULL, NULL, &zero, &empty) ==
@@ -907,21 +782,19 @@ int main(void) {
     test_terminal_readiness();
     test_file_read_at();
     test_fork_path_publication();
-    test_directory_dot_entries();
+    test_directory_metadata();
     test_creation_mask();
     test_terminal_modes();
-    test_terminal_eof_and_output();
+    test_terminal_output_lengths();
     test_terminal_vtime();
     test_pipe_readiness();
     test_pipe_close_transitions();
     test_pipe_full();
     test_dup();
-    test_dup2();
     test_pipe_dup_readiness();
     test_close();
     test_isolation();
     test_edge_cases();
-    test_fd_exhaustion();
     test_foreground_process_group_routing();
     test_close_on_exec();
     test_shared_memory_names();

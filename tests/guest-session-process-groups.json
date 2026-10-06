@@ -1,0 +1,58 @@
+{
+  "fixture": "tests/guest-session-process-groups.wast",
+  "events": [
+    {
+      "after": "BG\n",
+      "waitKind": 2,
+      "pid": 1,
+      "bytes": [
+        3
+      ],
+      "stillWaiting": true
+    },
+    {
+      "waitKind": 2,
+      "pid": 1,
+      "text": "x"
+    },
+    {
+      "after": "MOVE\n",
+      "waitKind": 2,
+      "pid": 1,
+      "bytes": [
+        3
+      ],
+      "stillWaiting": true
+    },
+    {
+      "waitKind": 2,
+      "pid": 1,
+      "text": "Y"
+    },
+    {
+      "after": "FG\n",
+      "waitKind": 2,
+      "pid": 1,
+      "bytes": [
+        3
+      ]
+    },
+    {
+      "after": "RAW\n",
+      "waitKind": 2,
+      "pid": 1,
+      "bytes": [
+        3
+      ]
+    }
+  ],
+  "output": "BG\nMOVE\nFG\nRAW\n",
+  "assertions": 71,
+  "exitStatus": 0,
+  "nativeCounts": {
+    "inputBytes": 6,
+    "readWaits": 0,
+    "selectWaits": 6,
+    "signalEvents": 0
+  }
+}

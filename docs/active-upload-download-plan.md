@@ -91,8 +91,8 @@ Mirror worker.js and app.js message handling in the inline JS templates within `
 | `src/engine/engine_internal.h` | Add `EXEC_YIELD_HOST_IO` |
 | `src/html-rt/browser_api.c` | Host IO state struct + 7 exported functions |
 | `src/html-rt/posix_stubs.c` | 2 host functions + dispatch entries |
-| `src/html-rt/src/bash/worker.js` | Yield-kind check + upload response handler |
-| `src/html-rt/src/bash/app.js` | File picker + download trigger |
+| `src/html-rt/src/worker.js` | Yield-kind check + upload response handler |
+| `src/html-rt/src/app.js` | File picker + download trigger |
 | `src/html-rt/tools/build-upload-download.py` | New build script |
 | `start.sh` | AUX_UTILITIES + dispatch case |
 | `src/html-rt/tools/generate-c-engine-bash-html.py` | Mirror JS changes |

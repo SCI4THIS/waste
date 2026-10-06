@@ -115,43 +115,26 @@ typedef struct wat_context {
     int cur_group;
     uint32_t cur_func_index;
 
-    char labels[WAST_MAX_LABEL_DEPTH][WAST_MAX_EXPORT_NAME];
     int label_depth;
-    char local_names[WAST_MAX_PARAMS + WAST_MAX_LOCALS]
-                    [WAST_MAX_EXPORT_NAME];
     int local_name_count;
 
-    char func_names[WAST_MAX_FUNCS][WAST_MAX_EXPORT_NAME];
     int func_name_count;
-    char global_names[WAST_MAX_GLOBALS][WAST_MAX_EXPORT_NAME];
     int global_name_count;
-    char type_names[WAST_MAX_TYPES][WAST_MAX_EXPORT_NAME];
-    uint32_t type_name_indices[WAST_MAX_TYPES];
     int type_name_count;
     int in_rec_group;
     int parsing_type_definition;
     uint32_t rec_group_start;
-    char table_names[WAST_MAX_TABLES][WAST_MAX_EXPORT_NAME];
     int table_name_count;
-    char memory_names[WAST_MAX_MEMORIES][WAST_MAX_EXPORT_NAME];
     int memory_name_count;
-    char data_names[WAST_MAX_DATA_SEGS][WAST_MAX_EXPORT_NAME];
     int data_name_count;
-    char elem_names[WAST_MAX_ELEM_SEGS][WAST_MAX_EXPORT_NAME];
     int elem_name_count;
-    char tag_names[WAST_MAX_TAGS][WAST_MAX_EXPORT_NAME];
     int tag_name_count;
 
     wast_tag cur_tag;
-    wast_func_fixup func_fixups[WAST_MAX_FUNC_FIXUPS];
     int func_fixup_count;
-    wast_type_fixup type_fixups[WAST_MAX_FUNCS];
     int type_fixup_count;
-    wast_code_index_fixup code_fixups[WAST_MAX_FUNC_FIXUPS];
     int code_fixup_count;
-    wast_meta_fixup meta_fixups[WAST_MAX_FUNC_FIXUPS];
     int meta_fixup_count;
-    wast_rec_type_fixup rec_fixups[WAST_MAX_REC_FIXUPS];
     int rec_fixup_count;
 
     wast_assertion cur_assert;
@@ -159,18 +142,12 @@ typedef struct wat_context {
     char invoke_name[WAST_MAX_EXPORT_NAME];
     int module_assert_action;
 
-    uint32_t brtable_labels[WAST_MAX_BR_TABLE_LABELS];
     int brtable_count;
-    wast_parsed_catch try_catches[WAST_MAX_TAGS];
     int try_catch_count;
-    wasm_valtype select_result_types[WAST_MAX_RESULTS];
     int select_result_count;
-    uint32_t lane_imms[32];
     int lane_imm_count;
 
-    wasm_valtype inline_params[WAST_MAX_PARAMS];
     int inline_param_count;
-    wasm_valtype inline_results[WAST_MAX_RESULTS];
     int inline_result_count;
 
     char import_module[WAST_MAX_EXPORT_NAME];
@@ -188,13 +165,40 @@ typedef struct wat_context {
     int *constexpr_length;
     int constexpr_capacity;
 
-    wasm_valtype blocktype_params[WAST_MAX_PARAMS];
     int blocktype_param_count;
-    wasm_valtype blocktype_results[WAST_MAX_RESULTS];
     int blocktype_result_count;
     int blocktype_explicit;
     int typeuse_field_stage;
     int signature_seen_result;
+    /* Bounded scratch arrays: live counts expose only initialized entries.
+     * Keep these after all zero-initialized state so each command
+     * parser need not clear megabytes of unused names/fixups/branch labels.
+     * New state requiring zero initialization belongs above this boundary. */
+    char labels[WAST_MAX_LABEL_DEPTH][WAST_MAX_EXPORT_NAME];
+    char local_names[WAST_MAX_PARAMS + WAST_MAX_LOCALS]
+                    [WAST_MAX_EXPORT_NAME];
+    char func_names[WAST_MAX_FUNCS][WAST_MAX_EXPORT_NAME];
+    char global_names[WAST_MAX_GLOBALS][WAST_MAX_EXPORT_NAME];
+    char type_names[WAST_MAX_TYPES][WAST_MAX_EXPORT_NAME];
+    uint32_t type_name_indices[WAST_MAX_TYPES];
+    char table_names[WAST_MAX_TABLES][WAST_MAX_EXPORT_NAME];
+    char memory_names[WAST_MAX_MEMORIES][WAST_MAX_EXPORT_NAME];
+    char data_names[WAST_MAX_DATA_SEGS][WAST_MAX_EXPORT_NAME];
+    char elem_names[WAST_MAX_ELEM_SEGS][WAST_MAX_EXPORT_NAME];
+    char tag_names[WAST_MAX_TAGS][WAST_MAX_EXPORT_NAME];
+    wast_func_fixup func_fixups[WAST_MAX_FUNC_FIXUPS];
+    wast_type_fixup type_fixups[WAST_MAX_FUNCS];
+    wast_code_index_fixup code_fixups[WAST_MAX_FUNC_FIXUPS];
+    wast_meta_fixup meta_fixups[WAST_MAX_FUNC_FIXUPS];
+    wast_rec_type_fixup rec_fixups[WAST_MAX_REC_FIXUPS];
+    uint32_t brtable_labels[WAST_MAX_BR_TABLE_LABELS];
+    wast_parsed_catch try_catches[WAST_MAX_TAGS];
+    wasm_valtype select_result_types[WAST_MAX_RESULTS];
+    uint32_t lane_imms[32];
+    wasm_valtype inline_params[WAST_MAX_PARAMS];
+    wasm_valtype inline_results[WAST_MAX_RESULTS];
+    wasm_valtype blocktype_params[WAST_MAX_PARAMS];
+    wasm_valtype blocktype_results[WAST_MAX_RESULTS];
 } wat_context;
 
 #endif

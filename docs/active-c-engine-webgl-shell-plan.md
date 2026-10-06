@@ -2,6 +2,10 @@
 
 Status: active
 
+Source-layout note: the VFS refactor's Stage 2 moved the current shell frontend
+to `src/html-rt/src/` and terminal sources/notices to its `terminal/` directory.
+Older implementation-log paths below describe their original locations.
+
 ## Objective
 
 Replace the current form-and-`<pre>` Bash presentation with a WebGL terminal,
@@ -89,11 +93,11 @@ shared between processes unless POSIX thread semantics explicitly require it.
 
 - `build/html-rt/bash.html` starts Bash through the C engine and accepts later
   input after a failed command.
-- `src/html-rt/src/bash/app.js` routes output through the VT model to a WebGL
+- `src/html-rt/src/app.js` routes output through the VT model to a WebGL
   canvas, with a bounded transcript for accessibility. The WebGL path now
   uses the reopened Stage 1 GLF/Bézier renderer, and terminal output is
   normalized by the engine before both the model and transcript consume it.
-- `src/html-rt/src/bash/worker.js` already carries terminal bytes across the
+- `src/html-rt/src/worker.js` already carries terminal bytes across the
   browser/engine boundary without Asyncify.
 - The engine terminal owns termios, `isatty`, canonical/raw readiness,
   configured controls, output processing, and window sizing. Interactive Bash
@@ -166,7 +170,7 @@ Status: complete (GLF renderer and offline integration verified; headless
 screenshot gate deferred — ptrace-restricted environment prevents browser
 launch, all other gates pass)
 
-Create a renderer under `src/html-rt/src/bash/terminal/` that is independent of
+Create a renderer under `src/html-rt/src/terminal/` that is independent of
 the C engine and terminal parser.
 
 The source of truth for this port is rogue-wasm revision
@@ -423,7 +427,10 @@ Gate:
 - Native warnings-as-errors, ASan, and UBSan terminal tests cover canonical,
   raw, echo, EOF, interrupt, output `OPOST`/`ONLCR`, resize, readiness, and
   repeated yield/resume.
-- Direct and threaded POSIX harnesses remain aligned where applicable.
+- Native and browser C POSIX/session results agree. OCaml is used only for
+  Wasm/WAT/WAST language checks; legacy direct/threaded POSIX evidence belongs
+  to coverage accounting before deferred kernel removal, not a terminal
+  acceptance gate. See [the OCaml retirement plan](active-ocaml-language-oracle-plan.md).
 - Browser Bash no longer relies on frontend line echo, Ctrl-C reaches the
   engine as SIGINT, Ctrl-D reaches the engine as VEOF/EOF, and the canvas/model
   agrees with the transcript for LF, CRLF, and cursor position.

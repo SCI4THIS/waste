@@ -1,0 +1,27 @@
+# Native-corpus files that fail against build/cli-rt/waste-wast and are
+# therefore expected to appear as XFAIL rather than FAIL in CI output.
+#
+# As of Stage 6B.8 the cli-rt host resolver chains to
+# guest_posix_host_resolver (the same engine-owned POSIX stub table the
+# browser worker uses), so env.* and the broader waste_kernel ABI resolve
+# natively.  The remaining libc-test fixtures below are the same two the
+# browser corpus already lists as XFAIL — they need capabilities the
+# engine kernel currently returns ENOSYS for and are tracked for
+# diagnosis under docs/completed-browser-corpus-xfail-diagnosis.md.
+#
+# Each entry is a relative file path matched against the harness's
+# `test.path || test.group/test.file` identity.  Comments (`#...`) and blank
+# lines are ignored.  When a listed file starts passing, the harness reports
+# XPASS and the overall run fails — remove the entry (and update the plan)
+# in the same change that fixes the underlying bug.
+#
+# Baseline recorded 2026-10-03 at
+# build/engine/refactor-stage6b-native-resolver/.
+# 2 entries, both libc-test, both already XFAIL under the browser runtime.
+
+libc-test/environment-boundaries.wast
+libc-test/terminal.wast
+
+# Stage 6B.42 exposed ten ordinary setup errors in seven language files.
+# Stages 6B.43–6B.45 repair segment capacity, element types and spectest.table64;
+# all seven now pass native/browser C and the OCaml language oracle.

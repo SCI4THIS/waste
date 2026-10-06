@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Generate a self-contained C-engine Bash page.
 
-Embeds the compiled C engine (waste-wast.wasm), the bash-runtime.wast launch
-script, and the first linked GNU coreutils utility into a single offline HTML
-file.  The C engine processes the WAST script in a Web Worker.
+Stages generated engine/bootstrap assets or packages the authored frontend
+through build.sh. No generated copy of the shell UI or worker is maintained.
 
 Terminal output is captured through the posix_write host import.  Interactive
 input is copied into the engine-owned terminal kernel; a blocked read yields
@@ -12,480 +11,9 @@ No asyncify transform, no SharedArrayBuffer, works on file://.
 """
 
 import argparse
-import base64
-import json
+import subprocess
 from pathlib import Path
 
-
-COREUTILS_UTILITIES = [
-    "true", "false", "pwd", "echo", "printf", "basename", "dirname", "cat", "wc",
-    "ls", "date",
-]
-PACKAGE_FILES = [
-    ("/usr/share/waste/coreutils-provenance.json", "build/coreutils/provenance.json", 0o644),
-    ("/usr/share/waste/coreutils-source-package.json", "build/coreutils/coreutils-source-package.json", 0o644),
-    ("/usr/share/licenses/coreutils/COPYING", "submodules/coreutils/COPYING", 0o644),
-]
-# Files that the engine itself excludes from auto-discovery.
-EXCLUDED_WASM = {"waste-wast", "waste-probe"}
-
-
-def script_json(value) -> str:
-    return (
-        json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-        .replace("&", "\\u0026")
-        .replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-    )
-
-
-HTML = r'''<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WASTE Bash (C engine)</title>
-  <style>
-    :root { color-scheme: dark; --bg:#0b1017; --panel:#151d29; --line:#334258; --text:#e8edf4; --muted:#9cacbf; --accent:#62b4ff; }
-    * { box-sizing:border-box; }
-    body { margin:0; min-height:100vh; background:radial-gradient(circle at top,#17253a,var(--bg) 38rem); color:var(--text); font:15px/1.45 system-ui,sans-serif; }
-    main { width:min(1050px,calc(100% - 32px)); margin:32px auto; }
-    h1 { margin:0 0 4px; font-size:24px; }
-    .subtitle { color:var(--muted); margin:0 0 22px; }
-    .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; box-shadow:0 14px 38px #0005; }
-    form,.controls { display:flex; flex-wrap:wrap; gap:9px; align-items:center; }
-    input,select,button { border:1px solid #40526c; border-radius:7px; background:#202c3e; color:var(--text); padding:8px 11px; font:inherit; }
-    #terminal-input { flex:1 1 420px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
-    button { cursor:pointer; }
-    button:hover:not(:disabled) { border-color:var(--accent); }
-    button:disabled { cursor:not-allowed; opacity:.48; }
-    #start,#send-input { background:#135c8e; border-color:#2984bd; font-weight:650; }
-    .controls { margin-top:10px; }
-    #status { margin-left:auto; color:var(--muted); }
-    pre { min-height:480px; max-height:68vh; overflow:auto; margin:16px 0 0; padding:16px; border:1px solid #263449; border-radius:8px; background:#070b10; color:#dce8d5; white-space:pre-wrap; overflow-wrap:anywhere; font:14px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; }
-    code { color:#b9ddff; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>WASTE Bash (C engine)</h1>
-    <p class="subtitle">A self-contained C WebAssembly engine, shared runtime namespace, guest libc, and Bash. No server or network access is required.</p>
-    <section class="panel">
-      <form id="start-form">
-        <button id="start" type="submit">Restart Bash</button>
-      </form>
-      <div class="controls">
-        <button id="pause" type="button" disabled>Pause</button>
-        <button id="resume" type="button" disabled>Resume</button>
-        <select id="signal" disabled>
-          <option value="2">SIGINT</option><option value="15">SIGTERM</option>
-          <option value="1">SIGHUP</option><option value="14">SIGALRM</option>
-          <option value="28">SIGWINCH</option>
-        </select>
-        <button id="send-signal" type="button" disabled>Send signal</button>
-        <button id="stop" type="button" disabled>Stop worker</button>
-        <span id="status">idle</span>
-      </div>
-      <pre id="terminal" aria-live="polite"></pre>
-      <form id="terminal-form" style="margin-top:10px">
-        <label for="terminal-input">input</label>
-        <input id="terminal-input" autocomplete="off" spellcheck="false" disabled>
-        <button id="send-input" type="submit" disabled>Send</button>
-      </form>
-    </section>
-  </main>
-  <script>
-    "use strict";
-    const PAYLOAD = __PAYLOAD__;
-    let worker = null;
-    let startedAt = null;
-    let startedEpoch = null;
-    let statusTimer = null;
-    let starting = false;
-    const terminal = document.querySelector("#terminal");
-    const status = document.querySelector("#status");
-    const controls = ["#pause","#resume","#signal","#send-signal","#stop"];
-
-    const workerProgram = String.raw`
-      "use strict";
-
-      function decodeB64(text) {
-        const raw = atob(text), bytes = new Uint8Array(raw.length);
-        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-        return bytes;
-      }
-
-      function watFloat(text, asF32) {
-        return asF32 ? Math.fround(Number(text)) : Number(text);
-      }
-
-      let exp = null;
-      let engineMemory = null;
-      let ioResolve = null;
-      let ioPending = false;
-      let terminated = false;
-
-      function waitForIO() {
-        if (ioPending) {
-          ioPending = false;
-          return Promise.resolve();
-        }
-        return new Promise(resolve => { ioResolve = resolve; });
-      }
-
-      const decoder = new TextDecoder();
-
-      function posixRead(fd, ptr, count) {
-        return terminated ? 0 : -1;
-      }
-
-      function posixWrite(fd, ptr, count) {
-        if (fd === 1 || fd === 2) {
-          const bytes = new Uint8Array(engineMemory.buffer, ptr, count);
-          const text = decoder.decode(bytes, {stream: true});
-          self.postMessage({type: "output", text});
-        }
-        return count;
-      }
-
-      async function run(wasmB64, source, coreutilsMap, packagedFiles, buildMtime) {
-        const wasmBytes = decodeB64(wasmB64);
-        const hostFloat = (ptr, length, asF32) => {
-          const bytes = new Uint8Array(engineMemory.buffer, ptr, length);
-          return watFloat(decoder.decode(bytes), asF32);
-        };
-        const imports = {waste_host: {
-          strtod: (ptr, length) => hostFloat(ptr, length, false),
-          strtof: (ptr, length) => hostFloat(ptr, length, true),
-          posix_open: () => -1,
-          posix_close: () => 0,
-          posix_read: posixRead,
-          posix_write: posixWrite,
-          wall_clock_ms: () => Date.now(),
-        }};
-        const {instance} = await WebAssembly.instantiate(wasmBytes, imports);
-        exp = instance.exports;
-        engineMemory = exp.memory;
-        exp.waste_wast_enable_terminal();
-        if (buildMtime && exp.waste_wast_stage_build_mtime) {
-          const seconds = buildMtime.sec;
-          const staged = exp.waste_wast_stage_build_mtime(
-            seconds >>> 0, Math.floor(seconds / 0x100000000) >>> 0,
-            (buildMtime.nsec || 0) >>> 0);
-          if (staged !== 0) throw new Error(`build mtime staging failed: ${staged}`);
-        }
-
-        const stageVfsMtime = (seconds, nanoseconds = 0) => {
-          if (!exp.waste_wast_stage_mtime) return;
-          if (seconds === undefined) {
-            const milliseconds = Date.now();
-            seconds = Math.floor(milliseconds / 1000);
-            nanoseconds = (milliseconds % 1000) * 1000000;
-          }
-          const staged = exp.waste_wast_stage_mtime(
-            seconds >>> 0, Math.floor(seconds / 0x100000000) >>> 0,
-            nanoseconds >>> 0);
-          if (staged !== 0) throw new Error(`VFS mtime staging failed: ${staged}`);
-        };
-        const stageVfsPath = (path, kind, mode, size, mtimeSec, mtimeNsec) => {
-          const pathBytes = new TextEncoder().encode(path);
-          const pathPtr = exp.waste_wast_alloc(pathBytes.length);
-          if (!pathPtr) throw new Error(`VFS path allocation failed for ${path}`);
-          new Uint8Array(engineMemory.buffer, pathPtr, pathBytes.length).set(pathBytes);
-          const staged = exp.waste_wast_stage_path(pathPtr, pathBytes.length,
-            kind, mode, size >>> 0);
-          exp.waste_wast_free?.(pathPtr);
-          if (staged !== 0) throw new Error(`VFS metadata failed for ${path}`);
-          stageVfsMtime(mtimeSec, mtimeNsec);
-        };
-        stageVfsPath("/tmp", 2, 0o777, 0);
-        stageVfsPath("/root", 2, 0o755, 0);
-        stageVfsPath("/usr", 2, 0o755, 0);
-        stageVfsPath("/usr/bin", 2, 0o755, 0);
-        stageVfsPath("/usr/share", 2, 0o755, 0);
-        stageVfsPath("/usr/lib", 2, 0o755, 0);
-        stageVfsPath("/usr/share/waste", 2, 0o755, 0);
-        stageVfsPath("/usr/share/licenses", 2, 0o755, 0);
-        stageVfsPath("/usr/share/licenses/coreutils", 2, 0o755, 0);
-        stageVfsPath("/lib", 2, 0o755, 0);
-        stageVfsPath("/bin/wat", 1, 0o755, 0);
-        stageVfsPath("/bin/wast", 1, 0o755, 0);
-
-        for (const [name, source] of Object.entries(coreutilsMap)) {
-          const utilityBytes = decodeB64(source.data);
-          for (const utilityName of [`/usr/bin/${name}`, `/bin/${name}`]) {
-            const utilityPath = new TextEncoder().encode(utilityName);
-            const pathPtr = exp.waste_wast_alloc(utilityPath.length);
-            const utilityPtr = exp.waste_wast_alloc(utilityBytes.length);
-            if (!pathPtr || !utilityPtr) throw new Error("utility VFS staging allocation failed");
-            new Uint8Array(engineMemory.buffer, pathPtr, utilityPath.length).set(utilityPath);
-            new Uint8Array(engineMemory.buffer, utilityPtr, utilityBytes.length).set(utilityBytes);
-            const staged = exp.waste_wast_stage_file(pathPtr, utilityPath.length,
-              utilityPtr, utilityBytes.length, 0o755);
-            exp.waste_wast_free?.(pathPtr);
-            exp.waste_wast_free?.(utilityPtr);
-            if (staged !== 0) throw new Error(`staging ${utilityName} failed: ${staged}`);
-            stageVfsMtime(source.mtimeSec, source.mtimeNsec);
-          }
-        }
-        for (const file of packagedFiles || []) {
-          const pathBytes = new TextEncoder().encode(file.path);
-          const fileBytes = decodeB64(file.data);
-          const pathPtr = exp.waste_wast_alloc(pathBytes.length);
-          const dataPtr = exp.waste_wast_alloc(fileBytes.length);
-          if (!pathPtr || !dataPtr) throw new Error(`package allocation failed for ${file.path}`);
-          new Uint8Array(engineMemory.buffer, pathPtr, pathBytes.length).set(pathBytes);
-          new Uint8Array(engineMemory.buffer, dataPtr, fileBytes.length).set(fileBytes);
-          const staged = exp.waste_wast_stage_file(pathPtr, pathBytes.length,
-            dataPtr, fileBytes.length, file.mode);
-          exp.waste_wast_free?.(pathPtr);
-          exp.waste_wast_free?.(dataPtr);
-          if (staged !== 0) throw new Error(`staging ${file.path} failed: ${staged}`);
-          stageVfsMtime(file.mtimeSec, file.mtimeNsec);
-        }
-
-        const sourceBytes = new TextEncoder().encode(source);
-        const scriptPtr = exp.waste_wast_alloc(sourceBytes.length);
-        if (!scriptPtr) throw new Error("C engine script allocation failed");
-        new Uint8Array(engineMemory.buffer, scriptPtr, sourceBytes.length).set(sourceBytes);
-
-        self.postMessage({type: "started"});
-
-        let yielded = exp.waste_wast_run_script(scriptPtr, sourceBytes.length);
-        while (yielded) {
-          const waitKind = exp.waste_wast_wait_kind ? exp.waste_wast_wait_kind() : 0;
-          if (waitKind === 5 && exp.waste_wast_host_io_kind) {
-            const ioKind = exp.waste_wast_host_io_kind();
-            const vb = exp.waste_wast_host_io_verbose && exp.waste_wast_host_io_verbose();
-            const pathPtr = exp.waste_wast_host_io_path_ptr();
-            const pathLen = exp.waste_wast_host_io_path_len();
-            const path = decoder.decode(new Uint8Array(engineMemory.buffer, pathPtr, pathLen));
-            if (vb) console.log("[worker] host-io yield: kind=" + ioKind +
-              " (1=UPLOAD, 2=DOWNLOAD) path=" + path + " waitKind=" + waitKind);
-            if (ioKind === 2) {
-              const dataPtr = exp.waste_wast_host_io_data_ptr();
-              const dataLen = exp.waste_wast_host_io_data_len();
-              const data = new Uint8Array(engineMemory.buffer, dataPtr, dataLen).slice();
-              if (vb) console.log("[download] sending to main thread, name=" + path +
-                " size=" + dataLen);
-              self.postMessage({type: "host-download", name: path, bytes: data,
-                verbose: vb}, [data.buffer]);
-              exp.waste_wast_host_io_complete();
-              ioPending = true;
-            } else if (ioKind === 1) {
-              if (vb) console.log("[upload] sending request to main thread, destPath=" + path);
-              self.postMessage({type: "host-upload-request", destPath: path, verbose: vb});
-            }
-          }
-          await waitForIO();
-          if (terminated) break;
-          yielded = exp.waste_wast_resume();
-        }
-
-        const total = exp.waste_wast_results_total();
-        const passed = exp.waste_wast_results_passed();
-        const resultsPtr = exp.waste_wast_results_ptr();
-        const resultBytes = new Uint8Array(engineMemory.buffer);
-        const results = [];
-        for (let i = 0; i < total; i++) {
-          const base = resultsPtr + i * 256;
-          let funcEnd = 1;
-          while (funcEnd < 64 && resultBytes[base + funcEnd]) funcEnd++;
-          let errorEnd = 64;
-          while (errorEnd < 256 && resultBytes[base + errorEnd]) errorEnd++;
-          results.push({
-            pass: resultBytes[base] !== 0,
-            func: decoder.decode(resultBytes.subarray(base + 1, base + funcEnd)),
-            error: decoder.decode(resultBytes.subarray(base + 64, base + errorEnd)),
-          });
-        }
-        self.postMessage({type: "done", ok: total === 0 || passed === total,
-          total, passed, results});
-      }
-
-      self.onmessage = function(e) {
-        const msg = e.data;
-        if (msg.type === "start") {
-          run(msg.wasmB64, msg.source, msg.coreutilsMap || {},
-              msg.packagedFiles || [], msg.buildMtime).catch(error => {
-            self.postMessage({type: "done", ok: false,
-              error: error && (error.stack || error.message) || String(error)});
-          });
-        } else if (msg.type === "input") {
-          const bytes = new Uint8Array(msg.bytes);
-          const ptr = exp.waste_wast_alloc(bytes.length);
-          if (!ptr) throw new Error("C engine input allocation failed");
-          new Uint8Array(engineMemory.buffer, ptr, bytes.length).set(bytes);
-          exp.waste_wast_enqueue_input(ptr, bytes.length);
-          if (ioResolve) { ioResolve(); ioResolve = null; }
-          else ioPending = true;
-        } else if (msg.type === "signal") {
-          exp.waste_wast_raise_signal(msg.signal);
-          if (ioResolve) { ioResolve(); ioResolve = null; }
-        } else if (msg.type === "host-upload-response") {
-          if (msg.cancelled) {
-            exp.waste_wast_host_io_cancel();
-          } else {
-            const bytes = new Uint8Array(msg.bytes);
-            const ptr = exp.waste_wast_alloc(bytes.length);
-            new Uint8Array(engineMemory.buffer, ptr, bytes.length).set(bytes);
-            exp.waste_wast_host_io_provide_upload(ptr, bytes.length);
-          }
-          if (ioResolve) { ioResolve(); ioResolve = null; }
-        } else if (msg.type === "stop") {
-          terminated = true;
-          if (ioResolve) { ioResolve(); ioResolve = null; }
-        }
-      };
-    `;
-
-    function setRunning(running) {
-      for (const selector of controls) document.querySelector(selector).disabled = !running;
-      if (!running) {
-        document.querySelector("#terminal-input").disabled = true;
-        document.querySelector("#send-input").disabled = true;
-      }
-    }
-
-    function append(line) {
-      terminal.textContent += line + "\n";
-      terminal.scrollTop = terminal.scrollHeight;
-    }
-
-    function appendRaw(text) {
-      terminal.textContent += text;
-      terminal.scrollTop = terminal.scrollHeight;
-    }
-
-    function finish(message) {
-      const elapsed = startedEpoch ? ((Date.now() - startedEpoch) / 1000).toFixed(3) : "0.000";
-      status.textContent = `${message} \u00b7 ${elapsed}s by Date`;
-      clearInterval(statusTimer);
-      starting = false;
-      setRunning(false);
-      if (worker) { worker.postMessage({type: "stop"}); }
-      worker?.terminate();
-      worker = null;
-    }
-
-    function startShell(event) {
-      event?.preventDefault();
-      try {
-        if (worker) { worker.postMessage({type: "stop"}); }
-        worker?.terminate();
-        const source = PAYLOAD.launch;
-        terminal.textContent = "";
-        status.textContent = "Starting C engine (0.0 s)";
-        setRunning(true);
-        document.querySelector("#terminal-input").disabled = true;
-        document.querySelector("#send-input").disabled = true;
-        startedAt = performance.now();
-        startedEpoch = Date.now();
-        starting = true;
-        clearInterval(statusTimer);
-        statusTimer = setInterval(() => {
-          if (starting) status.textContent = `Starting C engine (${((Date.now() - startedEpoch) / 1000).toFixed(1)} s by Date)`;
-        }, 100);
-        const url = URL.createObjectURL(new Blob([workerProgram], {type:"text/javascript"}));
-        worker = new Worker(url);
-        URL.revokeObjectURL(url);
-        worker.onmessage = ({data}) => {
-          if (data.type === "output") {
-            appendRaw(data.text);
-            if (starting && /bash-[^\r\n]*[#$] ?/.test(data.text)) {
-              starting = false;
-              clearInterval(statusTimer);
-              const wallSeconds = (Date.now() - startedEpoch) / 1000;
-              const monotonicSeconds = (performance.now() - startedAt) / 1000;
-              status.textContent = `Bash running after ${wallSeconds.toFixed(3)} s by Date (${monotonicSeconds.toFixed(3)} s monotonic)`;
-              document.querySelector("#terminal-input").disabled = false;
-              document.querySelector("#send-input").disabled = false;
-              document.querySelector("#terminal-input").focus();
-            }
-          }
-          else if (data.type === "started" && starting) {
-            status.textContent = `C engine loaded; running Bash (${((Date.now() - startedEpoch) / 1000).toFixed(1)} s by Date)`;
-          }
-          else if (data.type === "host-download") {
-            if (data.verbose) console.log("[download] trigger browser save, name=" +
-              data.name + " size=" + data.bytes.length);
-            const blob = new Blob([data.bytes], {type: "application/octet-stream"});
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement("a");
-            link.href = url;
-            link.download = data.name;
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-          }
-          else if (data.type === "host-upload-request") {
-            if (data.verbose) console.log("[upload] open file picker, destPath=" +
-              data.destPath);
-            const uploadVerbose = data.verbose;
-            const input = document.createElement("input");
-            input.type = "file";
-            input.onchange = () => {
-              const file = input.files[0];
-              if (!file) {
-                if (uploadVerbose) console.log("[upload] no file selected");
-                worker.postMessage({type: "host-upload-response", cancelled: true});
-                return;
-              }
-              if (uploadVerbose) console.log("[upload] reading " +
-                file.name + " (" + file.size + " bytes)");
-              const reader = new FileReader();
-              reader.onload = () => {
-                if (uploadVerbose) console.log("[upload] sending " +
-                  reader.result.byteLength + " bytes to worker");
-                worker.postMessage({type: "host-upload-response",
-                  bytes: new Uint8Array(reader.result)});
-              };
-              reader.readAsArrayBuffer(file);
-            };
-            input.addEventListener("cancel", () => {
-              if (uploadVerbose) console.log("[upload] file dialog cancelled");
-              worker.postMessage({type: "host-upload-response", cancelled: true});
-            });
-            input.click();
-          }
-          else if (data.type === "done") {
-            if (data.error) append(data.error);
-            finish(data.ok ? "completed" : `failed${data.exitCode === undefined ? "" : ` (exit ${data.exitCode})`}`);
-          }
-        };
-        worker.onerror = event => { append(event.message || "worker error"); finish("failed"); };
-        worker.postMessage({type: "start", wasmB64: PAYLOAD.wasmB64, source,
-          coreutilsMap: PAYLOAD.coreutilsMap, packagedFiles: PAYLOAD.packagedFiles,
-          buildMtime: PAYLOAD.buildMtime});
-      } catch (error) { status.textContent = error.message || String(error); }
-    }
-    document.querySelector("#start-form").addEventListener("submit", startShell);
-
-    document.querySelector("#terminal-form").addEventListener("submit", event => {
-      event.preventDefault();
-      const input = document.querySelector("#terminal-input");
-      const bytes = new TextEncoder().encode(input.value + "\n");
-      if (worker) worker.postMessage({type: "input", bytes: Array.from(bytes)});
-      append(input.value);
-      input.value = "";
-      status.textContent = "Bash running";
-    });
-
-    document.querySelector("#pause").onclick = () => status.textContent = "paused (C engine executes synchronously)";
-    document.querySelector("#resume").onclick = () => status.textContent = "running";
-    document.querySelector("#send-signal").onclick = () => {
-      const select = document.querySelector("#signal");
-      const signal = Number(select.value);
-      if (worker) worker.postMessage({type: "signal", signal});
-      status.textContent = `${select.selectedOptions[0].textContent} queued`;
-    };
-    document.querySelector("#stop").onclick = () => finish("stopped");
-    startShell();
-  </script>
-</body>
-</html>
-'''
 
 
 def main() -> None:
@@ -498,74 +26,26 @@ def main() -> None:
                         help="Path to waste-wast.wasm (C engine)")
     parser.add_argument("--launch", type=Path, required=True,
                         help="Path to bash-runtime.wast (interactive mode)")
-    parser.add_argument("--coreutils-dir", type=Path, default=None,
-                        help="Directory containing pre-built coreutils .wasm files")
-    parser.add_argument("--output", type=Path, default=None,
-                        help="Output HTML file path (monolithic mode)")
-    parser.add_argument("--output-dir", type=Path, default=None,
-                        help="Output directory for staging files (copy wasm + launch)")
+    parser.add_argument("--vfs-root", type=Path, default=None,
+                        help="Explicitly installed VFS distribution tree")
+    output = parser.add_mutually_exclusive_group(required=True)
+    output.add_argument("--output", type=Path,
+                        help="Self-contained HTML output using the authored frontend")
+    output.add_argument("--output-dir", type=Path,
+                        help="Generated staging directory under repository build/")
     args = parser.parse_args()
 
-    if not args.output and not args.output_dir:
-        parser.error("either --output or --output-dir is required")
+    args.repo_root = args.repo_root.resolve()
+    if args.output_dir and not args.output_dir.resolve().is_relative_to(args.repo_root / "build"):
+        parser.error("--output-dir must be under repository build/")
 
     if not args.wasm.is_file():
         raise SystemExit(f"C engine Wasm not found: {args.wasm}")
     if not args.launch.is_file():
         raise SystemExit(f"Bash launch script not found: {args.launch}")
-    coreutils_dir = args.coreutils_dir or (args.repo_root / "src/html-rt/src/bash")
-    coreutils_paths: dict[str, Path] = {}
-    missing = []
-    for name in COREUTILS_UTILITIES:
-        p = coreutils_dir / f"{name}.wasm"
-        if p.is_file():
-            coreutils_paths[name] = p
-        else:
-            missing.append(name)
-    if missing:
-        raise SystemExit(
-            f"coreutils Wasm files missing from {coreutils_dir}: {', '.join(missing)}\n"
-            "Run ./start.sh --build-coreutils to build them.")
-
-    # Auto-discover additional executables (.wasm but not .so.wasm) and
-    # shared libraries (.so.wasm) from the same directory.
-    extra_executables: dict[str, Path] = {}
-    library_files: list[tuple[str, Path]] = []
-    for wasm_file in sorted(coreutils_dir.glob("*.wasm")):
-        if wasm_file.name.endswith(".so.wasm"):
-            library_files.append((wasm_file.name, wasm_file))
-            continue
-        stem = wasm_file.stem
-        if stem in coreutils_paths or stem in EXCLUDED_WASM:
-            continue
-        extra_executables[stem] = wasm_file
-    if extra_executables:
-        print(f"extra executables: {', '.join(extra_executables)}")
-    if library_files:
-        print(f"shared libraries: {', '.join(n for n, _ in library_files)}")
-
-    packaged_files = []
-    for vfs_path, relative_path, mode in PACKAGE_FILES:
-        package_path = args.repo_root / relative_path
-        if not package_path.is_file():
-            raise SystemExit(
-                f"required package file missing: {package_path}\n"
-                "Run make -C src/html-rt BUILD_DIR=../../build/html-rt coreutils-wasm.")
-        packaged_files.append({
-            "path": vfs_path,
-            "mode": mode,
-            "data": base64.b64encode(package_path.read_bytes()).decode("ascii"),
-            "mtimeSec": package_path.stat().st_mtime_ns // 1_000_000_000,
-            "mtimeNsec": package_path.stat().st_mtime_ns % 1_000_000_000,
-        })
-    for lib_name, lib_path in library_files:
-        packaged_files.append({
-            "path": f"/usr/lib/{lib_name}",
-            "mode": 0o644,
-            "data": base64.b64encode(lib_path.read_bytes()).decode("ascii"),
-            "mtimeSec": lib_path.stat().st_mtime_ns // 1_000_000_000,
-            "mtimeNsec": lib_path.stat().st_mtime_ns % 1_000_000_000,
-        })
+    vfs_root = args.vfs_root or args.repo_root / "src/vfs"
+    subprocess.run(["python3", str(Path(__file__).with_name("vfs.py")),
+                    "audit", "--root", str(vfs_root)], check=True)
 
     if args.output_dir:
         import os
@@ -582,50 +62,19 @@ def main() -> None:
                 pass
             shutil.copy2(src, dst)
 
-        all_executables = {**coreutils_paths, **extra_executables}
         safe_copy(args.wasm, out_dir / "waste-wast.wasm")
         safe_copy(args.launch, out_dir / "launch.wast")
-        for name, src in all_executables.items():
-            safe_copy(src, out_dir / f"{name}.wasm")
-        for name, src in library_files:
-            safe_copy(src, out_dir / name)
+        print(f"Generated bootstrap staging in {out_dir}; guest tree remains {vfs_root}")
 
-        wasm_size = args.wasm.stat().st_size
-        launch_size = args.launch.stat().st_size
-        print(f"Copied staging files to {out_dir}")
-        print(f"  waste-wast.wasm: {wasm_size:,} bytes")
-        print(f"  launch.wast: {launch_size:,} bytes")
-        for name, src in all_executables.items():
-            print(f"  {name}.wasm: {src.stat().st_size:,} bytes")
     else:
-        launch_text = args.launch.read_text(encoding="utf-8")
-        wasm_bytes = args.wasm.read_bytes()
-        wasm_b64 = base64.b64encode(wasm_bytes).decode("ascii")
-
-        payload = {
-            "wasmB64": wasm_b64,
-            "buildMtime": {
-                "sec": args.wasm.stat().st_mtime_ns // 1_000_000_000,
-                "nsec": args.wasm.stat().st_mtime_ns % 1_000_000_000,
-            },
-            "launch": launch_text,
-            "coreutilsMap": {name: {
-                "data": base64.b64encode(src.read_bytes()).decode("ascii"),
-                "mtimeSec": src.stat().st_mtime_ns // 1_000_000_000,
-                "mtimeNsec": src.stat().st_mtime_ns % 1_000_000_000,
-            } for name, src in {**coreutils_paths, **extra_executables}.items()},
-            "packagedFiles": packaged_files,
-        }
-
-        document = HTML.replace("__PAYLOAD__", script_json(payload))
-
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(document, encoding="utf-8")
-        print(f"Generated {args.output}")
-        print(f"Output size: {args.output.stat().st_size:,} bytes")
-        print(f"C engine Wasm: {len(wasm_bytes):,} bytes "
-              f"({len(wasm_b64):,} B base64)")
-        print(f"Launch script: {len(launch_text):,} bytes")
+        subprocess.run([
+            "bash", str(Path(__file__).with_name("build.sh")), "bash",
+            "--source-dir", str(args.repo_root / "src/html-rt/src"),
+            "--vfs-root", str(vfs_root.resolve()),
+            "--wasm", str(args.wasm.resolve()),
+            "--launch", str(args.launch.resolve()),
+            "--output", str(args.output.resolve()),
+        ], check=True)
 
 
 if __name__ == "__main__":

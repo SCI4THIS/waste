@@ -5,13 +5,24 @@
 WASTE runs WebAssembly applications and specification scripts in a native C
 diagnostic runtime and in a self-contained browser runtime.  The repository-owned
 C engine is the production direction.  The official OCaml interpreter in
-`submodules/wasm-spec` remains the differential oracle during migration; it is
-not part of the C engine's instruction-execution path.
+`submodules/wasm-spec` is the differential oracle only for Wasm/WAT/WAST
+language semantics: parsing, encoding/decoding, validation, linking,
+instantiation, execution, traps and script assertions. Standard spec-test
+imports and minimal language-test scaffolding remain in scope.
+
+The OCaml application-engine experiment was not practical. No further OCaml
+kernel, VFS, process, signal, scheduler, terminal, libc-host or broker
+development is planned. The existing repository-added OCaml kernel and
+application-runtime integration will be removed in deferred cleanup; see
+[the OCaml scope and retirement plan](active-ocaml-language-oracle-plan.md).
+C owns production application execution and kernel behavior. Missing OCaml
+POSIX imports are outside oracle scope and do not block C kernel acceptance.
 
 This document records durable system boundaries and ownership rules.  Concrete
 unfinished work belongs in the active plans:
 
-- [active-c-engine-select-pselect-plan.md](active-c-engine-select-pselect-plan.md)
+- [active-browser-vfs-layout-plan.md](active-browser-vfs-layout-plan.md)
+- [active-ocaml-language-oracle-plan.md](active-ocaml-language-oracle-plan.md)
 
 [techniques.md](techniques.md) records reusable implementation and testing
 practices.  Dated pass counts, resolved failure lists, and build-history notes
@@ -23,8 +34,9 @@ The current source boundaries are:
 
 ```text
 src/engine/    platform-neutral parser, encoder, decoder, validator,
-               instantiation, linker, runner, and executor
-src/cli-rt/    native CLI, mmap harness, native platform library, and Makefile
+               instantiation, linker, runner, executor and guest POSIX ABI
+src/cli-rt/    native CLI/session drivers, mmap harness, platform library,
+               and Makefile
 src/html-rt/   browser API, browser POSIX adapter, guest libc, HTML tools,
                and Wasm Makefile
 ```
@@ -49,13 +61,94 @@ Generated files stay under `build/`:
 ```text
 build/engine/   shared generated parser sources, toolchain, and logs
 build/cli-rt/   native executables, including waste-cli
-build/html-rt/  browser Wasm, test.html, bash.html, and libc fixtures
+build/html-rt/  browser Wasm, bash.html, worker-test payloads, and libc fixtures
 build/ocaml/    OCaml oracle builds and staging
 ```
 
 `examples/bash.wat` is the compiled Bash input.  Guest-libc sources are under
 `src/html-rt/lib/`, and browser packaging tools are under
 `src/html-rt/tools/`.  Nothing under `build/` is a source of truth.
+
+Authored browser assets are flattened under `src/html-rt/src/`: the shell/test
+page uses `index.html`, `app.js`, `worker.js`, and `style.css`, with shared
+`test-suite.js` for installed-corpus execution. Focused Node worker conformance
+uses a JSON payload and `tests-worker.js`; it has no HTML frontend. Both use
+`loader.js`; canonical terminal assets and notices live in `terminal/`. Guest
+distribution snapshots live in `src/vfs`:
+canonical commands in `usr/bin`, verified command copies in `bin`, and shared
+libraries in `lib` with compatible `usr/lib` copies. The host-side
+`.inventory.json` declares guest paths, ownership, modes, original mtimes,
+hashes, aliases, source inputs and Wasm contracts. Inventory timestamps and empty
+directories are authoritative even after a Git checkout changes host metadata.
+
+Guest public headers are authored in `src/vfs/usr/include`, with selected,
+licensed compiler-support snapshots in `usr/lib/waste/cc/include`. Sysroot and
+guest libc builds consume this same mounted tree without host header fallback.
+Private engine/native/libc headers stay beside their implementations; package
+compatibility shims remain separate named build profiles. The SDK records its
+audited function providers, signatures and unavailable capabilities; see
+`guest-sdk.md` and Stage 4 of the active VFS plan.
+
+`src/html-rt/tools/vfs.py install` explicitly publishes validated snapshots;
+build tools compile under `build/` and support a separate `--install` step.
+Packaging reads the installed inventory and preserves its directory tree in
+standard tar. The browser's existing tarballjs extractor supplies file bytes;
+`src/cli-rt/native_vfs.c` reads declared files directly beneath an open host
+VFS directory. The shared engine validates inventory metadata and SHA-256
+content hashes before mounting a complete catalogue into a fresh kernel.
+Both the browser API and `waste-cli --vfs-root DIRECTORY FILE.wast` use this
+inventory/file mounting contract. No custom filesystem bundle is generated.
+The native option
+establishes mount parity; the separate `waste-session` companion adds shared
+guest imports and bounded child-first fork/exec terminal sessions through the
+shared process driver. Both runtimes use the shared WAST child handler, retaining
+assertions across READ/SELECT resumes and mapping failed child assertions to an
+exit status without stopping the parent shell. See `native-guest-session.md`.
+Host engine/worker assets and the host inventory are not guest VFS nodes.
+
+`src/vfs/tests` holds explicitly installed snapshots of the WebAssembly corpus
+and authored `tests/engine-regressions/*.wast`, with a mounted policy/provenance
+manifest and companion assets. Sources remain in the pinned spec submodule,
+top-level regression directories and generated libc fixture directory. The
+corpus collector shares selection/grouping logic with the installer.
+`waste-test`, the native batch companion, consumes `/tests/manifest.json` and
+WAST/support bytes from an installed directory without Node or an HTML payload.
+Its bounded manifest decoder
+lives in `src/engine/test_suite.{c,h}`; native child isolation, signal handling,
+deadlines and report files belong to `src/cli-rt/test_suite.c`. The CLI and batch
+runner share native imports and assertion execution in `native_wast.c`, using
+the engine's balanced command scanner and the shared process driver to attach
+the active guest address space. Commands execute in source order; explicit
+module assertions preserve the current instance, and register commands update
+provider bindings immediately. Parsed definition/live-instance metadata is
+retained while borrowed by the store; temporary assertion parses are released
+after execution. Native
+children each construct a fresh store/kernel and retain intentional aliases
+within their own script. Unsupported execution modes remain explicit skips;
+reports preserve assertion records and expected-failure distinctions.
+The native WAST adapter resumes finite kernel SELECT deadlines against a host
+monotonic clock through the shared process driver, preserving pending assertion
+arguments/results. Clock/sleep syscalls stay in cli-rt; terminal-input,
+indefinite and other externally driven waits require the full session adapter.
+The offline shell's `test-suite.js` controller runs this same installed corpus
+through fresh production `worker.js` instances. Browser API exports decode the
+mounted manifest with the shared decoder, read WAST/companions through temporary
+catalogue kernels, and remount the validated installed files for execution. JavaScript
+owns worker scheduling, watchdogs and cancellation; assertion execution remains
+in C. The live shell has its own instance. Browser expected-failure policy is a
+tracked host package asset, separate from the guest inventory. Both batch paths
+retain manifest order and distinguish infrastructure failures from XFAIL.
+The installed guest batch launcher uses the runtime capability. Coverage
+accounting, compatibility fixtures and supported WebAssembly-language oracle
+comparisons remain pending. See `test-corpus.md` for execution, refresh and mount verification, and
+`test-coverage.md` for assertion-level C/WAST mappings and retained private gates.
+
+Focused worker-test metadata lives in `build/html-rt/tests/payload.json` and
+the Bash page bootstrap inputs live in
+`build/html-rt/{waste-wast.wasm,bash-runtime.wast}`. The one browser page,
+`bash.html`, includes the installed corpus diagnostic runner. Packaging reads
+authored frontend files plus these generated inputs; no standalone test
+dashboard is generated.
 
 ## Runtime Roles
 
@@ -69,11 +162,27 @@ a narrow exported C API and packages the engine, tests, and applications into
 single offline HTML files.  A behavior is not complete until the relevant
 native and browser paths agree.
 
-The OCaml runtime supplies three things during migration:
+`src/engine/guest_posix.c` owns guest ABI decoding, legacy import selection,
+errno conversion and operations on the store-owned kernel/process state.
+Its private header is not a mounted application SDK header. A borrowed immutable
+capability table and per-store context connect it to platform operations;
+missing callbacks return unsupported errors, not implicit host access.
+`src/html-rt/posix_stubs.c` owns browser imports, wall-clock conversion and
+upload/download dialogs. Native polling, clocks and transcript output live in
+`src/cli-rt/guest_session.c`; guest paths are never forwarded to host syscalls.
+Both runtimes resume explicitly saved evaluator state through ordinary C calls.
 
-- the official WebAssembly language oracle;
-- a behavioral comparison for POSIX subsystems already implemented there; and
-- a rollback runtime while the C implementation is incomplete.
+`src/engine/process_driver.{c,h}` owns reusable fork/exec/child selection and
+parent/provider continuation restoration policy, with mutable state in a
+per-session record. Native polling and browser event delivery remain in runtime
+adapters. Borrowed trace/command-stream hooks do not grant host capabilities.
+Capsules retain an explicit owner for fork root-engine clones across image or
+handler replacement, releasing them during reaping or store teardown.
+
+The OCaml interpreter supplies the official WebAssembly language oracle. Its
+existing POSIX/application artifacts are remnants of the earlier experiment,
+not a production fallback or a kernel reference to develop further. Historical
+comparisons do not create an ongoing OCaml kernel parity requirement.
 
 An executing application never switches engines midway through a process.
 
@@ -137,9 +246,9 @@ The maintained C-engine regression surface includes the official top-level
 core tests and the configured bulk-memory, exception handling, GC, memory64,
 multi-memory, relaxed-SIMD, and SIMD proposal suites.  It also includes the
 repository's custom annotation coverage for custom sections, names, and branch
-hints.  These suites run through both the native C runner and the browser C
-artifact; the generated browser dashboard follows the OCaml dashboard's group
-layout.
+hints. These suites run through both the native C runner and the browser C
+artifact. The browser diagnostic runner reads the mounted manifest directly;
+focused Node worker tests use the same corpus identities through JSON metadata.
 
 This coverage statement describes the configured repository revision, not all
 future WebAssembly proposals.  The generated test results are authoritative if
@@ -164,8 +273,8 @@ interchangeable.  Mutable state has four ownership levels:
    locals, signal mask, and thread-directed pending signals.  Threads share
    their process's address space and descriptor table.
 
-Each WAST file receives a fresh sandbox even when the dashboard schedules
-several files concurrently.  Dashboard concurrency controls runnable
+Each WAST file receives a fresh sandbox even when the browser test runner schedules
+several files concurrently. Browser concurrency controls runnable
 sandboxes; it does not create guest threads.
 
 Explicit Wasm imports may alias a memory, table, global, tag, or function
@@ -258,8 +367,10 @@ survive a call capable of growing that memory.
 
 ### Browser control channels
 
-The OCaml scheduled runtime retains its version 1 control-page ABI as a
-behavioral and compatibility reference.  The page is an array of 32-bit words:
+The legacy OCaml scheduled runtime has a version 1 control-page ABI. This
+records the existing interface for deferred retirement; it is not a required
+C control ABI or a target for further OCaml scheduler/signal development.
+The page is an array of 32-bit words:
 
 | Word | Purpose |
 | ---: | --- |
@@ -277,9 +388,10 @@ layout in a `SharedArrayBuffer` with atomic publication.
 
 The C runtime does not depend on the OCaml control-page representation.  It
 currently returns explicit exit or yield statuses and resumes saved evaluator
-frames through exported functions.  New C control APIs must preserve the same
-observable pause, signal, termination, and scheduling behavior while using
-versioned integer-handle messages appropriate to the C scheduler.
+frames through exported functions. New C control APIs use versioned
+integer-handle messages appropriate to the C scheduler. Verify observable
+pause, signal, termination and scheduling behavior with the shared C session
+contracts and native/browser parity, rather than OCaml control-page parity.
 
 ## POSIX Capability Model
 
@@ -363,14 +475,15 @@ child begins with only the calling thread.  Page-granular copy-on-write may
 replace eager copying behind one memory-clone boundary without changing these
 semantics.
 
-The OCaml oracle currently owns the mature process/VFS/signal kernel used by
-its scheduled POSIX probes.  The C browser runtime now owns the bounded
-child-first fork/failed-`execve`/exit/`waitpid` continuation used by the Bash
+The legacy OCaml artifacts still contain a process/VFS/signal kernel used by
+older scheduled POSIX probes. That kernel is outside the language oracle
+scope and is planned for removal, not further development. The C browser
+runtime owns the bounded child-first fork/failed-`execve`/exit/`waitpid` continuation used by the Bash
 command-not-found path, including evaluator snapshots and store checkpoints.
 It still does not provide general concurrent process or guest-thread
-scheduling; that remains a separate migration.  Do not describe OCaml kernel
-behavior as already owned by the C runtime.  The `select`/`pselect` migration
-is specified in the active plan rather than duplicated here.
+scheduling; remaining C capabilities belong to the active runtime plans.
+Their acceptance uses C native/browser contracts, not an obligation to mirror
+or extend the OCaml kernel. Legacy behavior alone does not prove a C capability.
 
 ### Engine-owned virtual memory
 
@@ -428,8 +541,11 @@ documented ptrace environment.  Binary tests cover truncation, malformed LEBs,
 overflow, invalid UTF-8, ordering, duplicate sections, bad indexes, and type
 mismatches.
 
-Official WebAssembly tests are compared with the OCaml oracle.  Local DIY
-POSIX and libc tests are regression probes, not formal POSIX certification.
+Official Wasm/WAT/WAST language tests are compared with the OCaml oracle.
+POSIX imports in a WAST client do not make its kernel behavior part of that
+oracle. Kernel, libc and application behavior uses C native/browser parity,
+private sanitizer gates and compiled guest ABI checks. Local DIY POSIX and
+libc tests are regression probes, not formal POSIX certification.
 Independent scripts must be tested in different orders and at different
 dashboard concurrency settings to expose unintended global state.
 
@@ -445,7 +561,7 @@ must not be presented as browser speedups.  Performance reports identify the
 artifact, engine, browser, machine, workload, instruction or allocation count,
 and elapsed time; build and execution time are separate measurements.
 
-The browser dashboard and Bash page remain single offline HTML documents.
+The Bash and installed-test interface share one offline HTML document.
 Optional broker use does not change the packaging requirement: opening the
 page through `file://` must work without a server when broker-backed features
 are not requested.

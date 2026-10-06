@@ -59,8 +59,10 @@ static inline long syscall6(long nr, long a1, long a2, long a3, long a4,
 #define SYS_mmap        9
 #define SYS_munmap      11
 #define SYS_ioctl       16
+#define SYS_nanosleep   35
 #define SYS_clock_gettime 228
 #define SYS_exit_group  231
+#define SYS_openat      257
 
 /* ---- Kernel structures ---- */
 
@@ -128,6 +130,10 @@ static inline long sys_munmap(void *addr, size_t length) {
 
 static inline long sys_clock_gettime(int clk_id, struct __kernel_timespec *tp) {
     return syscall2(SYS_clock_gettime, clk_id, (long)tp);
+}
+
+static inline long sys_nanosleep(const struct __kernel_timespec *request) {
+    return syscall2(SYS_nanosleep, (long)request, 0);
 }
 
 _Noreturn static inline void sys_exit_group(int status) {

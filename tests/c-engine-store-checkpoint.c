@@ -71,6 +71,16 @@ int main(void) {
     consumer->table_count = 1;
     consumer->import_table_count = 1;
 
+    /* Capture the host table even before any module imports it. */
+    exec_table *wide = &store.spectest_table64;
+    wide->size = 10;
+    wide->max_size = 20;
+    wide->has_max = 1;
+    wide->is_64 = 1;
+    wide->element_type = WASM_VALTYPE_FUNCREF;
+    wide->elements = calloc(12, sizeof(*wide->elements));
+    if (!wide->elements) return 2;
+
     exec_global *global = &provider->owned_globals[0];
     global->mutable_ = 1;
     global->value.type = WASM_VALTYPE_I32;
@@ -161,6 +171,11 @@ int main(void) {
     native_store_checkpoint nested;
     native_store_checkpoint_init(&nested);
 
+    wide->size = 12;
+    wide->elements[0].owner = provider;
+    wide->elements[0].func_idx = 17;
+    wide->elements[0].type = WASM_VALTYPE_FUNCREF;
+    wide->elements[0].dynamic_type = WASM_VALTYPE_FUNCREF;
     uint8_t changed_value = 0xa5;
     check(exec_memory_write(memory, 13, &changed_value, 1, NULL) == EXEC_OK,
           "memory fixture mutates through the access API");
@@ -191,6 +206,9 @@ int main(void) {
               EXEC_OK && restored_value == 0xa5 &&
           memory->page_data[0] == shared_memory->page_data[0],
           "nested restore preserves shared page identity and growth");
+    check(wide->size == 12 && wide->elements[0].owner == provider &&
+          wide->elements[0].func_idx == 17,
+          "nested restore retains spectest table64 growth and function owner");
     uint8_t nested_mutation = 0x77;
     check(exec_memory_write(memory, 13, &nested_mutation, 1, NULL) == EXEC_OK,
           "nested restored memory accepts a follow-up mutation");
@@ -212,6 +230,10 @@ int main(void) {
           "memory bytes and growth are restored");
     check(table->size == 1 && table->elements[0].func_idx == 17,
           "table contents and growth are restored");
+    check(wide->size == 10 && wide->max_size == 20 && wide->has_max &&
+          wide->is_64 && wide->element_type == WASM_VALTYPE_FUNCREF &&
+          wide->elements[0].owner == NULL && wide->elements[9].owner == NULL,
+          "restore resets unimported spectest table64 contents and growth");
     check(global->value.i32 == 7, "global value is restored");
     check(provider->active_call_depth == 0 &&
           !provider->yield_frames[0].valid &&
@@ -252,6 +274,7 @@ int main(void) {
     free(store.processes[0].capsule.regions);
     posix_kernel_destroy(store.processes[0].kernel);
     free(table->elements);
+    free(wide->elements);
     exec_memory_release(memory);
     exec_memory_release(shared_memory);
     free(provider);

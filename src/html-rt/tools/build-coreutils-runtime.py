@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from libc_sources import libc_source_paths
+from libc_sources import guest_include_flags, libc_source_paths
 
 
 RUNTIME = "coreutils-runtime"
@@ -274,6 +274,7 @@ def main() -> int:
             libc_global_base = 65536
         run([
             "clang", "--target=wasm32", "-O2", "-nostdlib", "-fno-builtin",
+            *guest_include_flags(root),
             "-DWASTE_POSIX_IO",
             *(str(path) for path in libc_source_paths(root)),
             "-Wl,--no-entry", "-Wl,--import-memory",

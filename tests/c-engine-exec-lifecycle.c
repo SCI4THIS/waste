@@ -56,16 +56,25 @@ static exec_status host_exec(void *data, const wasm_value *a, int n,
 static exec_status host_write(void *data, const wasm_value *a, int n,
                               wasm_value *r, int *rc, exec_error *e,
                               const waste_exec_engine *caller) {
-    probe_state *s = data; uint8_t *bytes;
+    probe_state *s = data; uint8_t *bytes = NULL;
     if (n != 3 || !caller || !caller->memory || a[1].i32 < 0 ||
         (uint64_t)(uint32_t)a[1].i32 + (uint32_t)a[2].i32 >
             caller->memory->pages * UINT64_C(65536))
         return exec_fail(e, EXEC_ERROR_TRAP, "write arguments");
-    bytes = caller->memory->data + (uint32_t)a[1].i32;
+    if (a[2].i32 > 0) {
+        bytes = malloc((size_t)a[2].i32);
+        if (!bytes) return exec_fail(e, EXEC_ERROR_TRAP, "write allocation");
+        if (exec_memory_read(caller->memory, (uint32_t)a[1].i32, bytes,
+                             (size_t)a[2].i32, e) != EXEC_OK) {
+            free(bytes);
+            return e ? e->status : EXEC_ERROR_TRAP;
+        }
+    }
     s->writes++;
     if (getenv("WASTE_PROFILE"))
         fprintf(stderr, "WASTE_PROFILE exec fixture write=%.*s\n",
-                a[2].i32, (const char *)bytes);
+                a[2].i32, bytes ? (const char *)bytes : "");
+    free(bytes);
     return i32_result(a[2].i32, r, rc);
 }
 

@@ -1,0 +1,13 @@
+(module
+  (import "env" "open" (func $open (param i32 i32 i32) (result i32)))
+  (import "env" "read" (func $read (param i32 i32 i32) (result i32)))
+  (import "env" "close" (func $close (param i32) (result i32)))
+  (memory 1)
+  (data (i32.const 0) "/companion\00")
+  (func (export "bytes") (result i32)
+    (local $fd i32)
+    (local.set $fd (call $open (i32.const 0) (i32.const 0) (i32.const 0)))
+    (drop (call $read (local.get $fd) (i32.const 32) (i32.const 4)))
+    (drop (call $close (local.get $fd)))
+    (i32.load (i32.const 32))))
+(assert_return (invoke "bytes") (i32.const 0x6c696174))

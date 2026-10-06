@@ -39,7 +39,8 @@ typedef enum {
 #define WAST_MAX_PARAMS        128
 #define WAST_MAX_LOCALS        2048
 #define WAST_MAX_CODE_BYTES    65536
-#define WAST_MAX_EXPORT_NAME   256
+/* Bounded decoded WAsm names, including their trailing C NUL. */
+#define WAST_MAX_EXPORT_NAME   512
 #define WAST_MAX_FUNCS         1024
 #define WAST_MAX_RESULTS       32
 #define WAST_MAX_ALTERNATIVES  4
@@ -50,8 +51,9 @@ typedef enum {
 #define WAST_MAX_MEMORIES      32
 #define WAST_MAX_TABLES        8
 #define WAST_MAX_TAGS          64
-#define WAST_MAX_DATA_SEGS     32
-#define WAST_MAX_ELEM_SEGS     32
+/* Includes official 65-segment probes and the full one-byte u32 LEB range. */
+#define WAST_MAX_DATA_SEGS     128
+#define WAST_MAX_ELEM_SEGS     128
 #define WAST_MAX_DATA_BYTES    65536
 #define WAST_MAX_ELEM_REFS     256
 #define WAST_MAX_ELEM_EXPR_BYTES 32
@@ -218,7 +220,10 @@ typedef struct {
     int      kind; /* 0=func, 1=table, 2=memory, 3=global */
 } wast_export;
 
-#define WAST_MAX_EXPORTS 256
+/* Raised from 256 so large freestanding modules (e.g. the waste-libc overlay,
+ * which exposes ~400 symbols) are not silently truncated during WAT parsing.
+ * Downstream engine caps are already much larger (EXEC_MAX_EXPORTS=65536). */
+#define WAST_MAX_EXPORTS 1024
 
 /* Complete parsed WAT module */
 typedef struct {
@@ -266,7 +271,7 @@ typedef struct {
     char id[WAST_MAX_EXPORT_NAME];
     char register_name[WAST_MAX_EXPORT_NAME]; /* for (register "name") */
     char register_target[WAST_MAX_EXPORT_NAME]; /* optional $id in register */
-    int  is_definition; /* (module definition ...): validate/store as a template */
+    int  is_definition; /* retain a WAST module definition without instantiating */
     char instance_of[WAST_MAX_EXPORT_NAME]; /* definition named by module instance */
 } wast_module;
 

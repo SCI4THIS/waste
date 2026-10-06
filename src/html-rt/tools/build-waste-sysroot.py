@@ -1,132 +1,78 @@
 #!/usr/bin/env python3
-"""Build the deterministic WASTE application sysroot and compiler wrapper."""
-
+"""Copy the mounted guest SDK into a hermetic application build sysroot."""
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import os
-import shutil
 from pathlib import Path
+import shutil
+
+import guest_sdk
 
 
-HEADER_ROOT = Path("src/html-rt/lib/include")
-CRT_SOURCE = Path("src/html-rt/lib/waste-crt.c")
-
-
-def digest(path: Path) -> str:
-    hasher = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(65536), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-
-def write_wrapper(path: Path) -> None:
+def write_wrapper(path, repo_root, profile=False):
+    toolchain = repo_root / "build/engine/toolchain/usr"
+    extra = ('  -DWASTE_LEGACY_DECLARATIONS -I "$sysroot/profiles/coreutils/include" '
+             '-include "$sysroot/profiles/coreutils/include/waste-gnulib-compat.h" \\\n') if profile else ""
     path.write_text(
-        """#!/bin/sh
-set -eu
-wrapper_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-sysroot=$(CDPATH= cd -- "$wrapper_dir/.." && pwd)
-toolchain_bin=$(CDPATH= cd -- "$wrapper_dir/../../../engine/toolchain/usr/bin" && pwd)
-toolchain_lib=$(CDPATH= cd -- "$wrapper_dir/../../../engine/toolchain/usr/lib" && pwd)
-if [ -x "$toolchain_bin/wasm-ld" ]; then
-  export LD_LIBRARY_PATH="$toolchain_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-  set -- -B "$toolchain_bin" "$@"
-fi
-exec clang --target=wasm32 -std=c11 -ffreestanding -fno-builtin \\
-  -DWASTE_WASM \\
-  -fno-stack-protector -fdata-sections -ffunction-sections \\
-  -nostdinc -nostdlib -isystem "$sysroot/include" \\
-  -isystem "$(clang -print-resource-dir)/include" \\
-  -include "$sysroot/include/waste-gnulib-compat.h" \\
-  -Wl,--no-entry \\
-  -I "$sysroot/include" "$@"
-""",
-        encoding="utf-8",
-    )
+        '#!/bin/sh\nset -eu\n'
+        'wrapper_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
+        'sysroot=$(CDPATH= cd -- "$wrapper_dir/.." && pwd)\n'
+        f'toolchain="{toolchain}"\n'
+        f'if [ "$(clang -dumpversion)" != "{guest_sdk.COMPILER_VERSION}" ]; then\n'
+        '  echo "Review compiler/header compatibility before changing the SDK compiler version" >&2\n'
+        '  exit 1\nfi\n'
+        'if [ -x "$toolchain/bin/wasm-ld" ]; then\n'
+        '  export LD_LIBRARY_PATH="$toolchain/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\n'
+        '  set -- -B "$toolchain/bin" "$@"\nfi\n'
+        'exec clang --target=wasm32 -std=c11 -ffreestanding -fno-builtin \\\n'
+        '  -DWASTE_WASM -fno-stack-protector -fdata-sections -ffunction-sections \\\n'
+        '  -nostdinc -nostdlib -isystem "$sysroot/include" \\\n'
+        '  -isystem "$sysroot/lib/waste/cc/include" \\\n'
+        + extra + '  -Wl,--no-entry "$@"\n', encoding="utf-8")
     path.chmod(0o755)
 
 
-def build(repo_root: Path, output: Path) -> None:
-    headers = repo_root / HEADER_ROOT
-    crt = repo_root / CRT_SOURCE
-    if not headers.is_dir():
-        raise RuntimeError(f"missing guest header directory: {headers}")
-    if not crt.is_file():
-        raise RuntimeError(f"missing CRT source: {crt}")
-
-    include = output / "include"
-    bin_dir = output / "bin"
-    include.mkdir(parents=True, exist_ok=True)
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    entries = []
-    for source in sorted(headers.rglob("*.h")):
-        relative = source.relative_to(headers)
-        destination = include / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
-        entries.append({
-            "path": f"include/{relative.as_posix()}",
-            "source": (HEADER_ROOT / relative).as_posix(),
-            "sha256": digest(source),
-        })
-
-    # obstack.h is a generated gnulib public header rather than a guest libc
-    # header. Stage the pinned template when the coreutils source tree is
-    # available; it is freestanding and does not depend on the host layout.
-    coreutils_source = output.parent / "source"
-    obstack_template = coreutils_source / "gnulib/lib/obstack.in.h"
-    if obstack_template.is_file():
-        obstack_destination = include / "obstack.h"
-        shutil.copyfile(obstack_template, obstack_destination)
-        entries.append({
-            "path": "include/obstack.h",
-            "source": str(obstack_template.relative_to(repo_root)),
-            "sha256": digest(obstack_template),
-        })
-
-    # The Unicode string objects use gnulib's generated public declaration
-    # template. Stage it when the pinned source tree is available so the
-    # freestanding build sees the same complete API as the generated objects.
-    unistr_template = coreutils_source / "gnulib/lib/unistr.in.h"
-    if unistr_template.is_file():
-        unistr_destination = include / "unistr.h"
-        shutil.copyfile(unistr_template, unistr_destination)
-        entries.append({
-            "path": "include/unistr.h",
-            "source": str(unistr_template.relative_to(repo_root)),
-            "sha256": digest(unistr_template),
-        })
-
-    crt_destination = output / "lib" / "waste-crt.c"
-    crt_destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(crt, crt_destination)
-    write_wrapper(bin_dir / "waste-wasm-clang")
-
-    manifest = {
-        "format": 1,
-        "target": "wasm32-unknown-unknown",
-        "compiler": "clang --target=wasm32",
-        "freestanding": True,
-        "headers": entries,
-        "crt": {"path": "lib/waste-crt.c", "source": CRT_SOURCE.as_posix(),
-                "sha256": digest(crt)},
-    }
-    (output / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+def build(repo_root, output):
+    if not output.is_relative_to(repo_root / "build") or output == repo_root / "build":
+        raise ValueError("generated sysroots must be a subdirectory of build/")
+    root = repo_root / "src/vfs"
+    sdk = guest_sdk.audit(root)
+    output.mkdir(parents=True, exist_ok=True)
+    # These exact generated subtrees belong to this builder. Remove stale
+    # headers so obsolete public/host/private declarations cannot shadow SDK.
+    for source, destination in (
+        (root / "usr/include", output / "include"),
+        (root / "usr/lib/waste/cc/include", output / "lib/waste/cc/include"),
+        (repo_root / "src/html-rt/profiles/coreutils/include", output / "profiles/coreutils/include"),
+    ):
+        if destination.exists():
+            shutil.rmtree(destination)
+        shutil.copytree(source, destination)
+    profile = output / "profiles/coreutils/include"
+    for name in ("obstack", "unistr"):
+        source = repo_root / f"build/coreutils/source/gnulib/lib/{name}.in.h"
+        if source.is_file():
+            shutil.copyfile(source, profile / f"{name}.h")
+    crt = repo_root / "src/html-rt/lib/waste-crt.c"
+    shutil.copyfile(crt, output / "lib/waste-crt.c")
+    (output / "bin").mkdir(exist_ok=True)
+    write_wrapper(output / "bin/waste-wasm-clang", repo_root)
+    write_wrapper(output / "bin/waste-coreutils-clang", repo_root, profile=True)
+    (output / "manifest.json").write_text(json.dumps(dict(
+        format=2, sdk=sdk, sdk_sha256=guest_sdk.sha(root / "usr/share/waste/sdk.json"),
+        profiles=["default", "coreutils (gnulib/SELinux compatibility declarations; not guest libc)"],
+        crt=dict(source="src/html-rt/lib/waste-crt.c", sha256=guest_sdk.sha(crt)),
+    ), indent=2, sort_keys=True) + "\n")
 
 
-def main() -> int:
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     build(args.repo_root.resolve(), args.output.resolve())
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

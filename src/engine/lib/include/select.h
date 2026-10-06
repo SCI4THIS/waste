@@ -95,6 +95,7 @@ int posix_timespec_decode(posix_timespec *out, const uint8_t *mem);
 
 /* Decode the fixed-width guest sigset_t representation. */
 int posix_sigset_decode(posix_sigset *out, const uint8_t *mem);
+int posix_sigset_encode(uint8_t *mem, const posix_sigset *set);
 
 /* --- Validation --- */
 

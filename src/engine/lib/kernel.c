@@ -316,6 +316,7 @@ int posix_kernel_path_mkdir(posix_kernel *kernel, const uint8_t *path,
     if (!kernel || path_normalize(kernel, path, length, normalized) < 0)
         return -POSIX_EINVAL;
     if (path_find(kernel, normalized)) return -POSIX_EEXIST;
+    if (path_prefix_is_file(kernel, normalized)) return -POSIX_ENOTDIR;
     posix_path_metadata metadata = { POSIX_NODE_DIRECTORY,
         (uint32_t)(mode ? mode : 0777), 0, 0, 0,
         1000u + (uint64_t)kernel->path_node_count, 0, 0 };
@@ -329,7 +330,8 @@ int posix_kernel_path_unlink(posix_kernel *kernel, const uint8_t *path,
     if (!kernel || path_normalize(kernel, path, length, normalized) < 0)
         return -POSIX_EINVAL;
     posix_kernel_path_node *node = path_find(kernel, normalized);
-    if (!node) return -POSIX_ENOENT;
+    if (!node) return path_prefix_is_file(kernel, normalized) ?
+        -POSIX_ENOTDIR : -POSIX_ENOENT;
     if (directory != (node->metadata.kind == POSIX_NODE_DIRECTORY))
         return directory ? -POSIX_ENOTDIR : -POSIX_EISDIR;
     if (directory) {
@@ -361,7 +363,8 @@ int posix_kernel_path_rename(posix_kernel *kernel,
         return -POSIX_EINVAL;
     posix_kernel_path_node *from = path_find(kernel, source_name);
     posix_kernel_path_node *to = path_find(kernel, destination_name);
-    if (!from) return -POSIX_ENOENT;
+    if (!from) return path_prefix_is_file(kernel, source_name) ?
+        -POSIX_ENOTDIR : -POSIX_ENOENT;
     if (to) {
         if (to->metadata.kind == POSIX_NODE_DIRECTORY) return -POSIX_EISDIR;
         posix_kernel_file_release(to->file); free(to->link_target);
@@ -370,6 +373,7 @@ int posix_kernel_path_rename(posix_kernel *kernel,
         memset(from, 0, sizeof(*from));
         return 0;
     }
+    if (path_prefix_is_file(kernel, destination_name)) return -POSIX_ENOTDIR;
     size_t length = strlen(destination_name);
     memcpy(from->path, destination_name, length + 1);
     return 0;
@@ -382,7 +386,8 @@ int posix_kernel_path_readlink(posix_kernel *kernel, const uint8_t *path,
         path_normalize(kernel, path, length, normalized) < 0)
         return -POSIX_EINVAL;
     posix_kernel_path_node *node = path_find(kernel, normalized);
-    if (!node) return -POSIX_ENOENT;
+    if (!node) return path_prefix_is_file(kernel, normalized) ?
+        -POSIX_ENOTDIR : -POSIX_ENOENT;
     if (node->metadata.kind != POSIX_NODE_SYMLINK || !node->link_target)
         return -POSIX_EINVAL;
     size_t target_length = strlen(node->link_target);
@@ -414,7 +419,8 @@ int posix_kernel_path_set_mtime(posix_kernel *kernel, const uint8_t *path,
     int result = path_normalize(kernel, path, length, normalized);
     if (result < 0) return result;
     posix_kernel_path_node *node = path_find(kernel, normalized);
-    if (!node) return -POSIX_ENOENT;
+    if (!node) return path_prefix_is_file(kernel, normalized) ?
+        -POSIX_ENOTDIR : -POSIX_ENOENT;
     node->metadata.mtime_sec = seconds;
     node->metadata.mtime_nsec = nanoseconds;
     return 0;
@@ -1253,7 +1259,9 @@ int posix_kernel_pipe(posix_kernel *kernel, int fds[2]) {
     wofd->pipe = p;
 
     kernel->fds[rfd].ofd = rofd;
+    kernel->fds[rfd].cloexec = 0;
     kernel->fds[wfd].ofd = wofd;
+    kernel->fds[wfd].cloexec = 0;
     fds[0] = rfd;
     fds[1] = wfd;
     return 0;
@@ -1282,9 +1290,20 @@ int posix_kernel_open(posix_kernel *kernel, const uint8_t *path, size_t length,
     int result = path_normalize(kernel, path, length, normalized);
     if (result < 0) return result;
     posix_kernel_path_node *node = path_find(kernel, normalized);
+    if (node && (flags & POSIX_O_CREAT) && (flags & POSIX_O_EXCL))
+        return -POSIX_EEXIST;
+    int link_depth = 0;
+    while (node && node->metadata.kind == POSIX_NODE_SYMLINK &&
+           node->link_target && link_depth++ < 8) {
+        result = path_normalize(kernel, (const uint8_t *)node->link_target,
+                                strlen(node->link_target), normalized);
+        if (result < 0) return result;
+        node = path_find(kernel, normalized);
+    }
+    if (node && node->metadata.kind == POSIX_NODE_SYMLINK) return -POSIX_ELOOP;
     if (!node) {
-        if (!(flags & POSIX_O_CREAT)) return path_prefix_is_file(kernel, normalized) ?
-            -POSIX_ENOTDIR : -POSIX_ENOENT;
+        if (path_prefix_is_file(kernel, normalized)) return -POSIX_ENOTDIR;
+        if (!(flags & POSIX_O_CREAT)) return -POSIX_ENOENT;
         posix_path_metadata metadata = { POSIX_NODE_REGULAR,
             ((uint32_t)mode & 07777u) & ~kernel->creation_mask, 0, 0, 0,
             1000u + (uint64_t)kernel->path_node_count, 0, 0 };
@@ -1365,7 +1384,6 @@ int posix_kernel_shm_open(posix_kernel *kernel, const uint8_t *name,
         }
     if (!object) {
         if (!(flags & POSIX_O_CREAT)) return -POSIX_ENOENT;
-        if (flags & POSIX_O_EXCL) return -POSIX_EEXIST;
         if (kernel->shm_namespace->count >= POSIX_SHM_OBJECT_MAX)
             return -POSIX_ENOMEM;
         object = &kernel->shm_namespace->objects[kernel->shm_namespace->count++];
@@ -1414,8 +1432,10 @@ int posix_kernel_shm_open(posix_kernel *kernel, const uint8_t *name,
         node->file = object->file;
     }
     node->metadata.size = (int64_t)object->file->data_capacity;
+    /* Exclusivity was checked against the shared-memory namespace above;
+     * the backing path has already been materialized for this object. */
     return posix_kernel_open(kernel, (const uint8_t *)path, strlen(path),
-                             flags, mode);
+                             flags & ~POSIX_O_EXCL, mode);
 }
 
 int posix_kernel_shm_unlink(posix_kernel *kernel, const uint8_t *name,

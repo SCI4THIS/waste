@@ -1,0 +1,8 @@
+{
+  "fixture": "tests/guest-session-linked-fork.wast",
+  "events": [],
+  "assertions": 3,
+  "exited": false,
+  "exitStatus": 0,
+  "output": "ABCBCDCDE"
+}

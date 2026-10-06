@@ -611,6 +611,19 @@ static int native_process_bind_engine_memory(
         native_process_capsule *capsule, waste_exec_engine *engine) {
     if (!capsule || !engine || !engine->memory)
         return -POSIX_EINVAL;
+    /* Only mutate memories the engine actually owns.  Modules that import
+     * a shared memory (spectest.memory in the core test suite, env.memory
+     * from waste-runtime for executables) must not acquire process-virtual
+     * semantics on that memory — doing so leaks state across every other
+     * importer and breaks spec limit-matching assertions. */
+    int owns_primary = 0;
+    for (uint32_t i = 0; i < engine->memory_count; i++) {
+        if (engine->memories[i] == engine->memory) {
+            owns_primary = engine->owns_memories[i];
+            break;
+        }
+    }
+    if (!owns_primary) return 0;
     engine->memory->access_check =
         native_process_validate_memory_access;
     engine->memory->access_check_context = capsule;
@@ -1008,7 +1021,11 @@ int native_process_capsule_clone(native_process_capsule *destination,
             destination->engine = NULL;
             return 0;
         }
-        if (destination->engine->memory) {
+        destination->owned_fork_engine = destination->engine;
+        /* Imported memory is still borrowed from the parent until the graph
+         * rebinding pass. Do not install child access checks on that object. */
+        if (destination->engine->memory &&
+            !destination->engine->import_memory_count) {
             destination->engine->memory->access_check =
                 native_process_validate_memory_access;
             destination->engine->memory->access_check_context = destination;
@@ -1125,6 +1142,8 @@ void native_process_capsule_destroy(native_process_capsule *capsule) {
     }
     free(capsule->continuations);
     free(capsule->continuation_engines);
+    if (capsule->owned_fork_engine && exec_free)
+        exec_free(capsule->owned_fork_engine);
     if (capsule->file_mappings)
         for (uint32_t i = 0; i < capsule->file_mapping_count; i++)
             posix_kernel_file_release(capsule->file_mappings[i].file_object);
@@ -1352,7 +1371,10 @@ static void rebind_imports(waste_exec_engine *clone,
     for (uint32_t i = 0; i < clone->import_memory_count; i++) {
         for (uint32_t j = 0; j < count; j++) {
             const waste_exec_engine *provider = bindings[j].source;
-            for (uint32_t k = 0; k < provider->memory_count; k++)
+            /* An importer aliases the canonical object until this pass binds
+             * it. Only the defining provider owns the cloned replacement. */
+            for (uint32_t k = provider->import_memory_count;
+                 k < provider->memory_count; k++)
                 if (source->memories[i] == provider->memories[k]) {
                     clone->memories[i] = bindings[j].clone->memories[k];
                     j = count;
@@ -1363,7 +1385,8 @@ static void rebind_imports(waste_exec_engine *clone,
     for (uint32_t i = 0; i < clone->import_table_count; i++) {
         for (uint32_t j = 0; j < count; j++) {
             const waste_exec_engine *provider = bindings[j].source;
-            for (uint32_t k = 0; k < provider->table_count; k++)
+            for (uint32_t k = provider->import_table_count;
+                 k < provider->table_count; k++)
                 if (source->tables[i] == provider->tables[k]) {
                     clone->tables[i] = bindings[j].clone->tables[k];
                     j = count;
@@ -1374,7 +1397,8 @@ static void rebind_imports(waste_exec_engine *clone,
     for (uint32_t i = 0; i < clone->import_global_count; i++) {
         for (uint32_t j = 0; j < count; j++) {
             const waste_exec_engine *provider = bindings[j].source;
-            for (uint32_t k = 0; k < provider->global_count; k++)
+            for (uint32_t k = provider->import_global_count;
+                 k < provider->global_count; k++)
                 if (source->globals[i] == provider->globals[k]) {
                     clone->globals[i] = bindings[j].clone->globals[k];
                     j = count;
@@ -1382,6 +1406,8 @@ static void rebind_imports(waste_exec_engine *clone,
                 }
         }
     }
+    /* The default-memory fast path must follow the rebound import too. */
+    clone->memory = clone->memory_count ? clone->memories[0] : NULL;
 }
 
 int native_store_clone_process_graph(native_store *store, int parent_pid,
@@ -1495,6 +1521,22 @@ int native_store_signal_process(native_store *store, int pid, int signal) {
     process->capsule.state = NATIVE_PROCESS_EXITED;
     process->capsule.pending_transition = NATIVE_PROCESS_TRANSITION_EXIT;
     return 0;
+}
+
+int native_store_signal_process_group(native_store *store, int pgid, int signal) {
+    int delivered = 0;
+    if (!store || pgid <= 0 || signal <= 0) return -POSIX_EINVAL;
+    for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
+        native_process *process = &store->processes[i];
+        if (!process->used || process->zombie) continue;
+        if (posix_kernel_getpgid(process->kernel) != pgid) continue;
+        /* Signal every live group member even if one member's disposition
+         * forces an immediate exit; the exit zombies that process without
+         * blocking later members from receiving the same signal. */
+        if (native_store_signal_process(store, process->pid, signal) == 0)
+            delivered++;
+    }
+    return delivered;
 }
 
 int native_store_wait_process(native_store *store, int pid, int options,

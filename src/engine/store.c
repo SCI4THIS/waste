@@ -189,8 +189,7 @@ static exec_status native_process_image_startup_block(
         native_store_u32(memory, base + 4, argv_ptr, error) != EXEC_OK ||
         native_store_u32(memory, base + 8, request->envc, error) != EXEC_OK ||
         native_store_u32(memory, base + 12, envp_ptr, error) != EXEC_OK ||
-        native_store_u32(memory, base + 16, (uint32_t)image->pid, error) != EXEC_OK ||
-        native_store_u32(memory, base + 20, cursor, error) != EXEC_OK)
+        native_store_u32(memory, base + 16, (uint32_t)image->pid, error) != EXEC_OK)
         return error->status;
     for (uint32_t i = 0; i < request->argc; i++) {
         if (native_store_u32(memory, argv_ptr + i * 4u, cursor, error) != EXEC_OK)
@@ -213,6 +212,7 @@ static exec_status native_process_image_startup_block(
         cursor += (uint32_t)length;
     }
     if (native_store_u32(memory, envp_ptr + request->envc * 4u, 0, error) != EXEC_OK ||
+        native_store_u32(memory, base + 20, cursor, error) != EXEC_OK ||
         native_store_bytes(memory, cursor, image->cwd,
                            strlen(image->cwd) + 1u, error) != EXEC_OK)
         return error->status;
@@ -779,10 +779,12 @@ static exec_status native_linked_call(void *data, const wasm_value *args,
                                        int arg_count, wasm_value *results,
                                        int *result_count, exec_error *error,
                                        const waste_exec_engine *caller) {
-    (void)caller;
     native_linked_func *function = (native_linked_func *)data;
+    /* Fork clones share immutable import bindings, not provider state. Calling
+     * the canonical engine directly lets child libc mutate the parent's heap. */
+    waste_exec_engine *provider = exec_clone_resolve(caller, function->engine);
     exec_status status = exec_invoke(
-        function->engine, function->func_idx, args, arg_count,
+        provider, function->func_idx, args, arg_count,
         results, result_count, error);
     if (status != EXEC_OK && status != EXEC_YIELD &&
         status != EXEC_ERROR_EXIT && error) {
@@ -866,6 +868,12 @@ void native_store_init(native_store *store) {
     store->spectest_table.has_max = 1;
     store->spectest_table.element_type = WASM_VALTYPE_FUNCREF;
     store->spectest_table.elements = calloc(10, sizeof(exec_table_element));
+    store->spectest_table64.size = 10;
+    store->spectest_table64.max_size = 20;
+    store->spectest_table64.has_max = 1;
+    store->spectest_table64.is_64 = 1;
+    store->spectest_table64.element_type = WASM_VALTYPE_FUNCREF;
+    store->spectest_table64.elements = calloc(10, sizeof(exec_table_element));
     store->spectest_i32.value.type = WASM_VALTYPE_I32;
     store->spectest_i32.value.i32 = 666;
     store->spectest_i64.value.type = WASM_VALTYPE_I64;
@@ -916,6 +924,7 @@ void native_store_free(native_store *store) {
     while (block) {
         native_call_block *next = block->next;
         free(block->calls);
+        free(block->got_globals);
         free(block);
         block = next;
     }
@@ -923,6 +932,7 @@ void native_store_free(native_store *store) {
     free(store->orphan_engines);
     exec_memory_release(&store->spectest_memory);
     free(store->spectest_table.elements);
+    free(store->spectest_table64.elements);
     for (int i = 0; i < NATIVE_PROCESS_MAX; i++)
         if (store->processes[i].used) {
             native_process_capsule_destroy(&store->processes[i].capsule);
@@ -932,6 +942,7 @@ void native_store_free(native_store *store) {
     posix_shm_namespace_release(store->shm_namespace);
     store->shm_namespace = NULL;
     store->kernel = NULL;
+    free(store->host_io.data);
     memset(store, 0, sizeof(*store));
 }
 
@@ -1253,7 +1264,7 @@ exec_status native_load_module(native_store *store,
                                 exec_error *error) {
     wasm_module decoded;
     wasm_decode_error decode_error;
-    size_t function_count = 0, global_count = 0;
+    size_t function_count = 0, global_count = 0, got_count = 0;
     size_t memory_count = 0, table_count = 0, tag_count = 0;
     const wasm_import *decoded_imports;
     uint32_t decoded_import_count;
@@ -1285,6 +1296,9 @@ exec_status native_load_module(native_store *store,
         table_count += decoded_imports[i].kind == WASM_IMPORT_TABLE;
         memory_count += decoded_imports[i].kind == WASM_IMPORT_MEMORY;
         global_count += decoded_imports[i].kind == WASM_IMPORT_GLOBAL;
+        got_count += decoded_imports[i].kind == WASM_IMPORT_GLOBAL &&
+            (!strcmp(decoded_imports[i].module, "GOT.func") ||
+             !strcmp(decoded_imports[i].module, "GOT.mem"));
         tag_count += decoded_imports[i].kind == WASM_IMPORT_TAG;
     }
 
@@ -1300,12 +1314,17 @@ exec_status native_load_module(native_store *store,
     native_call_block *call_block = calloc(1, sizeof(*call_block));
     if (call_block && function_count)
         call_block->calls = calloc(function_count, sizeof(*call_block->calls));
+    if (call_block && got_count)
+        call_block->got_globals = calloc(got_count, sizeof(*call_block->got_globals));
     if (!call_block ||
         (function_count && (!functions || !call_block->calls)) ||
+        (got_count && !call_block->got_globals) ||
         (global_count && !globals) || (memory_count && !memories) ||
         (table_count && !tables) || (tag_count && !tags)) {
         free(functions); free(globals); free(memories); free(tables); free(tags);
-        if (call_block) { free(call_block->calls); free(call_block); }
+        if (call_block) {
+            free(call_block->calls); free(call_block->got_globals); free(call_block);
+        }
         wasm_module_dispose(&decoded);
         if (error) {
             error->status = EXEC_ERROR_FORMAT;
@@ -1315,7 +1334,7 @@ exec_status native_load_module(native_store *store,
         return EXEC_ERROR_FORMAT;
     }
 
-    size_t nf = 0, ng = 0, nm = 0, nt = 0, ntag = 0;
+    size_t nf = 0, ng = 0, nm = 0, nt = 0, ntag = 0, ngot = 0;
 
     /* Resolve the declarations produced by the binary decoder for both WAT
      * output and literal binary modules. */
@@ -1396,10 +1415,13 @@ exec_status native_load_module(native_store *store,
             }
             nf++;
         } else if (request->kind == WASM_IMPORT_TABLE) {
-            exec_table *value = provider ? NULL :
-                (strcmp(request->module, "spectest") == 0 &&
-                 strcmp(request->name, "table") == 0 ?
-                 &store->spectest_table : NULL);
+            exec_table *value = NULL;
+            if (!provider && strcmp(request->module, "spectest") == 0) {
+                if (strcmp(request->name, "table") == 0)
+                    value = &store->spectest_table;
+                else if (strcmp(request->name, "table64") == 0)
+                    value = &store->spectest_table64;
+            }
             if (strcmp(request->module, "env") == 0 &&
                 strcmp(request->name, "__indirect_function_table") == 0) {
                 native_process_capsule *capsule =
@@ -1436,7 +1458,16 @@ exec_status native_load_module(native_store *store,
                 }
                 goto fail;
             }
+            /* The shared-library loader coordinates table sizing across
+             * executables that import `env.__indirect_function_table` from
+             * `waste-runtime`.  Growing an arbitrary imported table before
+             * wasm_load's spec-conformant limit check would mask
+             * incompatible imports (e.g. assert_unlinkable with a larger
+             * minimum than the exporter declares).  Restrict the grow to
+             * the shared runtime table. */
             if (value->size < request->descriptor.table.limits.minimum &&
+                strcmp(request->module, "env") == 0 &&
+                strcmp(request->name, "__indirect_function_table") == 0 &&
                 native_store_grow_table(
                     value, request->descriptor.table.limits.minimum,
                     error) != EXEC_OK)
@@ -1518,12 +1549,10 @@ exec_status native_load_module(native_store *store,
                 /* For now, unresolved GOT entries are provided as zero-
                  * initialized mutable globals.  The loader patches them
                  * after all libraries are instantiated. */
-                exec_global *got = calloc(1, sizeof(*got));
-                if (got) {
-                    got->value.type = WASM_VALTYPE_I32;
-                    got->value.i32 = 0;
-                    got->mutable_ = 1;
-                }
+                exec_global *got = &call_block->got_globals[ngot++];
+                got->value.type = WASM_VALTYPE_I32;
+                got->value.i32 = 0;
+                got->mutable_ = 1;
                 value = got;
             }
             if (!value && !provider)
@@ -1578,10 +1607,17 @@ exec_status native_load_module(native_store *store,
 
     {
         exec_imports imports = {functions, nf, globals, ng,
-                                memories, nm, tables, nt, tags, ntag};
+                                memories, nm, tables, nt, tags, ntag,
+                                &store->execution_control};
         load_status = wasm_instantiate_module(
             &decoded, &imports, engine_out, error);
-        if (load_status != EXEC_OK && !*engine_out) goto fail;
+        if (load_status != EXEC_OK && !*engine_out) {
+            /* A yielding host import need not populate error.status. Preserve
+             * the returned start status when disposing the partial instance;
+             * otherwise failure cleanup can incorrectly return EXEC_OK. */
+            if (error) error->status = load_status;
+            goto fail;
+        }
         /* wasm-ld uses GOT.mem/GOT.func imports for both shared objects and
          * position-independent executables.  Patch every instantiated
          * module; modules without GOT imports make this a no-op. */
@@ -1597,11 +1633,12 @@ exec_status native_load_module(native_store *store,
     }
     free(functions); free(globals); free(memories); free(tables); free(tags);
     wasm_module_dispose(&decoded);
-    if (function_count) {
+    if (function_count || got_count) {
         call_block->next = store->call_blocks;
         store->call_blocks = call_block;
     } else {
         free(call_block->calls);
+        free(call_block->got_globals);
         free(call_block);
     }
     return load_status;
@@ -1609,7 +1646,7 @@ exec_status native_load_module(native_store *store,
 fail:
     free(functions); free(globals); free(memories); free(tables); free(tags);
     wasm_module_dispose(&decoded);
-    free(call_block->calls); free(call_block);
+    free(call_block->calls); free(call_block->got_globals); free(call_block);
     return error ? error->status : EXEC_ERROR_FORMAT;
 }
 

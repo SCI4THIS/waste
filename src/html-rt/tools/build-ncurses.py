@@ -134,16 +134,9 @@ ac_cv_func_tsearch=no
 
 
 def ensure_sysroot(repo_root: Path, output_base: Path) -> Path:
-    """Build or locate the WASTE application sysroot."""
-    sysroot = output_base / "sysroot"
-    if (sysroot / "bin" / "waste-wasm-clang").is_file():
-        return sysroot
-    # Try the pre-existing coreutils sysroot.
-    coreutils_sysroot = repo_root / "build" / "coreutils" / "sysroot"
-    if (coreutils_sysroot / "bin" / "waste-wasm-clang").is_file():
-        return coreutils_sysroot
-    # Build one.
+    """Refresh from the mounted SDK; never reuse an unchecked old sysroot."""
     build_sysroot = repo_root / "src" / "html-rt" / "tools" / "build-waste-sysroot.py"
+    sysroot = output_base / "sysroot"
     subprocess.run(
         [sys.executable, str(build_sysroot),
          "--repo-root", str(repo_root),
@@ -295,6 +288,7 @@ def compile_ncurses(
 
     # Ncurses needs these defines.
     defines = [
+        "-include", "stdbool.h",  # consume C11 bool before raw curses chooses its DSO ABI
         "-DHAVE_CONFIG_H",
         "-DNDEBUG",
         "-DBUILDING_NCURSES",
@@ -364,14 +358,15 @@ def compile_ncurses(
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if result.returncode != 0:
-            failed.append((label, result.stderr[:300]))
+            failed.append((label, result.stderr))
         else:
             objects.append(obj)
 
     if failed:
         print(f"\ncompile: {len(objects)} ok, {len(failed)} failed")
-        for name, err in failed[:10]:
-            print(f"  FAIL {name}: {err.strip()[:200]}")
+        for name, err in failed:
+            print(f"  FAIL {name}: {err.strip()}")
+        raise RuntimeError("ncurses compilation failed; refusing partial library publication")
     else:
         print(f"compile: {len(objects)} objects ok")
     return objects
@@ -397,40 +392,18 @@ def link_shared_library(
     print(f"link: {output.name} ({size} bytes)")
 
 
-def install_headers(
-    build_dir: Path,
-    ncurses_source: Path,
-    sysroot: Path,
-) -> None:
-    """Copy generated curses.h and other headers into the sysroot."""
-    include = sysroot / "include"
-    # The generated curses.h from configure.
-    generated = build_dir / "include" / "curses.h"
-    if generated.is_file():
-        shutil.copyfile(generated, include / "curses.h")
-        # ncurses.h is typically a symlink to curses.h.
-        ncurses_h = include / "ncurses.h"
-        if not ncurses_h.exists():
-            shutil.copyfile(generated, ncurses_h)
-        print("headers: curses.h, ncurses.h installed")
-    # term.h
-    term_h = build_dir / "include" / "term.h"
-    if term_h.is_file():
-        shutil.copyfile(term_h, include / "term.h")
-    # ncurses_cfg.h
-    cfg_h = build_dir / "include" / "ncurses_cfg.h"
-    if cfg_h.is_file():
-        shutil.copyfile(cfg_h, include / "ncurses_cfg.h")
-    # unctrl.h from source
-    unctrl_h = ncurses_source / "include" / "unctrl.h.in"
-    if unctrl_h.is_file():
-        content = unctrl_h.read_text(encoding="utf-8")
-        content = content.replace("@cf_cv_header_stdbool_h@", "1")
-        (include / "unctrl.h").write_text(content, encoding="utf-8")
+def install_headers(build_dir: Path, ncurses_source: Path, sysroot: Path) -> None:
+    """Public snapshots are published only by build-guest-sdk.py --install.
+
+    Generated ncurses_cfg.h and implementation headers remain in build_dir.
+    Do not overwrite the canonical SDK wrapper or package build sysroots.
+    """
+    print("headers: generated in build tree; explicit guest-sdk-install publishes selected public headers")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--install", action="store_true", help="Explicitly install audited outputs into src/vfs")
     parser.add_argument("--repo-root", type=Path, default=Path("."))
     parser.add_argument("--output", type=Path,
                         default=Path("build/ncurses"))
@@ -513,6 +486,10 @@ def main() -> int:
     shutil.copyfile(lib_output, vfs_stage / "libncurses.so.wasm")
     print(f"\nstaged: {vfs_stage / 'libncurses.so.wasm'}")
     print("VFS path: /usr/lib/libncurses.so.wasm")
+    if args.install:
+        subprocess.run([sys.executable, str(repo_root / "src/html-rt/tools/build-guest-sdk.py"),
+                        "--install", "--library",
+                        str(vfs_stage / "libncurses.so.wasm")], check=True)
     return 0
 
 

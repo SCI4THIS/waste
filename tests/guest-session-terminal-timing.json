@@ -1,0 +1,96 @@
+{
+  "fixture": "tests/guest-session-terminal-timing.wast",
+  "clockMonotonicNs": 4294967290,
+  "events": [
+    {
+      "after": "ZERO\n",
+      "waitKind": 1,
+      "pid": 1,
+      "monotonicNs": 4494967289,
+      "stillWaiting": true
+    },
+    {
+      "waitKind": 1,
+      "pid": 1,
+      "monotonicNs": 4494967290
+    },
+    {
+      "after": "PARTIAL\n",
+      "waitKind": 1,
+      "pid": 1,
+      "text": "x",
+      "stillWaiting": true
+    },
+    {
+      "waitKind": 1,
+      "pid": 1,
+      "monotonicNs": 4694967289,
+      "stillWaiting": true
+    },
+    {
+      "waitKind": 1,
+      "pid": 1,
+      "monotonicNs": 4694967290
+    },
+    {
+      "after": "EARLY\n",
+      "waitKind": 1,
+      "pid": 1,
+      "text": "Q"
+    },
+    {
+      "after": "REPEAT\n",
+      "waitKind": 1,
+      "pid": 1,
+      "monotonicNs": 4894967289,
+      "stillWaiting": true
+    },
+    {
+      "waitKind": 1,
+      "pid": 1,
+      "monotonicNs": 4894967290
+    },
+    {
+      "after": "EOF\n",
+      "waitKind": 2,
+      "pid": 1,
+      "text": "partial\u0004"
+    }
+  ],
+  "output": "a\r\nba\nba\nba\nbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\r\nZZERO\nPARTIAL\nEARLY\nREPEAT\nEOF\n",
+  "assertions": 46,
+  "exitStatus": 0,
+  "nativeCounts": {
+    "inputBytes": 10,
+    "readWaits": 8,
+    "selectWaits": 1,
+    "clockEvents": 6
+  },
+  "outputSegments": [
+    {
+      "wastOrdinal": 3,
+      "text": "a\r\nb",
+      "sourceBytes": 3
+    },
+    {
+      "wastOrdinal": 5,
+      "text": "a\nb",
+      "sourceBytes": 3
+    },
+    {
+      "wastOrdinal": 7,
+      "text": "a\nb",
+      "sourceBytes": 3
+    },
+    {
+      "wastOrdinal": 9,
+      "text": "a\nb",
+      "sourceBytes": 3
+    },
+    {
+      "wastOrdinal": 11,
+      "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\r\nZ",
+      "sourceBytes": 257
+    }
+  ]
+}

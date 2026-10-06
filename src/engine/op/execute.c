@@ -14,6 +14,17 @@ extern void native_process_image_unpin(native_process_image *image)
 #include <stdlib.h>
 #include <string.h>
 
+exec_status exec_execution_check(exec_execution_control *control,
+                                  exec_error *error) {
+    if (!control) return EXEC_OK;
+    if (!control->stopped && control->poll)
+        control->stopped = control->poll(control->context);
+    if (!control->stopped) return EXEC_OK;
+    return exec_fail(error, EXEC_ERROR_INTERRUPTED,
+        control->stopped == EXEC_STOP_TIMEOUT ? "execution deadline exceeded" :
+                                               "execution cancelled");
+}
+
 void runtime_free_jump_snapshots(waste_exec_engine *eng) {
     for (uint32_t i = 0; i < eng->jump_snapshot_count; i++)
         free(eng->jump_snapshots[i].locals);
@@ -1465,6 +1476,34 @@ tail_entry:
     context.tail_arg_count = &tail_arg_count;
 
     for (uint32_t pc = start_pc; pc < func->code_size; pc++) {
+        exec_execution_control *control = eng->execution_control;
+        if (control && control->stopped)
+            return exec_execution_check(control, err);
+        if (control && control->poll) {
+            if (!control->remaining) {
+                control->remaining = 4095;
+                exec_status stop = exec_execution_check(control, err);
+                if (stop != EXEC_OK) return stop;
+                /* Cooperative pump: between opcodes the operand stack is a
+                 * stable value-type checkpoint, so we may save the exact PC
+                 * and yield when the embedder's wall clock crosses the
+                 * configured quantum.  The embedder drains its event loop,
+                 * calls back into resume, and the loop restarts from here. */
+                if (control->pump_quantum_ns && control->pump_clock_now) {
+                    uint64_t now = control->pump_clock_now(
+                        control->pump_clock_context);
+                    if (!control->last_pump_ns) control->last_pump_ns = now;
+                    if (now - control->last_pump_ns >=
+                        control->pump_quantum_ns) {
+                        control->last_pump_ns = now;
+                        context.pc = &pc;
+                        save_yield_frame(&context);
+                        err->yield_reason = EXEC_YIELD_PUMP;
+                        return EXEC_YIELD;
+                    }
+                }
+            } else control->remaining--;
+        }
         const exec_instr *instr = &func->code[pc];
         context.pc = &pc;
 

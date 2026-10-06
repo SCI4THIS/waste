@@ -1,7 +1,7 @@
 /* sys/ioctl.c — Device control stub for the WASTE guest libc. */
 
 #include "../include/helper.h"
-#include "../include/sys_ioctl.h"
+#include <sys/ioctl.h>
 
 __attribute__((import_module("waste_kernel"), import_name("ioctl_v1")))
 extern i32 waste_kernel_ioctl_v1(i32 descriptor, u32 request, void *argument);

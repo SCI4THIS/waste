@@ -74,29 +74,8 @@ static void test_signal_after_yield(void) {
     posix_kernel_destroy(kernel);
 }
 
-static void test_blocked_signal(void) {
-    posix_kernel *kernel = posix_kernel_create(1);
-    posix_sigset blocked = {{0, 0, 0, 0}};
-    mask_signal(&blocked, 2);
-    posix_kernel_set_signal_mask(kernel, &blocked);
-    CHECK(posix_kernel_signal_raise(kernel, 2) == 0, "blocked raise failed");
-    posix_fd_set readfds;
-    posix_fd_zero(&readfds);
-    posix_fd_set_bit(0, &readfds);
-    posix_timespec zero = {0, 0};
-    int result = posix_kernel_pselect(kernel, 1, &readfds, NULL, NULL,
-                                      &zero, NULL);
-    CHECK(result == 0, "blocked signal interrupted pselect: %d", result);
-    CHECK(posix_kernel_signal_pending(kernel, 2), "blocked signal was consumed");
-    posix_sigset unblocked = {{0, 0, 0, 0}};
-    posix_kernel_set_signal_mask(kernel, &unblocked);
-    posix_fd_zero(&readfds);
-    posix_fd_set_bit(0, &readfds);
-    result = posix_kernel_select(kernel, 1, &readfds, NULL, NULL, NULL);
-    CHECK(result == -POSIX_EINTR, "unblocked pending signal returned %d", result);
-    CHECK(!posix_kernel_signal_pending(kernel, 2), "unblocked signal remained");
-    posix_kernel_destroy(kernel);
-}
+/* Blocked-signal observations now run through real guest imports in
+ * engine-regressions/signal-masks.wast. Wait ownership stays in C below. */
 
 static void test_simultaneous_and_restore(void) {
     posix_kernel *kernel = posix_kernel_create(1);
@@ -225,7 +204,6 @@ static void test_handler_mask_round_trip(void) {
 int main(void) {
     test_pending_before_call();
     test_signal_after_yield();
-    test_blocked_signal();
     test_simultaneous_and_restore();
     test_cancel_and_error_restore();
     test_signal_dispositions();

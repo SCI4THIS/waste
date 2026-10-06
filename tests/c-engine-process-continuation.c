@@ -69,11 +69,10 @@ static exec_status probe_fork(void *data, const wasm_value *args,
 }
 
 static int probe_range(const waste_exec_engine *caller, uint32_t offset,
-                       uint32_t length, uint8_t **out) {
+                       uint32_t length) {
     if (!caller || !caller->memory) return 0;
     uint64_t size = caller->memory->pages * UINT64_C(65536);
     if ((uint64_t)offset + length > size) return 0;
-    if (out) *out = caller->memory->data + offset;
     return 1;
 }
 
@@ -82,9 +81,9 @@ static exec_status probe_waitpid(void *data, const wasm_value *args,
                                  int *result_count, exec_error *error,
                                  const waste_exec_engine *caller) {
     process_probe *probe = data;
-    uint8_t *status_bytes;
-    if (arg_count != 3 || !probe_range(caller, (uint32_t)args[1].i32, 4,
-                                       &status_bytes))
+    uint8_t status_bytes[4];
+    if (arg_count != 3 || args[1].i32 < 0 ||
+        !probe_range(caller, (uint32_t)args[1].i32, sizeof(status_bytes)))
         return exec_fail(error, EXEC_ERROR_TRAP, "waitpid argument mismatch");
     if (probe->phase != PROBE_PARENT || args[0].i32 != 42 || args[2].i32 != 0)
         return exec_fail(error, EXEC_ERROR_TRAP, "invalid waitpid process");
@@ -95,6 +94,9 @@ static exec_status probe_waitpid(void *data, const wasm_value *args,
     status_bytes[1] = (uint8_t)(probe->reap_status >> 8);
     status_bytes[2] = 0;
     status_bytes[3] = 0;
+    if (exec_memory_write(caller->memory, (uint32_t)args[1].i32,
+                          status_bytes, sizeof(status_bytes), error) != EXEC_OK)
+        return error ? error->status : EXEC_ERROR_TRAP;
     return result_i32(args[0].i32, results, result_count);
 }
 
@@ -176,11 +178,16 @@ int main(int argc, char **argv) {
           "child fork counts = %d/%d", probe.child_fork_calls,
           probe.parent_fork_calls);
     CHECK(probe.wait_calls == 0, "child wait count = %d", probe.wait_calls);
-    CHECK(engine->memory && engine->memory->data[0] == 0xfe &&
-          engine->memory->data[1] == 0xca,
+    uint8_t marker[2] = {0};
+    CHECK(engine->memory && exec_memory_read(engine->memory, 0, marker,
+                                             sizeof(marker), &error) == EXEC_OK &&
+          marker[0] == 0xfe && marker[1] == 0xca,
           "child marker was not written");
 
-    memset(engine->memory->data, 0, 16);
+    uint8_t cleared[16] = {0};
+    CHECK(exec_memory_write(engine->memory, 0, cleared, sizeof(cleared),
+                            &error) == EXEC_OK,
+          "clear child memory before parent phase");
     probe.phase = PROBE_PARENT;
     profile_event("parent-restore", 1, 1);
     profile_event("parent-resume", 1, 1);
@@ -195,7 +202,8 @@ int main(int argc, char **argv) {
           "parent lifecycle = fork %d wait %d pid %d status %d",
           probe.parent_fork_calls, probe.wait_calls, probe.reap_pid,
           probe.reap_status);
-    CHECK(engine->memory->data[0] == 0xef && engine->memory->data[1] == 0xbe,
+    CHECK(exec_memory_read(engine->memory, 0, marker, sizeof(marker), &error) ==
+              EXEC_OK && marker[0] == 0xef && marker[1] == 0xbe,
           "parent marker was not written");
 
     exec_free(engine);

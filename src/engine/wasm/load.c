@@ -1,6 +1,7 @@
 #include "engine_internal.h"
 #include "wasm/opcode.h"
 #include "wasm/decode.h"
+#include "wat/name.h"
 #include "wasm/reader.h"
 #include "op/validate.h"
 #include "instantiate.h"
@@ -389,8 +390,10 @@ static exec_status parse_exports(waste_exec_engine *eng, wasm_reader *sec, exec_
             (kind==2 && idx>=eng->memory_count) ||
             (kind==3 && idx>=eng->global_count) ||
             (kind==4 && idx>=eng->tag_count)) return exec_fail(err,EXEC_ERROR_FORMAT,"invalid export index");
-        memcpy(eng->exports[i].name, name, name_len);
-        eng->exports[i].name[name_len] = '\0';
+        if (!wast_name_from_bytes(name, name_len, eng->exports[i].name,
+                                  sizeof(eng->exports[i].name)))
+            return exec_fail(err, EXEC_ERROR_FORMAT,
+                             "export name exceeds supported representation");
         eng->exports[i].index = idx; eng->exports[i].kind=kind;
         if (kind == 0) eng->declared_funcs[idx] = 1;
         for (uint32_t j = 0; j < i; j++)
@@ -869,12 +872,16 @@ static exec_status parse_elements(waste_exec_engine *eng, wasm_reader *sec,
     for (uint32_t segment = 0; segment < count; segment++) {
         uint32_t mode, table_index = 0, item_count;
         uint64_t offset = 0;
-        wasm_valtype ref_type = WASM_VALTYPE_FUNCREF;
+        wasm_valtype ref_type;
         int active, uses_expressions;
         if (!wasm_reader_read_u32(sec, &mode) || mode > 7)
             return exec_fail(err, EXEC_ERROR_FORMAT, "invalid element segment mode");
         /* Modes 0-3: funcidx vectors; modes 4-7: expression vectors */
         uses_expressions = mode >= 4;
+        /* Legacy funcidx vectors declare (ref func), including passive and
+         * declarative segments. Mode 4 alone implies nullable funcref. */
+        ref_type = uses_expressions ? WASM_VALTYPE_FUNCREF :
+                                     WASM_VALTYPE_FUNCREF_NONNULL;
         active = (mode == 0 || mode == 2 || mode == 4 || mode == 6);
         /* Read explicit table index for modes 2 and 6 */
         if ((mode == 2 || mode == 6) && !wasm_reader_read_u32(sec, &table_index))
@@ -896,19 +903,19 @@ static exec_status parse_elements(waste_exec_engine *eng, wasm_reader *sec,
                 (uint64_t)(uint32_t)initial.value.i32;
         }
         /* Read type/kind: modes 1,2,3 have elemkind; modes 5,6,7 have reftype;
-           modes 0,4 imply funcref */
+           mode 0 implies (ref func), mode 4 funcref */
         if (mode == 1 || mode == 2 || mode == 3) {
             uint8_t elemkind;
             if (!wasm_reader_read_u8(sec, &elemkind) || elemkind != 0x00)
                 return exec_fail(err, EXEC_ERROR_FORMAT, "invalid element kind");
-            ref_type = WASM_VALTYPE_FUNCREF;
+            ref_type = WASM_VALTYPE_FUNCREF_NONNULL;
         } else if (mode == 5 || mode == 6 || mode == 7) {
             if (!wasm_decode_valtype(sec, &ref_type) ||
                 !value_type_is_defined(eng, ref_type) ||
                 !is_reference_type(ref_type))
                 return exec_fail(err, EXEC_ERROR_FORMAT, "invalid element type");
         }
-        /* else mode 0 or 4: ref_type stays FUNCREF */
+        /* Modes 0 and 4 retain their distinct implicit reference types. */
         if (!wasm_reader_read_u32(sec, &item_count))
             return exec_fail(err, EXEC_ERROR_FORMAT, "invalid element length");
         eng->elem_types[segment] = ref_type;
@@ -957,15 +964,10 @@ static exec_status parse_elements(waste_exec_engine *eng, wasm_reader *sec,
                 eng->elem_values[segment][item] = slot;
             }
         }
-        /* For active segments, the segment's effective type must be a subtype
-         * of the table's element type.  Modes 0-3 (bare funcidx) items are
-         * non-null function references by construction, so their effective
-         * type is (ref func) even though the declared encoding is funcref. */
-        wasm_valtype segment_eff_type = ref_type;
-        if (!uses_expressions && ref_type == WASM_VALTYPE_FUNCREF)
-            segment_eff_type = WASM_VALTYPE_FUNCREF_NONNULL;
+        /* Validate the declared segment type, not the values in its vector.
+         * Nullable funcref remains nullable even if every item is ref.func. */
         if (active && !global_type_is_compat(
-                eng, segment_eff_type,
+                eng, ref_type,
                 eng->tables[table_index]->type_owner,
                 eng->tables[table_index]->element_type, 0))
             return exec_fail(err, EXEC_ERROR_FORMAT,
@@ -1506,6 +1508,7 @@ exec_status exec_load_decoded_with_imports(
                          "engine static metadata alloc failed");
     }
     *eng->static_ref_count = 1;
+    eng->execution_control = imports ? imports->execution_control : NULL;
 
     wasm_reader r = {
         .start = bytes,

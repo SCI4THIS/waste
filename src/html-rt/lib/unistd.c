@@ -11,7 +11,8 @@ extern i32 waste_kernel_startup_v1(void);
 
 extern i32 waste_kernel_open_v1(const char *path, i32 flags, i32 mode)
   __attribute__((import_module("waste_kernel"), import_name("open_v1")));
-extern i32 close(i32 descriptor);
+extern i32 waste_env_close(i32 descriptor)
+  __attribute__((import_module("env"), import_name("close")));
 extern i32 waste_kernel_chdir(const char *path) __attribute__((import_module("waste_kernel"), import_name("chdir")));
 extern i32 waste_kernel_getcwd(char *buffer, i32 capacity) __attribute__((import_module("waste_kernel"), import_name("getcwd")));
 extern i32 waste_kernel_fcntl_v1(i32 fd, i32 cmd, i32 arg) __attribute__((import_module("waste_kernel"), import_name("fcntl_v1")));
@@ -32,6 +33,7 @@ i32 open(const char *path, i32 flags, ...) {
   }
   return env_result(waste_kernel_open_v1(path, flags, mode));
 }
+i32 close(i32 descriptor) { return env_result(waste_env_close(descriptor)); }
 i32 chdir(const char *path) { return env_result(waste_kernel_chdir(path)); }
 char *getcwd(char *buffer, u32 capacity) {
   /* Keep the allocation in the calling image.  The host import only knows

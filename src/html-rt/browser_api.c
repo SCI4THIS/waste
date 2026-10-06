@@ -1,9 +1,15 @@
 #include "store.h"
+#include "vfs.h"
+#include "test_suite.h"
 #include "runtime_internal.h"
+#include "wat/name.h"
 #include "wast/runner.h"
 #include "wasm/encode.h"
 #include "wast/stream.h"
+#include "wast/handler.h"
+#include "wast/setup.h"
 #include "posix_stubs.h"
+#include "process_driver.h"
 #include "lib/include/kernel.h"
 
 #include <stddef.h>
@@ -61,7 +67,8 @@ static int read_leb64(bin_reader *r, uint64_t *v) {
 }
 static int read_name(bin_reader *r, char *out) {
     uint32_t n; if(!read_leb(r,&n)||n>=WAST_MAX_EXPORT_NAME||(size_t)(r->end-r->p)<n)return 0;
-    memcpy(out,r->p,n);out[n]='\0';r->p+=n;return 1;
+    if (!wast_name_from_bytes(r->p, n, out, WAST_MAX_EXPORT_NAME)) return 0;
+    r->p+=n;return 1;
 }
 static int skip_limits(bin_reader *r) {
     uint32_t flags; uint64_t value;
@@ -119,9 +126,59 @@ typedef struct {
 
 #define MAX_BROWSER_RESULTS 16384
 static wast_browser_result g_browser_results[MAX_BROWSER_RESULTS];
+/* The legacy 256-byte result record keeps its short display name. Separate
+ * bounded names let current clients preserve the parser's full UTF-8 identity
+ * without changing that record layout for older host-boundary probes. */
+static char g_browser_result_names[MAX_BROWSER_RESULTS][WAST_MAX_EXPORT_NAME];
 static int g_browser_result_count = 0;
 static int g_browser_result_passed = 0;
-static waste_exec_engine *g_process_parent_engine;
+static wast_setup_report g_browser_setup;
+static int g_browser_script_completed;
+/* Script result survives store cleanup, just like assertion records. These
+ * exports distinguish explicit guest exit from ordinary script completion. */
+static int g_browser_guest_exited, g_browser_guest_exit_status;
+static uint32_t g_execution_timeout_ms, g_execution_cancel_ms;
+static uint64_t g_execution_started_ns, g_execution_last_ns;
+static exec_stop_reason g_execution_stop;
+/* Cooperative pump: when non-zero, the engine yields after this many
+ * wall-clock nanoseconds of guest execution so the worker can drain its
+ * event loop and process external cancel messages. */
+static uint32_t g_pump_quantum_ms;
+static uint64_t browser_pump_clock_now(void *opaque) {
+    (void)opaque;
+    return waste_browser_realtime_now(NULL);
+}
+/* Scripted deterministic clocks for host-independent guest tests.  The browser
+ * execution-policy clock keeps real time; only the kernel-visible realtime and
+ * monotonic callbacks observe the override. */
+static int g_clock_realtime_fixed, g_clock_monotonic_fixed;
+static uint64_t g_clock_realtime_ns, g_clock_monotonic_ns;
+
+static uint64_t browser_guest_realtime_now(void *data) {
+    if (g_clock_realtime_fixed) return g_clock_realtime_ns;
+    return waste_browser_realtime_now(data);
+}
+static uint64_t browser_guest_monotonic_now(void *data) {
+    if (g_clock_monotonic_fixed) return g_clock_monotonic_ns;
+    return waste_browser_realtime_now(data);
+}
+
+static exec_stop_reason browser_execution_poll(void *opaque) {
+    (void)opaque;
+    uint64_t now = waste_browser_realtime_now(NULL);
+    if (now < g_execution_last_ns) now = g_execution_last_ns;
+    g_execution_last_ns = now;
+    uint64_t elapsed = now - g_execution_started_ns;
+    if (g_execution_cancel_ms && (!g_execution_timeout_ms ||
+        g_execution_cancel_ms <= g_execution_timeout_ms) &&
+        elapsed >= (uint64_t)g_execution_cancel_ms * 1000000u)
+        g_execution_stop = EXEC_STOP_CANCELLED;
+    else if (g_execution_timeout_ms &&
+             elapsed >= (uint64_t)g_execution_timeout_ms * 1000000u)
+        g_execution_stop = EXEC_STOP_TIMEOUT;
+    return g_execution_stop;
+}
+static native_process_driver g_shared_process;
 #define BROWSER_TRANSITION_EVIDENCE_MAX 2048
 static char g_browser_transition_evidence[BROWSER_TRANSITION_EVIDENCE_MAX];
 static size_t g_browser_transition_evidence_length;
@@ -173,7 +230,9 @@ static void browser_record_engine_transition(const char *label,
 
 static void add_result(int pass, const char *func, const char *err) {
     if (g_browser_result_count >= MAX_BROWSER_RESULTS) return;
-    wast_browser_result *r = &g_browser_results[g_browser_result_count++];
+    int index = g_browser_result_count++;
+    wast_browser_result *r = &g_browser_results[index];
+    snprintf(g_browser_result_names[index], WAST_MAX_EXPORT_NAME, "%s", func ? func : "");
     r->pass = pass ? 1 : 0;
     /* Copy func name (null-terminated, max 62 chars + null) */
     int i = 0;
@@ -233,7 +292,7 @@ uint32_t waste_wast_load_linked_module(uint32_t ptr,uint32_t size,uint32_t id_pt
         else {exec_global *v;st=exec_find_export_global(provider->engine,req->name,&v,&g_error);if(st!=EXEC_OK)return st;g_global_imports[ng++]=(exec_global_import){req->module,req->name,v};}
     }
     imports=(exec_imports){g_func_imports,nf,g_global_imports,ng,
-        g_memory_imports,nm,g_table_imports,nt,(void *)0,0};memset(&g_error,0,sizeof(g_error));
+        g_memory_imports,nm,g_table_imports,nt,(void *)0,0,NULL};memset(&g_error,0,sizeof(g_error));
     exec_status st=exec_load_with_imports((const uint8_t *)(uintptr_t)ptr,size,&imports,&engine,&g_error);if(st!=EXEC_OK){g_linked_func_count=linked_start;return st;}
     linked_module *m=&g_modules[g_module_count];m->engine=engine;if(id_len>=WAST_MAX_EXPORT_NAME)id_len=WAST_MAX_EXPORT_NAME-1;
     memcpy(m->id,(const void *)(uintptr_t)id_ptr,id_len);m->id[id_len]='\0';g_current_module=g_module_count++;g_engine=engine;return EXEC_OK;
@@ -257,7 +316,10 @@ __attribute__((export_name("waste_wast_find_export")))
 int32_t waste_wast_find_export(uint32_t name_ptr, uint32_t name_len) {
     if (!g_engine) return -1;
     char name[WAST_MAX_EXPORT_NAME];
-    if (name_len >= WAST_MAX_EXPORT_NAME) name_len = WAST_MAX_EXPORT_NAME - 1;
+    if (name_len >= WAST_MAX_EXPORT_NAME) {
+        set_error("export name exceeds supported representation");
+        return -1;
+    }
     memcpy(name, (const void *)(uintptr_t)name_ptr, name_len);
     name[name_len] = '\0';
     uint32_t func_idx = 0;
@@ -410,7 +472,10 @@ uint32_t waste_wast_assert_global(uint32_t name_ptr, uint32_t name_len,
     char name[WAST_MAX_EXPORT_NAME];
     exec_global *global = (void *)0;
     if (!g_engine) { set_error("no module loaded"); return 0; }
-    if (name_len >= WAST_MAX_EXPORT_NAME) name_len = WAST_MAX_EXPORT_NAME - 1;
+    if (name_len >= WAST_MAX_EXPORT_NAME) {
+        set_error("export name exceeds supported representation");
+        return 0;
+    }
     memcpy(name, (const void *)(uintptr_t)name_ptr, name_len);
     name[name_len] = '\0';
     memset(&g_error, 0, sizeof(g_error));
@@ -433,7 +498,10 @@ uint32_t waste_wast_assert_trap(uint32_t name_ptr, uint32_t name_len,
     wasm_value args[WAST_MAX_ARGS], results[WAST_MAX_RESULTS];
     int result_count = 0;
     if (!g_engine) { set_error("no module loaded"); return 0; }
-    if (name_len >= WAST_MAX_EXPORT_NAME) name_len = WAST_MAX_EXPORT_NAME - 1;
+    if (name_len >= WAST_MAX_EXPORT_NAME) {
+        set_error("export name exceeds supported representation");
+        return 0;
+    }
     memcpy(name, (const void *)(uintptr_t)name_ptr, name_len); name[name_len] = '\0';
     memset(&g_error, 0, sizeof(g_error));
     if (exec_find_export(g_engine, name, &func_idx, &g_error) != EXEC_OK) return 0;
@@ -465,7 +533,10 @@ uint32_t waste_wast_assert_return(
     }
 
     char name[WAST_MAX_EXPORT_NAME];
-    if (name_len >= WAST_MAX_EXPORT_NAME) name_len = WAST_MAX_EXPORT_NAME - 1;
+    if (name_len >= WAST_MAX_EXPORT_NAME) {
+        set_error("export name exceeds supported representation");
+        return 0;
+    }
     memcpy(name, (const void *)(uintptr_t)name_ptr, name_len);
     name[name_len] = '\0';
 
@@ -528,8 +599,7 @@ typedef struct {
     uint32_t retained_count;
     uint32_t retained_capacity;
     wast_script *current_anonymous_script;
-    wast_stream handler_stream;
-    int handler_stream_active;
+    wast_process_handler handler;
 } browser_wast_context;
 
 static uint32_t g_browser_command_line;
@@ -569,7 +639,7 @@ static void browser_release_superseded_anonymous(
         return;
     }
     int imports_table = 0;
-    int process_owned = current->engine == g_process_parent_engine;
+    int process_owned = current->engine == g_shared_process.parent_engine;
     native_process_capsule *active_capsule =
         native_store_active_capsule(&context->store);
     process_owned = process_owned ||
@@ -646,42 +716,19 @@ static uint32_t g_yield_func_idx;
 static wasm_value g_yield_args[WAST_MAX_ARGS];
 static int g_yield_arg_count;
 static exec_yield_reason g_yield_reason;
+/* Own the parsed expectation across ordinary return-based evaluator yields.
+ * The stream releases its temporary command immediately after the callback. */
+static int g_assertion_pending;
+static wast_assertion g_pending_assertion;
+static waste_exec_engine *g_pending_assertion_engine;
 /* The process driver may switch from the suspended Bash child to a newly
  * committed executable image before exposing a terminal/select yield. */
-static waste_exec_engine *g_process_active_engine;
-static uint32_t g_process_active_func_idx;
-static wasm_value g_process_active_args[WAST_MAX_ARGS];
-static int g_process_active_arg_count;
 static int g_terminal_requested;
-static exec_continuation g_process_continuation;
-static int g_process_state_initialized;
-static int g_process_fork_active;
-/* Immutable parent invocation captured at fork.  The active image has its
- * own descriptor; successful exec must never overwrite this record. */
-static int g_process_parent_restored;
-static int g_process_image_active;
-static uint32_t g_process_parent_func_idx;
-static wasm_value g_process_parent_args[WAST_MAX_ARGS];
-static int g_process_parent_arg_count;
+static int g_test_suite_requested;
 
 static uint8_t *g_boot_executable;
 static size_t g_boot_executable_size;
-
-/* ---- Host I/O request state for upload/download dialogs ---- */
-#define HOST_IO_NONE     0
-#define HOST_IO_UPLOAD   1
-#define HOST_IO_DOWNLOAD 2
-
-/* Not static: accessed by posix_stubs.c host functions. */
-struct {
-    int kind;                            /* HOST_IO_NONE / UPLOAD / DOWNLOAD */
-    char path[POSIX_PATH_NODE_NAME_MAX]; /* dest path (upload) or filename (download) */
-    int path_len;
-    uint8_t *data;                       /* download: file bytes; upload: received bytes */
-    size_t data_len;
-    int result;                          /* 0=pending, 1=completed, -1=cancelled */
-    int verbose;                         /* guest passed --verbose */
-} g_host_io;
+static waste_vfs g_boot_vfs;
 
 /* Boot-time packaged VFS manifest.  The browser submits only bounded path
  * metadata; file contents and executable bytes remain separate staged images
@@ -737,28 +784,6 @@ static void browser_driver_reset(void) {
     g_process_driver.state = BROWSER_DRIVER_IDLE;
 }
 
-static void browser_driver_select(browser_wast_context *context,
-                                  waste_exec_engine *engine,
-                                  uint32_t func_idx,
-                                  const wasm_value *args, int arg_count) {
-    native_process_capsule *capsule =
-        native_store_active_capsule(&context->store);
-    g_process_driver.state = BROWSER_DRIVER_RUNNING;
-    g_process_driver.pid = native_store_getpid(&context->store);
-    g_process_driver.engine = engine;
-    g_process_driver.func_idx = func_idx;
-    g_process_driver.arg_count = arg_count > WAST_MAX_ARGS ? WAST_MAX_ARGS : arg_count;
-    for (int i = 0; i < g_process_driver.arg_count; i++)
-        g_process_driver.args[i] = args[i];
-    if (capsule && capsule->engine) {
-        g_process_driver.engine = capsule->engine;
-        g_process_driver.func_idx = capsule->root_func_idx;
-        g_process_driver.arg_count = capsule->root_arg_count;
-        for (int i = 0; i < g_process_driver.arg_count; i++)
-            g_process_driver.args[i] = capsule->root_args[i];
-    }
-}
-
 static void browser_driver_publish_wait(void) {
     g_process_driver.state = BROWSER_DRIVER_BROWSER_WAIT;
     g_process_driver.wait_reason = g_yield_reason;
@@ -769,182 +794,24 @@ static void browser_driver_publish_wait(void) {
         g_yield_args[i] = g_process_driver.args[i];
 }
 
-static void browser_consume_parent_continuation(native_process_capsule *capsule) {
-    if (!capsule || !capsule->continuation) return;
-    exec_continuation_destroy(capsule->continuation);
-    free(capsule->continuation);
-    capsule->continuation = NULL;
-    capsule->continuation_valid = 0;
-}
-
-static int browser_engine_seen(waste_exec_engine **engines, uint32_t count,
-                               waste_exec_engine *engine) {
-    for (uint32_t i = 0; i < count; i++)
-        if (engines[i] == engine) return 1;
-    return 0;
-}
-
-static exec_status browser_capture_parent_graph(browser_wast_context *context,
-                                                native_process_capsule *capsule,
-                                                waste_exec_engine *root,
-                                                exec_error *error) {
-    uint32_t capacity = (uint32_t)context->store.module_count +
-                        (uint32_t)context->store.orphan_count;
-    char graph_event[64];
-    snprintf(graph_event, sizeof(graph_event), "graph-cap-m%d-o%d",
-             context->store.module_count, context->store.orphan_count);
-    waste_browser_record_transition(graph_event);
-    waste_exec_engine **engines = NULL;
-    exec_continuation *continuations = NULL;
-    uint32_t count = 0;
-    if (capacity) {
-        engines = calloc(capacity, sizeof(*engines));
-        continuations = calloc(capacity, sizeof(*continuations));
-        if (!engines || !continuations) {
-            free(engines); free(continuations);
-            return exec_fail(error, EXEC_ERROR_TRAP,
-                             "parent continuation graph allocation failed");
-        }
-    }
-    for (int pass = 0; pass < 2; pass++) {
-        uint32_t n = pass == 0 ? (uint32_t)context->store.module_count :
-                                (uint32_t)context->store.orphan_count;
-        for (uint32_t i = 0; i < n; i++) {
-            waste_exec_engine *engine = pass == 0 ?
-                context->store.modules[i].engine :
-                context->store.orphan_engines[i];
-            if (!engine || engine == root ||
-                browser_engine_seen(engines, count, engine)) continue;
-            if (count == capacity) {
-                for (uint32_t j = 0; j < count; j++)
-                    exec_continuation_destroy(&continuations[j]);
-                free(engines); free(continuations);
-                return exec_fail(error, EXEC_ERROR_TRAP,
-                                 "parent continuation graph capacity exhausted");
-            }
-            if (exec_continuation_capture(
-                    engine, &continuations[count], error) != EXEC_OK) {
-                char message[256];
-                snprintf(message, sizeof(message),
-                         "parent continuation graph capture failed: %s",
-                         error->message[0] ? error->message : "unknown error");
-                for (uint32_t j = 0; j < count; j++)
-                    exec_continuation_destroy(&continuations[j]);
-                free(engines); free(continuations);
-                return exec_fail(error, EXEC_ERROR_TRAP, message);
-            }
-            engines[count++] = engine;
-        }
-    }
-    capsule->continuation_engines = engines;
-    capsule->continuations = continuations;
-    capsule->continuation_count = count;
-    return EXEC_OK;
-}
-
-static exec_status browser_restore_parent_graph(native_process_capsule *capsule,
-                                                exec_error *error) {
-    if (!capsule) return exec_fail(error, EXEC_ERROR_TRAP,
-                                   "missing parent continuation capsule");
-    for (uint32_t i = 0; i < capsule->continuation_count; i++) {
-        exec_status status = exec_continuation_resume(
-            &capsule->continuations[i], capsule->continuation_engines[i],
-            0, EXEC_YIELD_NONE, error);
-        if (status != EXEC_OK) return status;
-    }
-    return EXEC_OK;
-}
-
-static void browser_discard_parent_graph(native_process_capsule *capsule) {
-    if (!capsule) return;
-    for (uint32_t i = 0; i < capsule->continuation_count; i++)
-        exec_continuation_destroy(&capsule->continuations[i]);
-    free(capsule->continuations);
-    free(capsule->continuation_engines);
-    capsule->continuations = NULL;
-    capsule->continuation_engines = NULL;
-    capsule->continuation_count = 0;
-}
-
-/* Restore the suspended Bash parent before a child replacement starts or
- * finishes.  Both ordinary Wasm image exec and future process handlers must
- * use this same ordering so the parent continuation is never skipped. */
-static exec_status browser_restore_fork_parent(browser_wast_context *context,
-                                               exec_error *error) {
-    native_process_capsule *parent_capsule;
-    waste_exec_engine *parent_engine;
-    uint32_t parent_func_idx;
-    int parent_arg_count;
-    wasm_value parent_args[WAST_MAX_ARGS];
-    exec_status restored;
-    if (!context || !g_process_fork_active || g_process_parent_restored)
-        return EXEC_OK;
-    parent_capsule = native_store_process_capsule(
-        &context->store, context->store.fork_parent_pid);
-    if (!parent_capsule)
-        return exec_fail(error, EXEC_ERROR_TRAP,
-                         "missing parent process capsule");
-    if (!parent_capsule->continuation || !parent_capsule->engine)
-        return exec_fail(error, EXEC_ERROR_TRAP,
-                         "missing parent continuation engine");
-    parent_engine = parent_capsule->engine;
-    parent_func_idx = parent_capsule->continuation->root_func_idx;
-    parent_arg_count = parent_capsule->continuation->root_arg_count;
-    memcpy(parent_args, parent_capsule->continuation->root_args,
-           sizeof(parent_args));
-    restored = browser_restore_parent_graph(parent_capsule, error);
-    if (restored != EXEC_OK) return restored;
-    /* The graph snapshots are consumed by the restore.  Release them before
-     * the next WAST/WAT child can capture a replacement graph; otherwise
-     * repeated execs leak continuation frames and exhaust the Wasm heap. */
-    browser_discard_parent_graph(parent_capsule);
-    restored = exec_continuation_resume(
-        parent_capsule->continuation, parent_engine,
-        context->store.fork_parent_pid, EXEC_YIELD_FORK, error);
-    if (restored != EXEC_OK) return restored;
-    parent_capsule->engine = parent_engine;
-    parent_capsule->root_func_idx = parent_func_idx;
-    parent_capsule->root_arg_count = parent_arg_count;
-    memcpy(parent_capsule->root_args, parent_args, sizeof(parent_args));
-    parent_capsule->state = NATIVE_PROCESS_RUNNABLE;
-    g_process_active_engine = parent_engine;
-    g_process_active_func_idx = parent_func_idx;
-    g_process_active_arg_count = parent_arg_count;
-    for (int i = 0; i < parent_arg_count; i++)
-        g_process_active_args[i] = parent_args[i];
-    g_process_parent_restored = 1;
-    browser_consume_parent_continuation(parent_capsule);
-    return EXEC_OK;
-}
-
 static void browser_process_state_init(void) {
-    if (g_process_state_initialized) return;
-    exec_continuation_init(&g_process_continuation);
+    if (g_shared_process.initialized) return;
+    native_process_driver_init(&g_shared_process);
     browser_driver_reset();
-    g_process_state_initialized = 1;
 }
-
 static void browser_process_state_reset(void) {
-    if (!g_process_state_initialized) return;
-    exec_continuation_destroy(&g_process_continuation);
-    g_process_fork_active = 0;
-    g_process_parent_restored = 0;
-    g_process_image_active = 0;
-    g_process_parent_engine = NULL;
-    g_process_parent_func_idx = 0;
-    g_process_parent_arg_count = 0;
-    g_process_active_engine = NULL;
-    g_process_active_func_idx = 0;
-    g_process_active_arg_count = 0;
+    native_process_driver_destroy(&g_shared_process);
     browser_driver_reset();
 }
 
 static void browser_yield_cleanup(void) {
+    g_assertion_pending = 0;
+    g_pending_assertion_engine = NULL;
     browser_process_state_reset();
-    if (g_yield_context.handler_stream_active)
-        wast_stream_destroy(&g_yield_context.handler_stream);
+    wast_process_handler_reset(&g_yield_context.handler);
     wast_stream_destroy(&g_yield_stream);
     native_store_free(&g_yield_context.store);
+    wast_process_handler_destroy(&g_yield_context.handler);
     for (uint32_t i = 0; i < g_yield_context.retained_count; i++) {
         if (!g_yield_context.retained[i]) continue;
         wast_script_free(g_yield_context.retained[i]);
@@ -954,567 +821,45 @@ static void browser_yield_cleanup(void) {
     memset(&g_yield_context, 0, sizeof(g_yield_context));
 }
 
-static waste_exec_engine *browser_image_runtime_export(
-        native_store *store, waste_exec_engine *image, const char *name,
-        uint32_t *index, exec_error *error) {
-    native_linked_module *env;
-    waste_exec_engine *runtime;
-    if (exec_find_export(image, name, index, error) == EXEC_OK)
-        return image;
-    env = native_registered_module(store, "env");
-    runtime = env ? native_store_process_engine(store, env->engine) : NULL;
-    if (!runtime || runtime->memory != image->memory) return NULL;
-    if (error) memset(error, 0, sizeof(*error));
-    return exec_find_export(runtime, name, index, error) == EXEC_OK ?
-        runtime : NULL;
+static void browser_handler_result(void *opaque, int passed,
+                                   const char *name, const char *message) {
+    (void)opaque;
+    add_result(passed, name, message);
 }
-
-static exec_status browser_wast_handler_step(
-        const uint8_t *source, size_t source_size, size_t offset,
-        unsigned line, size_t *next_offset, unsigned *next_line,
-        void *opaque);
-
-/* Drive an invocation through internal process transitions.  A fork yield is
- * handled entirely inside the browser runtime: the parent evaluator and store
- * are captured, the child continuation runs with fork returning zero, and a
- * child exit restores the parent before the fork call is resumed with its PID.
- * Terminal/select yields remain visible to JavaScript. */
+static void browser_driver_trace(void *opaque, const char *event) {
+    (void)opaque;
+    waste_browser_record_transition(event);
+}
+static exec_status browser_driver_handler_step(const uint8_t *source, size_t size,
+    size_t offset, unsigned line, size_t *next_offset, unsigned *next_line, void *opaque) {
+    wast_process_handler *handler = opaque;
+    exec_status status = wast_process_handler_step(source, size, offset, line,
+                                                   next_offset, next_line, handler);
+    g_shared_process.handler_wait_reason = handler->wait_reason;
+    return status;
+}
 static exec_status browser_invoke_process(browser_wast_context *context,
-                                          waste_exec_engine *engine,
-                                          uint32_t func_idx,
-                                          const wasm_value *args, int arg_count,
-                                          wasm_value *results, int *result_count,
-                                          exec_error *error) {
+    waste_exec_engine *engine, uint32_t function, const wasm_value *args, int count,
+    wasm_value *results, int *result_count, exec_error *error) {
     browser_process_state_init();
-    browser_driver_select(context, engine, func_idx, args, arg_count);
-    waste_exec_engine *active_engine = engine;
-    uint32_t active_func_idx = func_idx;
-    int image_active = g_process_image_active;
-    int child_exit_recorded = 0;
-    int handler_wake_recorded = 0;
-    native_process_capsule *capsule =
-        native_store_active_capsule(&context->store);
-    g_process_active_engine = active_engine;
-    g_process_active_func_idx = active_func_idx;
-    g_process_active_arg_count = arg_count;
-    for (int i = 0; i < arg_count && i < WAST_MAX_ARGS; i++)
-        g_process_active_args[i] = args[i];
-    if (capsule) {
-        capsule->engine = active_engine;
-        capsule->root_func_idx = active_func_idx;
-        capsule->root_arg_count = arg_count;
-        for (int i = 0; i < arg_count && i < WAST_MAX_ARGS; i++)
-            capsule->root_args[i] = args[i];
-        capsule->state = image_active ? NATIVE_PROCESS_RUNNABLE :
-                                        NATIVE_PROCESS_RUNNABLE;
-        (void)native_process_capsule_bind_memory(capsule);
+    g_shared_process.handler_step = browser_driver_handler_step;
+    g_shared_process.handler_reset = wast_process_handler_reset;
+    g_shared_process.handler_context = &context->handler;
+    g_shared_process.trace = browser_driver_trace;
+    exec_status status = native_process_driver_invoke(&g_shared_process, &context->store,
+        engine, function, args, count, results, result_count, error);
+    if (status == EXEC_ERROR_EXIT) {
+        g_browser_guest_exited = 1;
+        g_browser_guest_exit_status = error->exit_code;
     }
-    exec_status status = EXEC_OK;
-    for (;;) {
-        capsule = native_store_active_capsule(&context->store);
-        if (capsule && capsule->handler.kind != NATIVE_PROCESS_HANDLER_NONE) {
-            status = native_store_run_process_handler_step(
-                &context->store, browser_wast_handler_step);
-            if (status == EXEC_YIELD) {
-                if (g_yield_reason == EXEC_YIELD_NONE)
-                    g_yield_reason = EXEC_YIELD_READ;
-                if (native_store_suspend_process_handler_for_yield(
-                        &context->store, g_yield_reason) != 0)
-                    return exec_fail(error, EXEC_ERROR_TRAP,
-                                     "failed to suspend WAST handler");
-                g_process_driver.pid = native_store_getpid(&context->store);
-                g_process_driver.engine = NULL;
-                g_process_driver.func_idx = 0;
-                g_process_driver.arg_count = 0;
-                g_process_driver.wait_reason = g_yield_reason;
-                return status;
-            }
-            if (status != EXEC_OK && status != EXEC_ERROR_EXIT)
-                g_yield_reason = EXEC_YIELD_NONE;
-            {
-                exec_status handler_status = EXEC_OK;
-                int handler_exit_code = 0;
-                if (native_store_process_handler_result(
-                        &context->store, &handler_status,
-                        &handler_exit_code) != 0)
-                    return exec_fail(error, EXEC_ERROR_TRAP,
-                                     "missing WAST handler result");
-                if (status != EXEC_OK)
-                    handler_status = status;
-                handler_exit_code = native_process_handler_default_exit_code(
-                    handler_status, handler_exit_code);
-                error->exit_code = handler_exit_code;
-                if (g_process_fork_active &&
-                    native_store_getpid(&context->store) ==
-                        context->store.fork_child_pid) {
-                    /* Leave the child selected here.  The common fork-exit
-                     * path below must perform the parent wake after it has
-                     * observed the child exit; the combined helper selects
-                     * the parent too early for that path. */
-                    if ((error->signal ?
-                        native_store_complete_process_handler_signal(
-                            &context->store, handler_status, error->signal) :
-                        native_store_complete_process_handler(
-                            &context->store, handler_status,
-                            handler_exit_code)) != 0)
-                        return exec_fail(error, EXEC_ERROR_TRAP,
-                                         "failed to complete WAST handler");
-                    browser_record_engine_transition("handler-completed",
-                                                      g_process_parent_engine);
-                    status = EXEC_ERROR_EXIT;
-                } else {
-                    if ((error->signal ?
-                        native_store_complete_process_handler_signal(
-                            &context->store, handler_status, error->signal) :
-                        native_store_complete_process_handler(
-                            &context->store, handler_status,
-                            handler_exit_code)) != 0)
-                        return exec_fail(error, EXEC_ERROR_TRAP,
-                                         "failed to complete WAST handler");
-                    status = EXEC_ERROR_EXIT;
-                }
-            }
-        }
-        if (status != EXEC_ERROR_EXIT) {
-            uint64_t function_count = active_engine ?
-                (uint64_t)active_engine->import_func_count +
-                (uint64_t)active_engine->func_count : 0;
-            if (!active_engine || (uint64_t)active_func_idx >= function_count) {
-                char entry_error[128];
-                snprintf(entry_error, sizeof(entry_error),
-                         "process entry %u is outside engine function range %llu",
-                         active_func_idx,
-                         (unsigned long long)function_count);
-                return exec_fail(error, EXEC_ERROR_NOT_FOUND, entry_error);
-            }
-            if (!g_process_fork_active &&
-                active_engine == g_process_parent_engine)
-                waste_browser_record_transition("parent-invoke");
-            status = exec_invoke(active_engine, active_func_idx,
-                                 args, arg_count, results, result_count, error);
-            if (!g_process_fork_active &&
-                active_engine == g_process_parent_engine)
-                waste_browser_record_transition(status == EXEC_YIELD ?
-                                          "parent-invoke-yield" :
-                                          "parent-invoke-return");
-            if (!g_process_fork_active &&
-                active_engine == g_process_parent_engine &&
-                status != EXEC_OK && status != EXEC_YIELD &&
-                status != EXEC_ERROR_EXIT) {
-                char invoke_event[256];
-                snprintf(invoke_event, sizeof(invoke_event),
-                         "parent-invoke-error-s%d-f%llu-%s", status,
-                         error ? (unsigned long long)error->memory_fault_address : 0,
-                         error && error->message[0] ? error->message : "unknown");
-                waste_browser_record_transition(invoke_event);
-            }
-            if (!g_process_fork_active &&
-                active_engine == g_process_parent_engine &&
-                status == EXEC_YIELD) {
-                char yield_event[32];
-                snprintf(yield_event, sizeof(yield_event), "parent-yield-r%u",
-                         error->yield_reason);
-                waste_browser_record_transition(yield_event);
-            }
-        }
-        if (status == EXEC_YIELD &&
-            error->yield_reason == EXEC_YIELD_EXEC) {
-            waste_browser_record_transition("exec-yield");
-            native_process_image *image = NULL;
-            if (native_store_prepare_process_exec(
-                    &context->store, &context->store.exec_request) != 0)
-                return exec_fail(error, EXEC_ERROR_TRAP,
-                                 "invalid process exec transition");
-            exec_status loaded = native_store_instantiate_executable(
-                &context->store, &context->store.exec_request, &image, error);
-            if (loaded == EXEC_ERROR_UNSUPPORTED &&
-                context->store.exec_request.handler_kind ==
-                    NATIVE_EXEC_HANDLER_WAST) {
-                browser_record_engine_transition("handler-before",
-                                                  g_process_parent_engine);
-                if (native_store_commit_process_handler_with_context(
-                        &context->store, &context->store.exec_request,
-                        NATIVE_PROCESS_HANDLER_WAST, context, NULL) != 0)
-                    return exec_fail(error, EXEC_ERROR_TRAP,
-                                     "failed to commit WAST process handler");
-                browser_record_engine_transition("handler-after",
-                                                  g_process_parent_engine);
-                native_exec_request_destroy(&context->store.exec_request);
-                active_engine = NULL;
-                active_func_idx = 0;
-                args = NULL;
-                arg_count = 0;
-                image_active = 0;
-                g_process_image_active = 0;
-                if (context->handler_stream_active)
-                    wast_stream_destroy(&context->handler_stream);
-                memset(&context->handler_stream, 0,
-                       sizeof(context->handler_stream));
-                context->handler_stream_active = 0;
-                continue;
-            }
-            if (loaded != EXEC_OK) {
-                char reject_event[192];
-                snprintf(reject_event, sizeof(reject_event),
-                         "exec-preflight-rejected-s%d-%s",
-                         error ? error->status : -1,
-                         error && error->message[0] ? error->message : "unknown");
-                waste_browser_record_transition(reject_event);
-                /* Leave the old evaluator suspended. Its next import retry
-                 * consumes this one-shot errno and returns from execve. */
-                context->store.exec_request.failure_errno = POSIX_ENOEXEC;
-                native_store_abort_process_exec(&context->store);
-                continue;
-            }
-            /* Eagerly restore the dormant parent before running replacement
-             * guest code.  The child then runs against an independent image,
-             * and child exit only selects the already-restored parent. */
-            if (g_process_fork_active && !g_process_parent_restored) {
-                exec_status restored = browser_restore_fork_parent(context,
-                                                                    error);
-                if (restored != EXEC_OK) {
-                    native_process_image_release(image);
-                    return restored;
-                }
-            }
-            if (native_store_commit_process_image(&context->store, image) != 0) {
-                native_process_image_release(image);
-                /* Once the parent has been eagerly restored there is no
-                 * coherent child evaluator left to retry.  Treat a commit
-                 * failure as an internal transition error rather than
-                 * resuming the stale pre-exec child. */
-                if (g_process_parent_restored)
-                    return exec_fail(error, EXEC_ERROR_TRAP,
-                                     "failed to commit executable image");
-                native_store_abort_process_exec(&context->store);
-                context->store.exec_request.failure_errno = POSIX_ENOMEM;
-                continue;
-            }
-            native_exec_request_destroy(&context->store.exec_request);
-            /* Run guest libc bootstrap on the new image when the
-             * standard init exports are present.  This mirrors the
-             * WAST-level init sequence the launcher performs for Bash. */
-            {
-                uint32_t init_func;
-                waste_exec_engine *init_engine;
-                wasm_value init_args[4];
-                int init_result_count = 0;
-                exec_error init_error;
-                uint32_t heap_base = 65536;
-                exec_global *heap_global = NULL;
-                memset(&init_error, 0, sizeof(init_error));
-                if (exec_find_export_global(image->engine, "__heap_base",
-                                            &heap_global,
-                                            &init_error) == EXEC_OK
-                    && heap_global
-                    && heap_global->value.type == WASM_VALTYPE_I32
-                    && heap_global->value.i32 > (int32_t)heap_base) {
-                    heap_base = (uint32_t)heap_global->value.i32;
-                }
-                /* The exec startup block is materialized at the top of the
-                 * image's initial linear memory.  Starting malloc at the
-                 * module's __heap_base would let a growing heap overwrite
-                 * argv, envp, and the startup metadata before memory.grow is
-                 * needed.  Place the process heap immediately after that
-                 * immutable block instead. */
-                if (image->startup_size) {
-                    uint64_t startup_end = (uint64_t)image->startup_ptr +
-                                           image->startup_size;
-                    uint64_t aligned_end = (startup_end + 15u) & ~15u;
-                    if (aligned_end <= UINT32_MAX &&
-                        aligned_end > heap_base)
-                        heap_base = (uint32_t)aligned_end;
-                }
-                {
-                    char heap_event[128];
-                    snprintf(heap_event, sizeof(heap_event),
-                             "image-heap-base-%u", heap_base);
-                    waste_browser_record_transition(heap_event);
-                }
-                memset(&init_error, 0, sizeof(init_error));
-                init_engine = browser_image_runtime_export(
-                    &context->store, image->engine, "waste_allocator_init",
-                    &init_func, &init_error);
-                if (init_engine) {
-                    init_args[0].type = WASM_VALTYPE_I32;
-                    init_args[0].i32 = (int32_t)heap_base;
-                    exec_status init_st = exec_invoke(init_engine, init_func,
-                                      init_args, 1, NULL,
-                                      &init_result_count, &init_error);
-                    if (init_st != EXEC_OK) {
-                        char ev[128];
-                        snprintf(ev, sizeof(ev), "image-alloc-FAIL-s%d-%s",
-                                 init_st, init_error.message);
-                        waste_browser_record_transition(ev);
-                    }
-                }
-                waste_browser_record_transition("image-alloc-ok");
-                memset(&init_error, 0, sizeof(init_error));
-                init_engine = browser_image_runtime_export(
-                    &context->store, image->engine, "waste_environ_set",
-                    &init_func, &init_error);
-                if (init_engine) {
-                    init_args[0].type = WASM_VALTYPE_I32;
-                    init_args[0].i32 = (int32_t)(image->startup_ptr + 44u +
-                        (image->argc + 1u) * sizeof(uint32_t));
-                    exec_status init_st = exec_invoke(init_engine, init_func,
-                                      init_args, 1, NULL,
-                                      &init_result_count, &init_error);
-                    if (init_st != EXEC_OK) {
-                        char ev[128];
-                        snprintf(ev, sizeof(ev), "image-env-FAIL-s%d-%s",
-                                 init_st, init_error.message);
-                        waste_browser_record_transition(ev);
-                    } else {
-                        waste_browser_record_transition("image-env-ok");
-                    }
-                } else {
-                    waste_browser_record_transition("image-env-missing");
-                }
-                memset(&init_error, 0, sizeof(init_error));
-                init_engine = browser_image_runtime_export(
-                    &context->store, image->engine, "waste_stdio_init",
-                    &init_func, &init_error);
-                if (init_engine) {
-                    init_args[0].type = WASM_VALTYPE_I32;
-                    init_args[0].i32 = 4096;
-                    exec_status init_st = exec_invoke(init_engine, init_func,
-                                      init_args, 1, NULL,
-                                      &init_result_count, &init_error);
-                    if (init_st != EXEC_OK) {
-                        char ev[128];
-                        snprintf(ev, sizeof(ev), "image-stdio-FAIL-s%d-%s",
-                                 init_st, init_error.message);
-                        waste_browser_record_transition(ev);
-                    }
-                }
-                waste_browser_record_transition("image-stdio-ok");
-                memset(&init_error, 0, sizeof(init_error));
-                /* Only an image that owns its stdin/stdout/stderr pointer
-                 * slots may request them to be populated.  A dynamically
-                 * linked image uses waste_stdin/out/err from the resident
-                 * libc and must not write FILE pointers to addresses 0,1,2. */
-                init_engine = exec_find_export(
-                    image->engine, "waste_stdio_bind", &init_func,
-                    &init_error) == EXEC_OK ? image->engine : NULL;
-                if (init_engine) {
-                    init_args[0].type = WASM_VALTYPE_I32;
-                    init_args[0].i32 = 0;
-                    init_args[1].type = WASM_VALTYPE_I32;
-                    init_args[1].i32 = 1;
-                    init_args[2].type = WASM_VALTYPE_I32;
-                    init_args[2].i32 = 2;
-                    exec_status init_st = exec_invoke(init_engine, init_func,
-                                      init_args, 3, NULL,
-                                      &init_result_count, &init_error);
-                    if (init_st != EXEC_OK) {
-                        char ev[128];
-                        snprintf(ev, sizeof(ev), "image-bind-FAIL-s%d-%s",
-                                 init_st, init_error.message);
-                        waste_browser_record_transition(ev);
-                    } else {
-                        waste_browser_record_transition("image-bind-ok");
-                    }
-                } else {
-                    waste_browser_record_transition("image-bind-missing");
-                }
-            }
-            active_engine = image->engine;
-            active_func_idx = image->entry_func;
-            image_active = 1;
-            g_process_image_active = 1;
-            g_process_active_engine = active_engine;
-            g_process_active_func_idx = active_func_idx;
-            g_process_active_arg_count = 0;
-            args = NULL;
-            arg_count = 0;
-            capsule = native_store_active_capsule(&context->store);
-            if (capsule) {
-                capsule->engine = active_engine;
-                capsule->image = image;
-                capsule->root_func_idx = active_func_idx;
-                capsule->root_arg_count = 0;
-                capsule->generation++;
-                (void)native_process_capsule_bind_memory(capsule);
-            }
-            continue;
-        }
-        if (image_active && status != EXEC_YIELD) {
-            char image_event[512];
-            snprintf(image_event, sizeof(image_event),
-                     "image-return-s%d-e%d-f%llu-%s", status,
-                     error ? error->exit_code : -1,
-                     error ? (unsigned long long)error->memory_fault_address : 0,
-                     error && error->message[0] ? error->message : "none");
-            waste_browser_record_transition(image_event);
-            if (status == EXEC_ERROR_EXIT) {
-                /* Preserve an explicit guest exit code. */
-            } else if (status == EXEC_OK) {
-                error->exit_code = 0;
-            } else {
-                error->exit_code = 127;
-            }
-            if (error->signal)
-                (void)native_store_signal_process(
-                    &context->store, native_store_getpid(&context->store),
-                    error->signal);
-            else
-                (void)native_store_exit_process(&context->store,
-                                                error->exit_code);
-            child_exit_recorded = 1;
-            status = EXEC_ERROR_EXIT;
-            image_active = 0;
-            g_process_image_active = 0;
-        }
-        if (status == EXEC_ERROR_EXIT && g_process_fork_active &&
-            native_store_getpid(&context->store) ==
-                context->store.fork_child_pid) {
-            int parent_pid = context->store.fork_parent_pid;
-            browser_record_engine_transition("child-before-wake",
-                                              g_process_parent_engine);
-            if (!child_exit_recorded && !handler_wake_recorded)
-                (void)native_store_exit_process(&context->store,
-                                                error->exit_code);
-            if (!handler_wake_recorded &&
-                native_store_wake_process(&context->store, parent_pid,
-                                          context->store.fork_child_pid) != 0)
-                return exec_fail(error, EXEC_ERROR_TRAP,
-                                 "failed to restore parent process");
-            if (!g_process_parent_restored) {
-                exec_status restored = browser_restore_fork_parent(context,
-                                                                    error);
-                if (restored != EXEC_OK) return restored;
-            }
-            g_process_fork_active = 0;
-            native_process_capsule *parent_capsule =
-                native_store_process_capsule(&context->store, parent_pid);
-            exec_continuation_destroy(&g_process_continuation);
-            /* The child image has finished.  Resume the original parent
-             * evaluator at the suspended fork import; otherwise the next
-             * iteration would invoke the replacement image a second time. */
-            active_engine = parent_capsule && parent_capsule->engine ?
-                parent_capsule->engine : g_process_parent_engine;
-            browser_record_engine_transition("parent-after-wake", active_engine);
-            active_func_idx = parent_capsule && parent_capsule->engine ?
-                parent_capsule->root_func_idx : g_process_parent_func_idx;
-            args = parent_capsule && parent_capsule->engine ?
-                parent_capsule->root_args : g_process_parent_args;
-            arg_count = parent_capsule && parent_capsule->engine ?
-                parent_capsule->root_arg_count : g_process_parent_arg_count;
-            image_active = 0;
-            g_process_image_active = 0;
-            g_process_parent_restored = 0;
-            handler_wake_recorded = 0;
-            g_process_active_engine = active_engine;
-            g_process_active_func_idx = active_func_idx;
-            g_process_active_arg_count = arg_count;
-            capsule = native_store_active_capsule(&context->store);
-            if (capsule) {
-                capsule->engine = active_engine;
-                capsule->root_func_idx = active_func_idx;
-                capsule->root_arg_count = arg_count;
-                capsule->state = NATIVE_PROCESS_RUNNABLE;
-                /* native_store_wake_process already queued the child PID;
-                 * keep that result authoritative for the resumed fork. */
-                capsule->pending_result_valid = 1;
-            }
-            status = EXEC_OK;
-            continue;
-        }
-        if (status != EXEC_YIELD || error->yield_reason != EXEC_YIELD_FORK) {
-            if (status == EXEC_YIELD) {
-                g_process_driver.engine = g_process_active_engine ?
-                    g_process_active_engine : active_engine;
-                g_process_driver.func_idx = g_process_active_engine ?
-                    g_process_active_func_idx : active_func_idx;
-                g_process_driver.arg_count = g_process_active_engine ?
-                    g_process_active_arg_count : arg_count;
-                for (int i = 0; i < g_process_driver.arg_count; i++)
-                    g_process_driver.args[i] = g_process_active_engine ?
-                        g_process_active_args[i] : args[i];
-                g_process_driver.pid = native_store_getpid(&context->store);
-            }
-            return status;
-        }
-        if (g_process_fork_active)
-            return exec_fail(error, EXEC_ERROR_TRAP,
-                             "nested browser fork is unsupported");
-        browser_process_state_init();
-        native_process_capsule *parent_capsule =
-            native_store_process_capsule(&context->store,
-                                         native_store_getpid(&context->store));
-        if (!parent_capsule)
-            return exec_fail(error, EXEC_ERROR_TRAP,
-                             "missing parent process capsule");
-        exec_continuation_destroy(&g_process_continuation);
-        exec_continuation_init(&g_process_continuation);
-        if (exec_continuation_capture(active_engine, &g_process_continuation,
-                                      error) != EXEC_OK)
-            return error->status;
-        /* The child may replace its image with a WAST handler while this
-         * parent continuation remains suspended.  Keep the parent's image
-         * alive until the continuation is restored and consumed. */
-        exec_continuation_pin_image(&g_process_continuation,
-                                    parent_capsule->image);
-        parent_capsule->engine = active_engine;
-        parent_capsule->root_func_idx = active_func_idx;
-        parent_capsule->root_arg_count = arg_count;
-        for (int i = 0; i < arg_count && i < WAST_MAX_ARGS; i++)
-            parent_capsule->root_args[i] = args[i];
-        int parent_pid = native_store_getpid(&context->store);
-        g_process_parent_engine = active_engine;
-        browser_record_engine_transition("parent-at-fork",
-                                          g_process_parent_engine);
-        g_process_parent_func_idx = active_func_idx;
-        g_process_parent_arg_count = arg_count;
-        for (int i = 0; i < arg_count && i < WAST_MAX_ARGS; i++)
-            g_process_parent_args[i] = args[i];
-        exec_continuation_describe(&g_process_continuation, active_engine,
-                                   active_func_idx, args, arg_count,
-                                   EXEC_YIELD_FORK, parent_pid, 1);
-        parent_capsule->continuation = malloc(sizeof(*parent_capsule->continuation));
-        if (!parent_capsule->continuation)
-            return exec_fail(error, EXEC_ERROR_TRAP,
-                             "parent continuation capsule allocation failed");
-        *parent_capsule->continuation = g_process_continuation;
-        parent_capsule->continuation_valid = 1;
-        exec_continuation_init(&g_process_continuation);
-        if (browser_capture_parent_graph(context, parent_capsule,
-                                          active_engine, error) != EXEC_OK)
-            return error->status;
-        int child_pid = 0;
-        if (native_store_fork_process(&context->store, &child_pid) != 0 ||
-            native_store_set_active_process(&context->store, child_pid) != 0)
-            return exec_fail(error, EXEC_ERROR_TRAP,
-                             "failed to create browser child process");
-        context->store.fork_parent_pid = parent_pid;
-        context->store.fork_child_pid = child_pid;
-        if (native_store_clone_process_graph(&context->store, parent_pid,
-                                             child_pid) != 0)
-            return exec_fail(error, EXEC_ERROR_TRAP,
-                             "failed to clone linked process graph");
-        capsule = native_store_active_capsule(&context->store);
-        if (capsule) {
-            capsule->pending_result = 0;
-            capsule->pending_result_valid = 1;
-        }
-        g_process_fork_active = 1;
-        if (parent_capsule)
-            parent_capsule->state = NATIVE_PROCESS_BROWSER_BLOCKED;
-        capsule = native_store_active_capsule(&context->store);
-        if (capsule) {
-            /* Fork cloned the evaluator state before selecting the child.
-             * Continue with the child-owned engine and descriptor. */
-            active_engine = capsule->engine;
-            active_func_idx = capsule->root_func_idx;
-            args = capsule->root_args;
-            arg_count = capsule->root_arg_count;
-            capsule->state = NATIVE_PROCESS_RUNNABLE;
-            g_process_active_engine = active_engine;
-            g_process_active_func_idx = active_func_idx;
-            g_process_active_arg_count = arg_count;
-        }
-    }
+    native_driver_selection *selected = &g_shared_process.selection;
+    g_process_driver.pid = selected->pid;
+    g_process_driver.engine = selected->engine;
+    g_process_driver.func_idx = selected->func_idx;
+    g_process_driver.arg_count = selected->arg_count;
+    memcpy(g_process_driver.args, selected->args, sizeof(selected->args));
+    g_process_driver.wait_reason = selected->wait_reason;
+    return status;
 }
 
 static exec_status browser_assertion_invoke(void *data,
@@ -1526,6 +871,19 @@ static exec_status browser_assertion_invoke(void *data,
     return browser_invoke_process((browser_wast_context *)data, engine,
                                    func_idx, args, arg_count, results,
                                    result_count, error);
+}
+
+static exec_status browser_assertion_resume(void *data,
+                                             waste_exec_engine *engine,
+                                             uint32_t func_idx,
+                                             const wasm_value *args, int arg_count,
+                                             wasm_value *results, int *result_count,
+                                             exec_error *error) {
+    /* The expected value belongs to the original assertion, but fork/exec or
+     * a child WAST handler may have selected a different live continuation. */
+    (void)engine; (void)func_idx; (void)args; (void)arg_count;
+    return browser_invoke_process((browser_wast_context *)data, g_yield_engine,
+        g_yield_func_idx, g_yield_args, g_yield_arg_count, results, result_count, error);
 }
 
 static void browser_run_assertions(browser_wast_context *context,
@@ -1551,9 +909,12 @@ static void browser_run_assertions(browser_wast_context *context,
                 selected, assertion, &error, browser_assertion_invoke, context);
         }
         if (status == EXEC_YIELD) {
+            g_pending_assertion = *assertion;
+            g_pending_assertion_engine = selected;
+            g_assertion_pending = 1;
             g_yield_active = 1;
             g_yield_reason = error.yield_reason;
-            if (!g_process_active_engine) {
+            if (!g_shared_process.active_engine) {
                 g_process_driver.engine = selected;
                 g_process_driver.func_idx = 0;
                 g_process_driver.arg_count = assertion->arg_count;
@@ -1563,11 +924,16 @@ static void browser_run_assertions(browser_wast_context *context,
                     g_process_driver.args[j] = assertion->args[j];
             }
             g_process_driver.pid = native_store_getpid(&context->store);
+            /* Pump yields are time-slice boundaries, not guest I/O.  Publish
+             * the saved engine/args for resume; the worker distinguishes
+             * via waste_wast_wait_kind == EXEC_YIELD_PUMP and drives the
+             * cooperative drain itself. */
             browser_driver_publish_wait();
             return;
         }
         add_result(status == EXEC_OK, assertion->func_name,
                    status == EXEC_OK ? (void *)0 : error.message);
+        if (status == EXEC_ERROR_INTERRUPTED) return;
     }
 }
 
@@ -1579,7 +945,8 @@ static void browser_process_module(browser_wast_context *context,
         load_module = browser_find_definition(context,
                                               group->module.instance_of);
         if (!load_module) {
-            add_result(0, "(module)", "unknown module definition");
+            wast_setup_record(&g_browser_setup, g_browser_command_line,
+                EXEC_ERROR_NOT_FOUND, WAST_SETUP_DEFINITION, "unknown module definition");
             return;
         }
     }
@@ -1601,17 +968,10 @@ static void browser_process_module(browser_wast_context *context,
         if (group->has_module_assertion) {
             int ok = group->module_assert_kind != WAST_ASSERT_TRAP;
             add_result(ok, "(module)", ok ? (void *)0 : encode_error);
-        } else if (script->group_count == 1) {
-            /* The script was retained before processing so later commands can
-             * refer to a successful anonymous module.  An unasserted module
-             * that cannot be encoded has no instance to preserve; release the
-             * retained parse or large official files steadily exhaust the
-             * browser heap. */
-            browser_forget_retained(context, script);
+        } else {
+            wast_setup_record(&g_browser_setup, g_browser_command_line,
+                EXEC_ERROR_FORMAT, WAST_SETUP_ENCODE, encode_error);
         }
-        /* A module without an assertion is a definition/setup command.  The
-         * native runner does not count an expected-invalid setup module as a
-         * failed assertion; keep the streaming browser runner equivalent. */
         return;
     }
 
@@ -1622,6 +982,15 @@ static void browser_process_module(browser_wast_context *context,
                                             binary, binary_size, &engine,
                                             &error);
     free(binary);
+    if (status == EXEC_ERROR_INTERRUPTED) {
+        if (!group->has_module_assertion)
+            wast_setup_record(&g_browser_setup, g_browser_command_line,
+                status, WAST_SETUP_LOAD, error.message);
+        add_result(0, "(module)", error.message);
+        if (engine && !native_store_keep_orphan(&context->store, engine))
+            exec_free(engine);
+        return;
+    }
     if (group->has_module_assertion) {
         int ok = group->module_assert_kind == WAST_ASSERT_TRAP ?
                  status == EXEC_ERROR_TRAP : status != EXEC_OK;
@@ -1633,20 +1002,25 @@ static void browser_process_module(browser_wast_context *context,
         return;
     }
     if (status != EXEC_OK) {
-        /* Unasserted modules may intentionally be non-instantiable setup
-         * inputs in the official script.  They do not contribute a result;
-         * only an explicit module assertion turns the status into a check. */
-        if (!group->has_module_assertion && script->group_count == 1)
-            browser_forget_retained(context, script);
+        wast_setup_record(&g_browser_setup, g_browser_command_line,
+            status, WAST_SETUP_LOAD, error.message);
+        if (engine && !native_store_keep_orphan(&context->store, engine)) {
+            exec_free(engine);
+            add_command_failure("(module)", "cannot retain failed setup engine");
+        }
         return;
     }
     if (!native_store_add(&context->store, engine, &group->module,
                           load_module)) {
+        wast_setup_record(&g_browser_setup, g_browser_command_line,
+            EXEC_ERROR_TRAP, WAST_SETUP_RETAIN, "cannot retain module instance");
         exec_free(engine);
         add_command_failure("(module)",
                             "out of memory retaining module instance");
         return;
     }
+    wast_setup_record(&g_browser_setup, g_browser_command_line,
+                     EXEC_OK, WAST_SETUP_LOAD, NULL);
     browser_run_assertions(context, script, group);
 }
 
@@ -1704,10 +1078,19 @@ static int browser_process_command(wast_stream_command_kind kind,
     }
     wast_script *script = must_retain ?
         context->retained[context->retained_count - 1] : parsed;
+    int modules_before = context->store.module_count;
     for (int i = 0; i < script->group_count; i++) {
         wast_group *group = &script->groups[i];
         if (group->module.is_definition) continue;
         browser_process_module(context, script, group);
+    }
+    /* Failed ordinary modules have no published metadata. Release their parse
+     * after iteration, never while the loop still reads script->group_count. */
+    if (must_retain && script->group_count == 1 &&
+        !script->groups[0].module.is_definition &&
+        context->store.module_count == modules_before) {
+        browser_forget_retained(context, script);
+        return 0;
     }
     if (must_retain && script->group_count == 1 &&
         !script->groups[0].has_module_assertion &&
@@ -1721,53 +1104,27 @@ static int browser_process_command(wast_stream_command_kind kind,
     return 0;
 }
 
-static exec_status browser_wast_handler_step(
-        const uint8_t *source, size_t source_size, size_t offset,
-        unsigned line, size_t *next_offset, unsigned *next_line,
-        void *opaque) {
-    browser_wast_context *context = (browser_wast_context *)opaque;
-    int status;
-    (void)offset;
-    (void)line;
-    if (!context || !source || !source_size || !next_offset || !next_line)
-        return EXEC_ERROR_FORMAT;
-    /* The enclosing Bash invocation may have arrived here while resuming its
-     * own terminal read.  That stale browser-yield flag is not a yield from
-     * this WAST command; only browser_process_command may set it below. */
-    g_yield_active = 0;
-    g_yield_reason = EXEC_YIELD_NONE;
-    if (!context->handler_stream_active) {
-        wast_stream_init(&context->handler_stream,
-                         (const char *)source, source_size);
-        context->handler_stream_active = 1;
-    }
-    for (;;) {
-        status = wast_stream_next(&context->handler_stream,
-                                  browser_process_command, context);
-        if (status < 0 ||
-            wast_stream_position(&context->handler_stream,
-                                 next_offset, next_line) != 0)
-            return EXEC_ERROR_FORMAT;
-        if (status == 0) {
-            context->handler_stream_active = 0;
-            return EXEC_OK;
-        }
-        if (g_yield_active)
-            return EXEC_YIELD;
-    }
-}
-
 static int browser_stream_loop(void) {
+    if (g_yield_context.store.execution_control.stopped) {
+        browser_yield_cleanup();
+        return 0;
+    }
     for (;;) {
+        exec_error error = {0};
+        if (exec_execution_check(&g_yield_context.store.execution_control, &error) != EXEC_OK) {
+            add_result(0, "(execution)", error.message);
+            break;
+        }
         int status = wast_stream_next(&g_yield_stream,
                                       browser_process_command,
                                       &g_yield_context);
-        if (status == 0) break;
+        if (status == 0) { g_browser_script_completed = 1; break; }
         if (status < 0) {
             add_result(0, "(parse)", g_yield_stream.error);
             break;
         }
         if (g_yield_active) return 1;
+        if (g_yield_context.store.execution_control.stopped) break;
     }
     browser_yield_cleanup();
     return 0;
@@ -1778,6 +1135,12 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
     browser_process_state_reset();
     g_browser_result_count = 0;
     g_browser_result_passed = 0;
+    wast_setup_reset(&g_browser_setup);
+    g_browser_script_completed = 0;
+    g_browser_guest_exited = 0;
+    g_browser_guest_exit_status = 0;
+    g_execution_stop = EXEC_STOP_NONE;
+    g_execution_started_ns = g_execution_last_ns = waste_browser_realtime_now(NULL);
     g_shared_file_page_probe_result = 0;
     g_browser_command_line = 1;
     /* Reset old per-module API state */
@@ -1787,12 +1150,34 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
     g_engine = (void *)0;
     g_yield_active = 0;
     g_yield_reason = EXEC_YIELD_NONE;
+    g_assertion_pending = 0;
+    g_pending_assertion_engine = NULL;
     g_browser_transition_evidence_length = 0;
     g_browser_transition_evidence[0] = '\0';
     waste_browser_record_transition("run-start");
 
     memset(&g_yield_context, 0, sizeof(g_yield_context));
     native_store_init(&g_yield_context.store);
+    g_yield_context.store.test_suite_enabled = g_test_suite_requested;
+    g_test_suite_requested = 0;
+    if (g_execution_timeout_ms || g_execution_cancel_ms)
+        g_yield_context.store.execution_control.poll = browser_execution_poll;
+    if (g_pump_quantum_ms) {
+        /* Dispatch-loop safepoint only runs when poll != NULL, so install a
+         * no-op poll when only pump is configured.  browser_execution_poll
+         * already returns EXEC_STOP_NONE until the timeout/cancel windows
+         * engage; it is safe to reuse. */
+        if (!g_yield_context.store.execution_control.poll)
+            g_yield_context.store.execution_control.poll = browser_execution_poll;
+        g_yield_context.store.execution_control.pump_quantum_ns =
+            (uint64_t)g_pump_quantum_ms * 1000000ull;
+        g_yield_context.store.execution_control.pump_clock_now =
+            browser_pump_clock_now;
+        g_yield_context.store.execution_control.pump_clock_context = NULL;
+        g_yield_context.store.execution_control.last_pump_ns = 0;
+    }
+    wast_process_handler_init(&g_yield_context.handler, &g_yield_context.store,
+                               browser_handler_result, NULL);
     if (g_boot_executable) {
         (void)native_store_register_executable(
             &g_yield_context.store, "/bin/waste-probe", g_boot_executable,
@@ -1806,8 +1191,19 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
         g_terminal_requested = 0;
     }
     posix_kernel_set_realtime_clock(g_yield_context.store.kernel,
-                                    waste_browser_realtime_now, NULL);
+                                    browser_guest_realtime_now, NULL);
+    posix_kernel_set_clock(g_yield_context.store.kernel,
+                           browser_guest_monotonic_now, NULL);
     (void)native_store_bind_interpreter_paths(&g_yield_context.store);
+    if (g_boot_vfs.count) {
+        int rc = waste_vfs_mount(g_yield_context.store.kernel, &g_boot_vfs);
+        waste_vfs_free(&g_boot_vfs);
+        if (rc) {
+            add_result(0, "(vfs)", "cannot mount installed VFS files");
+            browser_yield_cleanup();
+            return 0;
+        }
+    }
     /* Terminal creation replaces the initial noninteractive kernel, so bind
      * packaged metadata only after that optional replacement. */
     for (uint32_t i = 0; i < g_vfs_manifest_count; i++) {
@@ -1908,10 +1304,12 @@ uint32_t waste_wast_resume(void) {
     int result_count = 0;
     exec_error error;
     memset(&error, 0, sizeof(error));
-    exec_status st = browser_invoke_process(&g_yield_context, g_yield_engine,
-                                            g_yield_func_idx, g_yield_args,
-                                            g_yield_arg_count, results,
-                                            &result_count, &error);
+    exec_status st = g_assertion_pending ?
+        wast_run_assertion_with_invoke(g_pending_assertion_engine,
+            &g_pending_assertion, &error, browser_assertion_resume, &g_yield_context) :
+        browser_invoke_process(&g_yield_context, g_yield_engine,
+            g_yield_func_idx, g_yield_args, g_yield_arg_count, results,
+            &result_count, &error);
     snprintf(resume_event, sizeof(resume_event), "resume-status-s%d-y%d",
              st, error.yield_reason);
     waste_browser_record_transition(resume_event);
@@ -1921,14 +1319,12 @@ uint32_t waste_wast_resume(void) {
          * next browser resume must remain armed instead of returning early. */
         g_yield_active = 1;
         g_yield_reason = error.yield_reason;
-        browser_driver_select(&g_yield_context, g_process_active_engine ?
-                              g_process_active_engine : g_yield_engine,
-                              g_process_active_engine ?
-                              g_process_active_func_idx : g_yield_func_idx,
-                              g_process_active_engine ? g_process_active_args :
-                              g_yield_args,
-                              g_process_active_engine ?
-                              g_process_active_arg_count : g_yield_arg_count);
+        /* browser_invoke_process already copied the exact shared selection.
+         * Pump yields reuse the same save/restore path; the worker detects
+         * them via waste_wast_wait_kind == EXEC_YIELD_PUMP (6) and drains
+         * its event loop (which may invoke waste_wast_request_cancel)
+         * before calling resume again.  Handler waits intentionally have
+         * no engine entry descriptor. */
         browser_driver_publish_wait();
         return 1;
     }
@@ -1937,9 +1333,11 @@ uint32_t waste_wast_resume(void) {
     g_yield_reason = EXEC_YIELD_NONE;
     g_process_driver.state = st == EXEC_OK || st == EXEC_ERROR_EXIT ?
                              BROWSER_DRIVER_DONE : BROWSER_DRIVER_ERROR;
-    add_result(st == EXEC_OK || st == EXEC_ERROR_EXIT, "main",
-               (st == EXEC_OK || st == EXEC_ERROR_EXIT)
-                   ? (void *)0 : error.message);
+    int passed = st == EXEC_OK || (!g_assertion_pending && st == EXEC_ERROR_EXIT);
+    const char *result_name = g_assertion_pending ? g_pending_assertion.func_name : "main";
+    g_assertion_pending = 0;
+    g_pending_assertion_engine = NULL;
+    add_result(passed, result_name, passed ? (void *)0 : error.message);
     return browser_stream_loop();
 }
 
@@ -1953,61 +1351,161 @@ uint32_t waste_wast_wait_kind(void) {
     return g_yield_active ? (uint32_t)g_yield_reason : EXEC_YIELD_NONE;
 }
 
+__attribute__((export_name("waste_wast_set_execution_limits")))
+int32_t waste_wast_set_execution_limits(uint32_t timeout_ms, uint32_t cancel_ms) {
+    if (g_yield_active || timeout_ms > 3600000 || cancel_ms > 3600000) return -1;
+    g_execution_timeout_ms = timeout_ms;
+    g_execution_cancel_ms = cancel_ms;
+    return 0;
+}
+
+__attribute__((export_name("waste_wast_execution_stop_reason")))
+uint32_t waste_wast_execution_stop_reason(void) {
+    return (uint32_t)g_execution_stop;
+}
+
+/* Configure the cooperative dispatch-pump quantum (wall-clock milliseconds).
+ * The engine yields EXEC_YIELD_PUMP (resume returns 2) after this many ms of
+ * guest execution so the worker can process pending onmessage events.  Zero
+ * disables the pump.  Must be called before run_script; rejected while a
+ * script is active. */
+__attribute__((export_name("waste_wast_set_pump_quantum_ms")))
+int32_t waste_wast_set_pump_quantum_ms(uint32_t quantum_ms) {
+    if (g_yield_active || quantum_ms > 60000) return -1;
+    g_pump_quantum_ms = quantum_ms;
+    return 0;
+}
+
+/* Request immediate cancellation of the running script.  Unlike the scheduled
+ * `waste_wast_set_execution_limits` cancel, this is callable from a worker
+ * onmessage handler during a pump yield; the next dispatch-loop safepoint
+ * then returns EXEC_ERROR_INTERRUPTED with EXEC_STOP_CANCELLED. */
+__attribute__((export_name("waste_wast_request_cancel")))
+void waste_wast_request_cancel(void) {
+    g_execution_stop = EXEC_STOP_CANCELLED;
+    g_yield_context.store.execution_control.stopped = EXEC_STOP_CANCELLED;
+}
+
+/* Freeze the kernel-visible realtime/monotonic clock at a scripted value for
+ * host-independent guest tests.  Host-side execution-policy time keeps real
+ * elapsed-time semantics.  Pass low == 0 && high == 0 as a reset sentinel.
+ * Must be called before run_script; rejected while a script is active. */
+__attribute__((export_name("waste_wast_set_clock_realtime_ns")))
+int32_t waste_wast_set_clock_realtime_ns(uint32_t low, uint32_t high) {
+    if (g_yield_active) return -1;
+    uint64_t value = ((uint64_t)high << 32) | (uint64_t)low;
+    g_clock_realtime_fixed = value != 0;
+    g_clock_realtime_ns = value;
+    return 0;
+}
+
+__attribute__((export_name("waste_wast_set_clock_monotonic_ns")))
+int32_t waste_wast_set_clock_monotonic_ns(uint32_t low, uint32_t high) {
+    if (g_yield_active) return -1;
+    uint64_t value = ((uint64_t)high << 32) | (uint64_t)low;
+    g_clock_monotonic_fixed = value != 0;
+    g_clock_monotonic_ns = value;
+    return 0;
+}
+
+/* Advance an explicitly frozen guest clock at an external wait safe point.
+ * This never changes the host clock used for execution/cancellation limits. */
+__attribute__((export_name("waste_wast_advance_clock_monotonic_ns")))
+int32_t waste_wast_advance_clock_monotonic_ns(uint32_t low, uint32_t high) {
+    uint64_t value = ((uint64_t)high << 32) | low;
+    uint32_t reason = waste_wast_wait_kind();
+    if (!g_yield_active || !g_clock_monotonic_fixed ||
+        (reason != EXEC_YIELD_READ && reason != EXEC_YIELD_SELECT) ||
+        value < g_clock_monotonic_ns) return -1;
+    g_clock_monotonic_ns = value;
+    return 0;
+}
+
+__attribute__((export_name("waste_wast_guest_exited")))
+uint32_t waste_wast_guest_exited(void) { return (uint32_t)g_browser_guest_exited; }
+
+__attribute__((export_name("waste_wast_guest_exit_status")))
+int32_t waste_wast_guest_exit_status(void) { return g_browser_guest_exit_status; }
+
+__attribute__((export_name("waste_wast_process_id")))
+int32_t waste_wast_process_id(void) { return native_store_getpid(&g_yield_context.store); }
+
 /* ---- Host I/O query/response exports for upload/download ---- */
 
 __attribute__((export_name("waste_wast_host_io_kind")))
 uint32_t waste_wast_host_io_kind(void) {
-    return (uint32_t)g_host_io.kind;
+    return (uint32_t)g_yield_context.store.host_io.kind;
 }
 
 __attribute__((export_name("waste_wast_host_io_path_ptr")))
 uint32_t waste_wast_host_io_path_ptr(void) {
-    return (uint32_t)(uintptr_t)g_host_io.path;
+    return (uint32_t)(uintptr_t)g_yield_context.store.host_io.path;
 }
 
 __attribute__((export_name("waste_wast_host_io_path_len")))
 uint32_t waste_wast_host_io_path_len(void) {
-    return (uint32_t)g_host_io.path_len;
+    return (uint32_t)g_yield_context.store.host_io.path_len;
 }
 
 __attribute__((export_name("waste_wast_host_io_data_ptr")))
 uint32_t waste_wast_host_io_data_ptr(void) {
-    return (uint32_t)(uintptr_t)g_host_io.data;
+    return (uint32_t)(uintptr_t)g_yield_context.store.host_io.data;
 }
 
 __attribute__((export_name("waste_wast_host_io_data_len")))
 uint32_t waste_wast_host_io_data_len(void) {
-    return (uint32_t)g_host_io.data_len;
+    return (uint32_t)g_yield_context.store.host_io.data_len;
 }
 
 __attribute__((export_name("waste_wast_host_io_provide_upload")))
 int32_t waste_wast_host_io_provide_upload(uint32_t ptr, uint32_t len) {
-    if (g_host_io.kind != HOST_IO_UPLOAD || g_host_io.result != 0)
+    native_host_io_state *host_io = &g_yield_context.store.host_io;
+    if (host_io->kind != NATIVE_HOST_IO_UPLOAD || host_io->result != 0)
         return -1;
     uint8_t *copy = (uint8_t *)malloc(len);
     if (!copy) return -1;
     memcpy(copy, (const void *)(uintptr_t)ptr, len);
-    free(g_host_io.data);
-    g_host_io.data = copy;
-    g_host_io.data_len = len;
-    g_host_io.result = 1;
+    free(host_io->data);
+    host_io->data = copy;
+    host_io->data_len = len;
+    host_io->result = 1;
     return 0;
 }
 
 __attribute__((export_name("waste_wast_host_io_verbose")))
 uint32_t waste_wast_host_io_verbose(void) {
-    return (uint32_t)g_host_io.verbose;
+    return (uint32_t)g_yield_context.store.host_io.verbose;
 }
 
 __attribute__((export_name("waste_wast_host_io_cancel")))
 int32_t waste_wast_host_io_cancel(void) {
-    g_host_io.result = -1;
+    g_yield_context.store.host_io.result = -1;
     return 0;
 }
 
 __attribute__((export_name("waste_wast_host_io_complete")))
 int32_t waste_wast_host_io_complete(void) {
-    g_host_io.result = 1;
+    g_yield_context.store.host_io.result = 1;
+    return 0;
+}
+
+/* Host service is enabled only by the shell runtime, never batch workers. */
+__attribute__((export_name("waste_wast_enable_test_suite")))
+int32_t waste_wast_enable_test_suite(void) {
+    if (g_yield_active) return -1;
+    g_test_suite_requested = 1;
+    return 0;
+}
+
+__attribute__((export_name("waste_wast_test_suite_reply")))
+int32_t waste_wast_test_suite_reply(uint32_t ptr, uint32_t len) {
+    native_host_io_state *io = &g_yield_context.store.host_io;
+    if (io->kind != NATIVE_HOST_IO_TEST_SUITE || io->result || len < 16 || len > 16u*1024u*1024u)
+        return -1;
+    uint8_t *copy = malloc(len);
+    if (!copy) return -1;
+    memcpy(copy, (const void *)(uintptr_t)ptr, len);
+    free(io->data); io->data = copy; io->data_len = len; io->result = 1;
     return 0;
 }
 
@@ -2017,6 +1515,23 @@ int32_t waste_wast_enable_terminal(void) {
     return 0;
 }
 
+
+/* Inventory metadata and extracted file bytes remain separate. The shared
+ * validator accepts a complete set before a fresh kernel can be mounted. */
+__attribute__((export_name("waste_wast_stage_vfs_inventory")))
+int32_t waste_wast_stage_vfs_inventory(uint32_t ptr, uint32_t size) {
+    if (g_yield_active) return -1;
+    return waste_vfs_inventory((const char *)(uintptr_t)ptr, size, &g_boot_vfs);
+}
+
+__attribute__((export_name("waste_wast_stage_vfs_file")))
+int32_t waste_wast_stage_vfs_file(uint32_t index, uint32_t ptr, uint32_t size) {
+    if (g_yield_active) return -1;
+    return waste_vfs_set_file(&g_boot_vfs, index, (const uint8_t *)(uintptr_t)ptr, size);
+}
+
+__attribute__((export_name("waste_wast_vfs_ready")))
+int32_t waste_wast_vfs_ready(void) { return waste_vfs_ready(&g_boot_vfs) ? 0 : -1; }
 
 __attribute__((export_name("waste_wast_stage_executable")))
 int32_t waste_wast_stage_executable(uint32_t ptr, uint32_t size) {
@@ -2136,6 +1651,127 @@ int32_t waste_wast_stage_file(uint32_t path_ptr, uint32_t path_length,
     return 0;
 }
 
+/* Mounted batch inputs. Each batch worker owns one instance and executes one
+ * test; the shell instance is never touched. The catalogue kernel is temporary,
+ * and execution remounts the same validated installed files in run_script. */
+static waste_suite g_suite;
+static char g_suite_error[256];
+static uint32_t g_suite_source_length;
+
+static uint8_t *browser_suite_read(posix_kernel *kernel, const char *path,
+                                   size_t *length) {
+    int fd = posix_kernel_open(kernel, (const uint8_t *)path, strlen(path), 0, 0);
+    uint64_t size = 0;
+    uint8_t *bytes = NULL;
+    if (fd >= 0 && !posix_kernel_file_size(kernel, fd, &size) &&
+        size <= WASTE_SUITE_MAX_BYTES) {
+        bytes = malloc((size_t)size + 1u);
+        if (bytes && posix_kernel_read(kernel, fd, bytes, (int)size) != (int)size) {
+            free(bytes);
+            bytes = NULL;
+        }
+    }
+    if (fd >= 0) posix_kernel_close(kernel, fd);
+    if (bytes) { bytes[size] = 0; *length = (size_t)size; }
+    return bytes;
+}
+
+__attribute__((export_name("waste_wast_suite_error_ptr")))
+uint32_t waste_wast_suite_error_ptr(void) {
+    return (uint32_t)(uintptr_t)g_suite_error;
+}
+
+__attribute__((export_name("waste_wast_suite_load")))
+int32_t waste_wast_suite_load(void) {
+    if (g_yield_active || !waste_vfs_ready(&g_boot_vfs)) {
+        snprintf(g_suite_error, sizeof(g_suite_error), "batch requires an idle instance and installed VFS");
+        return -1;
+    }
+    waste_suite_free(&g_suite);
+    g_suite_error[0] = 0;
+    native_store catalogue;
+    native_store_init(&catalogue);
+    size_t length = 0;
+    uint8_t *bytes = NULL;
+    int result = -1;
+    if (catalogue.kernel && !waste_vfs_mount(catalogue.kernel, &g_boot_vfs))
+        bytes = browser_suite_read(catalogue.kernel, "/tests/manifest.json", &length);
+    if (!bytes)
+        snprintf(g_suite_error, sizeof(g_suite_error), "cannot read mounted /tests/manifest.json");
+    else if (!waste_suite_decode((const char *)bytes, length, &g_suite,
+                                  g_suite_error, sizeof(g_suite_error)))
+        result = (int)g_suite.count;
+    free(bytes);
+    native_store_free(&catalogue);
+    return result;
+}
+
+/* Strings are borrowed until the next load. Fields: identity, group, mounted
+ * path, reporting filename, execution mode, skip reason. */
+__attribute__((export_name("waste_wast_suite_field")))
+uint32_t waste_wast_suite_field(uint32_t index, uint32_t field) {
+    if (index >= g_suite.count) return 0;
+    const waste_suite_test *test = &g_suite.tests[index];
+    const char *value;
+    switch (field) {
+    case 0: value = test->identity; break;
+    case 1: value = test->group; break;
+    case 2: value = test->path; break;
+    case 3: value = test->file; break;
+    case 4: value = test->mode; break;
+    case 5: value = test->skip_reason; break;
+    default: return 0;
+    }
+    return (uint32_t)(uintptr_t)value;
+}
+
+__attribute__((export_name("waste_wast_suite_expected_failure")))
+uint32_t waste_wast_suite_expected_failure(uint32_t index) {
+    return index < g_suite.count && g_suite.tests[index].expect_failure;
+}
+
+__attribute__((export_name("waste_wast_suite_source_length")))
+uint32_t waste_wast_suite_source_length(void) { return g_suite_source_length; }
+
+/* Returns owned source bytes (release with waste_wast_free), or zero. Assets
+ * are read from mounted support paths and copied through ordinary staging. */
+__attribute__((export_name("waste_wast_suite_prepare")))
+uint32_t waste_wast_suite_prepare(uint32_t index) {
+    g_suite_source_length = 0;
+    if (g_yield_active || !waste_vfs_ready(&g_boot_vfs) || index >= g_suite.count ||
+        g_suite.tests[index].skip_reason[0]) {
+        snprintf(g_suite_error, sizeof(g_suite_error), "invalid batch execution request");
+        return 0;
+    }
+    const waste_suite_test *test = &g_suite.tests[index];
+    native_store catalogue;
+    native_store_init(&catalogue);
+    uint8_t *source = NULL;
+    size_t length;
+    if (!catalogue.kernel || waste_vfs_mount(catalogue.kernel, &g_boot_vfs)) {
+        snprintf(g_suite_error, sizeof(g_suite_error), "cannot mount batch input files");
+        goto finish;
+    }
+    for (unsigned i = 0; i < test->asset_count; i++) {
+        const waste_suite_asset *asset = &test->assets[i];
+        uint8_t *bytes = browser_suite_read(catalogue.kernel, asset->path, &length);
+        int ok = bytes && !waste_wast_stage_file(
+            (uint32_t)(uintptr_t)asset->mount_path, (uint32_t)strlen(asset->mount_path),
+            (uint32_t)(uintptr_t)bytes, (uint32_t)length, asset->mode);
+        free(bytes);
+        if (!ok) {
+            snprintf(g_suite_error, sizeof(g_suite_error), "cannot stage mounted companion: %s", asset->path);
+            goto finish;
+        }
+    }
+    source = browser_suite_read(catalogue.kernel, test->path, &length);
+    if (source) g_suite_source_length = (uint32_t)length;
+    else snprintf(g_suite_error, sizeof(g_suite_error), "cannot read mounted WAST: %s", test->path);
+finish:
+    native_store_free(&catalogue);
+    return (uint32_t)(uintptr_t)source;
+}
+
 __attribute__((export_name("waste_wast_path_access")))
 int32_t waste_wast_path_access(uint32_t ptr, uint32_t length, uint32_t mode) {
     if (!g_yield_context.store.kernel || length >= POSIX_PATH_MAX)
@@ -2181,6 +1817,33 @@ int32_t waste_wast_raise_signal(uint32_t signal) {
     if (!g_yield_context.store.kernel_terminal) return -POSIX_EINVAL;
     return posix_kernel_signal_raise(g_yield_context.store.kernel,
                                      (int)signal);
+}
+
+/* Route a signal to a specific PID in the shared store.  pid == 0 falls back
+ * to the active-kernel queue (identical to waste_wast_raise_signal) so one
+ * worker/export entry point covers both backgrounded and active targets.
+ * Store errors (unknown/zombie process, invalid signal) stay visible. */
+__attribute__((export_name("waste_wast_raise_signal_pid")))
+int32_t waste_wast_raise_signal_pid(uint32_t signal, uint32_t pid) {
+    if (!g_yield_context.store.kernel_terminal) return -POSIX_EINVAL;
+    if (!pid)
+        return posix_kernel_signal_raise(g_yield_context.store.kernel,
+                                         (int)signal);
+    return native_store_signal_process(&g_yield_context.store,
+                                       (int)pid, (int)signal);
+}
+
+/* Fan a signal across every live member of a process group in the shared
+ * store.  pgid must be positive; a zero pgid is rejected so callers never
+ * conflate "deliver to active" (use waste_wast_raise_signal) with the group
+ * fan-out code path.  Returns the number of delivered members (0 for an
+ * empty group) or a negative POSIX errno. */
+__attribute__((export_name("waste_wast_raise_signal_pgid")))
+int32_t waste_wast_raise_signal_pgid(uint32_t signal, uint32_t pgid) {
+    if (!g_yield_context.store.kernel_terminal) return -POSIX_EINVAL;
+    if (!pgid) return -POSIX_EINVAL;
+    return native_store_signal_process_group(&g_yield_context.store,
+                                              (int)pgid, (int)signal);
 }
 
 /* Browser evidence probe for the store-owned MAP_SHARED page cache.  This is
@@ -2275,6 +1938,18 @@ uint32_t waste_wast_results_total(void) {
     return (uint32_t)g_browser_result_count;
 }
 
+__attribute__((export_name("waste_wast_result_name_ptr")))
+uint32_t waste_wast_result_name_ptr(uint32_t index) {
+    return index < (uint32_t)g_browser_result_count ?
+        (uint32_t)(uintptr_t)g_browser_result_names[index] : 0;
+}
+
+__attribute__((export_name("waste_wast_result_name_len")))
+uint32_t waste_wast_result_name_len(uint32_t index) {
+    return index < (uint32_t)g_browser_result_count ?
+        (uint32_t)strlen(g_browser_result_names[index]) : 0;
+}
+
 __attribute__((export_name("waste_wast_command_line")))
 uint32_t waste_wast_command_line(void) {
     return g_browser_command_line;
@@ -2283,4 +1958,22 @@ uint32_t waste_wast_command_line(void) {
 __attribute__((export_name("waste_wast_results_passed")))
 uint32_t waste_wast_results_passed(void) {
     return (uint32_t)g_browser_result_passed;
+}
+
+__attribute__((export_name("waste_wast_setup_total")))
+uint32_t waste_wast_setup_total(void) { return g_browser_setup.total; }
+__attribute__((export_name("waste_wast_setup_passed")))
+uint32_t waste_wast_setup_passed(void) { return g_browser_setup.passed; }
+__attribute__((export_name("waste_wast_setup_complete")))
+uint32_t waste_wast_setup_complete(void) { return !g_browser_setup.incomplete; }
+__attribute__((export_name("waste_wast_script_completed")))
+uint32_t waste_wast_script_completed(void) { return g_browser_script_completed; }
+__attribute__((export_name("waste_wast_setup_failure_count")))
+uint32_t waste_wast_setup_failure_count(void) { return g_browser_setup.count; }
+/* Each bounded diagnostic is line/status/phase (three 32-bit words), then
+ * a NUL-terminated 256-byte error. Valid until the next run_script call. */
+__attribute__((export_name("waste_wast_setup_failure_ptr")))
+uint32_t waste_wast_setup_failure_ptr(uint32_t index) {
+    return index < g_browser_setup.count ?
+        (uint32_t)(uintptr_t)&g_browser_setup.failures[index] : 0;
 }

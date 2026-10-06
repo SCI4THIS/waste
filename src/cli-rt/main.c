@@ -2,8 +2,11 @@
  * emitter, assertion counter, and parse-only benchmark. */
 
 #include "store.h"
+#include "native_wast.h"
+#include "native_vfs.h"
 #include "wast/runner.h"
 #include "runtime_internal.h"
+#include "guest_posix.h"
 #include "lib/include/kernel.h"
 #include "lib/include/select.h"
 
@@ -23,385 +26,52 @@ static const char *basename_simple(const char *path) {
     return last;
 }
 
-static exec_status cli_result(int32_t value, wasm_value *results,
-                              int *result_count) {
-    results[0].type = WASM_VALTYPE_I32;
-    results[0].i32 = value;
-    *result_count = 1;
-    return EXEC_OK;
+static void json_string(const char *value) {
+    native_wast_json_string(stdout, value);
 }
 
-static exec_status cli_select_host(void *data, const wasm_value *args,
-                                   int arg_count, wasm_value *results,
-                                   int *result_count, exec_error *error,
-                                   const waste_exec_engine *caller) {
-    native_store *store = data;
-    if (arg_count != 5 || !caller->memory) return EXEC_ERROR_NOT_FOUND;
-    exec_memory *memory = caller->memory;
-    posix_fd_set rds, wrs, exs;
-    posix_fd_set *rp = NULL, *wp = NULL, *ep = NULL;
-    uint8_t bytes[POSIX_FD_SET_BYTES];
-    uint32_t pointers[3] = {(uint32_t)args[1].i32,
-                            (uint32_t)args[2].i32,
-                            (uint32_t)args[3].i32};
-    posix_fd_set *sets[3] = {&rds, &wrs, &exs};
-    for (int i = 0; i < 3; i++) {
-        if (!pointers[i]) continue;
-        if (exec_memory_read(memory, pointers[i], bytes, sizeof(bytes), error) != EXEC_OK)
-            return cli_result(-POSIX_EINVAL, results, result_count);
-        posix_fd_set_decode(sets[i], bytes);
-        if (i == 0) rp = sets[i];
-        if (i == 1) wp = sets[i];
-        if (i == 2) ep = sets[i];
-    }
-    posix_timeval tv;
-    const posix_timeval *tvp = NULL;
-    uint32_t timeout = (uint32_t)args[4].i32;
-    if (timeout) {
-        if (exec_memory_read(memory, timeout, bytes, POSIX_TIMEVAL_BYTES, error) != EXEC_OK)
-            return cli_result(-POSIX_EINVAL, results, result_count);
-        posix_timeval_decode(&tv, bytes);
-        tvp = &tv;
-    }
-    int32_t value = posix_kernel_select(store->kernel, args[0].i32,
-                                        rp, wp, ep, tvp);
-    if (value == -POSIX_EAGAIN) return EXEC_YIELD;
-    if (value >= 0) {
-        if (rp) { posix_fd_set_encode(bytes, rp); exec_memory_write(memory, pointers[0], bytes, POSIX_FD_SET_BYTES, error); }
-        if (wp) { posix_fd_set_encode(bytes, wp); exec_memory_write(memory, pointers[1], bytes, POSIX_FD_SET_BYTES, error); }
-        if (ep) { posix_fd_set_encode(bytes, ep); exec_memory_write(memory, pointers[2], bytes, POSIX_FD_SET_BYTES, error); }
-    }
-    (void)error;
-    return cli_result(value, results, result_count);
-}
-
-static exec_status cli_pselect_host(void *data, const wasm_value *args,
-                                    int arg_count, wasm_value *results,
-                                    int *result_count, exec_error *error,
-                                    const waste_exec_engine *caller) {
-    native_store *store = data;
-    if (arg_count != 6 || !caller->memory) return EXEC_ERROR_NOT_FOUND;
-    exec_memory *memory = caller->memory;
-    posix_fd_set rds, wrs, exs;
-    posix_fd_set *rp = NULL, *wp = NULL, *ep = NULL;
-    uint8_t bytes[POSIX_FD_SET_BYTES];
-    uint32_t pointers[3] = {(uint32_t)args[1].i32,
-                            (uint32_t)args[2].i32,
-                            (uint32_t)args[3].i32};
-    posix_fd_set *sets[3] = {&rds, &wrs, &exs};
-    for (int i = 0; i < 3; i++) {
-        if (!pointers[i]) continue;
-        if (exec_memory_read(memory, pointers[i], bytes, sizeof(bytes), error) != EXEC_OK)
-            return cli_result(-POSIX_EINVAL, results, result_count);
-        posix_fd_set_decode(sets[i], bytes);
-        if (i == 0) rp = sets[i];
-        if (i == 1) wp = sets[i];
-        if (i == 2) ep = sets[i];
-    }
-    posix_timespec ts;
-    const posix_timespec *tsp = NULL;
-    uint32_t timeout = (uint32_t)args[4].i32;
-    if (timeout) {
-        if (exec_memory_read(memory, timeout, bytes, POSIX_TIMESPEC_BYTES, error) != EXEC_OK)
-            return cli_result(-POSIX_EINVAL, results, result_count);
-        posix_timespec_decode(&ts, bytes);
-        tsp = &ts;
-    }
-    posix_sigset mask;
-    const posix_sigset *maskp = NULL;
-    uint32_t mask_ptr = (uint32_t)args[5].i32;
-    if (mask_ptr) {
-        if (exec_memory_read(memory, mask_ptr, bytes, POSIX_SIGSET_BYTES, error) != EXEC_OK)
-            return cli_result(-POSIX_EINVAL, results, result_count);
-        posix_sigset_decode(&mask, bytes);
-        maskp = &mask;
-    }
-    int32_t value = posix_kernel_pselect(store->kernel, args[0].i32,
-                                         rp, wp, ep, tsp, maskp);
-    if (value == -POSIX_EAGAIN) return EXEC_YIELD;
-    if (value >= 0) {
-        if (rp) { posix_fd_set_encode(bytes, rp); exec_memory_write(memory, pointers[0], bytes, POSIX_FD_SET_BYTES, error); }
-        if (wp) { posix_fd_set_encode(bytes, wp); exec_memory_write(memory, pointers[1], bytes, POSIX_FD_SET_BYTES, error); }
-        if (ep) { posix_fd_set_encode(bytes, ep); exec_memory_write(memory, pointers[2], bytes, POSIX_FD_SET_BYTES, error); }
-    }
-    (void)error;
-    return cli_result(value, results, result_count);
-}
-
-static exec_status cli_path_access_host(void *data, const wasm_value *args,
-                                        int arg_count, wasm_value *results,
-                                        int *result_count, exec_error *error,
-                                        const waste_exec_engine *caller) {
-    native_store *store = data;
-    if (arg_count != 4 || !caller->memory) return cli_result(-POSIX_EFAULT, results, result_count);
-    uint32_t offset = (uint32_t)args[0].i32;
-    uint32_t length = (uint32_t)args[1].i32;
-    uint8_t *path = length ? malloc(length) : NULL;
-    if ((length && !path) || exec_memory_read(caller->memory, offset, path,
-                                               length, error) != EXEC_OK) {
-        free(path);
-        return cli_result(-POSIX_EFAULT, results, result_count);
-    }
-    int result = posix_kernel_path_access(store->kernel, path, length,
-                                          args[2].i32, args[3].i32);
-    free(path);
-    (void)error;
-    return cli_result(result, results, result_count);
-}
-
-static exec_status cli_path_stat_host(void *data, const wasm_value *args,
-                                      int arg_count, wasm_value *results,
-                                      int *result_count, exec_error *error,
-                                      const waste_exec_engine *caller) {
-    native_store *store = data;
-    uint8_t output[POSIX_PATH_METADATA_BYTES];
-    if (arg_count != 4 || !caller->memory) return cli_result(-POSIX_EFAULT, results, result_count);
-    uint32_t offset = (uint32_t)args[0].i32;
-    uint32_t length = (uint32_t)args[1].i32;
-    uint32_t output_offset = (uint32_t)args[3].i32;
-    uint8_t *path = length ? malloc(length) : NULL;
-    if ((length && !path) || exec_memory_read(caller->memory, offset, path,
-                                               length, error) != EXEC_OK ||
-        exec_memory_read(caller->memory, output_offset, output,
-                         sizeof(output), error) != EXEC_OK) {
-        free(path);
-        return cli_result(-POSIX_EFAULT, results, result_count);
-    }
-    posix_path_metadata metadata;
-    int result = posix_kernel_path_stat(store->kernel,
-        path, length, args[2].i32, &metadata);
-    if (result == 0) {
-        posix_path_metadata_encode(output, &metadata);
-        if (exec_memory_write(caller->memory, output_offset, output,
-                              sizeof(output), error) != EXEC_OK)
-            result = -POSIX_EFAULT;
-    }
-    free(path);
-    (void)error;
-    return cli_result(result, results, result_count);
-}
-
-static int cli_host_resolver(const char *module, const char *name,
-                             void *context, native_host_binding *out) {
-    if (strcmp(module, "waste_kernel") != 0) return 0;
-    if (strcmp(name, "select_v1") == 0) out->function = cli_select_host;
-    else if (strcmp(name, "pselect_v1") == 0) out->function = cli_pselect_host;
-    else if (strcmp(name, POSIX_KERNEL_PATH_ACCESS_V1) == 0) out->function = cli_path_access_host;
-    else if (strcmp(name, POSIX_KERNEL_PATH_STAT_V1) == 0) out->function = cli_path_stat_host;
-    else return 0;
-    out->host_data = context;
-    out->control = EXEC_HOST_CONTROL_NONE;
-    return 1;
-}
-
-/* Emit a JSON string with escaping */
-static void json_string(const char *s) {
-    putchar('"');
-    for (; *s; s++) {
-        unsigned char ch = (unsigned char)*s;
-        if (ch == '"') fputs("\\\"", stdout);
-        else if (ch == '\\') fputs("\\\\", stdout);
-        else if (ch == '\n') fputs("\\n", stdout);
-        else if (ch == '\r') fputs("\\r", stdout);
-        else if (ch == '\t') fputs("\\t", stdout);
-        else if (ch < 0x20 || ch >= 0x80) printf("\\u%04x", (unsigned)ch);
-        else putchar((int)ch);
-    }
-    putchar('"');
-}
-
-/* ---- normal run mode ---- */
-
-static int run_normal(const char *path) {
-    const char *filename = basename_simple(path);
-
-    wast_script *script = (wast_script *)calloc(1, sizeof(*script));
-    if (!script) return 1;
-    int parse_rc = wast_parse_file(path, script);
-    if (parse_rc != 0) {
-        fprintf(stderr, "parse error in %s: %s\n", path, script->error);
+static int run_normal(const char *path, const char *vfs_path) {
+    FILE *file = fopen(path, "rb");
+    long length = -1;
+    if (file && !fseek(file, 0, SEEK_END)) length = ftell(file);
+    char *source = length >= 0 && (unsigned long)length <= WASTE_VFS_MAX_BYTES ?
+                   malloc((size_t)length + 1u) : NULL;
+    int ok = source && !fseek(file, 0, SEEK_SET) &&
+             fread(source, 1, (size_t)length, file) == (size_t)length;
+    if (file) fclose(file);
+    if (!ok) {
+        fprintf(stderr, "cannot read WAST input: %s\n", path);
         printf("{\"file\":");
-        json_string(filename);
-        printf(",\"error\":");
-        json_string(script->error);
-        printf(",\"assertions\":[],\"passed\":0,\"total\":0}\n");
-        wast_script_free(script); free(script); return 1;
+        json_string(basename_simple(path));
+        printf(",\"error\":\"cannot read WAST input\",\"assertions\":[],\"passed\":0,\"total\":0}\n");
+        free(source);
+        return 1;
     }
-
-    int total_passed = 0;
-    int total_count  = 0;
-    int first_assertion = 1;
+    source[length] = 0;
     native_store store;
     native_store_init(&store);
-    store.host_resolver = cli_host_resolver;
-    store.host_context = &store;
-
-    printf("{\"file\":");
-    json_string(filename);
-    printf(",\"assertions\":[\n");
-
-    for (int g = 0; g < script->group_count; g++) {
-        wast_group *group = &script->groups[g];
-
-        /* Definitions are templates.  A module instance below encodes and
-         * instantiates the definition afresh, which gives its globals,
-         * tables, memories, and tags distinct identities. */
-        if (group->module.is_definition) continue;
-
-        const wast_module *load_module = &group->module;
-        if (group->module.instance_of[0]) {
-            load_module = native_find_definition(
-                script, g, group->module.instance_of);
-            if (!load_module) {
-                fprintf(stderr, "unknown module definition %s\n",
-                        group->module.instance_of);
-                continue;
-            }
+    if (vfs_path) {
+        waste_vfs vfs = {0};
+        char error[256];
+        int ok = !native_vfs_load(vfs_path, &vfs, error, sizeof(error)) &&
+                 !native_store_bind_interpreter_paths(&store) &&
+                 !waste_vfs_mount(store.kernel, &vfs) &&
+                 !posix_kernel_path_set_cwd(store.kernel, "/root");
+        waste_vfs_free(&vfs);
+        if (!ok) {
+            fprintf(stderr, "cannot mount installed VFS tree: %s\n", vfs_path);
+            native_store_free(&store);
+            free(source);
+            return 1;
         }
-
-        if (group->has_module_assertion && group->has_validation_error) {
-            int ok = group->module_assert_kind == WAST_ASSERT_INVALID ||
-                     group->module_assert_kind == WAST_ASSERT_MALFORMED;
-            if (!first_assertion) printf(",\n");
-            first_assertion = 0;
-            printf("{\"index\":%d,\"func\":\"(module)\",\"pass\":%s,\"error\":",
-                   total_count, ok ? "true" : "false");
-            if (ok) printf("null"); else json_string(group->validation_error);
-            printf("}");
-            total_count++;
-            if (ok) total_passed++;
-            continue;
-        }
-
-        char encode_error[256] = {0};
-        size_t bin_size = 0;
-        wast_group encode_group = *group;
-        encode_group.module = *load_module;
-        uint8_t *bin = encode_group_module(&encode_group, &bin_size,
-                                           encode_error);
-        if (!bin) {
-            fprintf(stderr, "encode error (group %d): %s\n", g, encode_error);
-            if (group->has_module_assertion) {
-                int ok = group->module_assert_kind != WAST_ASSERT_TRAP;
-                if (!first_assertion) printf(",\n");
-                first_assertion = 0;
-                printf("{\"index\":%d,\"func\":\"(module)\",\"pass\":%s,\"error\":",
-                       total_count, ok ? "true" : "false");
-                if (ok) printf("null"); else json_string(encode_error);
-                printf("}");
-                total_count++;
-                if (ok) total_passed++;
-                continue;
-            }
-            for (int i = 0; i < group->assertion_count; i++) {
-                if (!first_assertion) printf(",\n");
-                first_assertion = 0;
-                printf("{\"index\":%d,\"func\":", total_count + i);
-                json_string(script->assertions[group->assertion_start + i].func_name);
-                printf(",\"pass\":false,\"error\":");
-                json_string(encode_error);
-                printf("}");
-            }
-            total_count += group->assertion_count;
-            continue;
-        }
-
-        waste_exec_engine *engine = NULL;
-        exec_error exec_err;
-        memset(&exec_err, 0, sizeof(exec_err));
-        exec_status st = native_load_module(&store, load_module,
-                                            bin, bin_size, &engine, &exec_err);
-        free(bin);
-        if (group->has_module_assertion) {
-            int ok = group->module_assert_kind == WAST_ASSERT_TRAP ?
-                st == EXEC_ERROR_TRAP : st != EXEC_OK;
-            if (!first_assertion) printf(",\n");
-            first_assertion = 0;
-            printf("{\"index\":%d,\"func\":\"(module)\",\"pass\":%s,\"error\":",
-                   total_count, ok ? "true" : "false");
-            if (ok) printf("null");
-            else json_string(st == EXEC_OK ? "module unexpectedly instantiated" :
-                             exec_err.message);
-            printf("}");
-            total_count++;
-            if (ok) total_passed++;
-            if (engine && !native_store_keep_orphan(&store, engine)) {
-                /* Preserve any funcrefs installed into imported tables even
-                 * if the lifetime bookkeeping itself cannot grow. */
-            }
-            continue;
-        }
-        if (st != EXEC_OK) {
-            fprintf(stderr, "load error (group %d): %s\n", g, exec_err.message);
-            for (int i = 0; i < group->assertion_count; i++) {
-                if (!first_assertion) printf(",\n");
-                first_assertion = 0;
-                printf("{\"index\":%d,\"func\":", total_count + i);
-                json_string(script->assertions[group->assertion_start + i].func_name);
-                printf(",\"pass\":false,\"error\":");
-                json_string(exec_err.message);
-                printf("}");
-            }
-            total_count += group->assertion_count;
-            continue;
-        }
-
-        if (!native_store_add(&store, engine, &group->module, load_module)) {
-            exec_free(engine);
-            engine = NULL;
-            snprintf(exec_err.message, sizeof(exec_err.message),
-                     "out of memory retaining module instance");
-            for (int i = 0; i < group->assertion_count; i++) {
-                if (!first_assertion) printf(",\n");
-                first_assertion = 0;
-                printf("{\"index\":%d,\"func\":", total_count + i);
-                json_string(script->assertions[group->assertion_start + i].func_name);
-                printf(",\"pass\":false,\"error\":");
-                json_string(exec_err.message);
-                printf("}");
-            }
-            total_count += group->assertion_count;
-            continue;
-        }
-
-        for (int i = 0; i < group->assertion_count; i++) {
-            const wast_assertion *a = &script->assertions[group->assertion_start + i];
-            waste_exec_engine *selected = native_selected_engine(&store,
-                                                                  a->module_id);
-            exec_error aerr;
-            memset(&aerr, 0, sizeof(aerr));
-            exec_status ast;
-            if (!selected) {
-                aerr.status = EXEC_ERROR_NOT_FOUND;
-                snprintf(aerr.message, sizeof(aerr.message),
-                         "unknown module id");
-                ast = EXEC_ERROR_NOT_FOUND;
-            } else {
-                ast = wast_run_assertion(selected, a, &aerr);
-            }
-            int ok = (ast == EXEC_OK);
-            if (ok) total_passed++;
-
-            if (!first_assertion) printf(",\n");
-            first_assertion = 0;
-
-            printf("{\"index\":%d,\"func\":", total_count + i);
-            json_string(a->func_name);
-            printf(",\"pass\":%s,\"error\":", ok ? "true" : "false");
-            if (ok || aerr.message[0] == '\0') {
-                printf("null");
-            } else {
-                json_string(aerr.message);
-            }
-            printf("}");
-        }
-        total_count += group->assertion_count;
     }
-
-    printf("\n],\"passed\":%d,\"total\":%d}\n", total_passed, total_count);
+    native_wast_bind(&store);
+    native_wast_counts counts;
+    int result = native_wast_run(&store, basename_simple(path), source,
+                                  (size_t)length, &counts);
     native_store_free(&store);
-    wast_script_free(script); free(script);
-    return (total_passed == total_count) ? 0 : 1;
+    free(source);
+    return result;
 }
 
 /* ---- browser-spec mode ---- */
@@ -652,9 +322,48 @@ static int run_parse_only(int count, char **files) {
     return failures ? 1 : 0;
 }
 
+/* ---- server mode: one WAST path per stdin line, JSON + sentinel per reply.
+ *
+ * Amortises the per-test exec/startup cost (static init, dynamic linking,
+ * printf buffer setup) across many tests driven by a parent harness.  Each
+ * reply ends with "###END###\n" on both stdout and stderr so a parent can
+ * delimit per-test output without opening per-test pipes.  run_normal is
+ * invoked unchanged, so native_store lifetime, encoding, instantiation, and
+ * assertion isolation are identical to one-shot mode.
+ */
+static int run_server(void) {
+    char line[4096];
+    for (;;) {
+        size_t len = 0;
+        int ch;
+        while ((ch = getc(stdin)) != -1 && ch != '\n') {
+            if (len + 1 < sizeof(line)) line[len++] = (char)ch;
+        }
+        line[len] = 0;
+        while (len > 0 && line[len-1] == '\r') line[--len] = 0;
+        if (ch == -1 && len == 0) return 0;
+        if (len > 0) run_normal(line, NULL);
+        fputs("###END###\n", stdout);
+        fputs("###END###\n", stderr);
+        if (ch == -1) return 0;
+    }
+}
+
 /* ---- entry point ---- */
 
+static void usage(FILE *output, const char *name) {
+    fprintf(output, "usage: %s [--browser-spec|--count|--parse-only] <file.wast> [...]\n"
+                    "       %s --vfs-root <directory> <file.wast>\n"
+                    "       %s --server\n", name, name, name);
+}
+
 int main(int argc, char *argv[]) {
+    if (argc == 2 && strcmp(argv[1], "--help") == 0) {
+        usage(stdout, argv[0]);
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--server") == 0)
+        return run_server();
     if (argc >= 3 && strcmp(argv[1], "--parse-only") == 0)
         return run_parse_only(argc - 2, argv + 2);
     if (argc == 3 && strcmp(argv[1], "--browser-spec") == 0)
@@ -662,7 +371,9 @@ int main(int argc, char *argv[]) {
     if (argc == 3 && strcmp(argv[1], "--count") == 0)
         return run_count(argv[2]);
     if (argc == 2)
-        return run_normal(argv[1]);
-    fprintf(stderr, "usage: %s [--browser-spec|--count|--parse-only] <file.wast> [...]\n", argv[0]);
+        return run_normal(argv[1], NULL);
+    if (argc == 4 && strcmp(argv[1], "--vfs-root") == 0)
+        return run_normal(argv[3], argv[2]);
+    usage(stderr, argv[0]);
     return 1;
 }

@@ -5,9 +5,34 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const {TextDecoder, TextEncoder} = require("node:util");
+const {readOfflinePackage} = require("./offline-html-package.cjs");
 
 const root = path.resolve(__dirname, "..");
-const stagingDir = path.join(root, "src/html-rt/src/bash");
+const vfsRoot = path.join(root, "src/vfs");
+const stagingDir = path.join(vfsRoot, "usr/bin");
+const {installedVfs, treeVfs, packageVfs, stageVfs} = require("./vfs-package.cjs");
+const frontendDir = path.join(root, "src/html-rt/src");
+const pagePath = process.argv.slice(2).find(arg => arg.endsWith(".html"));
+const archive = pagePath ? readOfflinePackage(pagePath) : null;
+const manifest = archive ? JSON.parse(archive.read("vfs-manifest.json"))
+  : JSON.parse(fs.readFileSync(path.join(vfsRoot, ".inventory.json")));
+const entries = new Map(manifest.entries.map(e => [e.path, e]));
+function assetName(filename) {
+  if (filename.startsWith(vfsRoot + path.sep)) return path.relative(vfsRoot, filename).replaceAll(path.sep, "/");
+  return path.basename(filename);
+}
+function hasAsset(filename) {
+  return archive ? archive.files.has(assetName(filename)) : fs.existsSync(filename);
+}
+function readAsset(filename) {
+  return archive ? archive.read(assetName(filename)) : fs.readFileSync(filename);
+}
+function assetMtimeMs(filename) {
+  if (!archive) return fs.statSync(filename).mtimeMs;
+  const e = entries.get("/" + assetName(filename));
+  if (!e) return fs.statSync(filename).mtimeMs; // host bootstrap, never guest metadata
+  return e.mtime_sec * 1000 + e.mtime_nsec / 1000000;
+}
 const baselineMissingCommand = process.argv.includes("--missing-command");
 const executableProbe = process.argv.includes("--exec-probe");
 const executableExitProbe = process.argv.includes("--exec-exit");
@@ -23,6 +48,59 @@ const coreutilsWcProbe = process.argv.includes("--coreutils-wc");
 const coreutilsLsProbe = process.argv.includes("--coreutils-ls");
 const coreutilsMatrixProbe = process.argv.includes("--coreutils-matrix");
 const fullPackageProbe = process.argv.includes("--full-package");
+const expectedPipelineBinNames = fullPackageProbe
+  ? manifest.entries.filter(e => e.path.startsWith("/bin/") && !e.path.slice(5).includes("/"))
+      .map(e => e.path.slice(5)).sort()
+  : ["cat", "ls", "wast", "waste-probe", "wat", "wc"];
+const expectedRootNames = fullPackageProbe
+  ? manifest.entries.filter(e => e.kind === 2 && /^\/[^/]+$/.test(e.path))
+      .map(e => e.path.slice(1)).sort()
+  : ["bin", "lib", "root", "tmp", "usr"];
+const expectedBinNames = fullPackageProbe
+  ? manifest.entries.filter(e => /^\/bin\/[^/]+$/.test(e.path))
+      .map(e => e.path.slice(5)).sort()
+  : ["cat", "ls", "wast", "waste-probe", "wat"];
+function rootListingSeen(text) {
+  return listingSeen(text, "__LS_ROOT_BEGIN__", expectedRootNames);
+}
+function binListingSeen(text) {
+  return listingSeen(text, "__LS_BIN_BEGIN__", expectedBinNames);
+}
+function listingSeen(text, marker, expected) {
+  const markerIndex = text.lastIndexOf(marker);
+  if (markerIndex < 0) return false;
+  const lines = text.slice(markerIndex + marker.length)
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\r\n?/g, "\n").split("\n").filter(Boolean);
+  return lines.slice(0, expected.length).join("\n") === expected.join("\n");
+}
+function markedOutput(text, startMarker, endMarker) {
+  const start = text.lastIndexOf(startMarker);
+  if (start < 0) return null;
+  const contentStart = start + startMarker.length;
+  const end = text.indexOf(endMarker, contentStart);
+  if (end < 0) return null;
+  return text.slice(contentStart, end)
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\r\n?/g, "\n").trim();
+}
+function executableStartupSeen(text, expectedArgc) {
+  const entry = text.lastIndexOf("WASTE_PROBE_ENTRY_OK");
+  if (entry < 0) return false;
+  const end = text.indexOf("WASTE_PROBE_OK", entry);
+  if (end < 0) return false;
+  const startup = text.slice(entry, end)
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\r\n?/g, "\n");
+  const argc = startup.match(/WASTE_PROBE_ARGC=(\d+)/);
+  const argv0 = startup.match(/WASTE_PROBE_ARG0=([^\n]+)/);
+  const envc = startup.match(/WASTE_PROBE_ENVC=(\d+)/);
+  const pid = startup.match(/WASTE_PROBE_PID=(\d+)/);
+  const cwd = startup.match(/WASTE_PROBE_CWD=([^\n]+)/);
+  return Boolean(argc && Number(argc[1]) === expectedArgc && argv0 &&
+    argv0[1] === "/bin/waste-probe" && envc && Number(envc[1]) > 0 &&
+    pid && Number(pid[1]) > 0 && cwd && cwd[1] === "/root");
+}
 const sharedLibraryProbe = process.argv.includes("--shared-library");
 const readlineEchoProbe = process.argv.includes("--readline-echo");
 const readlineCompletionProbe = process.argv.includes("--readline-completion");
@@ -79,111 +157,65 @@ for (const name of ["stat", "lstat", "fstat", "eaccess", "faccessat", "fork"]) {
 }
 
 /* Load worker source, wasm, and launch script from staging files */
-const workerSrc = fs.readFileSync(path.join(stagingDir, "worker.js"), "utf8");
+const workerSrc = archive ? archive.read("waste/app/worker.js").toString("utf8")
+  : fs.readFileSync(path.join(frontendDir, "worker.js"), "utf8");
 
-/* Resolve waste-wast.wasm: staging symlink or build directory */
-let wasmPath = path.join(stagingDir, "waste-wast.wasm");
-if (!fs.existsSync(wasmPath)) {
-  wasmPath = path.join(root, "build/html-rt/waste-wast.wasm");
-}
-const wasmBytes = fs.readFileSync(wasmPath);
-const wasmMtimeMs = fs.statSync(wasmPath).mtimeMs;
+const wasmPath = path.join(root, "build/html-rt/waste-wast.wasm");
+const wasmBytes = readAsset(wasmPath);
+const wasmMtimeMs = assetMtimeMs(wasmPath);
 const buildMtime = {
   sec: Math.floor(wasmMtimeMs / 1000),
   nsec: Math.floor(wasmMtimeMs % 1000) * 1000000,
 };
-let probePath = path.join(stagingDir, "waste-probe.wasm");
+let probePath = path.join(stagingDir, "waste-probe");
 const builtProbePath = path.join(root, "build/cli-rt/waste-probe.wasm");
-if (fs.existsSync(builtProbePath)) probePath = builtProbePath;
-const probeBytes = (executableProbe || executableExitProbe) && fs.existsSync(probePath)
-  ? fs.readFileSync(probePath) : null;
-const coreutilsTruePath = path.join(stagingDir, "true.wasm");
-const coreutilsFalsePath = path.join(stagingDir, "false.wasm");
-const coreutilsPwdPath = path.join(stagingDir, "pwd.wasm");
-const coreutilsEchoPath = path.join(stagingDir, "echo.wasm");
-const coreutilsBasenamePath = path.join(stagingDir, "basename.wasm");
-const coreutilsPrintfPath = path.join(stagingDir, "printf.wasm");
-const coreutilsDirnamePath = path.join(stagingDir, "dirname.wasm");
-const coreutilsCatPath = path.join(stagingDir, "cat.wasm");
-const coreutilsWcPath = path.join(stagingDir, "wc.wasm");
-const coreutilsLsPath = path.join(stagingDir, "ls.wasm");
-const coreutilsTrueBytes = coreutilsTrueProbe && fs.existsSync(coreutilsTruePath)
-  ? fs.readFileSync(coreutilsTruePath) : null;
-const coreutilsFalseBytes = coreutilsFalseProbe && fs.existsSync(coreutilsFalsePath)
-  ? fs.readFileSync(coreutilsFalsePath) : null;
-const coreutilsPwdBytes = coreutilsPwdProbe && fs.existsSync(coreutilsPwdPath)
-  ? fs.readFileSync(coreutilsPwdPath) : null;
-const coreutilsEchoBytes = coreutilsEchoProbe && fs.existsSync(coreutilsEchoPath)
-  ? fs.readFileSync(coreutilsEchoPath) : null;
-const coreutilsBasenameBytes = coreutilsBasenameProbe && fs.existsSync(coreutilsBasenamePath)
-  ? fs.readFileSync(coreutilsBasenamePath) : null;
-const coreutilsPrintfBytes = coreutilsPrintfProbe && fs.existsSync(coreutilsPrintfPath)
-  ? fs.readFileSync(coreutilsPrintfPath) : null;
-const coreutilsDirnameBytes = coreutilsDirnameProbe && fs.existsSync(coreutilsDirnamePath)
-  ? fs.readFileSync(coreutilsDirnamePath) : null;
-const coreutilsCatBytes = (coreutilsCatProbe || coreutilsLsProbe || pipelineProbe) &&
-  fs.existsSync(coreutilsCatPath)
-  ? fs.readFileSync(coreutilsCatPath) : null;
-const coreutilsWcBytes = (coreutilsWcProbe || pipelineProbe) && fs.existsSync(coreutilsWcPath)
-  ? fs.readFileSync(coreutilsWcPath) : null;
-const coreutilsLsBytes = (coreutilsLsProbe || pipelineProbe) && fs.existsSync(coreutilsLsPath)
-  ? fs.readFileSync(coreutilsLsPath) : null;
+if (!archive && hasAsset(builtProbePath)) probePath = builtProbePath;
+const probeBytes = (executableProbe || executableExitProbe) && hasAsset(probePath)
+  ? readAsset(probePath) : null;
+const coreutilsTruePath = path.join(stagingDir, "true");
+const coreutilsFalsePath = path.join(stagingDir, "false");
+const coreutilsPwdPath = path.join(stagingDir, "pwd");
+const coreutilsEchoPath = path.join(stagingDir, "echo");
+const coreutilsBasenamePath = path.join(stagingDir, "basename");
+const coreutilsPrintfPath = path.join(stagingDir, "printf");
+const coreutilsDirnamePath = path.join(stagingDir, "dirname");
+const coreutilsCatPath = path.join(stagingDir, "cat");
+const coreutilsWcPath = path.join(stagingDir, "wc");
+const coreutilsLsPath = path.join(stagingDir, "ls");
+const coreutilsDatePath = path.join(stagingDir, "date");
+const coreutilsTrueBytes = (coreutilsTrueProbe || coreutilsMatrixProbe) && hasAsset(coreutilsTruePath)
+  ? readAsset(coreutilsTruePath) : null;
+const coreutilsFalseBytes = (coreutilsFalseProbe || coreutilsMatrixProbe) && hasAsset(coreutilsFalsePath)
+  ? readAsset(coreutilsFalsePath) : null;
+const coreutilsPwdBytes = (coreutilsPwdProbe || coreutilsMatrixProbe) && hasAsset(coreutilsPwdPath)
+  ? readAsset(coreutilsPwdPath) : null;
+const coreutilsEchoBytes = (coreutilsEchoProbe || coreutilsMatrixProbe) && hasAsset(coreutilsEchoPath)
+  ? readAsset(coreutilsEchoPath) : null;
+const coreutilsBasenameBytes = (coreutilsBasenameProbe || coreutilsMatrixProbe) && hasAsset(coreutilsBasenamePath)
+  ? readAsset(coreutilsBasenamePath) : null;
+const coreutilsPrintfBytes = (coreutilsPrintfProbe || coreutilsMatrixProbe) && hasAsset(coreutilsPrintfPath)
+  ? readAsset(coreutilsPrintfPath) : null;
+const coreutilsDirnameBytes = (coreutilsDirnameProbe || coreutilsMatrixProbe) && hasAsset(coreutilsDirnamePath)
+  ? readAsset(coreutilsDirnamePath) : null;
+const coreutilsCatBytes = (coreutilsCatProbe || coreutilsLsProbe || coreutilsMatrixProbe ||
+  pipelineProbe || heredocProbe || heredocStdoutProbe) &&
+  hasAsset(coreutilsCatPath)
+  ? readAsset(coreutilsCatPath) : null;
+const coreutilsWcBytes = (coreutilsWcProbe || coreutilsMatrixProbe || pipelineProbe) && hasAsset(coreutilsWcPath)
+  ? readAsset(coreutilsWcPath) : null;
+const coreutilsLsBytes = (coreutilsLsProbe || coreutilsMatrixProbe || pipelineProbe || heredocProbe) && hasAsset(coreutilsLsPath)
+  ? readAsset(coreutilsLsPath) : null;
+const coreutilsDateBytes = coreutilsMatrixProbe && hasAsset(coreutilsDatePath)
+  ? readAsset(coreutilsDatePath) : null;
 const asArrayBuffer = bytes => bytes && bytes.buffer.slice(
   bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-const fullPackageFiles = fullPackageProbe
-  ? ["true", "false", "pwd", "echo", "printf", "basename", "dirname", "cat", "wc", "ls", "date"]
-      .flatMap(name => {
-        const sourcePath = path.join(stagingDir, `${name}.wasm`);
-        const bytes = fs.readFileSync(sourcePath);
-        const mtimeMs = fs.statSync(sourcePath).mtimeMs;
-        return ["/usr/bin/", "/bin/"].map(prefix => ({
-          path: prefix + name,
-          bytes: asArrayBuffer(bytes),
-          mode: 0o755,
-          mtimeSec: Math.floor(mtimeMs / 1000),
-          mtimeNsec: Math.floor(mtimeMs % 1000) * 1000000,
-        }));
-      })
-      .concat([
-        "/usr/share/waste/coreutils-provenance.json",
-        "/usr/share/waste/coreutils-source-package.json",
-        "/usr/share/waste/waste-interpreters.json",
-        "/usr/share/licenses/coreutils/COPYING",
-      ].map(filePath => ({
-        path: filePath,
-        bytes: asArrayBuffer(Buffer.from("full-package regression fixture\n", "utf8")),
-        mode: 0o644,
-      })))
-  : [];
-const sharedLibraryFiles = sharedLibraryProbe
-  ? [
-      ["/bin/ls", "ls.wasm", 0o755],
-      ["/usr/bin/ldd", "ldd.wasm", 0o755],
-      ["/bin/ldd", "ldd.wasm", 0o755],
-      ["/usr/bin/rogue", "rogue.wasm", 0o755],
-      ["/bin/rogue", "rogue.wasm", 0o755],
-      ["/usr/lib/libncurses.so.wasm", "libncurses.so.wasm", 0o644],
-      ["/lib/libncurses.so.wasm", "libncurses.so.wasm", 0o644],
-    ].map(([vfsPath, sourceName, mode]) => {
-      const sourcePath = path.join(stagingDir, sourceName);
-      const bytes = fs.readFileSync(sourcePath);
-      const mtimeMs = fs.statSync(sourcePath).mtimeMs;
-      return {
-        path: vfsPath,
-        bytes: asArrayBuffer(bytes),
-        mode,
-        mtimeSec: Math.floor(mtimeMs / 1000),
-        mtimeNsec: Math.floor(mtimeMs % 1000) * 1000000,
-      };
-    })
-  : [];
-
-/* Resolve launch.wast: staging symlink or build directory */
-let launchPath = path.join(stagingDir, "launch.wast");
-if (!fs.existsSync(launchPath)) {
-  launchPath = path.join(root, "build/html-rt/bash-runtime.wast");
-}
-const launchSource = fs.readFileSync(launchPath, "utf8");
+const mountedVfs = fullPackageProbe || sharedLibraryProbe;
+const vfs = mountedVfs ? archive ? packageVfs(archive) : treeVfs(vfsRoot) : null;
+const fullPackageFiles = [];
+const sharedLibraryFiles = [];
+const launchPath = path.join(root, "build/html-rt/bash-runtime.wast");
+const launchSource = archive ? archive.read("launch.wast").toString("utf8")
+  : fs.readFileSync(launchPath, "utf8");
 
 let output = "";
 let promptSeen = false;
@@ -207,8 +239,10 @@ let probeStatus0Seen = false;
 let probeMissingSeen = false;
 let probeStatus127Seen = false;
 let probeSecondSeen = false;
+let probeStartupSeen = false;
 let probeFinalStatusSeen = false;
 let probeStatus7Seen = false;
+let probeSecondOutputOffset = -1;
 let coreutilsTrueStatusRequested = false;
 let coreutilsTrueStatusSeen = false;
 let coreutilsFalseStatusRequested = false;
@@ -300,7 +334,7 @@ const self = {
             !coreutilsEchoProbe && !coreutilsBasenameProbe &&
             !coreutilsPrintfProbe && !coreutilsDirnameProbe && !coreutilsCatProbe &&
             !coreutilsWcProbe && !coreutilsLsProbe && !coreutilsMatrixProbe &&
-            !sharedLibraryProbe) ||
+            !wastRepeatProbe && !(heredocProbe || heredocStdoutProbe) && !sharedLibraryProbe) ||
             (sharedLibraryProbe &&
              message.paths?.includes("/usr/bin/rogue") &&
              message.paths?.includes("/bin/rogue") &&
@@ -325,6 +359,12 @@ const self = {
             (coreutilsCatProbe && message.paths?.includes("/usr/bin/cat") &&
              message.paths?.includes("/bin/cat") &&
              message.paths?.includes("/usr/share/waste/cat-fixture.txt")) ||
+            (heredocStdoutProbe && message.paths?.includes("/usr/bin/cat") &&
+             message.paths?.includes("/bin/cat")) ||
+            (heredocProbe && message.paths?.includes("/usr/bin/cat") &&
+             message.paths?.includes("/bin/cat") &&
+             message.paths?.includes("/usr/bin/ls") &&
+             message.paths?.includes("/bin/ls")) ||
             (coreutilsWcProbe && message.paths?.includes("/usr/bin/wc") &&
              message.paths?.includes("/bin/wc") &&
              message.paths?.includes("/usr/share/waste/wc-fixture.txt")) ||
@@ -338,6 +378,10 @@ const self = {
              message.paths?.includes("/bin/wast") &&
              message.paths?.includes("/tmp/matrix.wat") &&
              message.paths?.includes("/tmp/matrix.wast")) ||
+            (wastRepeatProbe &&
+             ["/bin/wat", "/bin/wast", "/tmp/checks.wast",
+              "/tmp/checks-direct.wast", "/tmp/wast-shebang.wast"].every(path =>
+                message.paths?.includes(path))) ||
             (pipelineProbe &&
              ["ls", "wc", "cat"].every(name =>
                 message.paths?.includes(`/bin/${name}`))))) vfsSeen = true;
@@ -431,8 +475,8 @@ const self = {
           output.split(coreutilsLsExpected).length - 1 >= coreutilsLsExpectedCount) {
         coreutilsLsOutputSeen = true;
       } else if (coreutilsLsProbe &&
-          /__LS_ROOT_BEGIN__\r?\n(?:bin\r?\nroot\r?\ntmp\r?\nusr|bin\s+root\s+tmp\s+usr)/.test(output) &&
-          /__LS_BIN_BEGIN__[\s\S]*\r?\nls\r?\n[\s\S]*\r?\nwast\r?\nwaste-probe\r?\nwat/.test(output) &&
+          rootListingSeen(output) &&
+          binListingSeen(output) &&
           /__LS_EMPTY_BEGIN__\r?\n__LS_EMPTY_END__/.test(output) &&
           /__LS_DOT_BEGIN__[\s\S]*[ \t]\.\r?\n[\s\S]*[ \t]\.\.\r?\n[\s\S]*__LS_DOT_END__/.test(output) &&
           /__LS_HIDDEN_BEGIN__\r?\n\.hidden\r?\nlink\r?\nvisible/.test(output) &&
@@ -642,17 +686,19 @@ const self = {
           probeFdsSeen = true;
         if (output.includes("WASTE_PROBE_OK") && !probeSeen) {
           probeSeen = true;
-          setTimeout(() => self.onmessage({data: {type: "input",
-            bytes: Array.from(new TextEncoder().encode(
-              "printf '__C_ENGINE_EXEC_STATUS_%s__\\n' \"$?\"\n",
-            ))}}), 100);
+          probeStartupSeen = executableStartupSeen(output, 3);
         }
-        if (output.includes("__C_ENGINE_EXEC_STATUS_0__") && !probeStatus0Seen) {
+        const initialStatus = output.match(/__C_ENGINE_EXEC_INITIAL_STATUS_(\d+)__/);
+        if (initialStatus && Number(initialStatus[1]) === 0 && !probeStatus0Seen) {
           probeStatus0Seen = true;
           setTimeout(() => self.onmessage({data: {type: "input",
             bytes: Array.from(new TextEncoder().encode(
               `${genericMissingCommand}\n`,
             ))}}), 10);
+        } else if (initialStatus && Number(initialStatus[1]) !== 0 && !exitSent) {
+          exitSent = true;
+          setTimeout(() => self.onmessage({data: {type: "input",
+            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
         }
         if (output.includes(`bash: ${genericMissingCommand}: command not found`) &&
             !probeMissingSeen) {
@@ -664,26 +710,21 @@ const self = {
         }
         if (output.includes("__C_ENGINE_EXEC_STATUS_127__") && !probeStatus127Seen) {
           probeStatus127Seen = true;
+          probeSecondOutputOffset = output.length;
           setTimeout(() => self.onmessage({data: {type: "input",
             bytes: Array.from(new TextEncoder().encode(
-              "/bin/waste-probe again\n",
+              "/bin/waste-probe again; printf '__C_ENGINE_EXEC_SECOND_STATUS_%s__\\n' \"$?\"; exit\n",
             ))}}), 10);
         }
-        if (output.includes("WASTE_PROBE_OK") && probeStatus127Seen &&
-            !probeSecondSeen) {
-          probeSecondSeen = true;
-          setTimeout(() => self.onmessage({data: {type: "input",
-            bytes: Array.from(new TextEncoder().encode(
-              "printf '__C_ENGINE_EXEC_STATUS_%s__\\n' \"$?\"\n",
-            ))}}), 10);
-        }
-        if (output.includes("__C_ENGINE_EXEC_STATUS_0__") &&
-            probeSecondSeen && !probeFinalStatusSeen) {
-          probeFinalStatusSeen = true;
-          probeAfterSeen = true;
+        const secondStatus = output.match(/__C_ENGINE_EXEC_SECOND_STATUS_(\d+)__/);
+        if (secondStatus && !probeFinalStatusSeen) {
+          probeSecondSeen = probeSecondOutputOffset >= 0 &&
+            output.slice(probeSecondOutputOffset).includes("WASTE_PROBE_OK");
+          probeStartupSeen = probeStartupSeen &&
+            executableStartupSeen(output.slice(probeSecondOutputOffset), 2);
+          probeFinalStatusSeen = Number(secondStatus[1]) === 0;
+          probeAfterSeen = probeSecondSeen && Number(secondStatus[1]) === 0;
           exitSent = true;
-          setTimeout(() => self.onmessage({data: {type: "input",
-            bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
         }
       } else if (coreutilsMatrixProbe) {
         const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
@@ -702,15 +743,16 @@ const self = {
           "echo __PIPELINE_AFTER__\n",
           "exit\n",
         ];
-        if (output.includes("__PIPELINE_PIPE_BEGIN__")) {
-          const parts = output.split("__PIPELINE_PIPE_BEGIN__");
-          const afterLast = parts[parts.length - 1];
-          if (/\d+/.test(afterLast))
-            pipelineCountSeen = true;
-        }
+        const pipeCountText = markedOutput(output,
+          "__PIPELINE_PIPE_BEGIN__", "__PIPELINE_PIPE_END__");
+        if (pipeCountText !== null &&
+            Number(pipeCountText) === expectedPipelineBinNames.length)
+          pipelineCountSeen = true;
         if (output.includes("__PIPELINE_REDIRECT_STATUS_0__"))
           pipelineRedirectDone = true;
-        if (output.includes("__PIPELINE_CAT_BEGIN__") && output.includes("__PIPELINE_CAT_END__"))
+        const redirectedListing = markedOutput(output,
+          "__PIPELINE_CAT_BEGIN__", "__PIPELINE_CAT_END__");
+        if (redirectedListing === expectedPipelineBinNames.join("\n"))
           pipelineCatSeen = true;
         if (output.includes("__PIPELINE_AFTER__"))
           pipelineAfterSeen = true;
@@ -913,7 +955,7 @@ const self = {
                 : executableExitProbe
                   ? "WASTE_PROBE_EXIT=7 /bin/waste-probe\n"
                 : executableProbe
-                  ? "/bin/waste-probe one two\n"
+                  ? "/bin/waste-probe one two; printf '__C_ENGINE_EXEC_INITIAL_STATUS_%s__\\n' \"$?\"\n"
                 : coreutilsTrueProbe
                   ? "/bin/true\n"
                 : coreutilsFalseProbe
@@ -1068,9 +1110,11 @@ vm.runInContext(workerSrc, context, {filename: "c-engine-bash-worker.js"});
 self.onmessage({data: {
   type: "start",
   wasmBytes: asArrayBuffer(wasmBytes),
-  buildMtime,
+  buildMtime: mountedVfs ? undefined : buildMtime,
+  vfs,
+  vfsPaths: mountedVfs ? manifest.entries.map(e => e.path) : [],
   probeBytes: asArrayBuffer(probeBytes),
-  vfsFiles: [{
+  vfsFiles: [...(mountedVfs ? [] : [{
     path: "/usr/share/waste/launch.wast",
     bytes: asArrayBuffer(Buffer.from(launchSource, "utf8")),
     mode: 0o644,
@@ -1078,7 +1122,7 @@ self.onmessage({data: {
     path: "/bin/waste-probe",
     bytes: asArrayBuffer(probeBytes),
     mode: 0o755,
-  }, ...fullPackageFiles, ...sharedLibraryFiles, ...(coreutilsTrueBytes ? [{
+  }]), ...fullPackageFiles, ...sharedLibraryFiles, ...(coreutilsTrueBytes ? [{
     path: "/usr/bin/true",
     bytes: asArrayBuffer(coreutilsTrueBytes),
     mode: 0o755,
@@ -1175,6 +1219,14 @@ self.onmessage({data: {
     kind: 3,
     target: "/tmp/ls-fixture/visible",
     mode: 0o777,
+  }] : []), ...(coreutilsDateBytes ? [{
+    path: "/usr/bin/date",
+    bytes: asArrayBuffer(coreutilsDateBytes),
+    mode: 0o755,
+  }, {
+    path: "/bin/date",
+    bytes: asArrayBuffer(coreutilsDateBytes),
+    mode: 0o755,
   }] : []), ...(coreutilsWcBytes ? [{
     path: "/usr/bin/wc",
     bytes: asArrayBuffer(coreutilsWcBytes),
@@ -1265,7 +1317,11 @@ Promise.race([completion, timeout]).then(result => {
     ["true", "false", "pwd", "echo", "printf", "basename", "dirname",
      "cat", "wc", "ls", "date", "wat", "wast"].every(name =>
       normalizedOutput.includes(`\n${name}\n`)) &&
-    normalizedOutput.includes(`\n${new Date().getUTCFullYear()}\n`);
+      normalizedOutput.includes(`\n${new Date().getUTCFullYear()}\n`);
+  const wastRepeatStatusesPass = [
+    "WAT_REPEAT_1_0", "WAT_REPEAT_2_0", "WAT_REPEAT_3_0",
+    "WAST_REPEAT_1_0", "WAST_REPEAT_2_0", "WAST_REPEAT_3_0",
+  ].every(tag => output.includes(`__C_ENGINE_${tag}__`));
   const passed = baselineMissingCommand
     ? promptSeen && commandSent && vfsSeen && environmentEchoSent && environmentEchoSeen &&
       missingLsSent && commandNotFoundSeen && statusSeen &&
@@ -1293,18 +1349,18 @@ Promise.race([completion, timeout]).then(result => {
         !output.includes("cannot create temp file for here-document") && result.ok
     : heredocBuiltinProbe
       ? promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&
-        /bash-[^\r\n]*[#$] printf[^\r\n]*\r?\nHello world!\r?\n/.test(output) &&
+        /bash-[^\r\n]*[#$] printf[^\r\n]*\r?\n(?:\x1b\[\?2004l\r)?Hello world!\r?\n/.test(output) &&
         !output.includes("cannot create temp file for here-document") && result.ok
     : heredocStdoutProbe
       ? promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&
-        /> EOF\r?\nHello world!\r?\n/.test(output) &&
+        /> EOF\r?\n(?:\x1b\[\?2004l\r)?Hello world!\r?\n/.test(output) &&
         !output.includes("cannot create temp file for here-document") && result.ok
     : executableExitProbe
       ? promptSeen && commandSent && vfsSeen && exitProbeStatusRequested &&
         probeStatus7Seen && output.includes("__C_ENGINE_EXEC_EXIT_AFTER__") &&
         exitSent && !doneBeforeExit && result.ok
     : executableProbe
-      ? promptSeen && commandSent && vfsSeen && probeFdsSeen && probeSeen && probeStatus0Seen &&
+      ? promptSeen && commandSent && vfsSeen && probeFdsSeen && probeSeen && probeStartupSeen && probeStatus0Seen &&
         probeMissingSeen && probeStatus127Seen && probeSecondSeen &&
         probeFinalStatusSeen && probeAfterSeen && exitSent && !doneBeforeExit &&
         result.ok
@@ -1323,8 +1379,6 @@ Promise.race([completion, timeout]).then(result => {
       ? promptSeen && commandSent && vfsSeen &&
         pipelineCountSeen && pipelineRedirectDone &&
         pipelineCatSeen && pipelineAfterSeen &&
-        /__PIPELINE_PIPE_BEGIN__[\s\S]*\d+[\s\S]*__PIPELINE_PIPE_END__/.test(output) &&
-        /__PIPELINE_CAT_BEGIN__[\s\S]*\r?\n[\s\S]*__PIPELINE_CAT_END__/.test(output) &&
         exitSent && !doneBeforeExit && result.ok
     : coreutilsMatrixProbe
       ? promptSeen && commandSent && vfsSeen && matrixStatusesPass &&
@@ -1380,9 +1434,7 @@ Promise.race([completion, timeout]).then(result => {
         exitSent && !doneBeforeExit && result.ok
     : wastRepeatProbe
       ? promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&
-        output.includes("__C_ENGINE_WAST_REPEAT_1_0__") &&
-        output.includes("__C_ENGINE_WAST_REPEAT_2_0__") &&
-        output.includes("__C_ENGINE_WAST_REPEAT_3_0__") &&
+        wastRepeatStatusesPass &&
         output.includes("__C_ENGINE_WAST_REPEAT_AFTER__") && result.ok
     : runTextProbe
       ? promptSeen && commandSent && vfsSeen && watStatusRequested &&

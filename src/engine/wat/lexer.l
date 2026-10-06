@@ -130,7 +130,7 @@ static int integer_token(YYSTYPE *yylval, wat_context *context,
     const char *clean = wast_literal_strip_underscores(context, source);
     if (positive && clean[0] == '+') clean++;
     if (!positive && clean[0] == '-')
-        yylval->i64_val = -(int64_t)strtoull(clean + 1, NULL, base);
+        yylval->i64_val = (int64_t)(UINT64_C(0) - strtoull(clean + 1, NULL, base));
     else
         yylval->i64_val = (int64_t)strtoull(clean, NULL, base);
     if (context->numeric_kind == 1) consume_numeric(context);
@@ -650,6 +650,8 @@ memory\.fill     { return KW_MEMORY_FILL; }
 memory\.size     { return KW_MEMORY_SIZE; }
 memory\.grow     { return KW_MEMORY_GROW; }
 table\.init      { return KW_TABLE_INIT; }
+data\.drop       { return KW_DATA_DROP; }
+elem\.drop       { return KW_ELEM_DROP; }
 table\.copy      { return KW_TABLE_COPY; }
 table\.fill      { return KW_TABLE_FILL; }
 table\.get       { return KW_TABLE_GET; }

@@ -9,7 +9,10 @@ reintroducing earlier ambiguity, ownership, or portability failures.
 
 System ownership and runtime boundaries are defined in
 [architecture.md](architecture.md).  Unfinished staged work belongs in the
-active plans rather than this document.
+active plans rather than this document. OCaml is used only for Wasm/WAT/WAST
+language comparisons. No additional OCaml kernel/application-runtime
+development is planned; the existing kernel is to be removed in deferred
+cleanup under [the OCaml retirement plan](active-ocaml-language-oracle-plan.md).
 
 ## Virtual-Memory Ownership and Commit Boundaries
 
@@ -52,6 +55,19 @@ Do not add a second handwritten comment/string scanner, or use `setjmp`,
 command.  Boundary recognition belongs to the shared scanner; recovery policy
 belongs to the command driver.
 
+Ordinary module commands are setup, not assertions. Record attempted and
+successful instantiations plus ordered line/status/phase diagnostics separately
+from assertion/action results. A later passing assertion cannot erase a failed
+setup command, and zero assertions do not establish successful execution.
+Distinguish EOF completion from scanner failure or interruption. Definitions
+are retained syntax; count their instances when loaded rather than claiming a
+definition was instantiated. Preserve explicit module assertions as assertions.
+
+Release a failed command's retained parse after the dispatch loop finishes
+reading it. A module-processing callback must not free the script whose groups
+its caller is iterating. Keep engines from failed starts alive through store
+teardown when imported tables may contain their funcrefs.
+
 ## Process-Continuation Diagnostics
 
 When a fork/exec regression occurs, compare the parent capsule and resumed
@@ -88,6 +104,16 @@ Parser and scanner state must be caller-owned.  `%define api.pure full` and a
 reentrant scanner are insufficient if grammar actions still use file-static
 accumulators.  Locations, temporary vectors, fixups, numeric scratch storage,
 and current-module state all belong to an explicit parse context.
+
+Command streams create many short-lived contexts. Keep zero-initialized parser
+state and ownership fields before the bounded scratch arrays in `wat_context`.
+The builder clears that state prefix; scratch entries must be initialized before
+consumption, with zeroed live counts guarding every lookup. Add fields that need
+an initial zero above this boundary. Start group storage with one zeroed group
+and grow for whole-script parsing; reserving/clearing unused maximum workspace
+on every command can dominate execution. Verify this boundary with nonzero
+allocation poisoning and the complete corpus, including names, fixups and
+branch-table cases.
 
 ## Folded Instruction Boundaries
 
@@ -439,14 +465,58 @@ UndefinedBehaviorSanitizer.  LeakSanitizer is disabled only where the ptrace
 environment prevents it from operating reliably; this is not permission to
 ignore ownership leaks.
 
+Move guest-observable C driver assertions into authored WAST with a recorded
+argument/result/trap mapping. Keep direct C checks for embedding APIs, real host
+callbacks, source/instance ownership, clone/page identity and teardown. The
+executor smoke gate runs both retained C probes and the portable
+`engine-regressions` group with ASan/UBSan; it compares installed fixture bytes
+against authored inputs before using distribution snapshots. WAST instance
+isolation complements the C decode-once/instantiate-twice lifetime check rather
+than establishing that private ownership contract. See `test-coverage.md`.
+
+Use real guest imports for caller-memory and continuation counterparts: a
+pipe round trip observes the executing module's bytes, and a positive timed
+SELECT supplies a production wait boundary. Guest entry/completion counters
+can detect repeated side effects after resume, but cannot establish the C
+snapshot API's capture/restore/replay contract. Keep that sanitizer gate.
+Private C memory probes must use bounded `exec_memory_read` and initialized
+sparse-page observations rather than a removed contiguous `memory->data` field.
+The native WAST adapter services finite SELECT deadlines with a monotonic clock
+and bounded host sleeps; external input and indefinite waits use the session
+driver. POSIX imports are outside the OCaml language oracle scope: an
+unavailable import is not a differential pass, a C kernel acceptance blocker
+or a request to implement an OCaml provider. Verify these fixtures through
+C native/browser parity and the retained sanitizer/session contracts.
+
+Path regressions can create private files with real guest imports instead of
+depending on installed executable bytes or host filesystem writes. Assert the
+guest return value and errno separately for failed operations. Preserve the
+versioned import's negative-errno contract and perform libc's translation in
+the guest wrapper where needed. Check public stat fields at the documented
+Wasm32 offsets; keep private codec round trips, explicit byte-span bounds,
+seeded symlinks, mtime and snapshot ownership under direct C sanitizers until
+equivalent guest capabilities exist. Compare only the initialized pathname
+and terminator when inspecting getcwd buffers.
+
+Use zero-timeout SELECT to expose pipe readiness through the guest ABI, while
+retaining raw HUP/ERR bits and reference ownership in C probes. Dup2 tests
+should transfer bytes through the replaced descriptor and verify same-fd flag
+preservation, rather than checking only that a descriptor appears open. For
+zero-count I/O, validate the guest range and delegate descriptor bounds to the
+kernel with a non-NULL stack byte. Keep that byte separate from the owned heap
+buffer so ordinary cleanup never frees stack storage. Record existing import
+error conventions explicitly; raw kernel statuses and libc-translated errno
+must not be silently interchanged during fixture migration.
+
 ## Browser and Differential Testing
 
-After native gates pass, build the same engine for the browser and exercise the
-generated offline document through its worker harness:
+After native gates pass, run focused WAST worker tests from their generated
+payload and exercise the unified offline Bash/test page:
 
 ```sh
-./start.sh --html-test
-node tests/c-engine-browser-runtime.cjs build/html-rt/test.html
+node tests/c-engine-browser-runtime.cjs
+./start.sh --html-bash
+node tests/c-engine-offline-browser.cjs --page=bash
 ```
 
 Interactive runtime changes also run:
@@ -456,9 +526,12 @@ Interactive runtime changes also run:
 node tests/c-engine-bash-browser-runtime.cjs build/html-rt/bash.html
 ```
 
-Compare supported official tests with the OCaml oracle.  Run sequential and
-threaded OCaml libc or DIY POSIX probes when changing shared ABI, scheduler,
-signal, or process behavior.  Keep repository-owned interpreter changes in
+Compare supported official Wasm/WAT/WAST language tests with the OCaml oracle.
+Use native/browser C checks for kernel, shared ABI, scheduler, signal, process
+and libc behavior. Existing sequential/threaded OCaml POSIX probes are legacy
+evidence for coverage accounting during removal, not required gates for new
+C work. Do not extend the OCaml kernel to make these fixtures run. Keep
+repository-owned language-oracle fixes and retirement changes in
 `submodules/wasm-spec-i31-int32.patch`; do not commit them into submodule
 history.
 
@@ -511,3 +584,199 @@ proposal and WAST assertion semantics.
 
 After shell or Python changes, run `bash -n start.sh`, bytecode checks for
 changed `src/html-rt/tools/*.py`, and `git diff --check`.
+
+Guest batch launchers delegate scheduling to the runtime while keeping file I/O
+in the guest. `waste_kernel.test_suite_v1` is an opt-in shell capability; its
+versioned, bounded arguments never authorize guest-selected host paths. The
+engine owns copied request/reply buffers and validates the future reply range
+before returning `EXEC_YIELD_HOST_IO`. Runtime adapters run isolated batches
+from the installed directory or extracted package, supply a reply, and resume through ordinary C returns.
+Batch workers leave the capability disabled. Keep enumeration cancellation in
+the browser controller's state as well as the active-worker state; an interrupt
+can arrive before a catalogue exists. Sequence IDs guard delayed replies and
+cancels, and unrelated input/resize wakeups must wait for a batch reply.
+
+Parse signed integer literals as unsigned magnitudes and negate in unsigned
+arithmetic before converting the bit pattern to the signed storage field.
+Negating an already-cast `INT64_MIN` invokes C undefined behavior even though
+`-9223372036854775808` is a valid WAT i64 literal. Keep decimal and hexadecimal
+minimum-literal probes and run UBSan with `halt_on_error=1` so a recovered
+sanitizer diagnostic cannot be mistaken for an assertion pass.
+
+
+## Installed VFS Inputs
+
+Keep distribution bytes in `src/vfs` and metadata in its `.inventory.json`.
+Native adapters read declared files beneath an open directory, walking each
+component with `openat`/`O_NOFOLLOW`; browser adapters reuse the existing
+tarballjs file map. Never wrap this tree in a second custom archive. Both
+adapters submit the same inventory and separate file bytes to the shared
+bounded validator, which preserves exact ownership, inode identities and
+nanosecond mtimes and verifies the declared SHA-256 hashes before mounting.
+Missing empty host directories are represented by inventory entries.
+
+Mount complete inputs into a fresh kernel. Guest writes modify private kernel
+files and cannot alter the installed tree or another test's filesystem. Native
+batch children inherit a validated in-memory catalogue. The native shell holds
+an open root directory and passes that capability to its batch companion,
+retaining directory identity across rename/replacement without serializing
+file contents to a temporary image. The companion revalidates current files;
+this directory capability does not freeze external file-content edits.
+
+### Guest signal-mask operations
+
+Use the fixed-width four-word guest signal-set codec, not a native host
+`sigset_t` or an assumed compiled C handler pointer. Copy input before writing
+an old-mask output so aliased buffers remain valid. Validate complete guest
+ranges before writes and commit process-mask changes only after output succeeds;
+rejected operations must preserve both output canaries and kernel state. Mask
+updates exclude SIGKILL/SIGSTOP; pending queries observe blocked queued signals
+without consuming them. Keep handler delivery at the existing pselect boundary
+until a separate change establishes other safe points and C function-pointer
+semantics. WAST tests real imported state; compiled C clients separately preserve
+public-header/layout and canary coverage. See `docs/test-coverage.md` Stage 6B.26.
+
+## Retain segment declarations or reject the resource bound
+
+Stage 6B.43 found correctly encoded unsigned segment operands failing validation
+because WAT parsing silently dropped declarations after the 32nd segment.
+Data/element capacity now includes 128 segments, with the same bound in parser
+metadata, names, loader and evaluator state. Every append form checks capacity;
+excess declarations fail parsing and unretained data payloads are freed. Resource
+bounds remain hard parse errors inside `assert_invalid`, rather than satisfying
+semantic-invalid expectations with truncated syntax.
+
+Verify initialization and drop behavior as well as setup acceptance: the portable
+segment probe checks distinct values at 31/32/63/64/127, numeric and deferred names,
+32/64-bit memory/table operands, post-drop traps and zero-length operations.
+OCaml compares language semantics only; capacity overflow is a C implementation
+boundary, not an OCaml rejection requirement. The existing fixed capacities do
+not promise arbitrary segment counts. See [the setup ledger](wast-setup-coverage.md).
+
+## Preserve Element Segment Nullability
+
+Bare function-index vectors and `elemkind func` declare non-null `(ref func)`;
+explicit `funcref` declares nullable `(ref null func)`. Keep the distinction in
+active, passive and declarative WAT metadata. Synthesized table-shorthand
+segments inherit the table's declared type, including its nullability.
+
+Binary element modes 0–3 imply `(ref func)`, mode 4 implies nullable `funcref`,
+and modes 5–7 carry an explicit reference type. Store that declared type for
+both active initialization and instruction validation. Do not infer a narrower
+segment type because every current item happens to be a non-null function.
+The text encoder may use expression vectors with an explicit non-null type;
+it need not produce byte-identical encodings to the language oracle.
+
+Verify table contents and lifetime as well as setup: bare/empty vectors,
+nullable null slots, passive `table.init`, dropped active/declarative segments,
+post-drop traps, table64 and all eight binary modes. Reject nullable segments
+when targeting non-null tables even if their vectors contain only `ref.func`.
+Stage 6B.44 uses C/native/browser checks and the OCaml language-only oracle;
+no kernel/provider changes are involved. See [the setup ledger](wast-setup-coverage.md).
+
+
+## Standard language-test host tables
+
+`spectest.table` and `spectest.table64` are distinct nullable funcref tables,
+with initial size 10 and maximum 20. Preserve address width separately from
+reference type: standard table64 imports use 64-bit indices. Resolve names to
+store-owned objects and let the existing loader enforce width/type/limits;
+do not grow host tables to satisfy incompatible imports. Zero-initialized
+slots have no owner and represent null references.
+
+Aliases within one script share size, contents and cross-module function
+owners; separately scheduled scripts receive fresh host objects. Include both
+host tables in checkpoint capture even before a module imports them. Store
+teardown releases entries after engines, and snapshots restore object identity
+and original bounds/contents. Keep private checkpoint ownership checks as well
+as portable WAST bounds/growth/import and isolation probes. Stage 6B.45 runs
+both manifest orders sequentially and concurrently, compares C/native/browser
+and OCaml language results, and verifies C-encoded modules in source order so
+prior actions establish shared table state. Standard spectest scaffolding does
+not require OCaml kernel development.
+
+
+## Plain and folded bulk instructions
+
+Give plain bulk operators grammar productions that emit their opcode and
+immediates; permissive generic instruction handling must not silently omit
+`data.drop` or `elem.drop`. `table.init` abbreviates the table index to zero,
+or accepts explicit table/element indices in text order. Binary encoding places
+the element index first. Keep table and element fixups in their own index spaces
+and retain their original source locations, including forward names and mixed
+numeric/named forms. Folded numeric/numeric and numeric/named productions must
+emit the same operation as their plain counterparts. Preserve instructions with
+missing stack operands so binary validation sees them; reject missing text
+immediates or unresolved symbols through normal text parsing.
+
+Compare effects using distinct source functions/data and an untouched peer
+table; successful setup alone cannot prove the instruction was emitted. Check
+both address widths, repeated drops, post-drop traps and zero-length operations.
+Pair invalid-module assertions with quoted malformed-text assertions, and run
+C-encoded binaries through the language oracle while preserving script order.
+Stage 6B.46 uses 190 portable checks and separate ordinary rejection probes;
+resource bounds and unrelated language acceptance remain explicit.
+
+
+`table.copy` accepts no table indices (both zero) or two explicit indices;
+`table.fill` accepts no index (zero) or one. Copy immediates stay in
+**destination/source** order in both text and binary, unlike initialization's
+reversed table/segment encoding. Preserve table references through deferred
+index-space resolution, including forward names and all mixed numeric/named
+forms. Give folded numeric forms explicit emission paths; even operand-free
+fill/copy forms must reach binary operand validation.
+
+Copy addresses use each table's width. The count is i64 only when both tables
+are table64, otherwise i32; fill uses its table's width for address and count.
+Check both overlap directions with distinct entries, no writes after a bounds
+trap, zero-length boundary behavior, nulls, reference identity/nullability and
+cross-module function owners. Stage 6B.47 keeps these in 611 portable checks,
+with invalid/malformed and ordinary rejection probes, C-encoded language-oracle
+verification and sanitizer/leak cleanup gates. Equivalent explicit table/export
+declarations avoid broadening this slice to exported-table shorthand. Official
+language acceptance still needs a finite comparison ledger; POSIX and kernel
+providers are outside OCaml oracle scope.
+
+## Exported table shorthand
+
+Table element-list shorthand may carry an inline export and infer its minimum
+size from the element list. Accept both table32 `(table (export "name")
+funcref (elem ...))` and table64 `(table (export "name") i64 funcref (elem
+...))` forms. Preserve the reference type, attach the synthesized active
+element segment to the just-declared table, and emit the inline export through
+the ordinary table export metadata. Test both address widths with indirect
+calls, then import the exported table from a second module to verify aliasing
+and shared contents. Stage 6B.52 covers these paths in native C, the production
+browser runtime and the OCaml language-only oracle; it does not change official
+corpus identity counts or require OCaml kernel capabilities.
+
+
+## Finite language-oracle comparison
+
+Enumerate installed manifest identities and audit inventory/upstream/source
+hashes before comparison. Keep legacy syntax exclusions and repository runtime
+fixtures explicit; WAST with POSIX imports is outside the official language
+ledger. Run unchanged language scripts in fresh oracle processes with standard
+spec scaffolding. Enable custom handlers only for custom-annotation suites:
+core binary custom sections deliberately contain opaque payloads.
+
+Use C parser metadata and interpreter assertion traces to compare ordered
+check kinds and full action names, alongside actual native/browser assertion
+results, ordinary setup diagnostics and EOF completion. Do not introduce a
+second WAST command scanner or infer setup acceptance from assertion counts.
+Keep runtime traps distinct from instantiation traps, custom checks distinct
+in the oracle inventory, and bare actions visible even if C reports them as
+return checks. Decode displayed name escapes without Unicode normalization,
+truncation or prefix matching. A declaration and invocation truncated in the
+same way can pass while hiding a language difference; test distinct names
+sharing a prefix and equivalent escape spellings independently.
+
+Pin known gaps by identity, source hash and exact issue categories. Fail new
+or changed gaps and repaired baselines; strict comparison fails known gaps
+as well. Preserve raw metadata/traces, commands and artifact/report hashes.
+The report format does not bind source hashes, so supply current reports and
+retain freshness evidence. Stage 6B.48's [finite ledger](wasm-language-coverage.md)
+classifies all 265 official identities; 261 accept independently, 259 agree
+on check/setup identity, and name truncation/inline setup profiles remain open.
+Installed-script agreement does not imply every C-encoded module or arbitrary
+text form has been compared. No OCaml kernel/provider development is added.

@@ -1,0 +1,11 @@
+{
+  "fixture": "tests/guest-session-diy-control.wast",
+  "events": [
+    {"after": "STARTED", "waitKind": 2, "pid": 1, "signal": 2}
+  ],
+  "output": "STARTED",
+  "assertions": 7,
+  "processes": 0,
+  "exitStatus": 0,
+  "nativeCounts": {"selectWaits": 1, "readWaits": 0, "signalEvents": 1, "inputBytes": 0}
+}

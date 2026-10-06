@@ -1,0 +1,60 @@
+{
+  "fixture": "tests/guest-session-waits.wast",
+  "clockMonotonicNs": 4294967290,
+  "events": [
+    {
+      "after": "INPUT\n",
+      "waitKind": 2,
+      "pid": 1,
+      "bytes": [
+        120
+      ],
+      "rejectMonotonicNs": [
+        0,
+        4294967289
+      ]
+    },
+    {
+      "after": "TIMEOUT\n",
+      "waitKind": 2,
+      "pid": 1,
+      "monotonicNs": 4295467289,
+      "stillWaiting": true
+    },
+    {
+      "waitKind": 2,
+      "pid": 1,
+      "monotonicNs": 4295467290
+    },
+    {
+      "after": "REPEAT\n",
+      "waitKind": 2,
+      "pid": 1,
+      "monotonicNs": 4295967290
+    },
+    {
+      "after": "SIGNAL\n",
+      "waitKind": 2,
+      "pid": 1,
+      "signal": 2
+    },
+    {
+      "after": "AGAIN\n",
+      "waitKind": 2,
+      "pid": 1,
+      "bytes": [
+        89
+      ]
+    }
+  ],
+  "output": "INPUT\nTIMEOUT\nREPEAT\nSIGNAL\nAGAIN\n",
+  "assertions": 24,
+  "exitStatus": 0,
+  "nativeCounts": {
+    "readWaits": 0,
+    "selectWaits": 6,
+    "inputBytes": 2,
+    "signalEvents": 1,
+    "clockEvents": 3
+  }
+}

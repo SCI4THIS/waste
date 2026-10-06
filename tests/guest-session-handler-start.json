@@ -1,0 +1,17 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "files": [{"path": "/tmp/handler-start.wast", "source": "tests/guest-session-handler-start.wast", "mode": 493}],
+  "events": [
+    {"after": "bash-5.2# ", "text": "/bin/wast /tmp/handler-start.wast; printf '__START_%s__\\n' \"$?\"\n"},
+    {"after": "bash-5.2# ", "text": "/bin/true; printf '__RECOVER_%s__\\n' \"$?\"\n"},
+    {"after": "bash-5.2# ", "text": "exit 3\n"}
+  ],
+  "contains": ["__START_126__\r\n", "__RECOVER_0__\r\n"],
+  "assertions": 8,
+  "expectedPassed": 7,
+  "expectedHandlerError": "yielding module starts are unsupported in WAST handlers",
+  "expectedError": "yielding module starts are unsupported in WAST handlers",
+  "exitStatus": 3,
+  "processes": 2,
+  "execs": 2
+}

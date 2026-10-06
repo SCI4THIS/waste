@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from guest_sdk import include_flags
+
 
 LIBC_C_SOURCES = (
     "stdio.c",
@@ -32,3 +34,7 @@ LIBC_C_SOURCES = (
 def libc_source_paths(root: Path) -> tuple[Path, ...]:
     lib_dir = root / "src" / "html-rt" / "lib"
     return tuple(lib_dir / name for name in LIBC_C_SOURCES)
+
+
+def guest_include_flags(root: Path) -> list[str]:
+    return include_flags(root / "src/vfs")

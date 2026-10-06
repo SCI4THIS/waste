@@ -11,6 +11,12 @@ implementation to provide features that aren't available in the browser.  It all
 for threading and for process yielding and restarting without use of asyncify.
 
 
+OCaml is retained only as a reference for wasm, wat, and wast language behavior.
+The experiment using it as an application engine was not practical. Kernel and
+POSIX development belongs to the C engine; no additional OCaml kernel work is
+planned. The existing OCaml kernel will be removed in deferred cleanup; see
+[the scope and retirement plan](docs/active-ocaml-language-oracle-plan.md).
+
 ## Webassembly terms
 
 .wasm files are binary files that contain webassembly op-codes and can be ran by a web assembly machine
@@ -96,9 +102,10 @@ fast enough to be practical.
 Leveraging the AI I have created a TUI that can be started by running `./start.sh`
 It has a pre-check to ensure that all the required tools are installed then it
 launches a menu where specific compilations can be performed.  This allows for
-spec-testing the OCaml impelementation and the waste engine.  Generating a bash
-shell static HTML using OCaml and C-engine, and running unit tests on the compiled
-code.
+spec-testing the WebAssembly language implementation against OCaml, generating
+a bash shell static HTML using the C-engine, and running unit tests on the
+compiled code. Legacy OCaml application-runtime options remain until deferred
+cleanup; they are not the production direction.
 
 I have only tested it on Omarchy / Arch.  Other Linux distros will need some tweaks 
 to get it to work.  It has a secondary mode where you can feed it arguments to 

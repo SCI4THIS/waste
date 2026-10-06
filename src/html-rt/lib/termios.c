@@ -1,7 +1,7 @@
 /* termios.c — Terminal control for the WASTE guest libc. */
 
 #include "include/helper.h"
-#include "include/termios.h"
+#include <termios.h>
 
 __attribute__((import_module("waste_kernel"), import_name("tcgetattr_v1")))
 extern int waste_kernel_tcgetattr_v1(int descriptor, struct termios *t);

@@ -1,0 +1,97 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "normalization": "Rogue maps and cursor redisplay depend on real-time random seeds. Compare semantic markers, child PIDs at each post-yield event, wait boundaries and exact shell exit status; retain unnormalized transcripts.",
+  "events": [
+    {
+      "after": "bash-5.2# ",
+      "pid": 1,
+      "text": "/bin/ldd /bin/rogue; printf '__LDD_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "pid": 1,
+      "text": "/bin/rogue; printf '__ROGUE_1_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "Level:",
+      "pid": 3,
+      "bytes": [
+        27,
+        79,
+        65
+      ]
+    },
+    {
+      "pid": 3,
+      "bytes": [
+        46
+      ]
+    },
+    {
+      "pid": 3,
+      "text": "Qy"
+    },
+    {
+      "after": "[Press return to continue]",
+      "pid": 3,
+      "text": "\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "pid": 1,
+      "text": "/bin/rogue; printf '__ROGUE_2_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "Level:",
+      "pid": 4,
+      "bytes": [
+        27,
+        79,
+        65
+      ]
+    },
+    {
+      "pid": 4,
+      "bytes": [
+        46
+      ]
+    },
+    {
+      "pid": 4,
+      "text": "Qy"
+    },
+    {
+      "after": "[Press return to continue]",
+      "pid": 4,
+      "text": "\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "pid": 1,
+      "text": "echo __AFTER"
+    },
+    {
+      "after": "__AFTER",
+      "pid": 1,
+      "text": "_ROGUE__\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "pid": 1,
+      "text": "exit 5\n"
+    }
+  ],
+  "contains": [
+    "libncurses.so.wasm",
+    "__LDD_0__\r\n",
+    "__ROGUE_1_0__\r\n",
+    "__ROGUE_2_0__\r\n",
+    "\u001b[?25l",
+    "\u001b[?25h",
+    "\u001b[?2004l\r__AFTER_ROGUE__\r\n"
+  ],
+  "assertions": 7,
+  "exitStatus": 5,
+  "processes": 3
+}

@@ -118,13 +118,10 @@ CONFIG_H = """\
 ROGUE_BOOL_FIX_H = """\
 #ifndef ROGUE_BOOL_FIX_H
 #define ROGUE_BOOL_FIX_H
+#include <stdbool.h>
 #include <curses.h>
-#ifndef __STDBOOL_H
-#define __STDBOOL_H
-#define __bool_true_false_are_defined 1
-#define true 1
-#define false 0
-#endif
+#undef bool
+#define bool NCURSES_BOOL
 #endif
 """
 
@@ -378,14 +375,9 @@ MDPORT_C_PATCHES = [
 
 
 def ensure_sysroot(repo_root: Path, output_base: Path) -> Path:
-    """Build or locate the WASTE application sysroot."""
-    sysroot = output_base / "sysroot"
-    if (sysroot / "bin" / "waste-wasm-clang").is_file():
-        return sysroot
-    coreutils_sysroot = repo_root / "build" / "coreutils" / "sysroot"
-    if (coreutils_sysroot / "bin" / "waste-wasm-clang").is_file():
-        return coreutils_sysroot
+    """Refresh from the mounted SDK; never reuse an unchecked old sysroot."""
     build_sysroot = repo_root / "src" / "html-rt" / "tools" / "build-waste-sysroot.py"
+    sysroot = output_base / "sysroot"
     subprocess.run(
         [sys.executable, str(build_sysroot),
          "--repo-root", str(repo_root),
@@ -473,20 +465,21 @@ def compile_rogue(
     obj_dir = build_dir / "objects"
     obj_dir.mkdir(parents=True, exist_ok=True)
 
-    # ncurses headers are in the sysroot (installed by build-ncurses.py)
-    # and the configure-generated headers in ncurses build dir.
+    # Consume only the installed public ncurses SDK. Rogue's own generated
+    # config stays private; do not bypass the public ABI wrapper via build/.
     include_flags = [
         f"-I{src_dir}",
-        f"-I{ncurses_build / 'build' / 'include'}",
+
     ]
 
     defines = [
         "-DHAVE_CONFIG_H",
         "-DNDEBUG",
+        "-DWASTE_ROGUE_LEGACY_ABORT",  # inherited package binding; unavailable in default SDK
     ]
 
-    # Force-include the bool fix so <stdbool.h> is short-circuited before
-    # any source file's own includes run. This keeps `bool` = NCURSES_BOOL
+    # Consume <stdbool.h> once, then opt into the explicit Rogue legacy profile.
+    # This keeps `bool` = NCURSES_BOOL
     # (unsigned, 4 bytes) consistent across all translation units.
     bool_fix_flags = ["-include", str(src_dir / "rogue-bool-fix.h")]
 
@@ -738,6 +731,7 @@ def rewrite_imports(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--install", action="store_true", help="Explicitly install audited outputs into src/vfs")
     parser.add_argument("--repo-root", type=Path, default=Path("."))
     parser.add_argument("--output", type=Path,
                         default=Path("build/rogue"))
@@ -756,17 +750,7 @@ def main() -> int:
     print(f"ncurses: {ncurses_build}")
 
     # Ensure sysroot.
-    sysroot_candidates = [
-        repo_root / "build" / "coreutils" / "sysroot",
-        output / "sysroot",
-    ]
-    sysroot = None
-    for s in sysroot_candidates:
-        if (s / "bin" / "waste-wasm-clang").is_file():
-            sysroot = s
-            break
-    if sysroot is None:
-        sysroot = ensure_sysroot(repo_root, output)
+    sysroot = ensure_sysroot(repo_root, output)
     print(f"sysroot: {sysroot}")
 
     # Prepare sources (copy + patch).
@@ -801,6 +785,10 @@ def main() -> int:
     shutil.copyfile(final_output, vfs_stage / "rogue")
     print(f"\nstaged: {vfs_stage / 'rogue'}")
     print("VFS path: /usr/bin/rogue")
+    if args.install:
+        subprocess.run(["python3", str(repo_root / "src/html-rt/tools/vfs.py"),
+                        "install", "--component", "rogue", "--source",
+                        str(vfs_stage / "rogue")], check=True)
     return 0
 
 
