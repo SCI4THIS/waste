@@ -105,7 +105,7 @@ shared-memory regression; the allocator stress passed separately.
 The refreshed installed native corpus passes **289 / 2 XFAIL / 5 SKIP**, with
 no unexpected failures. The strict OCaml language comparison passes all **261
 supported official inputs**; four official inputs remain explicitly excluded
-by policy, and repository POSIX/libc fixtures stay outside oracle scope. The
+by policy, and repository POSIX/libc fixtures stay outside the scope of the OCaml reference implementation. The
 strict guest SDK gate now passes after refreshing the reviewed source hashes
 for the shared POSIX-provider extraction and explicitly reinstalling the SDK:
 56 public headers, six include orders, Wasm ABI and provider-negative checks,
@@ -260,7 +260,7 @@ first sandbox attempt was rejected with `EPERM`.
 | `tests/wasm-import-decode.c` | **49** | Hand-built binary import section covering function, table, memory, global and tag descriptors; import-only decode, no-import section, copied-source lifetime after caller bytes are overwritten, disposal/reset, malformed UTF-8/trailing bytes/truncation. Retain as decoded-structure, ownership and malformed-input coverage. |
 | `tests/wasm-validation.c` | **11** | Directly constructed internal instruction/type records check invalid versus unsupported status and source location, branch/call/local resolved metadata, and one-time validation. Retain as private validator-result and metadata coverage. |
 
-Official WAST tests and the OCaml language oracle cover accepted/rejected module
+Official WAST tests and the OCaml reference implementation cover accepted/rejected module
 behavior and language semantics, but do not replace direct assertions about
 reader cursor rollback, decoder ownership/reset, exact import descriptor
 records, or internal validation metadata. These are C implementation
@@ -955,7 +955,7 @@ classifications until their own assertion-level audits are complete.
 four bytes from the executing module's memory into its own destination buffer.
 A nested B→A→host call must read and update A's memory. A and a second identical
 module retain independent bytes. A historical OCaml run accepted this
-POSIX-based fixture; ongoing kernel parity is outside language-oracle scope.
+POSIX-based fixture; ongoing kernel parity is outside the scope of the OCaml reference implementation.
 
 All 32 successful-path C `CHECK`s remain in `c-engine-caller-instance.c`,
 including the twelve value observations complemented by WAST. The real
@@ -1067,8 +1067,8 @@ finite wait interrupted by a 200-ms host deadline, cancellation of runnable and
 waiting guests, and continued execution/reporting of a following test. The full
 native session driver also passes all 23 assertions and records actual SELECT
 waits. Native OCaml cannot execute the timed fixture because `env.select` is
-unavailable; that historical rejection is outside language-oracle scope,
-not an accepted oracle pass or
+unavailable; that historical rejection is outside the scope of the OCaml reference implementation,
+not an accepted OCaml reference implementation pass or
 an added expected failure in the installed C suites.
 
 ## Path VFS assertions moved out of C
@@ -1145,9 +1145,9 @@ also test the guest import adapters that direct kernel calls bypassed.
 `make -C src/cli-rt posix-path-vfs` runs the 57 retained C checks, verifies the
 installed fixture bytes, runs authored WAST in the CLI, and runs the installed
 fixture with ASan/UBSan. The ordinary executor regression gate covers all nine
-fixtures. The native OCaml oracle rejects this fixture at `env.chmod` import
-resolution; that historical POSIX rejection is outside oracle scope,
-not an oracle pass or a new
+fixtures. The native OCaml reference implementation rejects this fixture at `env.chmod` import
+resolution; that historical POSIX rejection is outside the scope of the OCaml reference implementation,
+not an OCaml reference implementation pass or a new
 expected failure in either installed C runner.
 
 ## Kernel pipe and descriptor assertions
@@ -1228,9 +1228,9 @@ each function; numbers count source CHECK sites, not loop iterations.
 
 The ordinary `posix-kernel` Make gate combines the retained C sanitizer probe,
 authored/installed byte comparison, authored CLI execution and installed WAST
-sanitizer execution. The native OCaml oracle rejects the fixture at its missing
+sanitizer execution. The native OCaml reference implementation rejects the fixture at its missing
 `env.select` import. A zero-timeout SELECT still needs that provider; its
-availability cannot be inferred from language-only oracle tests.
+availability cannot be inferred from language-only tests against the OCaml reference implementation.
 
 ## Signal masks and blocked pending assertions
 
@@ -1280,7 +1280,7 @@ not a demonstrated compiled C function pointer. Sigaction flags, general
 on-unblock delivery, default-action signal queuing and SELECT handler dispatch
 remain separate work. Existing sigaction/raise/pselect raw-negative errors
 are preserved. No fixture-only implementation replaces kernel signal state.
-The native OCaml oracle rejects the missing `env.sigfillset` provider.
+The native OCaml reference implementation rejects the missing `env.sigfillset` provider.
 
 `tests/guest-sdk-stat.c` remains an authored C client. Its new
 `sdk_signal_check` compiles against the mounted-only sysroot, verifies public
@@ -1340,7 +1340,7 @@ it does not start Node or require HTML. The shared session checker exercises
 native/browser exports and the packaged production worker with `--scenario
 waits --page build/html-rt/bash.html`. The actual offline Chromium gate also
 runs the same authored fixture/contract in an independent worker and records
-its individual results. The OCaml oracle lacks `env.select` and cannot execute
+its individual results. The OCaml reference implementation lacks `env.select` and cannot execute
 this fixture; the missing provider is explicit rather than a new installed skip.
 
 ## SELECT argument and pipe polling assertions
@@ -1408,7 +1408,7 @@ C checks stay intact. Codec ownership/NULL/layout tests remain independent.
 installed bytes, runs authored WAST in the CLI and installed WAST with
 ASan/UBSan. The ordinary executor group also requires all nine snapshots to
 match. Native/browser reports agree on 650 ordered regression assertions.
-The native OCaml oracle lacks `env.select`; it cannot execute the new fixture.
+The native OCaml reference implementation lacks `env.select`; it cannot execute the new fixture.
 No expected-failure or skip entry is added for this supported C fixture.
 
 ## Terminal SELECT and canonical/raw session assertions
@@ -1480,7 +1480,7 @@ require the guard to reject the premature continuation. The native-only
 `posix-kernel`; no Node/browser package is needed for those gates. The standalone
 Python checker defaults to full ASan/UBSan/LeakSanitizer. Shared exports/worker
 and actual offline Chromium also pass 76/76, with exact transcript and ordered
-browser assertion parity. The oracle lacks `env.select`; this fixture adds no
+browser assertion parity. The OCaml reference implementation lacks `env.select`; this fixture adds no
 installed skip or XFAIL. No runtime or engine semantics changed.
 
 ## Terminal EOF/output and VTIME session assertions
@@ -1542,7 +1542,7 @@ outcomes. The prior 24/76-check sessions still pass.
 This audit preserves the implementation's first-read-wait deadline. Explicit
 clock events wake READ; autonomous READ timer wakeups and broader VMIN/VTIME
 timing semantics remain acceptance work. No engine/runtime semantics changed.
-The oracle rejects `env.select`, without a new installed skip or XFAIL. The
+The OCaml reference implementation rejects `env.select`, without a new installed skip or XFAIL. The
 manifest/inventory bytes and full 293-test/63,704-assertion native/browser
 results remain unchanged.
 
@@ -1589,9 +1589,9 @@ The shared kernel now clears both endpoint flags when publishing a pipe.
 A historical focused 12-assertion differential probe independent of initial
 descriptor numbers passed in C and the native OCaml interpreter, whose pipe implementation
 already creates both endpoints with clear flags. The complete installed
-fixture stops in the oracle at its first allocation (3 versus C batch 0);
-the oracle's 1,024-slot table also differs from C's 64 slots. That runtime-profile
-difference is outside language-oracle scope and adds no installed skip or
+fixture stops in the OCaml reference implementation at its first allocation (3 versus C batch 0);
+the OCaml reference implementation's 1,024-slot table also differs from C's 64 slots. That runtime-profile
+difference is outside the scope of the OCaml reference implementation and adds no installed skip or
 expected failure. No OCaml descriptor/profile implementation work is required.
 
 The native-only `posix-kernel` target now requires matching authored/installed
@@ -1661,9 +1661,9 @@ path now clears O_EXCL to avoid rejecting first creation. Assertions 212–219
 check exclusive shm create, collision/errno, close/unlink and recreation.
 Existing shared-memory C checks remain for the next audit.
 
-The complete fixture stops at the native oracle's missing `env.readdir_v1`.
+The complete fixture stops at the native OCaml reference implementation's missing `env.readdir_v1`.
 A separate 25-check mask/exclusive comparison passes using explicit stat-mode
-offsets (C 16, OCaml 8); it excludes guest errno queries because the oracle
+offsets (C 16, OCaml 8); it excludes guest errno queries because the OCaml reference implementation
 stores its error internally. Installed C assertions still verify EEXIST errno.
 That comparison is not full fixture parity and adds no installed skip/XFAIL.
 
@@ -1731,7 +1731,7 @@ zero-filled. All created names/handles are released. This does not claim
 mmap coverage or inode uniqueness across simultaneously live generations.
 
 The recorded OCaml attempt stops at missing `env.shm_open`. This fixture is
-outside the language oracle scope; no provider development or kernel parity
+outside the scope of the OCaml reference implementation; no provider development or kernel parity
 is required, and no new installed skip/XFAIL or differential pass is claimed.
 Engine, adapter, runtime, guest headers and
 frontend behavior are unchanged in this slice.
@@ -2035,7 +2035,7 @@ sessions total 351 checks. Manifest/inventory and installed bytes are unchanged;
 no reinstall or page rebuild is needed.
 
 Classification is complete for the current helpers in this C file. Other C
-and libc/CJS audits, supported language-oracle comparison and consolidation
+and libc/CJS audits, supported OCaml reference implementation comparison and consolidation
 remain open. These C kernel contracts require no OCaml kernel development or
 comparison. The one-mapping ledger, complete per-site expressions/hashes,
 execution multiplicities and parity proof are under
@@ -2117,7 +2117,7 @@ every original command, including six ordinary bulk-operation invokes.
 The same memory pair runs in both manifest orders with one and three jobs
 through native sanitizer and browser host-boundary gates, preserving aliases
 within a script and fresh host stores between scripts. All three scripts pass
-the OCaml language oracle individually; no kernel/provider development is added.
+the OCaml reference implementation individually; no kernel/provider development is added.
 
 Explicitly reviewed installation removes four assembled support modules and
 three directories, leaving **497 VFS nodes / 314 manifest files**. Source
@@ -2286,7 +2286,7 @@ normal refreshes retain the selection guard.
 Stages 6B.49–6B.52 close full export/action-name handling, bare-inline-module
 profile parity and exported table32/table64 element-list shorthand. The strict
 official language ledger now agrees for all 261 supported inputs; POSIX/kernel
-behavior remains outside OCaml oracle scope. Stage 6B.53 audits all 117 runtime
+behavior remains outside the scope of the OCaml reference implementation. Stage 6B.53 audits all 117 runtime
 checks in `tests/c-engine-process-lifecycle.c`, preserving capsule/transition/
 mapping ownership invariants and mapping their guest-visible complements. Stage
 6B.54 audits all 58 runtime checks in `tests/c-engine-exec-matrix.c`; the

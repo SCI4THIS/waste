@@ -14,7 +14,7 @@ No additional guest assertion is moved or counted as a migration here.
 | Discover and sort all generated `.wast` files | Native `libc-native` gate requires the installed group's ordered identities to equal the nonempty authored client selection. It verifies installed client suffix bytes and obtains assertion names from the existing C parser. Corpus installation/checks retain full generated-byte and provenance audits. |
 | Exact generated fixture filename filter | `waste-test --vfs-root=src/vfs libc-test/matching-sort.wast`, or repeat identities for multiple files. Both runtime controllers reject unknown selections. The old filter can silently select zero files. Preserve rejection, not vacuous success. |
 | Optional export-name filter deletes other single-line `assert_return` commands | Existing runners retain the complete fixture and report each named assertion. No source-rewriting filter is added. This legacy debugging convenience is not an additional guest expectation; filtering can discard coverage or stateful setup assertions. |
-| Sequential/threaded OCaml artifact choice, scheduler quantum and thread count | Legacy OCaml application scheduling is outside the language-oracle scope. C batches isolate each fixture; native `--jobs` and browser job selection have their own host-boundary gates. No OCaml kernel/provider work is required. |
+| Sequential/threaded OCaml artifact choice, scheduler quantum and thread count | Legacy OCaml application scheduling is outside the scope of the OCaml reference implementation. C batches isolate each fixture; native `--jobs` and browser job selection have their own host-boundary gates. No OCaml kernel/provider work is required. |
 | Prepend deterministic `waste_kernel` and `env` providers | Retain only as legacy profile evidence. C tests use production providers; the stub functions do not establish C POSIX behavior. See the provider table below. |
 | Await loader completion and reject a nonzero interpreter exit | Native batch completion/exit status and browser `done`/controller exit status are already covered by host-boundary gates, including guest failure, malformed tails, deadlines and cancellation. The focused libc gate additionally requires every ordered assertion and exact counts. |
 | Print the number of passing suites; reject thrown errors | Native JSON/text and browser downloadable reports preserve identities, statuses and individual outcomes. Expected failures remain visible. The new gate rejects missing records, skips, setup diagnostics on the native side and any untracked assertion failure. |
@@ -77,7 +77,7 @@ semantics or expected-failure policy.
 
 All sixteen injected functions are accounted for. They are historical
 scaffolding for wrapper tests, not an OCaml POSIX implementation backlog.
-OCaml remains solely the Wasm/WAT/WAST language oracle; kernel and
+OCaml remains solely the Wasm/WAT/WAST OCaml reference implementation; kernel and
 application-runtime pruning stays in the
 [deferred retirement plan](active-ocaml-language-oracle-plan.md).
 

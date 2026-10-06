@@ -32,7 +32,7 @@ and changed selection policy. After reviewing a deliberate selection change,
 use `python3 src/html-rt/tools/build-test-corpus.py --install --review-selection`.
 HTML packaging only consumes the installed inventory; it never refreshes it.
 
-`/root/waste/tests/manifest.json` records source paths/hashes, pinned oracle revision,
+`/root/waste/tests/manifest.json` records source paths/hashes, pinned OCaml reference implementation revision,
 grouping, expected outcomes, skips, original execution specifications, assertion
 counts when known, and runtime profiles. Feature labels are group-derived, not
 a complete analysis of each module. Original host source paths are provenance,
@@ -52,7 +52,7 @@ Together with mmap, the DIY group has four C-engine WAST passes / 48 checks;
 the retained compatibility module contributes seven browser-side Wasm checks.
 Intentional memory aliases within one script and fresh stores across scripts
 are checked in both orders with one and three jobs. The three language fixtures
-also pass the OCaml oracle individually; no OCaml POSIX providers are required.
+also pass the OCaml reference implementation individually; no OCaml POSIX providers are required.
 OCaml direct/threaded profiles remain recorded, including the original
 threaded-runner default, quantum and timeout. These legacy metadata fields
 record provenance; they do not require further OCaml kernel development or
@@ -129,7 +129,7 @@ The unified `bash.html` page supplies browser batch scheduling, isolation,
 unsupported-test reporting, and downloadable assertion-aware results; native
 execution uses the same installed manifest. Focused Node worker tests consume
 generated payload metadata without building a second HTML page. Supported
-language tests are compared with the OCaml oracle; no OCaml POSIX/kernel
+language tests are compared with the OCaml reference implementation; no OCaml POSIX/kernel
 parity is required.
 
 The native batch companion now runs the installed C-engine corpus without
@@ -213,7 +213,7 @@ Explicit module assertions retain their existing assertion records.
 Stage 6B.42 exposed ten previously ignored setup failures across seven official
 language files. Stage 6B.43 fixes six of them by retaining up to 128 data/element
 segments and rejecting excess declarations explicitly, rather than silently
-truncating at 32. Five repaired files pass C and the OCaml language oracle and
+truncating at 32. Five repaired files pass C and the OCaml reference implementation and
 leave both XFAIL lists. Stage 6B.44 preserves non-null function-index segment
 types in WAT and binary input, repairing the three active-element errors in
 `core/elem.wast` and removing its XFAIL entry. Stage 6B.45 supplies the standard
@@ -321,7 +321,7 @@ node tests/c-engine-offline-browser.cjs --suite-full
 The latter checks the full mounted corpus, cancellation, assertion fidelity,
 Bash use after a batch and the absence of external runtime requests. The
 compatibility-mode migration, regression-fixture migration, and full
-WebAssembly-language oracle acceptance remain separate work. Missing OCaml
+WebAssembly-OCaml reference implementation acceptance remain separate work. Missing OCaml
 POSIX imports are outside that acceptance scope.
 Report parent directories must already exist. The tracked expected-failures
 list is an explicit host-side input, separate from immutable corpus provenance.
@@ -344,12 +344,12 @@ The portable caller-memory and timed-continuation fixtures use real guest POSIX
 imports. Native CLI/batch adapters service finite SELECT deadlines through the
 shared process driver; terminal or indefinite waits still require `waste-session`.
 Their C callback identity and explicit snapshot-replay checks remain separate
-sanitizer gates (`caller-instance`, `continuation`). The native OCaml oracle
+sanitizer gates (`caller-instance`, `continuation`). The native OCaml reference implementation
 accepted the pipe-based caller fixture in earlier checks but lacks
 `env.select` for the timed fixture. These POSIX comparisons are historical
-evidence, not language-oracle requirements or an OCaml provider backlog. The path fixture uses private guest-created files and moves fifteen
-traversal/normalization assertions out of C; its oracle run stops at the
-unsupported `env.chmod` import. That POSIX import is outside oracle scope.
+evidence, not OCaml reference implementation requirements or an OCaml provider backlog. The path fixture uses private guest-created files and moves fifteen
+traversal/normalization assertions out of C; its OCaml reference implementation run stops at the
+unsupported `env.chmod` import. That POSIX import is outside the scope of the OCaml reference implementation.
 See the coverage ledger for historical results and retained path/codec
 sanitizer checks.
 

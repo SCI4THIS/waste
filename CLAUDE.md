@@ -266,15 +266,15 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 
 ### Spec Submodule
 - `submodules/wasm-spec/interpreter/` — Official OCaml WebAssembly reference interpreter
-- `submodules/wasm-spec/test/` — Official Wasm core test suite and OCaml language-oracle inputs
+- `submodules/wasm-spec/test/` — Official Wasm core test suite and OCaml reference implementation inputs
 
 ## Key Design Decisions & Constraints
 
 ### Migration & Testing Strategy
 
-1. **Language oracle:** Compare supported official Wasm/WAT/WAST language
+1. **OCaml reference implementation:** Compare supported official Wasm/WAT/WAST language
    tests with the OCaml reference interpreter in `submodules/wasm-spec`.
-   POSIX imports in WAST clients are outside that oracle scope.
+   POSIX imports in WAST clients are outside that OCaml reference implementation’s scope.
 
 2. **Verification:** C language changes use fixtures and OCaml language
    comparison. Kernel/libc/application changes use native/browser C parity,
@@ -329,7 +329,7 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
   POSIX, process and libc changes. Legacy direct/threaded OCaml POSIX checks
   are coverage evidence for deferred retirement, not C acceptance gates.
 - **Spec tests:** Compare supported Wasm/WAT/WAST language behavior with the
-  OCaml oracle on official language tests.
+  OCaml reference implementation on official language tests.
 - **Browser page:** Keep shell and installed-test diagnostics in one offline HTML; do not introduce server requirements or external assets
 - **POSIX regression:** Local DIY/libc fixtures are C runtime regression
   probes. Preserve useful legacy assertions through explicit coverage mapping

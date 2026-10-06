@@ -5,7 +5,7 @@
 WASTE runs WebAssembly applications and specification scripts in a native C
 diagnostic runtime and in a self-contained browser runtime.  The repository-owned
 C engine is the production direction.  The official OCaml interpreter in
-`submodules/wasm-spec` is the differential oracle only for Wasm/WAT/WAST
+`submodules/wasm-spec` is the differential OCaml reference implementation only for Wasm/WAT/WAST
 language semantics: parsing, encoding/decoding, validation, linking,
 instantiation, execution, traps and script assertions. Standard spec-test
 imports and minimal language-test scaffolding remain in scope.
@@ -16,7 +16,7 @@ development is planned. The existing repository-added OCaml kernel and
 application-runtime integration will be removed in deferred cleanup; see
 [the OCaml scope and retirement plan](active-ocaml-language-oracle-plan.md).
 C owns production application execution and kernel behavior. Missing OCaml
-POSIX imports are outside oracle scope and do not block C kernel acceptance.
+POSIX imports are outside the scope of the OCaml reference implementation and do not block C kernel acceptance.
 
 This document records durable system boundaries and ownership rules.  Concrete
 unfinished work belongs in the active plans:
@@ -62,7 +62,7 @@ Generated files stay under `build/`:
 build/engine/   shared generated parser sources, toolchain, and logs
 build/cli-rt/   native executables, including waste-cli
 build/html-rt/  browser Wasm, bash.html, worker-test payloads, and libc fixtures
-build/ocaml/    OCaml oracle builds and staging
+build/ocaml/    OCaml reference implementation builds and staging
 ```
 
 `examples/bash.wat` is the compiled Bash input.  Guest-libc sources are under
@@ -139,8 +139,7 @@ in C. The live shell has its own instance. Browser expected-failure policy is a
 tracked host package asset, separate from the guest inventory. Both batch paths
 retain manifest order and distinguish infrastructure failures from XFAIL.
 The installed guest batch launcher uses the runtime capability. Coverage
-accounting, compatibility fixtures and supported WebAssembly-language oracle
-comparisons remain pending. See `test-corpus.md` for execution, refresh and mount verification, and
+accounting, compatibility fixtures and supported WebAssembly-language comparisons with the OCaml reference implementation remain pending. See `test-corpus.md` for execution, refresh and mount verification, and
 `test-coverage.md` for assertion-level C/WAST mappings and retained private gates.
 
 Focused worker-test metadata lives in `build/html-rt/tests/payload.json` and
@@ -179,7 +178,7 @@ adapters. Borrowed trace/command-stream hooks do not grant host capabilities.
 Capsules retain an explicit owner for fork root-engine clones across image or
 handler replacement, releasing them during reaping or store teardown.
 
-The OCaml interpreter supplies the official WebAssembly language oracle. Its
+The OCaml interpreter supplies the official WebAssembly OCaml reference implementation. Its
 existing POSIX/application artifacts are remnants of the earlier experiment,
 not a production fallback or a kernel reference to develop further. Historical
 comparisons do not create an ongoing OCaml kernel parity requirement.
@@ -476,7 +475,7 @@ replace eager copying behind one memory-clone boundary without changing these
 semantics.
 
 The legacy OCaml artifacts still contain a process/VFS/signal kernel used by
-older scheduled POSIX probes. That kernel is outside the language oracle
+older scheduled POSIX probes. That kernel is outside the OCaml reference implementation
 scope and is planned for removal, not further development. The C browser
 runtime owns the bounded child-first fork/failed-`execve`/exit/`waitpid` continuation used by the Bash
 command-not-found path, including evaluator snapshots and store checkpoints.
@@ -541,9 +540,9 @@ documented ptrace environment.  Binary tests cover truncation, malformed LEBs,
 overflow, invalid UTF-8, ordering, duplicate sections, bad indexes, and type
 mismatches.
 
-Official Wasm/WAT/WAST language tests are compared with the OCaml oracle.
+Official Wasm/WAT/WAST language tests are compared with the OCaml reference implementation.
 POSIX imports in a WAST client do not make its kernel behavior part of that
-oracle. Kernel, libc and application behavior uses C native/browser parity,
+OCaml reference implementation. Kernel, libc and application behavior uses C native/browser parity,
 private sanitizer gates and compiled guest ABI checks. Local DIY POSIX and
 libc tests are regression probes, not formal POSIX certification.
 Independent scripts must be tested in different orders and at different

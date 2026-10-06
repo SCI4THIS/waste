@@ -119,7 +119,7 @@ full migration mapping and the preserved-expression/runtime-count proof.
 It also records unchanged installed fixture bytes and native/browser parity.
 
 This completes classification of the current helpers in this C file. Audits of
-other C harnesses and legacy libc/CJS assertions, supported language-oracle
+other C harnesses and legacy libc/CJS assertions, supported OCaml reference implementation
 comparison and consolidation/retirement work remain in the active plan.
 These kernel contracts use C native/browser parity; OCaml remains a language
-oracle, with no additional kernel/provider development or comparison required.
+OCaml reference implementation, with no additional kernel/provider development or comparison required.

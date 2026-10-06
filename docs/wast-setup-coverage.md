@@ -3,7 +3,7 @@
 Stage 6B.42 audits ordinary module commands independently of assertion/action
 results. Previously, cli-rt printed some load errors to stderr and html-rt
 discarded them; both could report PASS with zero assertions or after later
-passing assertions. The native OCaml language oracle rejects the invalid,
+passing assertions. The native OCaml reference implementation rejects the invalid,
 unlinkable and trapping probes. No OCaml kernel work is involved.
 
 Both corpus runners now retain a separate `setup` report: `total` attempted
@@ -82,7 +82,7 @@ two setups** exercise data and element indices **31, 32, 63, 64, 127**, distinct
 payload/function values, numeric and deferred named references, 32/64-bit
 memory/table initialization, drops, post-drop traps, zero-length initialization
 and four invalid unknown-index cases. Native C, production browser and the
-OCaml language oracle agree on all checks. The two
+OCaml reference implementation agree on all checks. The two
 `tests/test-suite-segment-capacity-{data,elem}.wast` fixtures exceed the bound
 with 129 declarations; native/browser acceptance fails both ordinary modules
 and `assert_invalid` wrappers. Their implementation resource limit is not an
@@ -119,7 +119,7 @@ and empty vectors, nullable shorthand with null slots, table64, passive
 initialization, active/declarative dropped state, repeated drops, post-drop
 traps, all eight binary modes with distinct initial/segment function values,
 and nullable-to-non-null rejection despite
-non-null contents. Native C, browser and the OCaml language oracle agree;
+non-null contents. Native C, browser and the OCaml reference implementation agree;
 OCaml also accepts/rejects all twenty C-encoded setup/invalid modules as expected.
 Native warnings-as-errors ASan/UBSan and LeakSanitizer check expected rejection,
 segment lifetime and teardown. `core/elem.wast` now records **76 successful
@@ -140,7 +140,7 @@ imports, and restore recovers null contents and growth with stable identity.
 one setup**. Both remain outside installed selection. Native/browser host gates
 run both orders at jobs 1/3. They cover initial null slots, wide bounds, invalid
 imports, table32 separation, aliases, cross-module calls, growth and isolation.
-The official file and both fixtures agree with the OCaml language oracle;
+The official file and both fixtures agree with the OCaml reference implementation;
 all nine C-encoded modules and 36 actions/assertions also pass in source order.
 Two added private checkpoint checks, ASan/UBSan and LeakSanitizer cover restored
 host table ownership and teardown. No OCaml kernel or provider development is
@@ -188,7 +188,7 @@ portable and C-encoded OCaml language comparisons, native sanitizer/leak and
 browser results, unchanged source hashes and ordered corpus/session parity proof.
 
 Stage 6B.45 evidence: `build/engine/refactor-stage6b-spectest-table64/` contains
-prior store/checkpoint/baseline snapshots, portable and encoded language-oracle
+prior store/checkpoint/baseline snapshots, portable and encoded OCaml reference implementation
 results, native sanitizer/leak and browser reports, unchanged corpus/source
 hashes and ordered corpus/session parity proof.
 
@@ -204,8 +204,8 @@ outside installed selection: plain/folded numeric/forward-named forms, 32/64-bit
 addresses, distinct destination/segment/peer values, repeated drops, post-drop
 traps, zero-length operations and index 127. Fourteen invalid modules and six
 quoted malformed modules verify rejection as well as execution. Native/browser
-C and the OCaml language oracle agree; all 17 C-encoded setup/invalid modules
-also pass the ordered oracle script. Nine ordinary acceptance/rejection probes
+C and the OCaml reference implementation agree; all 17 C-encoded setup/invalid modules
+also pass the ordered OCaml reference implementation script. Nine ordinary acceptance/rejection probes
 include the original plain instruction failures. ASan/UBSan and LeakSanitizer
 cover successful setup, rejected imports/instructions and owned payload cleanup.
 Full corpus and setup records, six session transcripts and installed bytes remain
@@ -220,7 +220,7 @@ widths, mixed-width copies, overlap, atomic bounds failure, zero-length/null
 operations, reference identity/nullability and foreign function owners.
 Twenty-six invalid modules and three quoted malformed modules preserve
 rejection distinctions. Native/browser C and authored/33 C-encoded module
-oracle checks pass, as do seven ordinary acceptance/rejection probes and
+OCaml reference implementation checks pass, as do seven ordinary acceptance/rejection probes and
 ASan/UBSan/LeakSanitizer cleanup gates. All 296 corpus outcomes, 64,309 results,
 2,313 successful setup records, six session transcripts and installed bytes
 remain unchanged. Evidence: `build/engine/refactor-stage6b-table-copy-fill/`.
@@ -229,9 +229,9 @@ Next enumerate supported installed official language inputs and their OCaml
 comparison/acceptance and explicit exclusions in a finite identity-level ledger.
 Inline exported-table shorthand is outside this slice's syntax contract;
 `deferred-language-gaps.json` records its C rejection/OCaml acceptance.
-Broader supported-language oracle acceptance remains open.
+Broader supported-OCaml reference implementation acceptance remains open.
 Stage 6B, consolidation and dashboard retirement remain open. OCaml remains a
-language-only oracle; no additional OCaml kernel development is planned.
+language-only OCaml reference implementation; no additional OCaml kernel development is planned.
 
 
 ## Finite official language comparison

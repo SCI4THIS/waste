@@ -12,7 +12,7 @@ platform behavior only to the matching runtime directory. Compiled Bash input
 is in `examples/bash.wat`.
 
 Follow `docs/architecture.md`: C is the browser runtime, while the official
-OCaml interpreter in `submodules/wasm-spec` is the differential oracle only
+OCaml interpreter in `submodules/wasm-spec` is the differential OCaml reference implementation only
 for Wasm/WAT/WAST language semantics. Do not add OCaml kernel or application
 runtime capabilities. Its existing kernel is scheduled for removal in deferred
 cleanup; see `docs/active-ocaml-language-oracle-plan.md`.
@@ -85,7 +85,7 @@ this explicit return path as stack unwinding/rewinding.
   repository-owned OCaml patch, build sequential and CPS OCaml-to-Wasm
   artifacts, and restore the spec submodule even if the build fails.
 - `make -C submodules SWITCH_NAME=waste-wasm native`: use the same patch
-  transaction to build the native OCaml differential oracle.
+  transaction to build the native OCaml differential OCaml reference implementation.
 - `make -C src/cli-rt BUILD_DIR=../../build/cli-rt wast-native`: build the
   native CLI runner.
 - `make -C src/cli-rt corpus-native`: build the native batch companion and
@@ -156,9 +156,9 @@ conformance work should trace tests to The Open Group suites. Revisit LTP's
 upstream revisions and keep licensing and Wasm-adaptation patches separate.
 Keep libc test clients in `tests/libc-test/*.wast.inc`; generated fixtures
 belong under `build/html-rt/waste-libc/tests/`.
-Compare C Wasm/WAT/WAST language behavior with the OCaml oracle for every
+Compare C Wasm/WAT/WAST language behavior with the OCaml reference implementation for every
 supported official language test. Missing OCaml POSIX imports are outside
-oracle scope; do not develop providers or block C kernel acceptance on them.
+OCaml reference implementation’s scope; do not develop providers or block C kernel acceptance on them.
 Run C decoder/executor tests natively with warnings-as-errors, AddressSanitizer,
 and UndefinedBehaviorSanitizer, then exercise the same artifact through the
 offline Bash/test page. Do not claim a browser speedup from native OCaml timings.

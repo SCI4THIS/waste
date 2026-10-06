@@ -194,7 +194,7 @@ Gate:
 
 - No execution or kernel behavior changes with the contiguous backend.
 - Official memory, bulk-memory, SIMD, multi-memory, memory64, and linking tests
-  match the OCaml oracle in native and browser runs.
+  match the OCaml reference implementation in native and browser runs.
 - Native warnings-as-errors ASan/UBSan gates pass.
 - A repository search shows no unreviewed guest-byte access outside the memory
   implementation.
@@ -1212,7 +1212,7 @@ image gate is recorded in VM-D.7.
 
 Status: complete for the current libc client ABI
 
-The import-closure fix advances the OCaml-oracle libc run from link failures to
+The import-closure fix advances the OCaml-OCaml reference implementation libc run from link failures to
 behavioral checks. The allocator, entropy, locale, matching, memory
 conversion, select, stat, stdio, terminal, time-resource,
 `environment-boundaries`, and `path-runtime` clients all complete after the
@@ -1220,7 +1220,7 @@ errno-normalization and deterministic missing-path fixes below. This confirms
 that the shared pointer-space and compiler-runtime boundary is working.
 
 The completed Coreutils process-image gate uses the real C-engine/browser
-adapters for those operations; the earlier oracle adapter mismatches were
+adapters for those operations; the earlier OCaml reference implementation adapter mismatches were
 separate from the process memory graph and no longer block VM-D.
 
 Validation:
@@ -1231,12 +1231,12 @@ Validation:
 - Full sequential guest-libc run: 14 of 14 clients passed.
 - The `__extenddftf2` unresolved-import failure no longer occurs.
 
-Implementation update (2026-09-24, long-double import and oracle-kernel seam):
+Implementation update (2026-09-24, long-double import and OCaml reference implementation-kernel seam):
 
 - Added the typed guest `__extenddftf2` helper, reusing the libc's explicit
   IEEE-quad word representation instead of introducing a host pointer or a
   second memory object.
-- Extended the OCaml-oracle libc harness with typed `waste_kernel` and `env`
+- Extended the OCaml-OCaml reference implementation libc harness with typed `waste_kernel` and `env`
   declarations needed to link the complete generated libc module. The
   allocator client now passes end to end, and all clients link past the former
   compiler-runtime failure.
@@ -1252,9 +1252,9 @@ Implementation update (2026-09-24, errno-normalized libc boundary slice):
   with `errno` set, while preserving adapters that already return `-1` and
   publish errno themselves.
 - Corrected directory invalid-handle checks to report `EFAULT`, and made the
-  oracle path-access fixture return `ENOENT` for its deliberately missing
+  OCaml reference implementation path-access fixture return `ENOENT` for its deliberately missing
   `/bin/ls` path.
-- Added an optional single-assertion filter to the libc oracle harness for
+- Added an optional single-assertion filter to the libc OCaml reference implementation harness for
   isolating future client failures without changing generated fixtures.
 
 The full guest-libc client suite now passes, so the VM-D libc pointer-space
@@ -2449,7 +2449,7 @@ the implemented file-mapping and named-memory paths.
 Every stage must select the relevant rows rather than postponing all browser
 coverage to the end:
 
-| Area | Native | Browser | Differential/oracle |
+| Area | Native | Browser | Differential/OCaml reference implementation |
 | --- | --- | --- | --- |
 | Scalar, SIMD, bulk, grow, memory64 | ASan/UBSan | C dashboard | Official OCaml interpreter |
 | Imported-memory aliasing | Focused module fixtures | C dashboard | Official linking tests |

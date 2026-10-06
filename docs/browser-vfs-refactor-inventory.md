@@ -19,10 +19,10 @@ directory for subsequent stages rather than overwriting the initial baseline.
 ## Snapshot and reproduction
 
 Recorded on 2026-09-30 at repository revision
-`81fd0064f3602f7e00ff7dbee0d820d260475e2d`. The official OCaml oracle remains
+`81fd0064f3602f7e00ff7dbee0d820d260475e2d`. The official OCaml reference implementation remains
 the clean spec submodule at `4b29bdbced924599346ea2ffd9e975af5d28c735` with
 the repository-owned `submodules/wasm-spec-i31-int32.patch` build transaction.
-The existing direct and threaded OCaml artifacts remain separate oracle/probe
+The existing direct and threaded OCaml artifacts remain separate OCaml reference implementation/probe
 dependencies; this stage did not run a new differential comparison.
 
 The inventory tool requires the existing staged guest applications, dashboard
@@ -194,7 +194,7 @@ not a complete call graph; use this ownership map alongside it:
 | `tools/amalgamate.py` | Select shell versus temporary dashboard entry/style/app names; update exact script tags and terminal fallback; keep offline inlining |
 | `tools/generate-c-engine-tests.py` | Preserve corpus collection and payload generation; staged mode writes payload only; legacy monolithic mode has duplicate inline frontend templates |
 | `tools/generate-c-engine-bash-html.py` | Staged mode copies generated binaries/bootstrap only; legacy monolithic mode has duplicate inline frontend templates and guest path tables |
-| `tools/test_corpus.py` and `tools/test_distribution.py` | Preserve corpus collection, immutable installed snapshots, and language-oracle source policy independently of dashboard UI |
+| `tools/test_corpus.py` and `tools/test_distribution.py` | Preserve corpus collection, immutable installed snapshots, and OCaml reference implementation source policy independently of dashboard UI |
 | `tools/build-{bash-runtime,waste-libc,waste-sysroot}.py` | Preserve bootstrap/fixture outputs under build; later use canonical guest SDK instead of hardcoded header root/host compiler fallback |
 | Application builders and `tools/package-coreutils-source.py` | Keep compiler outputs/provenance under build; Stage 3 installs snapshots; Stage 4 changes guest SDK consumers |
 | `tools/audit-coreutils-package.py` and shell worker/loader | Maintain required guest paths, interpreter registration, provenance, byte/mode/mtime checks and archive bootstrap |

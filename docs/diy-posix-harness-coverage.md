@@ -3,7 +3,7 @@
 Stage 6B.40, 2026-10-04: account for the legacy
 `tests/diy-posix-test/posix-{kernel,control}-runtime.cjs` drivers before deferred
 OCaml kernel retirement. Neither driver is a C acceptance gate. OCaml remains
-only the Wasm/WAT/WAST language oracle; no OCaml provider, kernel or scheduler
+only the Wasm/WAT/WAST OCaml reference implementation; no OCaml provider, kernel or scheduler
 development is required by this audit.
 
 ## Kernel driver's seven guest expectations
@@ -107,7 +107,7 @@ production browser worker: **4 PASS / 1 SKIP / 48 checks**, including mmap's 23.
 Native and browser host-boundary gates additionally run the original memory
 pair in both manifest orders with one and three jobs, checking all four alias
 results and the separate script's initial zero. All three fixtures pass the
-native OCaml language oracle in separate processes; this is language/standard
+native OCaml reference implementation in separate processes; this is language/standard
 host-memory verification, without OCaml kernel imports or development.
 
 The actual offline Chromium full batch agrees with native on **296 ordered
@@ -128,7 +128,7 @@ adds supported coverage without clearing those gaps or authorizing scheduler
 feature work. Keep private wait/signal/process memory and ownership checks,
 compiled guest ABI probes, host controls and the legacy compatibility entry.
 Kernel retirement, other C/CJS audits, ordinary setup-module acceptance,
-supported language-oracle comparison and dashboard retirement remain open.
+supported OCaml reference implementation comparison and dashboard retirement remain open.
 
 Evidence: `build/engine/refactor-stage6b-diy-posix-audit/` contains original
 source/manifest/inventory snapshots, exact legacy selections and outcomes,

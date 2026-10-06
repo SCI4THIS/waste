@@ -184,7 +184,7 @@ repeated WAST, definitions/registration/module assertions, two READ pauses in
 one assertion, a resumed expected trap, SELECT readiness, a resumed mismatch
 and successful parent recovery. Its expected score is 22/23, with exactly one
 intentional failure and child status 1; that negative check is not a conformance
-pass. The non-POSIX handler fixture also passes the OCaml differential oracle.
+pass. The non-POSIX handler fixture also passes the OCaml differential OCaml reference implementation.
 The separate `handler-start` negative contract rejects a yielding module start
 with status 126 (7/8 results), proving it cannot falsely pass `assert_invalid`
 and that the parent shell can still recover.
@@ -428,7 +428,7 @@ outside the unchanged installed batch. No runtime API or timer model changed.
 Stage 6B.34 adds `tests/guest-session-process-groups.wast` and its JSON event
 contract, with 71 checks through real process/foreground-group, termios,
 pselect and signal-handler imports. This is a C POSIX session contract;
-OCaml language-oracle comparisons and additional OCaml providers are outside
+OCaml reference implementation comparisons and additional OCaml providers are outside
 its scope.
 
 ```sh

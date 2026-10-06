@@ -25,16 +25,16 @@ consume generated JSON payloads directly.
 
 ## OCaml scope decision (2026-10-04)
 
-The OCaml interpreter is retained only as an oracle for Wasm/WAT/WAST language
+The OCaml interpreter is retained only as an OCaml reference implementation for Wasm/WAT/WAST language
 semantics and standard spec-test scaffolding. The application-engine experiment
 was not practical. No additional OCaml kernel, POSIX, VFS, process, scheduler,
 signal, terminal, libc-host or broker development will be undertaken.
 
 The existing OCaml kernel and application-runtime integration are planned for
 removal. Implementation pruning is deferred to
-[the OCaml language-oracle and retirement plan](active-ocaml-language-oracle-plan.md);
+[the OCaml reference implementation and retirement plan](active-ocaml-language-oracle-plan.md);
 it is not an added Stage 6B kernel acceptance gate. Missing OCaml POSIX imports
-and kernel profile differences are outside oracle scope, not development gaps
+and kernel profile differences are outside the scope of the OCaml reference implementation, not development gaps
 or blockers. Verify C kernel/libc/session behavior through native/browser C
 parity, private sanitizer gates, compiled guest ABI checks and applicable POSIX
 contract fixtures. WAST syntax alone does not make a POSIX test a language test.
@@ -122,7 +122,7 @@ build/
   engine/                  generated parsers, toolchain, and logs
   cli-rt/                  native executables
   html-rt/                 browser engine, launch input, archives, bash.html
-  ocaml/                   oracle artifacts
+  ocaml/                   OCaml reference implementation artifacts
 ```
 
 The directory names under `/tests` preserve the existing group-qualified
@@ -216,7 +216,7 @@ integration gate and an explicit full browser parity mode.
 
 | Coverage | Primary gate | Additional retained coverage |
 | --- | --- | --- |
-| Official core/proposal/annotation WAST semantics | Native manifest runner and OCaml differential oracle | Focused Wasm-artifact parity; full browser corpus at cutover/releases and relevant changes |
+| Official core/proposal/annotation WAST semantics | Native manifest runner and OCaml differential OCaml reference implementation | Focused Wasm-artifact parity; full browser corpus at cutover/releases and relevant changes |
 | Kernel, memory, linking, process and descriptor lifetime | Native functional plus ASan/UBSan gates | Browser adapter/continuation boundary scenarios |
 | Guest Bash, Coreutils, pipelines, libc, ncurses | Native engine running the actual packaged guest modules | Small browser command/input/Rogue lifecycle matrix |
 | VT parsing/model and GLF lookup | Existing pure Node fixtures | Actual browser rendering, resize/zoom checks |
@@ -237,7 +237,7 @@ integration gate and an explicit full browser parity mode.
   native versus Wasm execution, and repeated waits or process teardown.
 - Keep terminal JS fixtures in Node; moving their ownership into the test
   orchestration does not justify translating the production model into C.
-- Preserve the full official corpus and oracle comparisons. Consolidating
+- Preserve the full official corpus and OCaml reference implementation comparisons. Consolidating
   harnesses does not mean discarding distinct upstream conformance cases.
 - Record baseline and resulting suite durations and engine/Bash startup counts.
   Confirm actual improvement; do not claim speedups from an assumed equivalence
@@ -388,7 +388,7 @@ Fresh native/browser builds succeeded. All eleven Bash scenarios and terminal
 model/GLF tests pass. Native core has one existing import-test failure; the full
 Node dashboard has three import-test failures and fourteen stale libc payload
 length failures. These are explicitly recorded, not a claim of a green parity
-gate. No files were relocated and no tests removed. Oracle artifacts/pin and
+gate. No files were relocated and no tests removed. OCaml reference implementation artifacts/pin and
 real-browser verification boundaries are recorded without claiming new runs.
 
 - Enumerate all authored frontend files, installed binaries, symlinks,
@@ -403,7 +403,7 @@ real-browser verification boundaries are recorded without claiming new runs.
   Retain them only until the unified test runner is accepted.
 - Move `bash/terminal/` to `src/terminal/`; do not flatten its asset namespace.
 - Capture the current complete test inventory and baseline result schema,
-  group counts, runtime requirements, and configured oracle comparison.
+  group counts, runtime requirements, and configured OCaml reference implementation comparison.
 - Capture suite durations, startup counts, duplicate assertions, host-import
   coverage gaps, and which checks currently run in Node versus a real browser.
 - Document an explicit mapping for Bash startup input, `/bin/wat`,
@@ -467,7 +467,7 @@ Verification:
   Screenshots are under `build/html-rt/offline-browser-check`.
 - Shell syntax, changed Python bytecode, JS syntax and whitespace checks pass.
   No engine/header semantics, guest installation paths, test assertions or
-  oracle sources were changed. Manual upload/download and cross-browser visual
+  OCaml reference implementation sources were changed. Manual upload/download and cross-browser visual
   regression checks remain separate future gates.
 
 Reproduce the focused layout checks with:
@@ -587,7 +587,7 @@ Verification:
   byte-identical to Stage 2. Existing import and ten libc fixture failures are
   not fixed or hidden. Measurements/logs are under
   `build/engine/refactor-stage3`; no suite-speedup claim is made.
-- Shell/Python/JS syntax and whitespace checks pass. Oracle sources and patch
+- Shell/Python/JS syntax and whitespace checks pass. OCaml reference implementation sources and patch
   transactions, guest ABI semantics, headers and test-corpus placement are
   unchanged.
 
@@ -801,7 +801,7 @@ Implementation:
 - `/tests/manifest.json` preserves every source hash, original execution
   specification, known parsed assertion counts, expected-failure/skip policy,
   group-derived feature labels and runtime profile. It records the pinned spec
-  revision and oracle patch scope. Host source paths are provenance, not a
+  revision and OCaml reference implementation patch scope. Host source paths are provenance, not a
   future execution fallback.
 - Official sources remain in the spec submodule, authored probes in top-level
   `tests/`, and generated libc fixtures under `build/html-rt/waste-libc/tests`.
@@ -1082,7 +1082,7 @@ WAST-handler continuation slice (2026-10-01):
   forked/reaped children and final Bash status 3. Tests save/restore terminal
   state through the kernel ABI; private-memory fixtures do not pass pointers
   into libc's different imported memory. The non-POSIX command fixture also
-  passes the OCaml oracle.
+  passes the OCaml reference implementation.
 - This remains bounded child-first execution, not a full batch runner.
   Nested process transitions/host-I/O from WAST invocations and yielding module
   starts fail explicitly with child status 126; a paused start cannot satisfy
@@ -1110,7 +1110,7 @@ Verification for the WAST-handler slice:
   ASan/UBSan and leak detection, including both negative handlers, normal
   teardown, failed exec and the separately labeled long-path heredoc trap.
   Native process lifecycle (115 checks) and exec-transition matrix (58) pass.
-  The non-POSIX handler fixture passes the native OCaml oracle.
+  The non-POSIX handler fixture passes the native OCaml reference implementation.
 - Native core remains 96/97 (the known imports suite); the final packaged
   browser corpus remains 267/280 with the same thirteen known failures.
   The legacy repeated-WAST worker probe passes. Terminal model/GLF,
@@ -1780,7 +1780,7 @@ Stage 6A.2 full-matrix verification sweep (2026-10-02):
   that enumerates the current Stage 6A.2 gate against the installed
   VFS, the shared engine and the production worker.  It does not run
   the full browser corpus (267/280 remains the baseline with thirteen
-  pre-existing failures) or the official OCaml oracle comparison; both
+  pre-existing failures) or the official OCaml reference implementation comparison; both
   remain explicit full-browser verification steps for a cutover slice.
 - Evidence: `build/engine/refactor-stage6a2-full-matrix/summary.txt`
   (totals: 19 shared-adapter scenarios, 420 unit checks, 1 worker
@@ -1819,7 +1819,7 @@ Full browser-corpus baseline (2026-10-02):
   introduced by the current slice series.
 - Scope: this slice does not fix the pre-existing failures — those
   remain in their own tracked backlog — and does not re-run the OCaml
-  oracle comparison for the official core suite, which continues to
+  OCaml reference implementation comparison for the official core suite, which continues to
   be a separate differential gate (`native core 96/97`) retained for
   the Stage 6B/6C/7 cutover work.  It also does not exercise an
   actual Chromium `file://` boot of the dashboard; the harness runs
@@ -1884,7 +1884,7 @@ baseline above are the authoritative evidence.
 ### Stage 6B: Common suite manifest and reporting
 
 Status: complete (2026-10-05). Native and browser corpus reporting, supported
-language-oracle comparison, assertion-ledger inventory, Bash-page browser-native
+OCaml reference implementation comparison, assertion-ledger inventory, Bash-page browser-native
 compatibility, and production-browser full-corpus acceptance are verified.
 
 Stage 6B.1 browser-corpus expected-failure classification slice (2026-10-02):
@@ -2403,7 +2403,7 @@ Stage 6B.12 browser-corpus resident engine bytes (2026-10-03):
 - Deferred: dynamic timeout budgets per group (still open from
   Stage 6B.6 — now the dominant wall-time ceiling); native
   per-process startup overhead (still open from Stage 6B.11);
-  oracle differential comparison across the shared record contract.
+  OCaml reference implementation differential comparison across the shared record contract.
 - Evidence: `build/engine/refactor-stage6b-resident-engine/summary.txt`,
   `build/engine/refactor-stage6b-resident-engine/run-baseline.log`,
   and `build/engine/refactor-stage6b-resident-engine/results.json`.
@@ -2460,7 +2460,7 @@ Stage 6B.13 browser-corpus per-group timeout budgets (2026-10-03):
   Stage 6B.11); native per-group timeouts (the same
   `GROUP_TIMEOUT_MS` table trivially applies to
   `tests/c-engine-native-runtime.cjs`; mirror once the native
-  runner has a parallel baseline worth protecting); oracle
+  runner has a parallel baseline worth protecting); OCaml reference implementation
   differential comparison across the shared record contract.
 - Evidence: `build/engine/refactor-stage6b-group-timeouts/summary.txt`,
   `build/engine/refactor-stage6b-group-timeouts/run-baseline.log`,
@@ -2508,7 +2508,7 @@ Stage 6B.14 native-corpus per-group timeout budgets (2026-10-03):
   ceilings.
 - Deferred: native per-process startup overhead (still open from
   Stage 6B.11 — a persistent child reading WAST paths off a pipe
-  would amortise per-test re-decode of the engine); oracle
+  would amortise per-test re-decode of the engine); OCaml reference implementation
   differential comparison across the shared record contract.
 - Evidence: `build/engine/refactor-stage6b-native-group-timeouts/summary.txt`,
   `build/engine/refactor-stage6b-native-group-timeouts/run-baseline.log`,
@@ -2575,7 +2575,7 @@ Stage 6B.15 native-corpus server-mode persistent child (2026-10-03):
   that still dominate the critical path.
 - Deferred: dynamic test re-ordering (the critical path is now the
   Band A outliers — scheduling them to start first across the slot
-  pool would let Band B tests fill in behind them); oracle
+  pool would let Band B tests fill in behind them); OCaml reference implementation
   differential comparison across the shared record contract.
 - Evidence: `build/engine/refactor-stage6b-native-server/summary.txt`,
   `build/engine/refactor-stage6b-native-server/run-baseline.log`,
@@ -2673,19 +2673,19 @@ Stage 6B.17 Node-independent native manifest runner (2026-10-03):
   not connected to the production browser batch API at this slice; Stage
   6B.18 below supplies that integration. This native stage did not authorize
   dashboard retirement.
-- Oracle comparison: the existing native OCaml executable passes **258/261**
+- OCaml reference implementation comparison: the existing native OCaml executable passes **258/261**
   installed official/custom fixtures. `core/custom.wast`,
   `core/return_call.wast` and `core/return_call_ref.wast` exceeded the 20s
   per-file comparison budget; an earlier attempt also timed out on
   `core/custom.wast` at 90s. These are incomplete comparisons, not C failures
-  or new XFAIL entries. All three pass in C. Full oracle acceptance remains
+  or new XFAIL entries. All three pass in C. Full OCaml reference implementation acceptance remains
   open, as do command-level streaming/recovery parity and scripted-session
   batch integration.
 - Commands and result semantics are documented in `docs/test-corpus.md`.
   Evidence: `build/engine/refactor-stage6b-native-suite/{run.log,results.json,
   make-corpus.log,baseline-comparison.txt,focused.log,sanitize-focused.log,
   sanitize-run.log,sanitize-results.json,browser-fixtures.log,
-  browser-fixture-results.json,oracle-results.json,corpus-install.log}` and
+  browser-fixture-results.json,OCaml reference implementation-results.json,corpus-install.log}` and
   `build/cli-rt/corpus-results.json`. Shell/Python syntax and whitespace
   checks pass.
 
@@ -2783,7 +2783,7 @@ Stage 6B.18 production-browser mounted batch execution (2026-10-03):
   bash.png,tests.png}`.
   Stage 6B acceptance remains open: the guest `/bin/waste-test` launcher,
   compatibility fixtures, scripted-session contract, coverage accounting and
-  complete oracle comparison still precede dashboard retirement.
+  complete OCaml reference implementation comparison still precede dashboard retirement.
 
 Stage 6B.19 landing slice — native command-stream assertion parity (2026-10-03):
 - Replaced the native CLI/batch driver's full-file group traversal with the
@@ -2853,11 +2853,11 @@ Stage 6B.19 landing slice — native command-stream assertion parity (2026-10-03
   and no external runtime requests. Packaging, shell/Python/JavaScript syntax
   and whitespace checks pass. Installed corpus identities/snapshots and
   expected-failure lists are unchanged by this slice.
-- Repeated official/custom oracle comparison gives **258/261 accepted scripts**;
+- Repeated official/custom OCaml reference implementation comparison gives **258/261 accepted scripts**;
   `core/custom.wast`, `core/return_call.wast` and `core/return_call_ref.wast`
-  retain their existing 20s oracle timeouts. All three linking files pass the
-  oracle. The oracle also accepts both positive portable fixtures and rejects
-  the intentionally wrong post-module expectation. Complete oracle acceptance,
+  retain their existing 20s OCaml reference implementation timeouts. All three linking files pass the
+  OCaml reference implementation. The OCaml reference implementation also accepts both positive portable fixtures and rejects
+  the intentionally wrong post-module expectation. Complete OCaml reference implementation acceptance,
   ordinary setup-module coverage, guest launcher/session parity and fixture
   accounting remain open before dashboard retirement.
 - Evidence: `build/engine/refactor-stage6b-native-stream/` contains native,
@@ -2918,7 +2918,7 @@ Stage 6B.20 landing slice — installed guest batch launcher (2026-10-03):
   shared lexer. Negating the parsed unsigned magnitude before converting its
   bits to `i64_val` preserves the valid decimal/hex minimum literals without
   C undefined behavior. `test-suite-i64-min-literal.wast` covers both forms;
-  the OCaml oracle passes that probe and official `int_literals`, `const`
+  the OCaml reference implementation passes that probe and official `int_literals`, `const`
   and `i64` scripts.
 - Verification passed: native CLI/session/browser builds; normal and
   ASan/UBSan native batch boundary gates; normal and sanitized guest launcher
@@ -2934,13 +2934,13 @@ Stage 6B.20 landing slice — installed guest batch launcher (2026-10-03):
   2 XFAIL, 8 SKIP**, with all **284 identities** and **63,054 ordered assertion
   names/outcomes** matching. Two native deadlines hit while compilation was
   active; the final run after builds finished passed at the normal budgets.
-  Evidence, including `full-parity.json`, guest transcripts/reports, oracle
+  Evidence, including `full-parity.json`, guest transcripts/reports, OCaml reference implementation
   literal checks and gate logs, is under
   `build/engine/refactor-stage6b-guest-suite/`.
 - Stage 6B acceptance remains open. Next slice: audit authored C/CJS checks by
   assertion, retain host/private invariants, and move guest-observable coverage
   to installed WAST/session contracts. The four compatibility modes, ordinary
-  setup-module diagnostics and oracle completion still need their own gates;
+  setup-module diagnostics and OCaml reference implementation completion still need their own gates;
   Stage 6C consolidation and Stage 7 dashboard retirement remain pending.
 
 Stage 6B.21 landing slice — retire WVFS in favor of tree/tar inputs (2026-10-03):
@@ -2996,7 +2996,7 @@ Stage 6B.21 landing slice — retire WVFS in favor of tree/tar inputs (2026-10-0
   shell/Python/JS syntax checks and `git diff --check` pass. The regenerated
   Bash page embeds a 3,683,420-byte gzip tar containing the single guest tree.
 - The remaining Stage 6B priorities are unchanged: C/CJS coverage accounting,
-  portable guest/session fixtures and completion of the differential oracle
+  portable guest/session fixtures and completion of the differential OCaml reference implementation
   comparison. This loading cutover does not retire the dashboard or claim
   completion of 6B, 6C or Stage 7.
 
@@ -3055,7 +3055,7 @@ Stage 6B.22 landing slice — executor assertion audit and portable WAST fixture
 - Next slice: audit caller-instance/continuation assertions, retaining host
   callback identity, replay/counter and ownership gates, then migrate remaining
   guest-observable kernel/path/signal/wait expectations through real guest
-  imports or the shared session contract. Full official oracle comparison,
+  imports or the shared session contract. Full official OCaml reference implementation comparison,
   compatibility-mode migration, Stage 6C and Stage 7 remain open.
 
 Stage 6B.23 landing slice — caller/continuation audit and finite native waits (2026-10-03):
@@ -3116,11 +3116,11 @@ Stage 6B.23 landing slice — caller/continuation audit and finite native waits 
   atomic snapshot and frontend/package guards, shell/Python/JS syntax and
   `git diff --check` pass. Evidence is under
   `build/engine/refactor-stage6b-caller-continuation/`.
-- Oracle scope: the official native OCaml interpreter accepts the pipe-based
+- OCaml reference implementation scope: the official native OCaml interpreter accepts the pipe-based
   caller fixture and the preceding three language fixtures. It rejects the
   timed continuation fixture at `env.select` import resolution. This remains
-  an explicit oracle capability gap, not an oracle pass or a new installed
-  expected failure. The official full-corpus oracle comparison stays open.
+  an explicit OCaml reference implementation capability gap, not an OCaml reference implementation pass or a new installed
+  expected failure. The official full-corpus OCaml reference implementation comparison stays open.
 - Next slice: audit kernel/path/signal/wait assertions and migrate their
   guest-observable expectations through real imports or the shared session
   contract while preserving internal ownership, errno-layout, teardown and
@@ -3175,10 +3175,10 @@ Stage 6B.24 landing slice — path VFS audit and portable guest assertions (2026
   ptrace sandbox; the normal C Make gates retain its documented leak-check
   exception. Evidence is under `build/engine/refactor-stage6b-path-audit/`,
   including `coverage-parity.json` and the previous manifest/native reports.
-- Oracle scope: the official native OCaml interpreter rejects this fixture
+- OCaml reference implementation scope: the official native OCaml interpreter rejects this fixture
   at its unsupported `env.chmod` import. This remains an explicit capability
-  gap, not an oracle pass or a new installed expected failure. The preceding
-  timed fixture's `env.select` gap and full official oracle comparison remain
+  gap, not an OCaml reference implementation pass or a new installed expected failure. The preceding
+  timed fixture's `env.select` gap and full official OCaml reference implementation comparison remain
   open.
 - Next slice: audit the remaining kernel/signal/wait assertions and move
   guest-observable expectations through real imports or shared session events.
@@ -3250,17 +3250,17 @@ Stage 6B.25 landing slice — kernel pipe/descriptor audit and zero-count import
   `build/engine/refactor-stage6b-pipe-audit/`, including the original kernel
   source, assertion inventory, previous manifest/native report and
   `coverage-parity.json`.
-- Oracle scope: the official native OCaml interpreter rejects the new fixture
+- OCaml reference implementation scope: the official native OCaml interpreter rejects the new fixture
   at its unsupported `env.select` import, even though SELECT uses zero
-  timeouts. This remains an explicit capability gap, not an oracle pass or a
+  timeouts. This remains an explicit capability gap, not an OCaml reference implementation pass or a
   new installed expected failure. The preceding select/chmod gaps and full
-  official oracle comparison remain open.
+  official OCaml reference implementation comparison remain open.
 - Next slice: provide faithful signal-mask/query capabilities before migrating
   blocked-signal, handler-mask and pselect restoration expectations; use shared
   session events for signal/readiness wakeups and retain deterministic
   cancellation/generation checks. Guest setup for terminal, clone namespace,
   path symlink/mtime and directory enumeration still needs equivalent coverage.
-  Broader C/CJS migration, compatibility modes, full oracle acceptance,
+  Broader C/CJS migration, compatibility modes, full OCaml reference implementation acceptance,
   Stage 6C and Stage 7 remain open; Stage 6B is not complete.
 
 Stage 6B.26 landing slice — real signal masks and blocked-signal migration (2026-10-03):
@@ -3318,7 +3318,7 @@ Stage 6B.26 landing slice — real signal masks and blocked-signal migration (20
   browser exports as before. Linked-provider fork isolation and native SELECT
   deadline/input-timeout/result boundaries pass. Evidence is in
   `session-parity.log`; native session checks enable LeakSanitizer.
-- Oracle/scope boundary: the native OCaml oracle rejects the new fixture at
+- OCaml reference implementation/scope boundary: the native OCaml reference implementation rejects the new fixture at
   missing `env.sigfillset`; this is a capability gap, not a differential pass
   or new installed XFAIL. Existing sigaction/raise/pselect raw-negative errno
   conventions remain explicit. The handler slot still names an **engine
@@ -3329,11 +3329,11 @@ Stage 6B.26 landing slice — real signal masks and blocked-signal migration (20
 - Evidence: `build/engine/refactor-stage6b-signal-audit/` contains baseline
   manifest/inventory/results/C audit snapshots, native/worker/actual-browser
   regression and complete-corpus reports, sanitizer, SDK and retained-gate
-  logs, compiled SDK results, oracle rejection and coverage/parity accounting.
+  logs, compiled SDK results, OCaml reference implementation rejection and coverage/parity accounting.
 - Next slice: migrate deterministic wait wakeups through shared native/browser
   session events and audit remaining kernel/host callback assertions. Keep
   cancellation/generation/ownership and compiled-C ABI checks where WAST cannot
-  observe them. Full supported-official oracle comparison and the broader CJS
+  observe them. Full supported-official OCaml reference implementation comparison and the broader CJS
   coverage audit still precede consolidation and dashboard retirement.
 
 Stage 6B.27 landing slice — shared wait events and deterministic timeout boundaries (2026-10-03):
@@ -3394,20 +3394,20 @@ Stage 6B.27 landing slice — shared wait events and deterministic timeout bound
   behavior. Worker terminal validation rejects **57 malformed/overflow
   controls**; its check observes unchanged guest output/wait state because
   ordinary SELECT timer polls can also publish `io-ready`.
-- Oracle/scope: the OCaml oracle rejects missing `env.select`; no differential
+- OCaml reference implementation/scope: the OCaml reference implementation rejects missing `env.select`; no differential
   pass or new XFAIL is claimed. Existing raw-negative SELECT/pselect and
   function-index/pselect handler semantics remain unchanged. This slice adds
   host event plumbing and coverage, not a new engine scheduler or signal ABI.
 - Evidence: `build/engine/refactor-stage6b-wait-audit/` contains original C
   wait/signal and manifest/result snapshots, retained-gate and native build
   logs, native/export/worker/actual-Chromium session results, malformed-event
-  and deadline checks, SDK/corpus/package logs, oracle rejection and parity
+  and deadline checks, SDK/corpus/package logs, OCaml reference implementation rejection and parity
   accounting. The native session, WAST and JSON contract remain authored
   sources; ordinary native verification does not require browser packaging.
 - Next slice: audit remaining SELECT/terminal/kernel guest expectations and
   migrate those with supported setup, retaining private generations, callback
   identity, ownership and C ABI checks. Broader CJS coverage accounting,
-  compatibility-mode migration and supported-official oracle comparison remain
+  compatibility-mode migration and supported-official OCaml reference implementation comparison remain
   acceptance work before Stage 6C consolidation and Stage 7 retirement.
 
 Stage 6B.28 landing slice — SELECT validation and pipe polling audit (2026-10-04):
@@ -3461,7 +3461,7 @@ Stage 6B.28 landing slice — SELECT validation and pipe polling audit (2026-10-
   compiled C SDK probe passes all four assertions. Strict SDK/provider,
   provenance, packaging and syntax checks pass. Guest headers, runtime adapters
   and shared engine semantics are unchanged by this coverage migration.
-- Oracle/scope: the native OCaml oracle rejects the new fixture at missing
+- OCaml reference implementation/scope: the native OCaml reference implementation rejects the new fixture at missing
   `env.select`; no differential pass or new installed XFAIL is claimed.
   Private EAGAIN still becomes a guest yield, so it cannot become an ordinary
   WAST expected return. Terminal-specific and cross-kernel checks remain direct
@@ -3470,12 +3470,12 @@ Stage 6B.28 landing slice — SELECT validation and pipe polling audit (2026-10-
   manifest/inventory/native-result snapshots, all 38 ordinal mappings,
   native/sanitizer/worker/actual-Chromium regression and full-corpus reports,
   retained-gate logs, mounted C SDK/VFS results, distribution/package checks,
-  oracle rejection and coverage/parity accounting.
+  OCaml reference implementation rejection and coverage/parity accounting.
 - Next slice: migrate terminal-specific SELECT/readiness and canonical/raw
   terminal expectations through shared native/browser session events, retaining
   raw readiness masks, terminal host APIs, generation/ownership and compiled C
   ABI coverage. Broader CJS audit, compatibility modes and supported-official
-  oracle comparison still precede Stage 6C consolidation and Stage 7 retirement.
+  OCaml reference implementation comparison still precede Stage 6C consolidation and Stage 7 retirement.
 
 Stage 6B.29 landing slice — shared terminal readiness and canonical/raw audit (2026-10-04):
 
@@ -3529,8 +3529,8 @@ Stage 6B.29 landing slice — shared terminal readiness and canonical/raw audit 
   expected-failure policy change is needed. Retained SELECT/codec/wait/signal/
   kernel/path gates pass **10/1,097/16/42/328/57 checks**; executor regressions,
   distribution/SDK/provider audits, packaging and syntax checks pass.
-- Scope/oracle: no engine, runtime adapter, frontend or guest header semantics
-  changed. The native OCaml oracle rejects the session at missing `env.select`;
+- Scope/OCaml reference implementation: no engine, runtime adapter, frontend or guest header semantics
+  changed. The native OCaml reference implementation rejects the session at missing `env.select`;
   no differential pass or installed skip is claimed. Raw readiness flags,
   terminal host API returns, C structure/ownership checks and wait generation/
   cancellation remain direct sanitizer coverage.
@@ -3541,7 +3541,7 @@ Stage 6B.29 landing slice — shared terminal readiness and canonical/raw audit 
 - Next slice: audit remaining terminal EOF/output and VTIME expectations through
   shared session input/clock events, retaining raw readiness, buffer bounds,
   wait ownership/generation and host APIs. Remaining kernel/libc/CJS migration,
-  compatibility modes and supported-official oracle comparison still precede
+  compatibility modes and supported-official OCaml reference implementation comparison still precede
   Stage 6C consolidation and Stage 7 dashboard retirement.
 
 Stage 6B.30 landing slice — terminal EOF/output and exact VTIME audit (2026-10-04):
@@ -3596,8 +3596,8 @@ Stage 6B.30 landing slice — terminal EOF/output and exact VTIME audit (2026-10
   policy is unchanged. SELECT/codec/wait/signal/kernel/path sanitizer gates pass
   **10/1,097/16/42/314/57 checks**; executor regressions, distribution/SDK/provider
   audits, packaging, both file:// pages and syntax checks pass.
-- Scope/oracle: engine, runtime adapter, frontend and guest header semantics
-  are unchanged. The OCaml oracle rejects the fixture at missing `env.select`;
+- Scope/OCaml reference implementation: engine, runtime adapter, frontend and guest header semantics
+  are unchanged. The OCaml reference implementation rejects the fixture at missing `env.select`;
   no differential pass or installed skip is claimed. READ timing here uses
   explicit clock events. Autonomous READ timer wakeups and broader VMIN/VTIME
   timing semantics remain acceptance work; the fixture audits the existing
@@ -3606,11 +3606,11 @@ Stage 6B.30 landing slice — terminal EOF/output and exact VTIME audit (2026-10
 - Evidence: `build/engine/refactor-stage6b-terminal-timing-audit/` contains the
   original C and manifest/inventory/corpus snapshots, all **14 mappings**,
   native/sanitizer/shared-session and actual Chromium reports, output segment
-  accounting, full-corpus parity, retained-gate/audit logs and oracle rejection.
+  accounting, full-corpus parity, retained-gate/audit logs and OCaml reference implementation rejection.
 - Next slice: audit remaining descriptor flags, exhaustion and duplicate-fd
   guest expectations through the real imports, retaining clone/ownership,
   private OFD state and compiled C ABI checks. Broader kernel/libc/CJS migration,
-  timer capability gaps, compatibility modes and supported-official oracle
+  timer capability gaps, compatibility modes and supported-official OCaml reference implementation
   comparison still precede Stage 6C consolidation and Stage 7 retirement.
 
 Stage 6B.31 landing slice — descriptor flags, exhaustion and pipe reuse (2026-10-04):
@@ -3662,20 +3662,20 @@ Stage 6B.31 landing slice — descriptor flags, exhaustion and pipe reuse (2026-
   both actual file:// pages and syntax/whitespace checks pass. The Make gates
   keep their documented ptrace leak-check exception; standalone regression
   LeakSanitizer passes outside that environment.
-- Scope/oracle: only shared pipe flag initialization changes engine behavior;
+- Scope/OCaml reference implementation: only shared pipe flag initialization changes engine behavior;
   no frontend, import adapter or guest headers change. The full new fixture
-  stops in the oracle at initial fd allocation **3 versus noninteractive C 0**;
+  stops in the OCaml reference implementation at initial fd allocation **3 versus noninteractive C 0**;
   its **1,024-slot** descriptor table also differs from C's **64 slots**.
   Record those runtime-profile gaps separately from the passing focused
   pipe-flag differential probe. No installed skip/XFAIL is added.
 - Evidence: `build/engine/refactor-stage6b-descriptor-audit/` contains original
   C/manifest/inventory/corpus snapshots, **14 ordinal mappings**, native,
-  sanitizer, worker and actual Chromium reports, the focused oracle probe,
+  sanitizer, worker and actual Chromium reports, the focused OCaml reference implementation probe,
   retained-gate/audit logs and ordered coverage/parity accounting.
 - Next slice: audit guest-observable directory iteration and creation-mask
   expectations, retaining injected-clock timestamp, metadata structure and
   clone ownership checks. Remaining kernel/libc/CJS migration, timer and
-  runtime-profile gaps, compatibility modes and supported-official oracle
+  runtime-profile gaps, compatibility modes and supported-official OCaml reference implementation
   comparison still precede Stage 6C consolidation and Stage 7 retirement.
 
 Stage 6B.32 landing slice — directory iteration, file masks and exclusive creation (2026-10-04):
@@ -3737,10 +3737,10 @@ Stage 6B.32 landing slice — directory iteration, file masks and exclusive crea
   both actual file:// pages and syntax/whitespace checks pass. Make retains
   its documented ptrace leak-check exception; standalone regression
   LeakSanitizer passes outside that environment.
-- Oracle/scope: the full fixture stops at missing **env.readdir_v1**; no new
+- OCaml reference implementation/scope: the full fixture stops at missing **env.readdir_v1**; no new
   skip/XFAIL or full differential pass is claimed. A focused **25-check**
   mask/exclusive-create comparison passes in C and OCaml with explicit stat
-  profiles: mode offset **16 in C**, **8 in OCaml**. The oracle stores errno
+  profiles: mode offset **16 in C**, **8 in OCaml**. The OCaml reference implementation stores errno
   internally rather than in this guest errno slot, so that focused comparison
   excludes errno queries; installed C WAST tests them. Frontend, import adapter,
   headers and clock semantics are unchanged. Directory creation-mask semantics
@@ -3748,11 +3748,11 @@ Stage 6B.32 landing slice — directory iteration, file masks and exclusive crea
 - Evidence: `build/engine/refactor-stage6b-directory-audit/` contains original
   C/kernel/manifest/inventory/corpus snapshots, **12 full/partial ordinal
   mappings**, native/sanitizer/worker/actual Chromium reports, both focused
-  oracle profiles, retained-gate/audit logs and ordered coverage/parity proof.
+  OCaml reference implementation profiles, retained-gate/audit logs and ordered coverage/parity proof.
 - Next slice: audit guest-visible named shared-memory creation, errors and
   lifetime expectations, retaining namespace attachment, credentials, retained
   object APIs and clone ownership in C. Remaining kernel/libc/CJS migration,
-  timer/profile gaps and supported-official oracle comparison still precede
+  timer/profile gaps and supported-official OCaml reference implementation comparison still precede
   Stage 6C consolidation and Stage 7 retirement.
 
 Stage 6B.33 landing slice — named shared-memory coverage audit (2026-10-04):
@@ -3806,19 +3806,19 @@ Stage 6B.33 landing slice — named shared-memory coverage audit (2026-10-04):
   both actual file:// pages and syntax/whitespace checks pass. Make retains
   its documented ptrace leak-check exception; standalone regression
   LeakSanitizer passes outside that environment.
-- Oracle/scope: the recorded OCaml attempt stops at missing **env.shm_open**.
-  This POSIX fixture is outside the language oracle scope; it creates no
+- OCaml reference implementation/scope: the recorded OCaml attempt stops at missing **env.shm_open**.
+  This POSIX fixture is outside the scope of the OCaml reference implementation; it creates no
   OCaml provider backlog or kernel acceptance blocker. No new skip/XFAIL or
   differential pass is claimed. No engine, import adapter,
   runtime, guest-header or frontend behavior changed in this slice.
 - Evidence: `build/engine/refactor-stage6b-shared-memory-audit/` contains original
   C/manifest/inventory/corpus snapshots, **five full/partial ordinal mappings**,
   native/sanitizer/worker/actual Chromium reports, retained-gate/audit logs,
-  the oracle capability result and ordered coverage/parity proof.
+  the OCaml reference implementation capability result and ordered coverage/parity proof.
 - Next slice: audit guest-visible process-group and foreground-terminal
   expectations through real imports and shared input events, retaining host
   signal routing, raw readiness and private kernel state in C. Remaining
-  kernel/libc/CJS migration, timer/profile gaps and supported-official oracle
+  kernel/libc/CJS migration, timer/profile gaps and supported-official OCaml reference implementation
   comparison still precede Stage 6C consolidation and Stage 7 retirement.
 
 Stage 6B.34 landing slice — process groups and foreground-terminal routing (2026-10-04):
@@ -3879,7 +3879,7 @@ Stage 6B.34 landing slice — process groups and foreground-terminal routing (20
   positive group rather than POSIX's zero; the fixture records the existing
   ABI without claiming full job-control conformance. Forked group membership,
   sessions/setsid and background-I/O enforcement remain outside this slice.
-  These are C POSIX contracts, outside the OCaml language oracle scope; no
+  These are C POSIX contracts, outside the scope of the OCaml reference implementation; no
   OCaml providers, comparisons or kernel work are required.
 - Evidence: `build/engine/refactor-stage6b-process-group-audit/` contains original
   C/Makefile/manifest/inventory/corpus snapshots, **six ordinal mappings**, native
@@ -3888,7 +3888,7 @@ Stage 6B.34 landing slice — process groups and foreground-terminal routing (20
 - Next slice: audit remaining guest-visible terminal descriptor duplication and
   close expectations through shared input events, retaining private OFD,
   reference-count, raw readiness and independently allocated kernel checks.
-  Remaining libc/CJS migration, C runtime gaps, supported language-oracle
+  Remaining libc/CJS migration, C runtime gaps, supported OCaml reference implementation
   comparison and coverage accounting still precede consolidation/retirement.
 
 Stage 6B.35 landing slice — terminal descriptor aliases and close lifetimes (2026-10-04):
@@ -3955,7 +3955,7 @@ Stage 6B.35 landing slice — terminal descriptor aliases and close lifetimes (2
   `test_pipe_close_transitions`. Reuse and extend the installed pipe fixture
   where coverage is equivalent; preserve raw POLL flags, direct kernel EAGAIN,
   reference ownership and capacity checks. Remaining libc/CJS migration,
-  supported language-oracle comparison and coverage accounting still precede
+  supported OCaml reference implementation comparison and coverage accounting still precede
   consolidation and dashboard retirement.
 
 Stage 6B.36 landing slice — pipe creation, byte I/O and close/EOF results (2026-10-04):
@@ -4015,7 +4015,7 @@ Stage 6B.36 landing slice — pipe creation, byte I/O and close/EOF results (202
   expectations in `test_terminal_readiness`, reusing the shared terminal
   contract where equivalent and retaining direct host enqueue/EOF signaling,
   raw readiness and private terminal state. Remaining libc/CJS migration,
-  supported language-oracle comparison and coverage accounting still precede
+  supported OCaml reference implementation comparison and coverage accounting still precede
   consolidation and dashboard retirement.
 
 Stage 6B.37 landing slice — terminal byte I/O and repeated EOF (2026-10-04):
@@ -4070,7 +4070,7 @@ Stage 6B.37 landing slice — terminal byte I/O and repeated EOF (2026-10-04):
 - Next slice: finish the retained-kernel inventory across remaining ownership,
   isolation, capacity and host-metadata helpers, mapping any guest-visible
   expectations to existing fixtures where equivalent. Then begin the libc/CJS
-  assertion audit. Supported language-oracle comparison and full coverage
+  assertion audit. Supported OCaml reference implementation comparison and full coverage
   accounting still precede consolidation and dashboard retirement.
 
 Stage 6B.38 landing slice — complete current retained-kernel inventory (2026-10-04):
@@ -4121,7 +4121,7 @@ Stage 6B.38 landing slice — complete current retained-kernel inventory (2026-1
 - Scope: classification is complete for this current C file, not all C/CJS
   harnesses or full kernel conformance. Engine, adapter, runtime API, guest
   headers and frontend behavior are unchanged. OCaml remains a Wasm/WAT/WAST
-  language oracle; no kernel comparison, provider additions or development
+  OCaml reference implementation; no kernel comparison, provider additions or development
   are required for these C contracts.
 - Evidence: `build/engine/refactor-stage6b-retained-kernel-audit/` contains
   original C/Makefile/manifest/inventory/corpus snapshots, **one full migration
@@ -4133,7 +4133,7 @@ Stage 6B.38 landing slice — complete current retained-kernel inventory (2026-1
   runners. Account for legacy stub-provider assumptions separately from real
   C providers; do not extend those OCaml stubs or kernel. Keep compiled C
   header/layout clients and focused artifact/allocator checks where they
-  expose distinct boundaries. Other C audits, supported language-oracle
+  expose distinct boundaries. Other C audits, supported OCaml reference implementation
   comparison and coverage accounting still precede consolidation/retirement.
 
 Stage 6B.39 landing slice — libc harness selection/completion audit (2026-10-04):
@@ -4159,7 +4159,7 @@ Stage 6B.39 landing slice — libc harness selection/completion audit (2026-10-0
   cancellation, malformed-tail recovery and exit-status host gates also pass.
   No provider or expected-failure policy is changed to clear legacy assumptions.
 - Classified all **sixteen legacy injected provider functions** separately
-  from real C providers. OCaml remains only a Wasm/WAT/WAST language oracle;
+  from real C providers. OCaml remains only a Wasm/WAT/WAST OCaml reference implementation;
   no stub, kernel or application-scheduler development/comparison is required.
   The optional regex export filter remains legacy debugging convenience;
   current runners execute complete fixtures and expose named results.
@@ -4199,7 +4199,7 @@ Stage 6B.39 landing slice — libc harness selection/completion audit (2026-10-0
   to C batch/shared-session coverage or explicit profile gaps. Retain host
   control boundaries; do not extend OCaml providers/kernel or retire drivers
   before their useful coverage is accounted for. Other C audits, setup-module
-  acceptance, supported language-oracle comparison and consolidation remain.
+  acceptance, supported OCaml reference implementation comparison and consolidation remain.
 
 Stage 6B.40 landing slice — legacy DIY POSIX harness audit (2026-10-04):
 
@@ -4258,7 +4258,7 @@ Stage 6B.40 landing slice — legacy DIY POSIX harness audit (2026-10-04):
   provider and frontend behavior and the **121-site / 261-check** retained
   kernel inventory are unchanged.
 - Scope: these C POSIX contracts require no OCaml comparison, provider additions
-  or kernel development. OCaml remains the Wasm/WAT/WAST language oracle;
+  or kernel development. OCaml remains the Wasm/WAT/WAST OCaml reference implementation;
   existing kernel/application integration removal stays deferred. Private
   process/wait/signal APIs and ownership, compiled C ABI and host control gates
   remain retained. General setup-module acceptance and wider C/CJS accounting
@@ -4300,7 +4300,7 @@ Stage 6B.41 landing slice — DIY language and host-memory cutover (2026-10-04):
   **zero**. All **4/1** checks pass in every configuration. These complement
   retained private store/ownership checks rather than replacing them.
 - All three unchanged fixtures pass both native C and the **OCaml language
-  oracle**, each in a separate process. This uses only language semantics and
+  OCaml reference implementation**, each in a separate process. This uses only language semantics and
   standard spectest scaffolding; no OCaml POSIX/kernel/scheduler provider or
   development is introduced. Existing OCaml kernel removal remains deferred.
 - Explicit `build-test-corpus.py --install --review-selection` refreshes the
@@ -4328,7 +4328,7 @@ Stage 6B.41 landing slice — DIY language and host-memory cutover (2026-10-04):
   provider and frontend behavior remain unchanged.
 - Evidence: `build/engine/refactor-stage6b-diy-language-cutover/` contains prior
   generator/distribution/manifest/inventory snapshots, unchanged source hashes,
-  the 25-command compatibility ledger, parser/oracle evidence, native sanitizer
+  the 25-command compatibility ledger, parser/OCaml reference implementation evidence, native sanitizer
   and leak reports, focused worker/dashboard and full native/actual-browser
   results, and ordered corpus/session parity proof. The
   [DIY coverage ledger](diy-posix-harness-coverage.md),
@@ -4436,7 +4436,7 @@ Stage 6B.43 landing slice — segment retention and capacity (2026-10-04):
   and inside `assert_invalid`. OCaml agrees on all portable language checks;
   implementation resource limits are separately tested C host boundaries.
 - The five unchanged official files and portable probe pass native C,
-  production browser worker and the OCaml language oracle. Native
+  production browser worker and the OCaml reference implementation. Native
   warnings-as-errors **ASan/UBSan** host-boundary and **LeakSanitizer** runs pass,
   including overflow payload cleanup. Removed only those five identities from
   both expected-failure lists. Four entries remain: two libc gaps,
@@ -4499,7 +4499,7 @@ Stage 6B.44 landing slice — element segment reference types (2026-10-04):
   nullable segment declarations in non-null tables, including vectors containing
   only non-null function values.
 - The portable fixture and unchanged official file pass native C, production
-  browser and the OCaml **language-only** oracle. OCaml also verifies all twenty
+  browser and the OCaml **language-only** OCaml reference implementation. OCaml also verifies all twenty
   C-encoded setup/invalid modules. Native warnings-as-errors
   **ASan/UBSan** host-boundary and **LeakSanitizer** checks pass for successful
   setup, expected invalid modules and segment/store teardown. Removed only
@@ -4554,7 +4554,7 @@ Stage 6B.45 landing slice — standard spectest table64 binding (2026-10-04):
   same-module aliases, cross-module calls, growth to the maximum, failed/zero
   growth, separation from `spectest.table` and fresh-store isolation. Native
   and production-browser host gates run both manifest orders at jobs **1/3**.
-- Native C, production browser and the OCaml **language-only** oracle accept
+- Native C, production browser and the OCaml **language-only** OCaml reference implementation accept
   the unchanged official file and both portable fixtures. OCaml also checks
   all **nine C-encoded modules / 36 assertions** in source order, preserving
   shared table state between actions and setups. Native warnings-as-errors
@@ -4588,7 +4588,7 @@ Stage 6B.45 landing slice — standard spectest table64 binding (2026-10-04):
 - Next slice: repair valid **flat `table.init`, `data.drop` and `elem.drop` WAT
   syntax**, including the silent drop-instruction omission recorded in 6B.43.
   Compare folded/plain behavior, C-encoded modules and rejection diagnostics
-  with the OCaml language oracle, preserving corpus/setup/session parity.
+  with the OCaml reference implementation, preserving corpus/setup/session parity.
   Broader supported-language acceptance and C/CJS audits remain open. No C
   assertions are removed: cumulative moved coverage stays **188**; retained
   kernel coverage stays **21 helpers / 121 sites / 261 checks**. No OCaml kernel
@@ -4617,7 +4617,7 @@ Stage 6B.46 landing slice — plain bulk instructions and folded index parity (2
   assertions check unknown indices, missing stack operands and wrong address
   widths; six quoted malformed assertions check missing immediates and
   unresolved symbolic references.
-- Native C, production browser and the OCaml **language-only** oracle agree on
+- Native C, production browser and the OCaml **language-only** OCaml reference implementation agree on
   all checks. OCaml also verifies all **17 C-encoded setup/invalid modules**
   in the complete ordered script, with malformed text retained as quoted text.
   Nine ordinary setup/parse probes agree on acceptance/rejection, including the
@@ -4651,7 +4651,7 @@ Stage 6B.46 landing slice — plain bulk instructions and folded index parity (2
   Wasm/WAT/WAST inputs into a finite identity-level OCaml acceptance/comparison
   ledger with explicit exclusions, preserving malformed/invalid/link/trap
   distinctions and bounded implementation limits. POSIX fixtures and OCaml
-  kernel compatibility remain outside oracle scope. Remaining C/CJS coverage
+  kernel compatibility remain outside the scope of the OCaml reference implementation. Remaining C/CJS coverage
   audits, C runtime profile gaps, Stage 6C and Stage 7 stay open. No C assertions are removed: cumulative moved coverage remains
   **188** and retained kernel coverage remains **21 helpers / 121 sites / 261
   checks**. No OCaml kernel development is added; removal remains deferred.
@@ -4678,7 +4678,7 @@ Stage 6B.47 landing slice — plain table copy/fill and folded index parity (202
   address/count types. Twenty-six invalid modules and three quoted malformed
   assertions cover missing operands, unknown indices/names, reference and
   address mismatches, and one-index copy text.
-- Native C, production browser and the OCaml **language-only** oracle agree on
+- Native C, production browser and the OCaml **language-only** OCaml reference implementation agree on
   the complete fixture. OCaml also verifies all **33 C-encoded setup/invalid
   modules** in source order. Seven ordinary acceptance/rejection probes agree,
   including both original 6B.46 plain copy/fill reproductions. Native
@@ -4706,7 +4706,7 @@ Stage 6B.47 landing slice — plain table copy/fill and folded index parity (202
   into a finite identity-level OCaml acceptance/comparison ledger, with explicit
   exclusions and malformed/invalid/link/trap distinctions. Record bounded
   implementation limits and unsupported text shorthand instead of inferring
-  acceptance from assertion totals. POSIX fixtures remain outside oracle scope.
+  acceptance from assertion totals. POSIX fixtures remain outside the scope of the OCaml reference implementation.
   Remaining C/CJS audits, C runtime profile gaps, Stage 6C and Stage 7 stay open.
   No C assertions are removed: cumulative moved coverage stays **188** and
   retained kernel coverage stays **21 helpers / 121 sites / 261 checks**. No
@@ -4803,7 +4803,7 @@ Stage 6B.49 implementation slice — decoded bounded names (2026-10-05):
   open in the Stage 6B.48 ledger and policy; no claim of full byte-name parity
   is made. Inline definition/instantiation profile behavior and exported-table
   shorthand remain separate open gaps.
-- Next slice: run the language oracle on authored and C-encoded WAST, exercise
+- Next slice: run the OCaml reference implementation on authored and C-encoded WAST, exercise
   collision and overflow probes, and compare native C with the production
   browser runtime. Fix any failures across all name-bearing paths before
   changing the names ledger. Then scope a length-bearing representation for
@@ -4835,7 +4835,7 @@ Stage 6B.50 landing slice — byte-preserving names and parity (2026-10-05):
 - Focused authored and C-encoded WAST probes cover equivalent `\\41`/`A`
   spellings, distinct `\\00` and `\\01` names, and two distinct **257-byte**
   names with a shared 256-byte prefix. The native runner passes every assertion;
-  the OCaml oracle accepts and traces each C-encoded module/action. The
+  the OCaml reference implementation accepts and traces each C-encoded module/action. The
   **511-byte** boundary passes; **512** is
   rejected with `WAT name exceeds supported representation`. The probes and
   fresh ledger artifacts are under
@@ -4890,7 +4890,7 @@ Stage 6B.52 landing slice — exported table32/table64 shorthand (2026-10-05):
   table32 and table64 indirect calls through the inline exports, plus importing
   the table32 export into a second module and calling through the shared alias.
   The prior C rejection at `funcref` is resolved. Native C and the OCaml
-  language-only oracle pass all four checks; the actual offline browser worker
+  the OCaml reference implementation’s language-only run passes all four checks; the actual offline browser worker
   passes the same fixture. The forced browser Wasm rebuild and native
   warnings-as-errors build pass.
 - Exported-table shorthand is no longer an open syntax gap. The 261-input
@@ -4941,7 +4941,7 @@ Remaining Stage 6B priorities: coverage audit and portable fixtures
 - Keep per-assertion native/browser comparisons and the retained legacy
   classifications as cutover gates. Audit ordinary setup-module diagnostics
   separately; do not infer full module acceptance from passing assertions.
-  Complete supported Wasm/WAT/WAST language-oracle comparisons before
+  Complete supported Wasm/WAT/WAST OCaml reference implementation comparisons before
   claiming runner acceptance; OCaml POSIX support is not an acceptance gate.
 - Audit authored `tests/*.c` and `tests/**/*.cjs` by assertion, recording
   each retained or migrated boundary. Convert guest-observable language,
@@ -4964,7 +4964,7 @@ Remaining Stage 6B priorities: coverage audit and portable fixtures
   Their use of Node is an automation choice, not a requirement for ordinary
   engine corpus execution.
 - Prioritize this runner/fixture migration over further Node orchestration
-  optimization. WebAssembly-language oracle comparison, C scripted-session
+  optimization. WebAssembly-language comparison with the OCaml reference implementation, C scripted-session
   parity and coverage accounting remain required before cutover.
 
 Counted completion inventory and estimate (updated through Stage 6B.99, 2026-10-05):
@@ -5017,7 +5017,7 @@ Counted completion inventory and estimate (updated through Stage 6B.99, 2026-10-
 - Adapt `tests/c-engine-browser-runtime.cjs` to the unified offline page and
   mounted manifest; retain focused and full-suite browser automation.
 - Retain the official OCaml interpreter solely as the Wasm/WAT/WAST language
-  oracle. Compare supported official language tests against it. Do not add
+  OCaml reference implementation. Compare supported official language tests against it. Do not add
   POSIX/kernel providers or require OCaml kernel parity. Account for useful
   legacy direct/threaded POSIX assertions in C before retiring their drivers
   under the deferred OCaml cleanup plan.
@@ -5028,7 +5028,7 @@ Counted completion inventory and estimate (updated through Stage 6B.99, 2026-10-
 
 Gate: native and browser runners preserve previous coverage and result
 semantics, with full C native/browser cutover parity and supported
-Wasm/WAT/WAST language-oracle comparisons. A missing or
+Wasm/WAT/WAST OCaml reference implementation comparisons. A missing or
 unsupported suite remains visible rather than disappearing during migration.
 
 ### Stage 6C: Consolidation and build/test separation
@@ -5088,14 +5088,14 @@ not the suite wall time. Stage 7 remains separately estimated at **2–3 slices*
 Status: complete
 
 - Removed the standalone dashboard frontend, HTML-generation path, and
-  `build.sh tests` target. Preserved the shared corpus/oracle collector and JSON
+  `build.sh tests` target. Preserved the shared corpus/OCaml reference implementation collector and JSON
   payload generator used by focused worker conformance checks.
 - Retired `--html-test`, `--generate-html`, and `--c-engine-html` from
   menu/help; direct invocations explain their replacements. Kept focused browser
   worker gates and the `bash.html` full-browser gate.
 - Documented native testing through the shared VFS and browser testing through
   `bash.html` diagnostics and its installed `/tests` corpus. Kept `--html-bash`,
-  native `--cli-test`, and the OCaml language-oracle build/run path. Legacy
+  native `--cli-test`, and the OCaml reference implementation build/run path. Legacy
   OCaml application-runtime removal remains deferred.
 - Removed obsolete page sources/references from active tooling and instructions;
   dated plan entries retain historical command names as records, not runnable
@@ -5111,7 +5111,7 @@ requires the retired dashboard or an old staging path.
 
 Run focused checks after each stage and the full relevant matrix at cutover:
 
-- Native CLI build, official Wasm/WAT/WAST C/oracle comparisons, and
+- Native CLI build, official Wasm/WAT/WAST C/OCaml reference implementation comparisons, and
   warnings-as-errors ASan/UBSan executor/kernel/process gates when headers
   or execution paths move.
 - Native guest-runtime shell/command/pipeline/library/TTY suites using the
@@ -5120,7 +5120,7 @@ Run focused checks after each stage and the full relevant matrix at cutover:
   terminal model/GLF fixtures and actual browser upload/download/render checks.
 - Full browser core/proposal/annotation corpus plus relevant DIY POSIX and
   libc probes through the C runner. OCaml remains the Wasm/WAT/WAST language
-  oracle only; its legacy POSIX/kernel probes are outside runtime acceptance.
+  OCaml reference implementation only; its legacy POSIX/kernel probes are outside runtime acceptance.
 - Offline `file://` startup, font/rendering, mounted file paths, shell/test
   interaction, and absence of external runtime requests.
 - Deterministic package inventory, permissions, mtimes, import closure,
@@ -5795,7 +5795,7 @@ Stage 6B.87 landing slice — binary reader, import decoder and validator C gate
   import descriptor kinds, malformed sections and copied-source ownership.
   The third checks validation status/location and resolved branch/call/local
   metadata, including one-time validation.
-- These white-box contracts complement official WAST/oracle behavior and
+- These white-box contracts complement official WAST/OCaml reference implementation behavior and
   remain native gates because WAST cannot inspect reader cursors, decoded
   ownership records or validator metadata. Warnings-as-errors ASan/UBSan gates
   pass for all three; no assertions moved or removed.
@@ -5910,10 +5910,10 @@ Stage 6B.92 landing slice — legacy DIY drivers and native allocator audit (202
   withstand the consistency pass and acceptance reveals no new engine-wide
   defect.
 
-Stage 6B.93 acceptance slice — corpus/oracle, SDK and browser gate reconciliation (2026-10-05):
+Stage 6B.93 acceptance slice — corpus/OCaml reference implementation, SDK and browser gate reconciliation (2026-10-05):
 
 - Re-ran the installed native corpus after SDK refresh: **289 PASS / 2 XFAIL /
-  5 SKIP**, zero unexpected failures. The strict language-oracle comparison
+  5 SKIP**, zero unexpected failures. The strict OCaml reference implementation comparison
   passed **261/261 supported official Wasm/WAT/WAST inputs**, with four
   explicitly excluded inputs and 31 repository fixtures outside OCaml scope.
 - The browser POSIX kernel fixture is backend-specific: the native runner
@@ -6069,7 +6069,7 @@ Stage 6B.99 closure — audit-ledger consistency and acceptance (2026-10-05):
   boundaries. The four sources added in Stage 6B.98 now have the same explicit
   treatment. No unsupported citation or undisposed test source was found.
 - Stage 6B's native/browser corpus and reporting gates, supported Wasm/WAT/WAST
-  oracle comparisons, retained C sanitizer gates, production Bash-page browser
+  OCaml reference implementation comparisons, retained C sanitizer gates, production Bash-page browser
   batch, and complete 56-file coverage inventory are now recorded and checked.
   Mark Stage 6B complete; no OCaml kernel parity or additional OCaml kernel
   development is part of its acceptance.
@@ -6187,7 +6187,7 @@ Stage 7.1 landing slice — retire the standalone test dashboard workflow (2026-
   Bash/test page. Removed the OCaml dashboard generator and the unused
   standalone dashboard UI sources. The C-engine payload tool now emits worker
   metadata only, with a named `--mounted-corpus` mode preserving the full 296
-  mounted test selection. Corpus collection, oracle policy, and installed VFS
+  mounted test selection. Corpus collection, OCaml reference implementation policy, and installed VFS
   snapshots remain reusable.
 - Reworked the Chromium integration gate to target only `bash.html`; its full
   batch, selection, cancellation, shell-recovery, session, and external-request

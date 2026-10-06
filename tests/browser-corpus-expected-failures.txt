@@ -21,4 +21,4 @@ libc-test/terminal.wast
 
 # Stage 6B.42 exposed ten ordinary setup errors in seven language files.
 # Stages 6B.43–6B.45 repair segment capacity, element types and spectest.table64;
-# all seven now pass native/browser C and the OCaml language oracle.
+# all seven now pass native/browser C and the OCaml reference implementation.

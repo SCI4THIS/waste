@@ -10,7 +10,7 @@ comparison inventory is complete with no known official-language ledger gaps.
 Provenance: official test revision `4b29bdbced924599346ea2ffd9e975af5d28c735`,
 installed selection SHA-256 `95078ad7cde3d6923d9d7515bf84ccffff22a187797ea56eb6e3e84408861e1d`.
 Installed input hashes, manifest/policy/binary/report hashes, subprocess commands
-and raw C metadata/oracle traces are retained in the machine ledger and evidence.
+and raw C metadata/OCaml reference implementation traces are retained in the machine ledger and evidence.
 Inputs are audited against installed inventory and authored/upstream sources.
 
 ## Comparison contract
@@ -56,12 +56,12 @@ The 261 compared inputs retain **62,975 assertion/action results** and
 **2,260 successful ordinary instantiations** in both runtimes. Bare inline
 module fields in `core/inline-module.wast` are retained as a definition and are
 not instantiated, matching the OCaml WAST profile.
-Oracle traces exercise **810 binary definitions** and **1,263 quoted text
+OCaml reference implementation traces exercise **810 binary definitions** and **1,263 quoted text
 definitions**, in addition to directly parsed WAST text. This checks the installed
 scripts and their embedded inputs. It does not cross-run every C-encoded module
 against OCaml, compare identical error strings/recovery policies, or establish
 acceptance of arbitrary text outside the pinned corpus. The earlier portable
-fixtures retain their separate C-encoded oracle comparisons.
+fixtures retain their separate C-encoded OCaml reference implementation comparisons.
 
 Stage 6B.50 resolves the `core/names.wast` identity difference. The 257-byte
 Unicode export/action name, byte-escaped names, and distinct embedded-NUL names
@@ -69,12 +69,12 @@ now compare without prefix matching or Unicode normalization. Native and actual
 offline-browser runs both pass **482/482** with matching action names, results
 and four setup records. Separate C-encoded WAST probes cover `\\41`/`A`, distinct
 `\\00`/`\\01`, and two 257-byte names sharing a 256-byte prefix; their native
-assertions pass and the OCaml oracle accepts and traces their binary modules.
+assertions pass and the OCaml reference implementation accepts and traces their binary modules.
 Names allow up to 511 ordinary bytes in the bounded internal storage; embedded
 NUL and marker byte `0x01` consume an extra internal byte and overflow is
 rejected explicitly.
 
-| Oracle check category | Count |
+| OCaml reference implementation check category | Count |
 | --- | ---: |
 | `action` | 357 |
 | `exception` | 18 |
@@ -117,23 +117,23 @@ deferred under [the retirement plan](active-ocaml-language-oracle-plan.md).
 build/cli-rt/waste-test --vfs-root=src/vfs --jobs=1 \
   --expected-failures=tests/native-corpus-expected-failures.txt \
   --results=build/cli-rt/language-corpus-results.json
-python3 tests/language-oracle-check.py \
+python3 tests/OCaml reference implementation-check.py \
   --native-results=build/cli-rt/language-corpus-results.json
-python3 tests/language-oracle-ledger-check.py
+python3 tests/OCaml reference implementation-ledger-check.py
 ```
 
 Add `--browser-results=PATH` to reconcile an actual production-browser report.
 Use `--output=PATH` for evidence and `--strict` to enforce gap-free comparison.
-The 180-second subprocess bound belongs to this oracle audit; production C
+The 180-second subprocess bound belongs to this OCaml reference implementation audit; production C
 corpus deadlines, selection and expected-failure policies are unchanged.
 
 ## Official identities
 
-Counts below are C/oracle checks and C/oracle ordinary instantiations.
+Counts below are C/OCaml reference implementation checks and C/OCaml reference implementation ordinary instantiations.
 “Gap” preserves a completed, accepted script with a comparison difference.
 Legacy exclusions retain their installed unsupported reason in the JSON ledger.
 
-| Identity | Checks C / oracle | Setups C / oracle | Comparison |
+| Identity | Checks C / OCaml reference implementation | Setups C / OCaml reference implementation | Comparison |
 | --- | ---: | ---: | --- |
 | `core/address.wast` | 256 / 256 | 4 / 4 | Agreed |
 | `core/align.wast` | 140 / 140 | 25 / 25 | Agreed |

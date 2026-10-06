@@ -261,7 +261,7 @@ update of the active interpreter frame:
 
 Do not represent each tail transfer with C recursion, heap allocation, or an
 exception.  The OCaml implementation's boxed continuation and exception path
-was useful as a behavioral oracle but demonstrated why the C engine needs an
+was useful as a behavioral OCaml reference implementation but demonstrated why the C engine needs an
 explicit frame-reuse operation.  Deep official tail-call fixtures and a large
 bounded native loop should show constant C stack and no allocation per
 transfer.
@@ -483,7 +483,7 @@ Private C memory probes must use bounded `exec_memory_read` and initialized
 sparse-page observations rather than a removed contiguous `memory->data` field.
 The native WAST adapter services finite SELECT deadlines with a monotonic clock
 and bounded host sleeps; external input and indefinite waits use the session
-driver. POSIX imports are outside the OCaml language oracle scope: an
+driver. POSIX imports are outside the scope of the OCaml reference implementation: an
 unavailable import is not a differential pass, a C kernel acceptance blocker
 or a request to implement an OCaml provider. Verify these fixtures through
 C native/browser parity and the retained sanitizer/session contracts.
@@ -526,12 +526,12 @@ Interactive runtime changes also run:
 node tests/c-engine-bash-browser-runtime.cjs build/html-rt/bash.html
 ```
 
-Compare supported official Wasm/WAT/WAST language tests with the OCaml oracle.
+Compare supported official Wasm/WAT/WAST language tests with the OCaml reference implementation.
 Use native/browser C checks for kernel, shared ABI, scheduler, signal, process
 and libc behavior. Existing sequential/threaded OCaml POSIX probes are legacy
 evidence for coverage accounting during removal, not required gates for new
 C work. Do not extend the OCaml kernel to make these fixtures run. Keep
-repository-owned language-oracle fixes and retirement changes in
+repository-owned OCaml reference implementation fixes and retirement changes in
 `submodules/wasm-spec-i31-int32.patch`; do not commit them into submodule
 history.
 
@@ -559,7 +559,7 @@ For a failure cluster, identify the earliest phase that diverges:
 9. result comparison.
 
 Use independent tools such as Binaryen validation only as a triage signal.
-They do not replace the project validator or OCaml oracle, especially for
+They do not replace the project validator or OCaml reference implementation, especially for
 proposal and WAST assertion semantics.
 
 ## Common Failure Patterns
@@ -665,13 +665,13 @@ and modes 5–7 carry an explicit reference type. Store that declared type for
 both active initialization and instruction validation. Do not infer a narrower
 segment type because every current item happens to be a non-null function.
 The text encoder may use expression vectors with an explicit non-null type;
-it need not produce byte-identical encodings to the language oracle.
+it need not produce byte-identical encodings to the OCaml reference implementation.
 
 Verify table contents and lifetime as well as setup: bare/empty vectors,
 nullable null slots, passive `table.init`, dropped active/declarative segments,
 post-drop traps, table64 and all eight binary modes. Reject nullable segments
 when targeting non-null tables even if their vectors contain only `ref.func`.
-Stage 6B.44 uses C/native/browser checks and the OCaml language-only oracle;
+Stage 6B.44 uses C/native/browser checks and the OCaml language-only OCaml reference implementation;
 no kernel/provider changes are involved. See [the setup ledger](wast-setup-coverage.md).
 
 
@@ -713,7 +713,7 @@ Compare effects using distinct source functions/data and an untouched peer
 table; successful setup alone cannot prove the instruction was emitted. Check
 both address widths, repeated drops, post-drop traps and zero-length operations.
 Pair invalid-module assertions with quoted malformed-text assertions, and run
-C-encoded binaries through the language oracle while preserving script order.
+C-encoded binaries through the OCaml reference implementation while preserving script order.
 Stage 6B.46 uses 190 portable checks and separate ordinary rejection probes;
 resource bounds and unrelated language acceptance remain explicit.
 
@@ -731,11 +731,11 @@ are table64, otherwise i32; fill uses its table's width for address and count.
 Check both overlap directions with distinct entries, no writes after a bounds
 trap, zero-length boundary behavior, nulls, reference identity/nullability and
 cross-module function owners. Stage 6B.47 keeps these in 611 portable checks,
-with invalid/malformed and ordinary rejection probes, C-encoded language-oracle
+with invalid/malformed and ordinary rejection probes, C-encoded OCaml reference implementation
 verification and sanitizer/leak cleanup gates. Equivalent explicit table/export
 declarations avoid broadening this slice to exported-table shorthand. Official
 language acceptance still needs a finite comparison ledger; POSIX and kernel
-providers are outside OCaml oracle scope.
+providers are outside the scope of the OCaml reference implementation.
 
 ## Exported table shorthand
 
@@ -747,16 +747,16 @@ element segment to the just-declared table, and emit the inline export through
 the ordinary table export metadata. Test both address widths with indirect
 calls, then import the exported table from a second module to verify aliasing
 and shared contents. Stage 6B.52 covers these paths in native C, the production
-browser runtime and the OCaml language-only oracle; it does not change official
+browser runtime and the OCaml language-only OCaml reference implementation; it does not change official
 corpus identity counts or require OCaml kernel capabilities.
 
 
-## Finite language-oracle comparison
+## Finite OCaml reference implementation comparison
 
 Enumerate installed manifest identities and audit inventory/upstream/source
 hashes before comparison. Keep legacy syntax exclusions and repository runtime
 fixtures explicit; WAST with POSIX imports is outside the official language
-ledger. Run unchanged language scripts in fresh oracle processes with standard
+ledger. Run unchanged language scripts in fresh OCaml reference implementation processes with standard
 spec scaffolding. Enable custom handlers only for custom-annotation suites:
 core binary custom sections deliberately contain opaque payloads.
 
@@ -765,7 +765,7 @@ check kinds and full action names, alongside actual native/browser assertion
 results, ordinary setup diagnostics and EOF completion. Do not introduce a
 second WAST command scanner or infer setup acceptance from assertion counts.
 Keep runtime traps distinct from instantiation traps, custom checks distinct
-in the oracle inventory, and bare actions visible even if C reports them as
+in the OCaml reference implementation inventory, and bare actions visible even if C reports them as
 return checks. Decode displayed name escapes without Unicode normalization,
 truncation or prefix matching. A declaration and invocation truncated in the
 same way can pass while hiding a language difference; test distinct names

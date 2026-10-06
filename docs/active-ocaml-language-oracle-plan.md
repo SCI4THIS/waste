@@ -1,4 +1,4 @@
-# OCaml language oracle scope and kernel retirement
+# OCaml reference implementation’s scope and kernel retirement
 
 Status: policy adopted 2026-10-04; implementation cleanup deferred.
 
@@ -19,7 +19,7 @@ capabilities. Do not add OCaml POSIX providers merely to run C kernel fixtures.
 A fixture written in WAST is not automatically a WebAssembly-language test:
 its imported POSIX behavior remains a C runtime contract. Missing OCaml POSIX
 imports and differences in descriptor allocation, errno, stat layout or kernel
-profiles are outside the language oracle's scope. They do not block C kernel
+profiles are outside the OCaml reference implementation's scope. They do not block C kernel
 acceptance and are not an OCaml implementation backlog. Verify those contracts
 through native/browser C parity, private sanitizer gates, compiled guest ABI
 checks and applicable POSIX contract fixtures instead.
@@ -27,7 +27,7 @@ checks and applicable POSIX contract fixtures instead.
 ## Deferred implementation work
 
 The target is to remove the repository-added OCaml kernel implementation and
-its application-runtime integration while retaining the language oracle. This
+its application-runtime integration while retaining the OCaml reference implementation. This
 document records that work; adopting the policy does not remove code, commands,
 artifacts or tests immediately.
 
@@ -42,12 +42,12 @@ artifacts or tests immediately.
    only after their coverage is accounted for. Historical OCaml results remain
    evidence, not parity requirements for new C kernel work.
 3. Remove the OCaml kernel and application-only integration from the
-   repository-owned patch/build inputs. Retain only justified language-oracle
+   repository-owned patch/build inputs. Retain only justified OCaml reference implementation
    fixes and scaffolding. Do not commit changes into upstream submodule history;
    use `submodules/wasm-spec-i31-int32.patch` and its build transaction.
 4. Remove dependent OCaml application-runtime commands, packaging, artifacts
    and direct/threaded POSIX test requirements. Keep the supported language
-   oracle build/run path and official test provenance; select its build variants
+   OCaml reference implementation build/run path and official test provenance; select its build variants
    based on language verification needs rather than application scheduling.
 5. Re-run supported official Wasm/WAT/WAST comparisons and the relevant C
    native/browser coverage gates after pruning. Document retained language
@@ -55,15 +55,15 @@ artifacts or tests immediately.
 
 ## Acceptance
 
-- OCaml builds and runs the supported WebAssembly-language oracle corpus
+- OCaml builds and runs the supported WebAssembly-OCaml reference implementation corpus
   without a repository-added kernel or application runtime dependency.
 - C native/browser kernel, libc, application and session coverage remains
   accounted for; no OCaml kernel parity gate remains.
 - Build/help, documentation and test selection describe OCaml only as the
-  language oracle. Legacy application artifacts and commands are removed with
+  OCaml reference implementation. Legacy application artifacts and commands are removed with
   explicit replacements where needed.
 
-Language-oracle comparisons remain part of the
+OCaml reference implementation comparisons remain part of the
 [browser/VFS plan](active-browser-vfs-layout-plan.md). Kernel retirement is
 deferred follow-up work, not an additional Stage 6B kernel migration gate.
 
