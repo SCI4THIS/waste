@@ -1,6 +1,6 @@
 # Mounted test distribution
 
-`src/vfs/tests` is an explicitly installed snapshot of the WebAssembly corpus and
+`src/vfs/root/waste/tests` is an explicitly installed snapshot of the WebAssembly corpus and
 authored engine regressions: 296 WAST files in 15 groups, including four
 unsupported legacy inputs. The original 284 identities remain unchanged;
 Stages 6B.22–6B.33 add twelve `engine-regressions` fixtures. Stage 6B.36 extends
@@ -32,12 +32,12 @@ and changed selection policy. After reviewing a deliberate selection change,
 use `python3 src/html-rt/tools/build-test-corpus.py --install --review-selection`.
 HTML packaging only consumes the installed inventory; it never refreshes it.
 
-`/tests/manifest.json` records source paths/hashes, pinned oracle revision,
+`/root/waste/tests/manifest.json` records source paths/hashes, pinned oracle revision,
 grouping, expected outcomes, skips, original execution specifications, assertion
 counts when known, and runtime profiles. Feature labels are group-derived, not
 a complete analysis of each module. Original host source paths are provenance,
 not permission to fall back to host files during future mounted execution.
-`/tests/.support` contains assembled DIY modules, mmap fixture bytes and libc
+`/root/waste/tests/.support` contains assembled DIY modules, mmap fixture bytes and libc
 client includes. Host-only test harnesses and build inputs are hash-traced in
 the manifest, not installed as guest executables. The upstream Apache-2.0
 license is mounted at `/usr/share/licenses/wasm-spec-tests/LICENSE`.
@@ -151,7 +151,7 @@ mapping and retained sanitizer/API boundaries are recorded in
 [test-coverage.md](test-coverage.md).
 
 This builds `build/cli-rt/waste-test`, reads the installed tree directly with
-its inventory metadata, then executes mounted `/tests/manifest.json` with four
+its inventory metadata, then executes mounted `/root/waste/tests/manifest.json` with four
 isolated native children. It writes assertion-aware records to
 `build/cli-rt/corpus-results.json`. It does not build the browser engine or
 refresh the installed distribution. An installed directory can be tested directly:
@@ -178,7 +178,7 @@ Completed reports retain assertion details. Exit codes are 0 for accepted result
 130 for Ctrl-C cancellation. Bash remains usable after each batch. Requests use
 the installed directory (native) or extracted package (browser), plus the
 runtime's tracked expected-failure policy;
-changes to the parent shell's `/tests` overlay do not change the isolated workers.
+changes to the parent shell's `/root/waste/tests` overlay do not change the isolated workers.
 The guest cannot override host root, executable, manifest or policy paths.
 
 Build and explicitly refresh the launcher snapshot with
@@ -290,7 +290,7 @@ Running these tests in the browser requires no Node process.
 
 `test-suite.js` supplies browser scheduling and event handling; each test uses
 a fresh instance of the production `worker.js` and C engine. The C API mounts
-the tar-extracted files with inventory metadata, decodes `/tests/manifest.json` with the same bounded
+the tar-extracted files with inventory metadata, decodes `/root/waste/tests/manifest.json` with the same bounded
 decoder as `waste-test`, and reads WAST/companions through the kernel. Dashboard
 payloads, provenance source paths, inline WAST and base64 fixture fields are
 never execution fallbacks. The tracked browser expected-failure list is a

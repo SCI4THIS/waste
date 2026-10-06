@@ -24,7 +24,7 @@ def deep_json():
 
 
 def entry(identity, source, **changes):
-    test = dict(id=identity, group=identity.rsplit("/", 1)[0], path="/tests/" + identity,
+    test = dict(id=identity, group=identity.rsplit("/", 1)[0], path="/root/waste/tests/" + identity,
                 executionSpec=dict(mode="wast-stream", file=identity), assets=[],
                 unsupported=False, expectFailure=False, unsupportedReason=None)
     test.update(changes)
@@ -53,10 +53,10 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
         manifest = dict(format=1, tests=[copy.deepcopy(t) for t, _ in items])
         if transform:
             transform(manifest)
-        files = {"/tests/manifest.json": json.dumps(manifest).encode()}
+        files = {"/root/waste/tests/manifest.json": json.dumps(manifest).encode()}
         files.update({t["path"]: source for t, source in items if source is not None})
         files.update(extra_files or {})
-        directories = {"/", "/root", "/tmp", "/tests"}
+        directories = {"/", "/root", "/tmp", "/root/waste", "/root/waste/tests"}
         for name in files:
             parent = str(Path(name).parent)
             while parent != "/":
@@ -119,7 +119,7 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
     install()
     filtered = run("--group=synthetic", "--exclude=fail.wast", "--exclude-group=compat")
     assert len(filtered["tests"]) == 5 and filtered["summary"]["pass"] == 5
-    assert len(run("/tests/synthetic/pass.wast")["tests"]) == 1
+    assert len(run("/root/waste/tests/synthetic/pass.wast")["tests"]) == 1
     run("--group=missing", expected=2, results=False)
     run("--jobs=NaN", expected=2, results=False)
     run("--timeout-ms=0", expected=2, results=False)
@@ -317,7 +317,7 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
         ("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqr", True),
         ("\ufeff", True)]
 
-    support = "/tests/.support/test-suite/file.bin"
+    support = "/root/waste/tests/.support/test-suite/file.bin"
     companion = entry("synthetic/companion.wast", (ROOT / "tests/test-suite-companion.wast").read_bytes(),
                       assets=[dict(kind="vfs-file", path=support, mountPath="/companion", mode=0o644)])
     install([companion], extra_files={support: b"tail"})
@@ -332,8 +332,8 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
     for transform in [
         lambda m: m.update(format=2),
         lambda m: m.update(tests=m["tests"] * 2),
-        lambda m: m["tests"][0].update(path="/tests/../escape.wast"),
-        lambda m: m["tests"][0].update(id="../escape.wast", path="/tests/../escape.wast"),
+        lambda m: m["tests"][0].update(path="/root/waste/tests/../escape.wast"),
+        lambda m: m["tests"][0].update(id="../escape.wast", path="/root/waste/tests/../escape.wast"),
         lambda m: m["tests"][0].update(unsupported="false"),
         lambda m: m["tests"][0].update(id="bad\0name"),
         lambda m: m["tests"][0].update(group="other"),
@@ -351,7 +351,7 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
                       b'{"format":1,"extra":"\\u12zz","tests":[]}',
                       b'{"format":1,"format":1,"tests":[]}',
                       b'{"format":01,"tests":[]}', b'{"format":1,"tests":[,]}'):
-        install(extra_files={"/tests/manifest.json": malformed})
+        install(extra_files={"/root/waste/tests/manifest.json": malformed})
         run(expected=2, results=False)
     install()
     inventory_path = vfs_root/".inventory.json"

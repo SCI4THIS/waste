@@ -106,12 +106,12 @@ assertions across READ/SELECT resumes and mapping failed child assertions to an
 exit status without stopping the parent shell. See `native-guest-session.md`.
 Host engine/worker assets and the host inventory are not guest VFS nodes.
 
-`src/vfs/tests` holds explicitly installed snapshots of the WebAssembly corpus
+`src/vfs/root/waste/tests` holds explicitly installed snapshots of the WebAssembly corpus
 and authored `tests/engine-regressions/*.wast`, with a mounted policy/provenance
 manifest and companion assets. Sources remain in the pinned spec submodule,
 top-level regression directories and generated libc fixture directory. The
 corpus collector shares selection/grouping logic with the installer.
-`waste-test`, the native batch companion, consumes `/tests/manifest.json` and
+`waste-test`, the native batch companion, consumes `/root/waste/tests/manifest.json` and
 WAST/support bytes from an installed directory without Node or an HTML payload.
 Its bounded manifest decoder
 lives in `src/engine/test_suite.{c,h}`; native child isolation, signal handling,

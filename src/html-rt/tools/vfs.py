@@ -171,13 +171,18 @@ def audit(manifest, read, physical=None):
         expected = {p for p, e in seen.items() if e["role"] != "interpreter" and p != "/"}
         if physical != expected:
             raise ValueError(f"unlisted or omitted VFS nodes: {sorted(physical ^ expected)}")
-    if test_distribution.MANIFEST in seen:
-        corpus = test_distribution.audit(json.loads(read(test_distribution.MANIFEST)), read, seen)
-        expected = dict(path=test_distribution.MANIFEST, tests=corpus["counts"]["tests"],
+    corpus_manifest_path = next((path for path in
+                                 (test_distribution.MANIFEST, test_distribution.LEGACY_MANIFEST)
+                                 if path in seen), None)
+    if corpus_manifest_path:
+        corpus = test_distribution.audit(json.loads(read(corpus_manifest_path)), read, seen)
+        expected = dict(path=corpus_manifest_path, tests=corpus["counts"]["tests"],
                         supported=corpus["counts"]["supported"], selection_sha256=corpus["selection_sha256"])
         if manifest.get("test_corpus") != expected:
             raise ValueError("VFS test corpus metadata differs")
-    elif "test_corpus" in manifest or any(p.startswith("/tests/") for p in seen):
+    elif "test_corpus" in manifest or any(
+            p.startswith(prefix + "/") for prefix in
+            (test_distribution.TEST_ROOT, test_distribution.LEGACY_TEST_ROOT) for p in seen):
         raise ValueError("missing mandatory test corpus manifest")
     return seen
 
@@ -456,10 +461,13 @@ def install_tests(root, source, corpus, review_selection=False):
     backup = None
     try:
         shutil.copytree(root, stage, dirs_exist_ok=True)
-        if (stage / "tests").exists():
-            shutil.rmtree(stage / "tests")  # Only the validated managed subtree.
+        for subtree in (stage / "tests", local(stage, test_distribution.TEST_ROOT)):
+            if subtree.exists():
+                shutil.rmtree(subtree)  # Only the validated managed subtree.
         previous = {e["path"]: e for e in old["entries"]}
-        entries = {p: dict(e) for p, e in previous.items() if p != "/tests" and not p.startswith("/tests/")
+        entries = {p: dict(e) for p, e in previous.items()
+                   if not any(p == prefix or p.startswith(prefix + "/") for prefix in
+                              (test_distribution.TEST_ROOT, test_distribution.LEGACY_TEST_ROOT))
                    and p != test_distribution.LICENSE}
         paths = [e["path"] for e in corpus["files"]] + [test_distribution.MANIFEST]
         files = {e["path"]: e for e in corpus["files"]}

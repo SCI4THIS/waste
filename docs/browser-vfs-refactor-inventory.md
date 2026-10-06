@@ -135,10 +135,10 @@ headers are not interchangeable with guest libc declarations.
 ## Complete dashboard corpus
 
 Preserve the existing qualified identities verbatim at
-`src/vfs/tests/<identity>`. In particular, proposal directories already live
+`src/vfs/root/waste/tests/<identity>`. In particular, proposal directories already live
 under `core/`; inventing a new `proposals/` prefix would change identities.
 
-| Existing group / destination below `/tests` | Files |
+| Existing group / destination below `/root/waste/tests` | Files |
 | --- | ---: |
 | `core` | 97 |
 | `core/bulk-memory` | 8 |

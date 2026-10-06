@@ -19,7 +19,7 @@ EXPECTED_FAILURES = {
 def contract(parser):
     clients = sorted((ROOT / "tests/libc-test").glob("*-client.wast.inc"))
     assert clients, "no authored libc clients"
-    manifest = json.loads((ROOT / "src/vfs/tests/manifest.json").read_text())
+    manifest = json.loads((ROOT / "src/vfs/root/waste/tests/manifest.json").read_text())
     installed = [t for t in manifest["tests"] if t["group"] == "libc-test"]
     identities = ["libc-test/" + p.name.replace("-client.wast.inc", ".wast") for p in clients]
     assert [t["id"] for t in installed] == identities, "libc selection differs from authored clients"

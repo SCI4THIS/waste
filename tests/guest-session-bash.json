@@ -4,7 +4,7 @@
     {"after": "bash-5.2# ", "text": "echo __FRAG"},
     {"after": "__FRAG", "text": "MENT_OK__\n"},
     {"after": "bash-5.2# ", "text": "echo __SECOND_OK__\n"},
-    {"after": "bash-5.2# ", "text": "IFS= read -r first < /tests/core/address.wast; printf '__FILE_READ__%s:%s\\n' \"$?\" \"$first\"\n"},
+    {"after": "bash-5.2# ", "text": "IFS= read -r first < /root/waste/tests/core/address.wast; printf '__FILE_READ__%s:%s\\n' \"$?\" \"$first\"\n"},
     {"after": "bash-5.2# ", "text": "exit 7\n"}
   ],
   "contains": ["\u001b[?2004l\r__FRAGMENT_OK__\r\n", "\u001b[?2004l\r__SECOND_OK__\r\n", "__FILE_READ__0:;; Load i32 data with different offset/align arguments\r\n"],

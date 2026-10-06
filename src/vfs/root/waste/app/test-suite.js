@@ -11,7 +11,7 @@ var WasteTestSuite = class {
     this.browserNativeSpecs = new Map();
     const inventory = JSON.parse(new TextDecoder().decode(vfs.inventory));
     const manifestIndex = inventory.entries.findIndex(entry =>
-      entry.path === "/tests/manifest.json");
+      entry.path === "/root/waste/tests/manifest.json");
     const manifestFile = vfs.files.find(file => file.index === manifestIndex);
     if (manifestIndex >= 0 && manifestFile) {
       const manifest = JSON.parse(new TextDecoder().decode(manifestFile.bytes));

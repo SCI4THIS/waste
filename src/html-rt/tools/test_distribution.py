@@ -9,7 +9,10 @@ import subprocess
 from test_corpus import collect_layout_tests, layout_roots
 from libc_sources import libc_source_paths
 
-MANIFEST = "/tests/manifest.json"
+TEST_ROOT = "/root/waste/tests"
+LEGACY_TEST_ROOT = "/tests"
+MANIFEST = TEST_ROOT + "/manifest.json"
+LEGACY_MANIFEST = LEGACY_TEST_ROOT + "/manifest.json"
 LICENSE = "/usr/share/licenses/wasm-spec-tests/LICENSE"
 
 
@@ -51,11 +54,15 @@ def prepare(repo, output, payload_path, baseline=None):
     repairs = []
     if baseline:
         previous = {t["id"]: t for t in json.loads(baseline.read_text())["corpus"]}
-    elif (repo / "src/vfs/tests/manifest.json").is_file():
-        installed = json.loads((repo / "src/vfs/tests/manifest.json").read_text())
-        previous = {t["id"]: dict(sha256=t["source"]["sha256"], packaged_spec=t["executionSpec"])
-                    for t in installed["tests"]}
-        repairs = installed.get("baselineRepairs", [])
+    else:
+        installed_path = next((repo / "src/vfs" / path.lstrip("/")
+                               for path in (MANIFEST, LEGACY_MANIFEST)
+                               if (repo / "src/vfs" / path.lstrip("/")).is_file()), None)
+        if installed_path:
+            installed = json.loads(installed_path.read_text())
+            previous = {t["id"]: dict(sha256=t["source"]["sha256"], packaged_spec=t["executionSpec"])
+                        for t in installed["tests"]}
+            repairs = installed.get("baselineRepairs", [])
 
     def add(path, data, role, source):
         if path in files:
@@ -95,19 +102,19 @@ def prepare(repo, output, payload_path, baseline=None):
                 raise ValueError(f"wrong installed-test source: {identity}")
         elif spec["mode"] != "browser-native" or spec.get("error"):
             raise ValueError(f"unusable browser execution specification: {identity}")
-        path = "/tests/" + identity
+        path = TEST_ROOT + "/" + identity
         add(path, data, "test-input", source)
         assets = []
         for index, module in enumerate(spec.get("modules", [])):
             binary = base64.b64decode(module["wasmB64"], validate=True)
             if binary[:8] != b"\0asm\x01\0\0\0":
                 raise ValueError(f"invalid DIY Wasm asset: {identity}")
-            asset = f"/tests/.support/{identity[:-5]}/module-{index}.wasm"
+            asset = f"{TEST_ROOT}/.support/{identity[:-5]}/module-{index}.wasm"
             add(asset, binary, "test-support", "assembled:" + source)
             assets.append(dict(kind="module", index=index, path=asset, moduleId=module["id"]))
         for index, file in enumerate(spec.get("vfsFiles", [])):
             binary = base64.b64decode(file["dataB64"], validate=True)
-            asset = f"/tests/.support/{identity[:-5]}/file-{index}.bin"
+            asset = f"{TEST_ROOT}/.support/{identity[:-5]}/file-{index}.bin"
             add(asset, binary, "test-support", "fixture:" + source)
             assets.append(dict(kind="vfs-file", index=index, path=asset, mountPath=file["path"], mode=file["mode"]))
         tests.append(dict(id=identity, path=path, name=entry["path"].name,
@@ -144,7 +151,7 @@ def prepare(repo, output, payload_path, baseline=None):
             data = path.read_bytes()
             inputs.append(dict(path=relative, size=len(data), sha256=sha(data), hostOnly=not path.name.endswith(".wast.inc")))
             if path.name.endswith(".wast.inc"):
-                add("/tests/.support/libc-test/" + path.name, data, "test-support", relative)
+                add(TEST_ROOT + "/.support/libc-test/" + path.name, data, "test-support", relative)
     for path in (repo / "src/html-rt/lib/stdlib.wat", repo / "build/html-rt/waste-libc/waste-libc.wasm",
                  repo / "src/vfs/usr/share/waste/sdk.json", repo / "src/html-rt/tools/build-waste-libc.py",
                  repo / "src/html-rt/lib/include/helper.h", repo / "submodules/wasm-spec-i31-int32.patch",
@@ -177,10 +184,14 @@ def audit(manifest, read, declared):
     """Archive/tree audit, independent of local source trees and build tools."""
     if manifest.get("format") != 1:
         raise ValueError("unsupported test corpus manifest")
+    manifest_path = next((path for path in (MANIFEST, LEGACY_MANIFEST) if path in declared), None)
+    if manifest_path is None:
+        raise ValueError("missing mounted test corpus manifest")
+    test_root = manifest_path.removesuffix("/manifest.json")
     tests, seen, files = manifest["tests"], set(), {}
     for entry in manifest["files"]:
         path = entry["path"]
-        if path in files or path not in declared or not (path.startswith("/tests/") or path == LICENSE):
+        if path in files or path not in declared or not (path.startswith(test_root + "/") or path == LICENSE):
             raise ValueError(f"conflicting or omitted test asset: {path}")
         data = read(path)
         if len(data) != entry["size"] or sha(data) != entry["sha256"]:
@@ -190,7 +201,7 @@ def audit(manifest, read, declared):
         raise ValueError("missing test corpus license/provenance")
     for test in tests:
         identity = test["id"]
-        if identity in seen or test["path"] != "/tests/" + identity or test["path"] not in files:
+        if identity in seen or test["path"] != test_root + "/" + identity or test["path"] not in files:
             raise ValueError(f"conflicting or omitted corpus identity: {identity}")
         seen.add(identity)
         if files[test["path"]]["role"] != "test-input" or declared[test["path"]]["mode"] != 0o644:
@@ -223,7 +234,7 @@ def audit(manifest, read, declared):
                   groups=dict(sorted(Counter(t["group"] for t in tests).items())))
     if actual != manifest["counts"] or sha(encoded(selection(tests))) != manifest["selection_sha256"]:
         raise ValueError("test selection/count/policy metadata differs")
-    if {p for p, e in declared.items() if e["kind"] == 1 and p.startswith("/tests/")} != set(files) - {LICENSE} | {MANIFEST}:
+    if {p for p, e in declared.items() if e["kind"] == 1 and p.startswith(test_root + "/")} != set(files) - {LICENSE} | {manifest_path}:
         raise ValueError("unlisted or omitted test corpus files")
     return manifest
 

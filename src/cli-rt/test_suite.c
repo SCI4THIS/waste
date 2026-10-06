@@ -1,4 +1,4 @@
-/* Native batch execution of the installed /tests distribution. Host process
+/* Native batch execution of the installed /root/waste/tests distribution. Host process
  * isolation, clocks, signals and report files belong to this adapter. */
 #define _XOPEN_SOURCE 700
 #define _POSIX_C_SOURCE 200809L
@@ -292,7 +292,7 @@ static void report_record(FILE *out, const test_record *record) {
 
 static void usage(void) {
     puts("usage: waste-test --vfs-root=DIRECTORY [OPTIONS] [IDENTITY ...]\n"
-         "  --manifest=/tests/manifest.json   mounted format-1 manifest\n"
+         "  --manifest=" WASTE_SUITE_MANIFEST "   mounted format-1 manifest\n"
          "  --list                           enumerate selected tests, including skips\n"
          "  --group=NAME --exclude=FILE --exclude-group=NAME (repeatable)\n"
          "  --expected-failures=PATH          tracked host-side XFAIL list\n"
@@ -336,7 +336,7 @@ static int report_outside_tree(const char *root, const char *destination, const 
 }
 
 int main(int argc, char **argv) {
-    const char *root_path = NULL, *manifest_path = "/tests/manifest.json";
+    const char *root_path = NULL, *manifest_path = WASTE_SUITE_MANIFEST;
     const char *results_path = NULL, *expected_path = NULL;
     unsigned jobs = 1, global_timeout = 0;
     int list = 0, json = 0;
@@ -366,7 +366,9 @@ int main(int argc, char **argv) {
         } else if (arg[0] == '-') goto bad_options;
         else if (!add_filter(&files, arg)) goto bad_options;
     }
-    if (!root_path || !*root_path || strncmp(manifest_path, "/tests/", 7) ||
+    if (!root_path || !*root_path ||
+        strncmp(manifest_path, WASTE_SUITE_TEST_PREFIX,
+                sizeof(WASTE_SUITE_TEST_PREFIX) - 1u) ||
         (results_path && (!*results_path || same_file(results_path, root_path) ||
                           same_file(results_path, expected_path)))) goto bad_options;
 

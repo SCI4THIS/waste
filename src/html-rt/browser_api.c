@@ -1695,9 +1695,9 @@ int32_t waste_wast_suite_load(void) {
     uint8_t *bytes = NULL;
     int result = -1;
     if (catalogue.kernel && !waste_vfs_mount(catalogue.kernel, &g_boot_vfs))
-        bytes = browser_suite_read(catalogue.kernel, "/tests/manifest.json", &length);
+        bytes = browser_suite_read(catalogue.kernel, WASTE_SUITE_MANIFEST, &length);
     if (!bytes)
-        snprintf(g_suite_error, sizeof(g_suite_error), "cannot read mounted /tests/manifest.json");
+        snprintf(g_suite_error, sizeof(g_suite_error), "cannot read mounted " WASTE_SUITE_MANIFEST);
     else if (!waste_suite_decode((const char *)bytes, length, &g_suite,
                                   g_suite_error, sizeof(g_suite_error)))
         result = (int)g_suite.count;

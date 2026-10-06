@@ -146,7 +146,7 @@ def collect(root: Path) -> dict:
                            "packaged_spec": spec,
                            "spec_sha256": hashlib.sha256(json.dumps(
                                spec, sort_keys=True).encode()).hexdigest(),
-                           "destination": "src/vfs/tests/" + entry["relative"]})
+                           "destination": "src/vfs/root/waste/tests/" + entry["relative"]})
 
     consumers = []
     files = subprocess.run(["rg", "--files", "src", "tests", "docs",

@@ -37,10 +37,11 @@ snapshots live in `src/vfs/usr/lib/waste/cc/include`. Keep engine/native headers
 and libc `helper.h` private. After public-header edits, run the explicit
 `guest-sdk-install` and `guest-sdk-check` targets; see `docs/guest-sdk.md` for
 the audited SDK's provider/signature capability ledger and build profiles.
-Test files in `src/vfs/tests` are installed distribution snapshots, not authored
-sources. Refresh with `vfs-tests-install` and audit with `vfs-tests-check`;
-the single `bash.html` page runs browser corpus diagnostics from these mounted
-snapshots. See `docs/test-corpus.md`.
+Test files in `src/vfs/root/waste/tests` are installed distribution snapshots,
+not authored sources. They mount at `/root/waste/tests`. Refresh with
+`vfs-tests-install` and audit with `vfs-tests-check`; the single `bash.html`
+page runs browser corpus diagnostics from these mounted snapshots. See
+`docs/test-corpus.md`.
 Authored portable executor regressions live in `tests/engine-regressions/*.wast`;
 `docs/test-coverage.md` records their C assertion mappings and retained private
 checks. The `i32-smoke`, `caller-instance` and `continuation` gates require their

@@ -24,7 +24,8 @@ static int canonical(const char *p, int absolute) {
 static int asset_decode(json_view object, waste_suite_asset *asset) {
     json_view mode;
     if (!field(object, "path", asset->path, sizeof(asset->path)) ||
-        strncmp(asset->path, "/tests/.support/", 16) || !canonical(asset->path, 1) ||
+        strncmp(asset->path, WASTE_SUITE_SUPPORT_PREFIX,
+                sizeof(WASTE_SUITE_SUPPORT_PREFIX) - 1u) || !canonical(asset->path, 1) ||
         !field(object, "mountPath", asset->mount_path, sizeof(asset->mount_path)) ||
         !canonical(asset->mount_path, 1) || !member(object, "mode", &mode)) return 0;
     uint32_t n = 0;
@@ -44,7 +45,9 @@ static int test_decode(json_view object, waste_suite_test *test) {
         !field(object, "group", test->group, sizeof(test->group)) ||
         !canonical(test->group, 0) ||
         !field(object, "path", test->path, sizeof(test->path)) ||
-        strncmp(test->path, "/tests/", 7) || strcmp(test->path + 7, test->identity) ||
+        strncmp(test->path, WASTE_SUITE_TEST_PREFIX,
+                sizeof(WASTE_SUITE_TEST_PREFIX) - 1u) ||
+        strcmp(test->path + sizeof(WASTE_SUITE_TEST_PREFIX) - 1u, test->identity) ||
         !boolean(object, "unsupported", &test->unsupported) ||
         !boolean(object, "expectFailure", &test->expect_failure) ||
         !member(object, "executionSpec", &spec) ||

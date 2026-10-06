@@ -202,7 +202,7 @@ now runs from the unified Bash page.
 ### Browser-native fixture in Bash Installed tests (Stage 6B.96)
 
 The Bash controller now reads browser-native execution specs from the mounted
-`/tests/manifest.json`. It clears the C runner's compatibility skip only when
+`/root/waste/tests/manifest.json`. It clears the C runner's compatibility skip only when
 a packaged module/step spec is present, then runs that spec in an isolated Bash
 worker with the compatibility imports and the standard deadline/cancellation
 lifecycle. Results use the same per-assertion `done` record as WAST-stream

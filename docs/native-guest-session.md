@@ -100,7 +100,7 @@ EOF, accept coalesced records and reject malformed child delivery without
 reporting a child exit. Browser probes reject eight invalid export values,
 check same-instance fresh-store recovery, and reject 35 invalid/overflow worker
 messages while testing pre-start delivery. These fixtures are authored host
-regressions, not additions to the installed `/tests` corpus. Evidence is under
+regressions, not additions to the installed `/root/waste/tests` corpus. Evidence is under
 `build/engine/refactor-stage6a2-terminal`.
 
 `--timeout-ms N` defaults to 30,000 ms from startup and bounds interpreted
@@ -211,7 +211,7 @@ The Bash file-input regression required a typed `pop_scope` cleanup adapter
 at table slot 145, following the existing cleanup-adapter scheme. It fixes the
 historical C function-pointer cast without loosening engine type checks.
 The host-side regression fixtures are not additional installed dashboard
-suites, so the frozen `/tests/manifest.json` corpus remains unchanged.
+suites, so the frozen `/root/waste/tests/manifest.json` corpus remains unchanged.
 
 The formerly trapping `/tmp/session-heredoc.txt` command is retained verbatim
 in `guest-session-heredoc-long.json`, now a positive acceptance contract.
@@ -284,7 +284,7 @@ teardown with no false child exit. Browser checks reject false expected-trap
 and `assert_invalid` passes, then run a fresh store in the same Wasm instance.
 The worker checks runnable and blocked limits, preserving earlier successful
 assertions rather than labeling interruption as either success or invalidity.
-These host-side fixtures do not alter the frozen installed `/tests` corpus.
+These host-side fixtures do not alter the frozen installed `/root/waste/tests` corpus.
 Evidence is under `build/engine/refactor-stage6a2-control`.
 The final combined gate passes eighteen native interruptions with leak checks,
 twelve browser-export interruptions plus same-instance recovery, and four

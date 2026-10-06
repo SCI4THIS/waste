@@ -34,7 +34,7 @@ function suite(vfs, expectedFailures = "", factory = createWorker) {
   return new context.WasteTestSuite({wasmBytes, vfs, expectedFailures, createWorker: factory});
 }
 function test(name, source, changes = {}) {
-  return {record: {id: "synthetic/" + name, group: "synthetic", path: "/tests/synthetic/" + name,
+  return {record: {id: "synthetic/" + name, group: "synthetic", path: "/root/waste/tests/synthetic/" + name,
     executionSpec: {mode: "wast-stream", file: name}, assets: [], unsupported: false,
     expectFailure: false, ...changes}, source};
 }
@@ -46,13 +46,13 @@ const definitions = [test("pass.wast", read("test-suite-pass.wast")),
   test("memory-writer.wast", read("diy-posix-test/spectest-isolation-a.wast")),
   test("memory-reader.wast", read("diy-posix-test/spectest-isolation-b.wast")),
   test("companion.wast", read("test-suite-companion.wast"), {assets: [{kind: "vfs-file",
-    path: "/tests/.support/tail", mountPath: "/companion", mode: 0o644}]}),
+    path: "/root/waste/tests/.support/tail", mountPath: "/companion", mode: 0o644}]}),
   test("skip.wast", Buffer.from("unparseable"), {unsupported: true, unsupportedReason: "legacy"}),
   test("compat.wast", Buffer.from("unparseable"), {executionSpec: {mode: "browser-native", file: "compat.wast"}})];
-function filesystem(items = definitions, extra = {"/tests/.support/tail": Buffer.from("tail")}, transform) {
+function filesystem(items = definitions, extra = {"/root/waste/tests/.support/tail": Buffer.from("tail")}, transform) {
   const manifest = {format: 1, tests: items.map(item => structuredClone(item.record))};
   transform?.(manifest);
-  const files = new Map([["/tests/manifest.json", Buffer.from(JSON.stringify(manifest))],
+  const files = new Map([["/root/waste/tests/manifest.json", Buffer.from(JSON.stringify(manifest))],
     ...items.filter(item => item.source).map(item => [item.record.path, item.source]), ...Object.entries(extra)]);
   const directories = new Set(["/", "/root", "/tmp"]);
   for (const name of files.keys()) {

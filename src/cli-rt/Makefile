@@ -290,7 +290,7 @@ $(WASTE_PROBE_WASM): ../../tests/c-engine-waste-probe.c
 i32-smoke: gen $(WAST_TARGET) $(SUITE_SAN_TARGET) $(I32_SMOKE_TARGET) $(I32_SMOKE_WASM) $(IMPORT_SMOKE_WASM) $(EXTERN_PROVIDER_WASM) $(EXTERN_CONSUMER_WASM)
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(I32_SMOKE_TARGET) $(I32_SMOKE_WASM) $(IMPORT_SMOKE_WASM) $(EXTERN_PROVIDER_WASM) $(EXTERN_CONSUMER_WASM)
 	for fixture in ../../tests/engine-regressions/*.wast; do \
-		cmp "$$fixture" "../vfs/tests/engine-regressions/$${fixture##*/}" || exit $$?; \
+		cmp "$$fixture" "../vfs/root/waste/tests/engine-regressions/$${fixture##*/}" || exit $$?; \
 		$(WAST_TARGET) "$$fixture" || exit $$?; \
 	done
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
@@ -462,7 +462,7 @@ posix-path-abi: $(POSIX_PATH_ABI_TEST_TARGET)
 
 posix-path-vfs: gen $(POSIX_PATH_VFS_TEST_TARGET) $(WAST_TARGET) $(SUITE_SAN_TARGET)
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(POSIX_PATH_VFS_TEST_TARGET)
-	cmp ../../tests/engine-regressions/path-vfs.wast ../vfs/tests/engine-regressions/path-vfs.wast
+	cmp ../../tests/engine-regressions/path-vfs.wast ../vfs/root/waste/tests/engine-regressions/path-vfs.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/path-vfs.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs path-vfs.wast --jobs=1 \
@@ -514,22 +514,22 @@ $(POSIX_SELECT_ABI_TEST_TARGET): ../../tests/posix-select-abi.c \
 
 posix-kernel: gen $(POSIX_KERNEL_TEST_TARGET) $(WAST_TARGET) $(SUITE_SAN_TARGET) terminal-readiness terminal-timing process-groups terminal-descriptors
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(POSIX_KERNEL_TEST_TARGET)
-	cmp ../../tests/engine-regressions/pipe-descriptors.wast ../vfs/tests/engine-regressions/pipe-descriptors.wast
+	cmp ../../tests/engine-regressions/pipe-descriptors.wast ../vfs/root/waste/tests/engine-regressions/pipe-descriptors.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/pipe-descriptors.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs pipe-descriptors.wast --jobs=1 \
 		--results=$(BUILD_DIR)/pipe-regressions.json
-	cmp ../../tests/engine-regressions/descriptor-flags.wast ../vfs/tests/engine-regressions/descriptor-flags.wast
+	cmp ../../tests/engine-regressions/descriptor-flags.wast ../vfs/root/waste/tests/engine-regressions/descriptor-flags.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/descriptor-flags.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs descriptor-flags.wast --jobs=1 \
 		--results=$(BUILD_DIR)/descriptor-regressions.json
-	cmp ../../tests/engine-regressions/directory-umask.wast ../vfs/tests/engine-regressions/directory-umask.wast
+	cmp ../../tests/engine-regressions/directory-umask.wast ../vfs/root/waste/tests/engine-regressions/directory-umask.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/directory-umask.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs directory-umask.wast --jobs=1 \
 		--results=$(BUILD_DIR)/directory-regressions.json
-	cmp ../../tests/engine-regressions/shared-memory.wast ../vfs/tests/engine-regressions/shared-memory.wast
+	cmp ../../tests/engine-regressions/shared-memory.wast ../vfs/root/waste/tests/engine-regressions/shared-memory.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/shared-memory.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs shared-memory.wast --jobs=1 \
@@ -550,7 +550,7 @@ $(POSIX_KERNEL_TEST_TARGET): ../../tests/posix-kernel.c \
 
 posix-select: gen $(POSIX_SELECT_TEST_TARGET) $(WAST_TARGET) $(SUITE_SAN_TARGET) terminal-readiness
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(POSIX_SELECT_TEST_TARGET)
-	cmp ../../tests/engine-regressions/select-polling.wast ../vfs/tests/engine-regressions/select-polling.wast
+	cmp ../../tests/engine-regressions/select-polling.wast ../vfs/root/waste/tests/engine-regressions/select-polling.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/select-polling.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs select-polling.wast --jobs=1 \
@@ -622,7 +622,7 @@ $(POSIX_WAIT_TEST_TARGET): ../../tests/posix-wait.c \
 
 posix-signal: gen $(POSIX_SIGNAL_TEST_TARGET) $(WAST_TARGET) $(SUITE_SAN_TARGET)
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(POSIX_SIGNAL_TEST_TARGET)
-	cmp ../../tests/engine-regressions/signal-masks.wast ../vfs/tests/engine-regressions/signal-masks.wast
+	cmp ../../tests/engine-regressions/signal-masks.wast ../vfs/root/waste/tests/engine-regressions/signal-masks.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/signal-masks.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs signal-masks.wast --jobs=1 \
@@ -643,7 +643,7 @@ $(POSIX_SIGNAL_TEST_TARGET): ../../tests/posix-signal.c \
 
 caller-instance: gen $(WAST_TARGET) $(SUITE_SAN_TARGET) $(CALLER_INSTANCE_TEST_TARGET) $(CALLER_A_WASM) $(CALLER_B_WASM)
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(CALLER_INSTANCE_TEST_TARGET) $(CALLER_A_WASM) $(CALLER_B_WASM)
-	cmp ../../tests/engine-regressions/caller-memory.wast ../vfs/tests/engine-regressions/caller-memory.wast
+	cmp ../../tests/engine-regressions/caller-memory.wast ../vfs/root/waste/tests/engine-regressions/caller-memory.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/caller-memory.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs caller-memory.wast --results=$(BUILD_DIR)/caller-memory-results.json
@@ -833,7 +833,7 @@ $(EXEC_LIFECYCLE_TEST_TARGET): ../../tests/c-engine-exec-lifecycle.c \
 continuation: gen $(WAST_TARGET) $(SUITE_SAN_TARGET) $(CONTINUATION_TEST_TARGET) $(CONTINUATION_WASM) $(CONTINUATION_CONSUMER_WASM)
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(CONTINUATION_TEST_TARGET) $(CONTINUATION_WASM) \
 		$(CONTINUATION_CONSUMER_WASM)
-	cmp ../../tests/engine-regressions/continuation-waits.wast ../vfs/tests/engine-regressions/continuation-waits.wast
+	cmp ../../tests/engine-regressions/continuation-waits.wast ../vfs/root/waste/tests/engine-regressions/continuation-waits.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/continuation-waits.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs continuation-waits.wast --results=$(BUILD_DIR)/continuation-waits-results.json
