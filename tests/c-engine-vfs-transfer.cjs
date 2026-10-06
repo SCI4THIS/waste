@@ -24,7 +24,7 @@ const self = {postMessage(message) {
 const context = vm.createContext({self, WebAssembly, Uint8Array, DataView,
   TextDecoder, TextEncoder, Promise, Math, Number, String, Date, Error,
   setTimeout, clearTimeout, console, atob:s => Buffer.from(s, "base64").toString("binary")});
-vm.runInContext(page.read("waste/app/worker.js").toString(), context);
+vm.runInContext(page.read("root/waste/app/worker.js").toString(), context);
 const buffer = b => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
 const wait = async test => {
   const deadline = Date.now() + 15000;

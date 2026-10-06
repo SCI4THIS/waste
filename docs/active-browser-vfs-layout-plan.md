@@ -15,11 +15,13 @@ The Bash page keeps a small loading screen, tarballjs reader, loader, and
 zlib-wasm bytes in the standalone HTML. Startup compiles zlib-wasm first, uses
 it to inflate the compressed tar archive, extracts the installed VFS into
 memory, then loads the Bash theme, terminal renderer/font, suite controller,
-shell app, and worker from `/waste/app`. The shell loop starts only after those
+shell app, and worker from `/root/waste/app`. The shell loop starts only after those
 steps complete. Refresh these distribution snapshots with
 `make -C src/html-rt vfs-install-app`; the installer/auditor requires the
-complete app set. The Bash page owns the installed-test diagnostics UI; focused
-worker conformance tests consume generated JSON payloads directly.
+complete app set. The host snapshot lives at `src/vfs/root/waste/app`, matching
+the guest path `/root/waste/app` and its tar archive member names. The Bash page
+owns the installed-test diagnostics UI; focused worker conformance tests
+consume generated JSON payloads directly.
 
 ## OCaml scope decision (2026-10-04)
 
@@ -93,6 +95,8 @@ src/
     test-runner.js         batch orchestration/results, if needed
   cli-rt/                  native runner, platform adapters, scripted I/O
   vfs/
+    root/
+      waste/app/            compressed browser app, terminal, and test worker
     bin/                   shell-facing commands and interpreter launchers
     usr/
       bin/                 installed application executables
@@ -6202,3 +6206,20 @@ Stage 7.1 landing slice — retire the standalone test dashboard workflow (2026-
   supported commands or dependencies. Stage 7's gate is complete; no manual
   browser rerun is needed for this cleanup slice because shell/test UI behavior
   is unchanged and Firefox acceptance was already supplied.
+
+Stage 7.2 layout refinement — place the packaged app under the guest root home (2026-10-05):
+
+- Moved the installed frontend snapshot from `src/vfs/waste/app` to
+  `src/vfs/root/waste/app`, so its host and guest paths now agree with the
+  `/root/waste/app` layout. Updated the installer, boot loader, archive worker
+  lookup, package checks, session harnesses, and build diagnostics. The
+  installer accepts the old inventory layout for the migration audit, then
+  removes `/waste` entries when publishing the new snapshot.
+- Regenerated and audited the inventory: **507 VFS nodes**, 296 installed tests
+  with 292 supported. Confirmed there are no `/waste` inventory entries and
+  packaged app members use `root/waste/app/...`.
+- Rebuilt `bash.html`; frontend packaging, Bash browser harness (**7/7**),
+  upload/download VFS transfer, corpus source/provenance checks, JavaScript and
+  Python syntax checks, and `git diff --check` pass. Manual browser testing is
+  not needed for this path-only relocation; the production loader and worker
+  were exercised against the rebuilt package.

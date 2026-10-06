@@ -143,8 +143,6 @@ def audit(manifest, read, physical=None):
                 if e.get(field) != other.get(field):
                     raise ValueError(f"alias differs: {path}")
     required = ["/usr/bin/" + n for n in COMMANDS] + [
-        "/waste/app/" + name for name in APP_FILES
-    ] + [
         "/lib/libncurses.so.wasm", "/bin/wat", "/bin/wast",
         "/usr/share/waste/launch.wast", "/usr/share/waste/coreutils-provenance.json",
         "/usr/share/waste/coreutils-source-package.json", "/usr/share/licenses/coreutils/COPYING",
@@ -152,6 +150,10 @@ def audit(manifest, read, physical=None):
     for path in required:
         if path not in seen:
             raise ValueError(f"missing mandatory VFS path: {path}")
+    app_paths = [{prefix + name for name in APP_FILES}
+                 for prefix in ("/root/waste/app/", "/waste/app/")]
+    if not any(paths <= seen.keys() for paths in app_paths):
+        raise ValueError("missing mandatory Bash webapp paths under /root/waste/app")
     for n in COMMANDS + [n for n in OPTIONAL_COMMANDS
                          if "/usr/bin/" + n in seen or "/bin/" + n in seen]:
         canonical = seen.get("/usr/bin/" + n, {})
@@ -346,6 +348,14 @@ def install(root, legacy=None, component=None, source=None, review_import=()):
             shutil.copytree(root, stage, dirs_exist_ok=True, copy_function=shutil.copy2)
         entries = {e["path"]: dict(e) for e in old["entries"]} if old else {}
 
+        # The webapp now lives below the guest root user's home directory.
+        # Drop the previous /waste tree from both the manifest and staged copy.
+        for path in [p for p in entries if p == "/waste" or p.startswith("/waste/")]:
+            del entries[path]
+        stale_webapp = stage / "waste"
+        if stale_webapp.exists():
+            shutil.rmtree(stale_webapp)
+
         def put(path, src, role, mode, alias=None):
             guest_path(path)
             data = src.read_bytes()
@@ -367,7 +377,7 @@ def install(root, legacy=None, component=None, source=None, review_import=()):
         for n, src in inputs.items():
             if n == "app":
                 for guest_name, source_name in APP_FILES.items():
-                    put("/waste/app/" + guest_name, src / source_name,
+                    put("/root/waste/app/" + guest_name, src / source_name,
                         "webapp", 0o644)
             elif n == "launch":
                 put("/usr/share/waste/launch.wast", src, "bootstrap", 0o644)

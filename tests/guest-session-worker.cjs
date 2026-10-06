@@ -20,11 +20,11 @@ let output = "", done, ready = 0, pid, waitKind, diagnosticResults, controlFailu
 let expectedControlErrors = 0;
 const suiteContext = vm.createContext({setTimeout, clearTimeout, performance,
   TextDecoder, TextEncoder, Uint8Array, DataView});
-const suiteSource = page.read("waste/app/test-suite.js").toString();
+const suiteSource = page.read("root/waste/app/test-suite.js").toString();
 assert.equal(suiteSource, fs.readFileSync("src/html-rt/src/test-suite.js", "utf8"),
   "package contains the production suite controller");
 vm.runInContext(suiteSource, suiteContext);
-const workerSource = page.read("waste/app/worker.js").toString();
+const workerSource = page.read("root/waste/app/worker.js").toString();
 const suite = new suiteContext.WasteTestSuite({wasmBytes:page.read("waste-wast.wasm"),
   vfs, expectedFailures:fs.readFileSync("tests/browser-corpus-expected-failures.txt", "utf8"),
   createWorker() {
@@ -58,7 +58,7 @@ const self = {postMessage(message) {
   }
   if (message.type === "done") done = message;
 }};
-vm.runInContext(page.read("waste/app/worker.js").toString(), vm.createContext({self,
+vm.runInContext(page.read("root/waste/app/worker.js").toString(), vm.createContext({self,
   WebAssembly, Uint8Array, DataView, TextDecoder, TextEncoder, Promise, Math,
   Number, String, Date, Error, setTimeout, clearTimeout, console,
   atob: value => Buffer.from(value, "base64").toString("binary")}));

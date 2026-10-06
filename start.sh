@@ -1161,7 +1161,7 @@ generate_c_engine_bash_html() {
       "$C_ENGINE_BASH_LOG" python3 "$REPO_ROOT/src/html-rt/tools/vfs.py" \
       install --component app --source "$REPO_ROOT/src/html-rt/src"; then
     show_message "C-engine Bash install failed" \
-      "Could not install the Bash webapp into /waste/app.\n\nLog: $C_ENGINE_BASH_LOG"
+      "Could not install the Bash webapp into /root/waste/app.\n\nLog: $C_ENGINE_BASH_LOG"
     return 1
   fi
 

@@ -156,7 +156,7 @@ async function startShell(event) {
       if (starting) status.textContent = `Starting C engine (${((Date.now() - startedEpoch) / 1000).toFixed(1)} s by Date)`;
     }, 100);
 
-    worker = await createWorker(g.is_staging ? "worker.js" : "waste/app/worker.js");
+    worker = await createWorker(g.is_staging ? "worker.js" : "root/waste/app/worker.js");
     let guestSuiteId = 0;
     worker.onmessage = ({data}) => {
       if (data.type === "output") {

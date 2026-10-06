@@ -70,7 +70,7 @@ logStep("BASH ASSERT app sources are not inlined into HTML");
 for (const name of ["app.js", "worker.js", "test-suite.js", "style.css",
   "terminal/model.js", "terminal/glf.js", "terminal/renderer.js"]) {
   assert(!archive.html.includes(fs.readFileSync(path.join(frontend, name), "utf8")));
-  assertBytesEqual(archive.read("waste/app/" + name),
+  assertBytesEqual(archive.read("root/waste/app/" + name),
     fs.readFileSync(path.join(frontend, name)), `bash VFS app ${name}`);
 }
 logStep("PAGE ASSERT engine bytes target=bash file=waste-wast.wasm");

@@ -29,7 +29,7 @@ def audit_members(members: list[tarfile.TarInfo]) -> None:
     ordered = [member.name for member in members]
     # GNU tar emits a deterministic depth-first path order. Compare path
     # components so a directory subtree sorts before a sibling whose name
-    # merely shares its prefix (for example waste/app and waste-wast.wasm).
+    # merely shares its prefix (for example root/waste/app and waste-wast.wasm).
     if ordered != sorted(ordered, key=lambda name: tuple(name.rstrip("/").split("/"))):
         raise SystemExit("package entries are not sorted")
     for member in members:

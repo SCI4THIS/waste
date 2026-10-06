@@ -57,7 +57,7 @@ function loadInstalledVfs() {
 /* Create a Web Worker — file URL in staging, Blob URL from tar in production */
 async function createWorker(filename) {
   if (g.is_staging) return new Worker(filename);
-  if (filename === "worker.js") filename = "waste/app/worker.js";
+  if (filename === "worker.js") filename = "root/waste/app/worker.js";
   var src = await g.tar_hash[filename].text();
   var url = URL.createObjectURL(new Blob([src], {type: "text/javascript"}));
   var w = new Worker(url);
@@ -68,14 +68,14 @@ async function createWorker(filename) {
 /* Production frontend files live in the compressed installed VFS. */
 async function loadWebappFiles() {
   const style = document.createElement("style");
-  style.textContent = await loadText("waste/app/style.css");
+  style.textContent = await loadText("root/waste/app/style.css");
   document.head.appendChild(style);
   for (const filename of [
-    "waste/app/terminal/model.js",
-    "waste/app/terminal/glf.js",
-    "waste/app/terminal/renderer.js",
-    "waste/app/test-suite.js",
-    "waste/app/app.js",
+    "root/waste/app/terminal/model.js",
+    "root/waste/app/terminal/glf.js",
+    "root/waste/app/terminal/renderer.js",
+    "root/waste/app/test-suite.js",
+    "root/waste/app/app.js",
   ]) {
     const source = await loadText(filename);
     const url = URL.createObjectURL(new Blob([source], {type: "text/javascript"}));

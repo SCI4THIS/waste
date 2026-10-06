@@ -157,7 +157,7 @@ for (const name of ["stat", "lstat", "fstat", "eaccess", "faccessat", "fork"]) {
 }
 
 /* Load worker source, wasm, and launch script from staging files */
-const workerSrc = archive ? archive.read("waste/app/worker.js").toString("utf8")
+const workerSrc = archive ? archive.read("root/waste/app/worker.js").toString("utf8")
   : fs.readFileSync(path.join(frontendDir, "worker.js"), "utf8");
 
 const wasmPath = path.join(root, "build/html-rt/waste-wast.wasm");

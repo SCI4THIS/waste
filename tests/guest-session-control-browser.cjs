@@ -58,7 +58,7 @@ const bytes = value => value.buffer.slice(value.byteOffset, value.byteOffset + v
       const budget = fixture === "io" ? 1000 : 100;
       let done;
       const self = {postMessage(message) { if (message.type === "done") done = message; }};
-      vm.runInContext(page.read("waste/app/worker.js").toString(), vm.createContext({self,
+      vm.runInContext(page.read("root/waste/app/worker.js").toString(), vm.createContext({self,
         WebAssembly, Uint8Array, DataView, TextDecoder, TextEncoder, Promise, Math,
         Number, String, Date, Error, setTimeout, clearTimeout, console,
         atob: value => Buffer.from(value, "base64").toString("binary")}));
