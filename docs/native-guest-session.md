@@ -134,7 +134,7 @@ The kernel/store still owns wait/reaping and process memory. Nested child-first
 fork remains unsupported; this is not a concurrent process/thread scheduler.
 Both runtimes use `src/engine/wast/handler.{c,h}` for WAST child command streams,
 including definitions/instances, registration, module assertions and invocation
-assertions. READ/SELECT yields retain the exact assertion and its selected
+assertions. READ/SELECT/HOST_IO yields retain the exact assertion and its selected
 engine until completion; resumed returns, expected traps and result mismatches
 are checked once, not replaced by an unconditional successful `main` result.
 Completed child command modules are released before provider-clone reaping,
@@ -150,9 +150,11 @@ from assertion totals. Executable handlers retain their child-status policy;
 the corpus runners recover at command boundaries while preserving a failed
 file outcome and every setup diagnostic.
 
-Nested process transitions/host-I/O inside WAST invocations and yielding module
-starts are explicitly unsupported (child status 126); a paused start cannot
-satisfy a module assertion. Native browser-specific host I/O remains pending.
+Nested process transitions inside WAST invocations and yielding module starts
+are explicitly unsupported (child status 126); a paused start cannot satisfy
+a module assertion. Host-service waits resume through the same saved assertion;
+the browser renderer capability is enabled only by the production shell and
+returns unavailable in native and isolated batch stores.
 The loader preserves the returned start status even when an import did not
 set `error.status`; disposing a yielded partial instance is not success.
 This is not a batch conformance runner: unsupported
@@ -303,7 +305,8 @@ host-I/O reply and the guest writes them to its own descriptors. Ctrl-C cancels
 and reaps the batch process group, returning 130 to Bash. Session-wide deadlines
 and external cancellation also stop and reap that group. A cancellation before
 enumeration returns an explicit `cancelledBeforeEnumeration` report with no test
-records. See `test-corpus.md` for guest options and explicit installation.
+records. See [installed corpus workflow](techniques.md#installed-corpus-workflow)
+for guest options and explicit installation.
 
 ## Deterministic wait-event contract
 
@@ -360,8 +363,8 @@ the standalone Python checker defaults to full leak checking. The `posix-select`
 and `posix-kernel` gates also require this session. No Node or HTML is required
 for native execution. `--results PATH` saves the standalone native report,
 transcript and two premature-input control counts; Make saves them to
-`build/cli-rt/terminal-readiness-results.json`. `docs/test-coverage.md` maps the
-48 Stage 6B.29 checks and four additional Stage 6B.37 terminal byte-I/O checks.
+`build/cli-rt/terminal-readiness-results.json`. The WAST assertions and session
+JSON preserve the readiness and terminal byte-I/O expectations.
 
 The session observes terminal sets before input, after a real delayed `hello`
 and after drain. Canonical `ab` stays blocked until `c\n`; backspace/DEL erase,
@@ -388,8 +391,8 @@ relative order, with fourteen new assertions and the same successful exit.
 Stage 6B.30 adds `tests/guest-session-terminal-timing.wast` and its JSON
 contract with 46 checks. The same source, post-yield clock/input events and
 exact transcript run natively, through browser exports, the production worker
-and actual offline Chromium. `docs/test-coverage.md` maps all 14 migrated C
-checks, including two output-byte expectations in the host transcript.
+and actual offline Chromium. The session JSON retains the output-byte
+expectations in the host transcript alongside guest assertions.
 
 ```sh
 make -C src/cli-rt terminal-timing
@@ -455,8 +458,8 @@ The current env.setpgid import returns the new positive process group, not
 POSIX's zero. Invalid group/descriptor updates preserve state; the three
 standard terminal descriptors share foreground state. No full job-control,
 forked-membership, setsid or background-I/O conformance is claimed. Private
-signal queues, host enqueue and raw kernel EINTR remain C checks mapped in
-`test-coverage.md`. No engine or runtime API changed in this slice.
+signal queues, host enqueue and raw kernel EINTR remain direct C checks; see
+[retained kernel coverage](posix-kernel-retained-coverage.md).
 
 ## Shared terminal descriptor contract
 

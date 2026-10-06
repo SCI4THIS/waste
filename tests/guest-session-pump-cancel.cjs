@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 "use strict";
+const {config, withConfig} = require("./runtime-config.cjs");
 const {treeVfs} = require("./vfs-package.cjs");
 // Pump + external cancellation contract through the production worker.js.
 // Boots the shared worker in a VM, starts a spin fixture with a short
@@ -30,7 +31,7 @@ const self = {postMessage(message) {
   }
 }};
 
-vm.runInContext(fs.readFileSync(workerPath, "utf8"), vm.createContext({self,
+vm.runInContext(withConfig(fs.readFileSync(workerPath, "utf8")),  vm.createContext({self,
   WebAssembly, Uint8Array, DataView, TextDecoder, TextEncoder, Promise, Math,
   Number, String, Date, Error, setTimeout, clearTimeout, console,
   atob: value => Buffer.from(value, "base64").toString("binary")}));

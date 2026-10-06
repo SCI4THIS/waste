@@ -1,5 +1,6 @@
 #ifndef WASTE_TEXT_WAT_TYPES_H
 #define WASTE_TEXT_WAT_TYPES_H
+#include "../../config.h"
 
 #include "include/waste.h"
 
@@ -51,9 +52,6 @@ typedef enum {
 #define WAST_MAX_MEMORIES      32
 #define WAST_MAX_TABLES        8
 #define WAST_MAX_TAGS          64
-/* Includes official 65-segment probes and the full one-byte u32 LEB range. */
-#define WAST_MAX_DATA_SEGS     128
-#define WAST_MAX_ELEM_SEGS     128
 #define WAST_MAX_DATA_BYTES    65536
 #define WAST_MAX_ELEM_REFS     256
 #define WAST_MAX_ELEM_EXPR_BYTES 32

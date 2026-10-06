@@ -9,6 +9,10 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src/html-rt/tools"))
+from runtime_config import read_config
+CONFIG = read_config()
+
 runner = str(Path(sys.argv[1] if len(sys.argv) > 1 else 'build/cli-rt/waste-cli').resolve())
 with tempfile.TemporaryDirectory(prefix='waste-directory-vfs-') as temporary:
     base = Path(temporary)
@@ -57,7 +61,7 @@ with tempfile.TemporaryDirectory(prefix='waste-directory-vfs-') as temporary:
         lambda m: m['entries'][4].update(inode=1),
         lambda m: m['entries'][4].update(mtime_sec=-(2**63)-1),
         lambda m: m['entries'][4].update(mtime_nsec=10**9),
-        lambda m: m['entries'][4].update(size=64*1024*1024+1),
+        lambda m: m['entries'][4].update(size=CONFIG["VFS_MAX_BYTES"] + 1),
         lambda m: m['entries'].append(copy.deepcopy(m['entries'][4])),
         lambda m: m['entries'].reverse(),
     ]:

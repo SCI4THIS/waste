@@ -47,7 +47,7 @@ ENGINE_HEADERS := $(ENGINE_DIR)/lib/json.h $(ENGINE_DIR)/wat/types.h $(ENGINE_DI
 	$(ENGINE_DIR)/op/validate.h $(WAST_GEN_DIR)/dispatch_gen.h \
 	$(ENGINE_DIR)/instantiate.h $(ENGINE_DIR)/runtime_internal.h
 
-ENGINE_HEADERS += $(ENGINE_DIR)/process_driver.h $(ENGINE_DIR)/vfs.h $(ENGINE_DIR)/guest_posix.h $(ENGINE_DIR)/include/waste.h
+ENGINE_HEADERS += $(ENGINE_DIR)/process_driver.h $(ENGINE_DIR)/vfs.h $(ENGINE_DIR)/../config.h $(ENGINE_DIR)/guest_posix.h $(ENGINE_DIR)/include/waste.h
 ENGINE_HEADERS += $(ENGINE_DIR)/wast/setup.h
 ENGINE_HEADERS += $(ENGINE_DIR)/lib/include/kernel.h \
 	$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h
@@ -459,6 +459,7 @@ vfs-tests-install: waste-libc wast-browser
 	$(PYTHON) tools/build-test-corpus.py --install
 
 vfs-tests-check:
+	$(PYTHON) $(REPO_ROOT)/tests/runtime-config-check.py
 	$(PYTHON) tools/build-test-corpus.py --audit
 	$(PYTHON) $(REPO_ROOT)/tests/test-corpus-check.py
 
@@ -560,3 +561,5 @@ clean:
 	rm -f $(WAST_WASM_TARGET) $(ENGINE_OBJS) $(RT_OBJS) \
 		$(WASM_LIB_SHARED_O) $(WASM_LIB_WASM_O) \
 		$(WAST_TAB_WASM_O) $(WAST_LEX_WASM_O)
+
+$(BUILD_DIR)/path.o $(BUILD_DIR)/test_suite.o: ../config.h

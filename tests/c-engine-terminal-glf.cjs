@@ -41,5 +41,14 @@ if (!Array.isArray(context.glf.pts) || context.glf.pts.length % 4 !== 0 ||
     !Array.isArray(context.glf.idx) || context.glf.idx.length % 3 !== 0) {
   throw new Error("GLF geometry does not contain vec4 points and triangles");
 }
+// The installed font need not exercise every supported cmap representation.
+const format6 = {cmap: {subtables: [{format: 6, firstCode: 65,
+  entryCount: 2, glyphIdArray: [7, 9]}]}};
+for (const [code, expectedGlyph] of [[64, null], [65, 7], [66, 9], [67, null]]) {
+  if (context.WasteTerminalLookupCmap(format6, code) !== expectedGlyph) {
+    throw new Error(`format 6 cmap boundary mismatch U+${code.toString(16)}`);
+  }
+}
 console.log(`GLF cmap/range fixture passed (${expected.size} cases, ` +
-  `${context.glf.pts.length / 4} vertices, ${context.glf.idx.length / 3} triangles)`);
+  `4 format-6 boundaries, ${context.glf.pts.length / 4} vertices, ` +
+  `${context.glf.idx.length / 3} triangles)`);

@@ -18,6 +18,7 @@ import tarfile
 import tempfile
 
 import guest_sdk
+from runtime_config import read_config, frontend_bytes
 import test_distribution
 
 REPO = Path(__file__).resolve().parents[3]
@@ -35,10 +36,12 @@ APP_FILES = {
     "terminal/model.js": "terminal/model.js",
     "terminal/glf.js": "terminal/glf.js",
     "terminal/renderer.js": "terminal/renderer.js",
+    "terminal/render-test.js": "terminal/render-test.js",
 }
-MAX_BYTES = 64 * 1024 * 1024
-MAX_INVENTORY = 2 * 1024 * 1024
-MAX_ENTRIES = 960  # kernel has 1024 slots; reserve 64 runtime-created nodes
+CONFIG = read_config()
+MAX_BYTES = CONFIG["VFS_MAX_BYTES"]
+MAX_ENTRIES = CONFIG["VFS_MAX_ENTRIES"]
+MAX_INVENTORY = CONFIG["VFS_INVENTORY_MAX_BYTES"]
 
 
 def digest(data):
@@ -49,7 +52,7 @@ def guest_path(value):
     p = PurePosixPath(value)
     if (not value.startswith("/") or "//" in value or str(p) != value or ".." in p.parts
             or "\0" in value or "\\" in value or any(ord(c) < 32 for c in value)
-            or len(value.encode()) >= 256):
+            or len(value.encode()) >= CONFIG["VFS_PATH_MAX_BYTES"]):
         raise ValueError(f"unsafe guest path: {value!r}")
     return value
 
@@ -95,7 +98,7 @@ def load(root):
     return manifest
 
 
-def audit(manifest, read, physical=None):
+def audit(manifest, read, physical=None, upgrading_app=False):
     if len(json.dumps(manifest, sort_keys=True).encode()) > MAX_INVENTORY:
         raise ValueError("inventory exceeds bounded metadata size")
     seen = {}
@@ -150,7 +153,8 @@ def audit(manifest, read, physical=None):
     for path in required:
         if path not in seen:
             raise ValueError(f"missing mandatory VFS path: {path}")
-    app_paths = [{prefix + name for name in APP_FILES}
+    app_paths = [{prefix + name for name in APP_FILES
+                  if not (upgrading_app and name == "terminal/render-test.js")}
                  for prefix in ("/root/waste/app/", "/waste/app/")]
     if not any(paths <= seen.keys() for paths in app_paths):
         raise ValueError("missing mandatory Bash webapp paths under /root/waste/app")
@@ -187,7 +191,7 @@ def audit(manifest, read, physical=None):
     return seen
 
 
-def audit_tree(root, manifest):
+def audit_tree(root, manifest, upgrading_app=False):
     physical = set()
     for p in root.rglob("*"):
         if p == root / MANIFEST:
@@ -199,7 +203,8 @@ def audit_tree(root, manifest):
     # is authoritative for those guest values; do not require a checkout to
     # reproduce the installing machine's host timestamps.
     declared_dirs = {e["path"] for e in manifest["entries"] if e["kind"] == 2 and e["path"] != "/"}
-    result = audit(manifest, lambda p: local(root, p).read_bytes(), physical | declared_dirs)
+    result = audit(manifest, lambda p: local(root, p).read_bytes(), physical | declared_dirs,
+                   upgrading_app=upgrading_app)
     for p, e in result.items():
         if e["role"] == "interpreter" or e["kind"] == 2:
             continue
@@ -312,7 +317,9 @@ def install_sdk(root, source, sdk, library=None):
 def install(root, legacy=None, component=None, source=None, review_import=()):
     old = load(root) if root.exists() else None
     if old:
-        audit_tree(root, old)  # never overwrite an edited snapshot
+        # Permit the previous asset set only during an explicit app upgrade;
+        # all existing snapshot hashes must still match.
+        audit_tree(root, old, upgrading_app="app" in (component or []))
     elif not legacy:
         raise ValueError("initial installation requires --legacy-dir; subsequent installs use --component")
     inputs = {}
@@ -363,11 +370,12 @@ def install(root, legacy=None, component=None, source=None, review_import=()):
 
         def put(path, src, role, mode, alias=None):
             guest_path(path)
-            data = src.read_bytes()
+            data = frontend_bytes(src) if role == "webapp" else src.read_bytes()
             stamp = src.stat().st_mtime_ns
             target = local(stage, path)
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, target)
+            target.write_bytes(data)
+            shutil.copystat(src, target)
             target.chmod(mode)
             e = dict(path=path, kind=1, mode=mode, uid=0, gid=0, size=len(data),
                      mtime_sec=stamp // 1000000000, mtime_nsec=stamp % 1000000000,

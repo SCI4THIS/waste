@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 "use strict";
+const {config, withConfig} = require("./runtime-config.cjs");
 const {treeVfs, packageVfs, stageVfs} = require("./vfs-package.cjs");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -46,7 +47,7 @@ const bytes = value => value.buffer.slice(value.byteOffset, value.byteOffset + v
       assert.equal(exp.waste_wast_results_passed(), 3);
     }
   }
-  assert.equal(exp.waste_wast_set_execution_limits(3600001, 0), -1);
+  assert.equal(exp.waste_wast_set_execution_limits(config.EXECUTION_MAX_TIMEOUT_MS + 1, 0), -1);
   console.log("PASS browser execution controls: 12 interrupts, expected-trap/invalid rejection, fresh-store recovery");
 
   if (!process.argv[4]) return;

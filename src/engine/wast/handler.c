@@ -93,11 +93,12 @@ static exec_status handler_invoke(void *opaque, waste_exec_engine *engine,
         handler->exit_code = error->exit_code;
     }
     if (status == EXEC_YIELD && error->yield_reason != EXEC_YIELD_READ &&
-        error->yield_reason != EXEC_YIELD_SELECT) {
+        error->yield_reason != EXEC_YIELD_SELECT &&
+        error->yield_reason != EXEC_YIELD_HOST_IO) {
         handler->stopped = 1;
         handler->exit_code = 126;
         return exec_fail(error, EXEC_ERROR_UNSUPPORTED,
-                         "WAST handler supports READ/SELECT, not nested process transitions");
+                         "WAST handler supports READ/SELECT/HOST_IO, not nested process transitions");
     }
     return status;
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 "use strict";
+const {config, withConfig} = require("./runtime-config.cjs");
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -158,7 +159,7 @@ for (const name of ["stat", "lstat", "fstat", "eaccess", "faccessat", "fork"]) {
 
 /* Load worker source, wasm, and launch script from staging files */
 const workerSrc = archive ? archive.read("root/waste/app/worker.js").toString("utf8")
-  : fs.readFileSync(path.join(frontendDir, "worker.js"), "utf8");
+  : withConfig(fs.readFileSync(path.join(frontendDir, "worker.js"), "utf8"));
 
 const wasmPath = path.join(root, "build/html-rt/waste-wast.wasm");
 const wasmBytes = readAsset(wasmPath);

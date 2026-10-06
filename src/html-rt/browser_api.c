@@ -120,8 +120,8 @@ static exec_status spectest_noop(void *data,const wasm_value *args,int argc,
 
 typedef struct {
     uint8_t pass;
-    char func[63];
-    char error[192];
+    char func[BROWSER_RESULT_NAME_BYTES];
+    char error[BROWSER_RESULT_ERROR_BYTES];
 } wast_browser_result;
 
 #define MAX_BROWSER_RESULTS 16384
@@ -725,6 +725,7 @@ static waste_exec_engine *g_pending_assertion_engine;
  * committed executable image before exposing a terminal/select yield. */
 static int g_terminal_requested;
 static int g_test_suite_requested;
+static int g_render_test_requested;
 
 static uint8_t *g_boot_executable;
 static size_t g_boot_executable_size;
@@ -1159,6 +1160,8 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
     memset(&g_yield_context, 0, sizeof(g_yield_context));
     native_store_init(&g_yield_context.store);
     g_yield_context.store.test_suite_enabled = g_test_suite_requested;
+    g_yield_context.store.render_test_enabled = g_render_test_requested;
+    g_render_test_requested = 0;
     g_test_suite_requested = 0;
     if (g_execution_timeout_ms || g_execution_cancel_ms)
         g_yield_context.store.execution_control.poll = browser_execution_poll;
@@ -1218,7 +1221,7 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
                 &g_vfs_manifest[i].metadata, g_vfs_manifest[i].data,
                 g_vfs_manifest[i].data_length);
         if (install_status != 0) {
-            char error[192];
+            char error[BROWSER_RESULT_ERROR_BYTES];
             snprintf(error, sizeof(error),
                      "cannot install packaged VFS path %s: %d",
                      g_vfs_manifest[i].path, install_status);
@@ -1353,7 +1356,7 @@ uint32_t waste_wast_wait_kind(void) {
 
 __attribute__((export_name("waste_wast_set_execution_limits")))
 int32_t waste_wast_set_execution_limits(uint32_t timeout_ms, uint32_t cancel_ms) {
-    if (g_yield_active || timeout_ms > 3600000 || cancel_ms > 3600000) return -1;
+    if (g_yield_active || timeout_ms > EXECUTION_MAX_TIMEOUT_MS || cancel_ms > EXECUTION_MAX_TIMEOUT_MS) return -1;
     g_execution_timeout_ms = timeout_ms;
     g_execution_cancel_ms = cancel_ms;
     return 0;
@@ -1371,7 +1374,7 @@ uint32_t waste_wast_execution_stop_reason(void) {
  * script is active. */
 __attribute__((export_name("waste_wast_set_pump_quantum_ms")))
 int32_t waste_wast_set_pump_quantum_ms(uint32_t quantum_ms) {
-    if (g_yield_active || quantum_ms > 60000) return -1;
+    if (g_yield_active || quantum_ms > EXECUTION_MAX_PUMP_QUANTUM_MS) return -1;
     g_pump_quantum_ms = quantum_ms;
     return 0;
 }
@@ -1462,7 +1465,7 @@ int32_t waste_wast_host_io_provide_upload(uint32_t ptr, uint32_t len) {
     native_host_io_state *host_io = &g_yield_context.store.host_io;
     if (host_io->kind != NATIVE_HOST_IO_UPLOAD || host_io->result != 0)
         return -1;
-    uint8_t *copy = (uint8_t *)malloc(len);
+    uint8_t *copy = (uint8_t *)malloc(len ? len : 1);
     if (!copy) return -1;
     memcpy(copy, (const void *)(uintptr_t)ptr, len);
     free(host_io->data);
@@ -1502,6 +1505,25 @@ int32_t waste_wast_test_suite_reply(uint32_t ptr, uint32_t len) {
     native_host_io_state *io = &g_yield_context.store.host_io;
     if (io->kind != NATIVE_HOST_IO_TEST_SUITE || io->result || len < 16 || len > 16u*1024u*1024u)
         return -1;
+    uint8_t *copy = malloc(len);
+    if (!copy) return -1;
+    memcpy(copy, (const void *)(uintptr_t)ptr, len);
+    free(io->data); io->data = copy; io->data_len = len; io->result = 1;
+    return 0;
+}
+
+__attribute__((export_name("waste_wast_enable_render_test")))
+int32_t waste_wast_enable_render_test(void) {
+    if (g_yield_active) return -1;
+    g_render_test_requested = 1;
+    return 0;
+}
+
+__attribute__((export_name("waste_wast_render_test_reply")))
+int32_t waste_wast_render_test_reply(uint32_t ptr, uint32_t len) {
+    native_host_io_state *io = &g_yield_context.store.host_io;
+    if (io->kind != NATIVE_HOST_IO_RENDER_TEST || io->result ||
+        len < 4 || len > RENDER_TEST_REPLY_MAX_BYTES) return -1;
     uint8_t *copy = malloc(len);
     if (!copy) return -1;
     memcpy(copy, (const void *)(uintptr_t)ptr, len);

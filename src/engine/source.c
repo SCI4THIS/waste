@@ -28,7 +28,7 @@ waste_source_result waste_source_view_init(const char *source, size_t length,
     while (line_end < length && source[line_end] != '\n') line_end++;
     size_t content_end = line_end;
     if (content_end > 2 && source[content_end - 1] == '\r') content_end--;
-    if (line_end - 2 >= 4096) return WASTE_SOURCE_SHEBANG_TOO_LONG;
+    if (line_end - 2 >= SOURCE_SHEBANG_MAX_BYTES) return WASTE_SOURCE_SHEBANG_TOO_LONG;
 
     size_t cursor = 2;
     while (cursor < content_end && is_space(source[cursor])) cursor++;

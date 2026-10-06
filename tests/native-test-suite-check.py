@@ -13,12 +13,15 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src/html-rt/tools"))
+from runtime_config import read_config
+CONFIG = read_config()
 RUNNER = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "build/cli-rt/waste-test").resolve()
 
 
 def deep_json():
     value = 0
-    for _ in range(65):
+    for _ in range(CONFIG["JSON_MAX_DEPTH"] + 1):
         value = [value]
     return value
 
@@ -234,14 +237,16 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
     assert detail["passed"] == detail["total"] == 64
     capacity_reports = []
     for kind, label in (("data", "data"), ("elem", "element")):
-        source = (ROOT / ("tests/test-suite-segment-capacity-" + kind + ".wast")).read_bytes()
+        limit = CONFIG["WAST_MAX_DATA_SEGS" if kind == "data" else "WAST_MAX_ELEM_SEGS"]
+        segment = '(data "x")' if kind == "data" else '(elem func)'
+        source = ("(module\n" + (segment + "\n") * (limit + 1) + ")").encode()
         for wrapped in (False, True):
             probe = b'(assert_invalid ' + source + b' "invalid")' if wrapped else source
             install([entry("synthetic/capacity.wast", probe)])
             result = run(expected=1)
             detail = result["tests"][0]["nativeReport"]
             assert any(a["func"] == "(parse)" and
-                       label + " segment capacity exceeded (128)" in a["error"]
+                       f"{label} segment capacity exceeded ({limit})" in a["error"]
                        for a in detail["assertions"])
             assert result["tests"][0]["status"] == "FAIL"
             capacity_reports.append(result)

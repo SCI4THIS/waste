@@ -70,6 +70,7 @@ for f in "$TARBALL_JS" "$ZLIBAUX_WASM" "$LOADER_JS" "$AMALGAMATE" "$PACKAGE_AUDI
 done
 
 mkdir -p "$BUILD_DIR"
+python3 "$SCRIPT_DIR/runtime_config.py" --javascript > "$BUILD_DIR/runtime-config.js"
 WORK_DIR=$(mktemp -d "$BUILD_DIR/package-$TARGET-XXXXXX")
 trap 'rm -rf "$WORK_DIR"' EXIT
 

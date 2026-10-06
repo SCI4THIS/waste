@@ -1,5 +1,5 @@
 ;; Guest-observable cases formerly asserted in c-engine-i32-smoke.c:main.
-;; See docs/test-coverage.md for the assertion mapping and retained C invariants.
+;; See docs/techniques.md for guest-test boundaries and retained C invariants.
 (module
   (type $pair-type (func (param i32 i32) (result i32 i32)))
   (memory 1 2)

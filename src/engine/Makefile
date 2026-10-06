@@ -10,7 +10,12 @@ DISPATCH_GEN_H := $(WAST_GEN_DIR)/dispatch_gen.h
 
 .PHONY: gen clean
 
-gen: $(WAST_TAB_C) $(WAST_TAB_H) $(WAST_LEX_C) $(DISPATCH_GEN_C) $(DISPATCH_GEN_H)
+gen: $(WAST_TAB_C) $(WAST_TAB_H) $(WAST_LEX_C) $(DISPATCH_GEN_C) $(DISPATCH_GEN_H) $(BUILD_DIR)/runtime-config.json
+
+$(BUILD_DIR)/runtime-config.json: ../config.h ../html-rt/tools/runtime_config.py
+	mkdir -p $(BUILD_DIR)
+	python3 ../html-rt/tools/runtime_config.py > $@.tmp
+	mv $@.tmp $@
 
 # Generate Bison parser (tab.c and tab.h)
 $(WAST_TAB_C) $(WAST_TAB_H): wat/parser.y

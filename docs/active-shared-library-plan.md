@@ -116,7 +116,8 @@ resident data at address zero.
 
 ## Context
 
-Stage 9 of the WebGL shell plan requires a guest ncurses fixture. Rather than
+The [browser terminal contract](architecture.md#browser-terminal-contract)
+requires a guest ncurses fixture. Rather than
 statically linking ncurses into a single binary, the user wants a proper shared
 library system: ncurses compiled as a `.wasm` shared object, placed in `/usr/lib`
 in the VFS, dynamically loaded via `dlopen`, with `ldd` able to report

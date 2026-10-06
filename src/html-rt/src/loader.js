@@ -56,7 +56,14 @@ function loadInstalledVfs() {
 
 /* Create a Web Worker — file URL in staging, Blob URL from tar in production */
 async function createWorker(filename) {
-  if (g.is_staging) return new Worker(filename);
+  if (g.is_staging) {
+    const source = await loadText(filename);
+    const config = "globalThis.WASTE_CONFIG = Object.freeze(" + JSON.stringify(WASTE_CONFIG) + ");\n";
+    const url = URL.createObjectURL(new Blob([config, source], {type: "text/javascript"}));
+    const worker = new Worker(url);
+    URL.revokeObjectURL(url);
+    return worker;
+  }
   if (filename === "worker.js") filename = "root/waste/app/worker.js";
   var src = await g.tar_hash[filename].text();
   var url = URL.createObjectURL(new Blob([src], {type: "text/javascript"}));
@@ -74,6 +81,7 @@ async function loadWebappFiles() {
     "root/waste/app/terminal/model.js",
     "root/waste/app/terminal/glf.js",
     "root/waste/app/terminal/renderer.js",
+    "root/waste/app/terminal/render-test.js",
     "root/waste/app/test-suite.js",
     "root/waste/app/app.js",
   ]) {

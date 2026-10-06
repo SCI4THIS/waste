@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 "use strict";
+const {config, withConfig} = require("./runtime-config.cjs");
 const {treeVfs, packageVfs, stageVfs} = require("./vfs-package.cjs");
 // The production worker consumes exactly the native/export-probe contract.
 const assert = require("node:assert/strict");
@@ -18,10 +19,12 @@ const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
 const buffer = bytes => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 let output = "", done, ready = 0, pid, waitKind, diagnosticResults, controlFailure;
 let expectedControlErrors = 0;
+let renderReplies = 0;
+let transitionEvidence = "";
 const suiteContext = vm.createContext({setTimeout, clearTimeout, performance,
   TextDecoder, TextEncoder, Uint8Array, DataView});
 const suiteSource = page.read("root/waste/app/test-suite.js").toString();
-assert.equal(suiteSource, fs.readFileSync("src/html-rt/src/test-suite.js", "utf8"),
+assert.equal(suiteSource, withConfig(fs.readFileSync("src/html-rt/src/test-suite.js", "utf8")),
   "package contains the production suite controller");
 vm.runInContext(suiteSource, suiteContext);
 const workerSource = page.read("root/waste/app/worker.js").toString();
@@ -47,7 +50,20 @@ const self = {postMessage(message) {
       type:"guest-suite-response", id:message.id, bytes}}));
   }
   if (message.type === "guest-suite-cancel") suite.cancel();
+  if (message.type === "render-test-request") {
+    const report = scenario.renderReplies?.[renderReplies++];
+    assert(report, "unexpected renderer request");
+    const json = new TextEncoder().encode(JSON.stringify(report) + "\n");
+    const bytes = new Uint8Array(4 + json.length);
+    new DataView(bytes.buffer).setUint32(0, report.ok ? 1 : 0, true);
+    bytes.set(json, 4);
+    // A stale reply must be ignored; the matching reply arrives later.
+    self.onmessage({data:{type:"render-test-response", id:message.id + 1, bytes}});
+    setTimeout(() => self.onmessage({data:{type:"render-test-response", id:message.id, bytes}}), 30);
+  }
   if (message.type === "output") {
+    if (message.text.startsWith("WASTE_TRANSITION_EVIDENCE="))
+      transitionEvidence = message.text;
     if (message.text.startsWith("WASTE_DONE_RESULTS="))
       diagnosticResults = JSON.parse(message.text.slice("WASTE_DONE_RESULTS=".length));
     else if (!message.text.startsWith("WASTE_TRANSITION_EVIDENCE="))
@@ -123,7 +139,7 @@ const wait = async predicate => {
   assert.equal(done.ok, (scenario.expectedPassed ?? scenario.assertions) === scenario.assertions, JSON.stringify(done));
   assert.equal(done.exited, scenario.exited ?? true, JSON.stringify(done));
   assert.equal(done.total, scenario.assertions);
-  assert.equal(done.passed, scenario.expectedPassed ?? done.total);
+  assert.equal(done.passed, scenario.expectedPassed ?? done.total, JSON.stringify(done) + "\n" + output);
   if (!done.ok) {
     // This is a separately posted worker diagnostic, not guest transcript
     // normalization. Check it and retain it beside the unmodified output.
@@ -134,6 +150,7 @@ const wait = async predicate => {
       assert(done.results.some(result => !result.pass && result.error === scenario.expectedError));
   }
   assert.equal(done.exitStatus, scenario.exitStatus);
+  assert.equal(renderReplies, scenario.renderReplies?.length || 0, output + transitionEvidence);
   if (scenario.output !== undefined) assert.equal(output, scenario.output);
   for (const marker of scenario.contains || []) assert(output.includes(marker), output);
   console.log(JSON.stringify({runtime:"production-worker-session", passed:done.passed,

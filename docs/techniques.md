@@ -14,6 +14,46 @@ language comparisons. No additional OCaml kernel/application-runtime
 development is planned; the existing kernel is to be removed in deferred
 cleanup under [the OCaml retirement plan](active-ocaml-language-oracle-plan.md).
 
+## Browser File Transfer
+
+In the offline `bash.html` shell, `upload DEST` selects a host file and writes
+its bytes to the guest VFS; `download FILE` sends an existing guest file to the
+browser with its basename as the suggested filename. Both commands are installed
+under `/bin` and `/usr/bin`. Upload cancellation or a file-read failure returns
+nonzero. Download success means delivery to the browser download mechanism; the
+page cannot confirm the eventual host disk write or detect a cancelled Save dialog.
+
+`src/html-rt/tools/build-upload-download.py` builds the guest utilities under
+`build/`; `start.sh` installs their snapshots through `vfs.py`. Frontend changes
+are explicitly installed with `vfs.py install --component app --source
+src/html-rt/src` before packaging. The tarball contains `/root/waste/app`; do not
+duplicate transfer code in the HTML generator or stage binaries in frontend sources.
+
+The shared ABI in `src/engine/guest_posix.c` provides
+`waste_kernel.host_upload_v1(path, length, flags)` and
+`host_download_v1(name, name_length, data, data_length, flags)`. Browser replies
+must release temporary buffers after the engine copies them, wake a waiting
+continuation even on failure, and avoid delivering an old picker result to a
+replacement shell worker. Empty files are valid uploads and downloads.
+
+Focused verification, without launching a browser:
+
+```sh
+node tests/browser-upload-runtime.cjs
+node tests/c-engine-vfs-transfer.cjs build/html-rt/bash.html
+python3 tests/guest-session-check.py --scenario transfer
+```
+
+The first checks DOM/worker failure handling with simulated browser APIs; the
+second runs real guest utilities through the packaged worker with scripted file
+selection; the third checks native/browser engine transfer parity. Real picker
+and download acceptance was confirmed on 2026-10-06: the user verified uploaded
+contents and cancellation, and supplied a JSON report downloaded from Bash.
+For future manual regressions, run `upload /tmp/test.txt`, select a known text
+file and inspect it with `cat /tmp/test.txt`; run another upload, cancel the
+picker and immediately check `echo $?` for a nonzero status. Run
+`download /tmp/test.txt` and compare the saved contents.
+
 ## Virtual-Memory Ownership and Commit Boundaries
 
 Keep virtual-memory metadata in the engine-owned process capsule, not in a
@@ -84,6 +124,74 @@ failed exec, command-not-found, repeated terminal waits, child exit, and parent
 reaping under warnings-as-errors plus ASan/UBSan.  Disable LeakSanitizer only
 for the documented ptrace environment; do not treat that exception as a reason
 to weaken ownership checks.
+
+## Terminal Rendering and Shell Verification
+
+Keep VT parsing independent of rendering and engine execution. Feed the model
+the exact engine-processed byte stream; canonical/raw handling and ONLCR belong
+in the C kernel. Preserve incremental UTF-8/escape parsing, alternate-screen
+state, CSI REP and character-set designators used by ncurses. Application-cursor
+mode must affect the input encoder as well as output parsing.
+
+Use font metrics to transform GLF geometry into cells. Preserve cmap format
+4/6 lookup, missing-glyph behavior, indexed glyph ranges and analytic curve
+coverage. Upload immutable geometry once, keep shader setup outside the cell
+loop and coalesce redraws. Resize the backing canvas for device pixel ratio
+without changing model contents. Any geometry optimization must preserve
+glyph appearance; do not introduce a raster atlas into the WebGL path.
+
+The fast checks run without a browser:
+
+```sh
+node tests/c-engine-terminal-glf.cjs
+node tests/c-engine-terminal-model.cjs
+```
+
+For actual WebGL pixels, open the rebuilt `build/html-rt/bash.html` in
+Firefox and run these commands at its Bash prompt:
+
+```sh
+wast /root/waste/tests/render/terminal.wast
+download /tmp/terminal-renderer-results.json
+```
+
+The authored fixture is `tests/render/terminal.wast`; `vfs-tests-install`
+installs its snapshot at `src/vfs/root/waste/tests/render/terminal.wast`.
+The WAST calls the versioned `waste_kernel.render_test_v1` browser capability,
+then writes the reply through ordinary guest descriptors. The DOM adapter uses
+the production GLF renderer to test glyph pixels, blank cells, colors, cursor,
+two widths and simulated display densities 1/2. It rejects the Canvas2D
+fallback and glyph texture creation. Rendering failure still produces the JSON
+file before the WAST assertion fails. Transport/filesystem failures instead
+fail the file-writing assertion; do not interpret a stale earlier report as a
+new result. The report includes its timestamp.
+
+Save the downloaded JSON under `build/html-rt/`. Closure requires `ok: true`
+and a manual check of the shape-sensitive text/colors printed by the fixture.
+Also resize the browser and change zoom; simulated densities test sizing, not
+monitor/zoom event delivery. The adapter draws into a temporary offscreen
+canvas, releases its WebGL context afterward, and preserves the live Bash
+terminal. There is no separate generated test page.
+
+The `render` corpus group is marked interactive-only and skipped by unattended
+batch runners. Native and isolated browser stores do not enable this capability;
+`engine-regressions/render-capability.wast` checks the unsupported return.
+The response capacity comes from `src/config.h` and is queried by the guest.
+The wire reply is a little-endian u32 pass flag followed by UTF-8 JSON.
+`tests/render-worker-session.json`, run through `tests/guest-session-worker.cjs`,
+uses scripted replies to verify persistence, failure reporting, stale-reply
+rejection and truncation across repeated shell runs. It does not test pixels.
+
+Pixel checks complement the worker-backed shell checks. After building the
+production page, run `./start.sh --html-check` for the focused worker suite.
+For targeted changes, `tests/c-engine-bash-browser-runtime.cjs` accepts
+`--missing-command`, `--pipeline-probe`, `--shared-library` and `--full-package`.
+Run `--missing-command` without `--full-package`: its reduced fixture
+deliberately omits `ls` to check command-not-found recovery.
+The Rogue fixture must enter/leave the alternate screen, consume an arrow and
+a game turn, and return to a usable Bash prompt twice in the same shell.
+Explicit guest `dlopen`/`dlsym`/`dlclose` acceptance is tracked separately in
+the [shared-library plan](active-shared-library-plan.md).
 
 ## WAT and WAST Parser Policy
 
@@ -394,13 +502,14 @@ prompt.
 
 ## Coreutils Cross-Build and Distribution
 
-Keep the pinned GNU Coreutils submodule pristine. Repository changes belong in
-`submodules/coreutils-waste.patch`; stage the patched source beneath
-`build/coreutils/` and generate `configure` there with
-`submodules/bootstrap-coreutils.sh`. That helper is the idempotent dependency
-and bootstrap entry point. Configure output, the target sysroot, object files,
-linked images, reports, and corresponding-source artifacts are generated
-outputs and must remain below `build/`.
+Keep every submodule read-only. Repository changes belong in
+`submodules/coreutils-waste.patch`; copy source into `build/coreutils/`, apply
+the patch to that staged copy, and generate `configure` there with
+`submodules/bootstrap-coreutils.sh`. Configure output, the target sysroot,
+object files, linked images, reports, and corresponding-source artifacts are
+generated outputs and must remain below `build/`. The existing staging helper
+still temporarily applies the patch to the submodule and must be refactored
+before use under this policy; see [the submodule policy](submodule-policy.md).
 
 Build utilities against the WASTE sysroot and guest libc, with the application
 and libc sharing one process memory. Keep configure answers explicit and
@@ -472,7 +581,7 @@ executor smoke gate runs both retained C probes and the portable
 `engine-regressions` group with ASan/UBSan; it compares installed fixture bytes
 against authored inputs before using distribution snapshots. WAST instance
 isolation complements the C decode-once/instantiate-twice lifetime check rather
-than establishing that private ownership contract. See `test-coverage.md`.
+than establishing that private ownership contract.
 
 Use real guest imports for caller-memory and continuation counterparts: a
 pipe round trip observes the executing module's bytes, and a positive timed
@@ -507,6 +616,131 @@ kernel with a non-NULL stack byte. Keep that byte separate from the owned heap
 buffer so ordinary cleanup never frees stack storage. Record existing import
 error conventions explicitly; raw kernel statuses and libc-translated errno
 must not be silently interchanged during fixture migration.
+
+## Test Boundary Selection
+
+Choose the layer that can observe the invariant. Moving guest behavior into
+WAST does not remove the need to test private state or the browser boundary:
+
+| Boundary | Retained verification |
+| --- | --- |
+| Language and guest-visible POSIX outcomes | Authored WAST under `tests/engine-regressions`, compiled libc clients and installed corpus execution |
+| Post-yield input, clocks, signals, fork/exec and terminal transcripts | Shared `tests/guest-session-*.wast`/JSON contracts; see [native sessions](native-guest-session.md) |
+| C API and ownership | Direct sanitizer gates for callback identity, decode-once instances, snapshot/replay, clone binding, page aliases, atomic exec transitions, handler cursors and teardown |
+| Compiler ABI | Compiled guest C probes for public header widths, offsets, alignment, varargs and callback signatures; do not translate away the compiler being checked |
+| Host adapters | Worker/DOM tests for message ordering, malformed controls, cancellation, FileReader, Blob downloads and allocation failures |
+| Distribution | Inventory/hash/metadata and exact-byte checks, tar extraction, offline references and mounted-path shell probes |
+| Real browser | Offline `file://` boot, DOM/worker behavior, rendering and downloadable reports; worker VM tests alone cannot establish these |
+
+Keep private NULL/overflow guards, raw readiness bits, injected credentials or
+clocks, object/reference identity and independent-kernel checks even where
+guest calls cover corresponding visible effects. Direct mapping reads reject
+ranges beyond EOF; ordinary POSIX reads may return partial bytes. Preserve
+these distinct contracts. [Retained kernel checks](posix-kernel-retained-coverage.md),
+[libc harness coverage](libc-harness-coverage.md) and
+[DIY harness coverage](diy-posix-harness-coverage.md) retain detailed boundaries.
+
+Tests must call the production implementation to establish its coverage. The
+legacy `c-engine-shared-lib-dylink.c` probe duplicates a parser, and its checked-in
+PIC fixture's metadata differs from a fresh source build; it is not evidence
+for the production loader. Likewise, building/import-auditing a CRT fixture
+does not establish that `_start` ran. Preserve these limits when evaluating
+shared-library and executable startup acceptance.
+
+For setup-report regressions use `tests/test-suite-setup-*.wast`: empty/valid
+zero-assertion streams, invalid/unlinkable/start-trapping/unknown-definition/
+encoding failures, and recovery followed by passing assertions. Also check
+truncated tails, XFAIL/XPASS and diagnostic capacity failures. Diagnostics own
+their strings and survive store teardown; reset them between runs. Do not let
+allocation failure silently truncate the report or turn a failed setup into PASS.
+
+## Installed Corpus Workflow
+
+Treat `src/vfs/root/waste/tests` as installed snapshots. Edit official inputs
+only through a pinned upstream update, authored regressions under `tests/`, or
+libc client includes under `tests/libc-test`; generate libc fixtures under
+`build/html-rt/waste-libc/tests`. Submodules remain read-only.
+
+```sh
+make -C src/html-rt vfs-tests-install
+make -C src/html-rt vfs-tests-check
+make -C src/cli-rt corpus-native
+build/cli-rt/waste-test --vfs-root=src/vfs --list
+build/cli-rt/waste-test --vfs-root=src/vfs --group=engine-regressions --json
+```
+
+Installation verifies source and companion hashes, then publishes test snapshots,
+manifest and license. It rejects edited installed snapshots and unreviewed
+selection changes; use `build-test-corpus.py --install --review-selection` only
+after reviewing a deliberate selection change. Packaging consumes the installed
+inventory without rebuilding or discovering tests. Native `corpus-native` writes
+`build/cli-rt/corpus-results.json` and does not refresh the distribution.
+
+Repeat `--group`, `--exclude` and `--exclude-group`, or select positional
+identities, mounted paths or filenames. Positive selections combine before
+exclusions. Use `--jobs`, `--timeout-ms` and `--timeout-group=NAME:N` to bound
+runs; `--results` saves a host report for native `waste-test`. Runtime limits
+come from `src/config.h` and policy files, not dated documentation counts.
+
+In `bash.html`, **Diagnostics → Installed tests** lists/selects/runs/cancels
+the same corpus and downloads JSON without Node. Interactive renderer fixtures
+are skipped in batches; run them with `wast` as described in terminal verification.
+The guest command also runs from native or browser Bash:
+
+```sh
+/bin/waste-test --list --group=libc-test
+/bin/waste-test --jobs=2 --results=/tmp/results.json path-runtime.wast address.wast
+/bin/download /tmp/results.json
+```
+
+Guest `--results` and stdout redirection write guest files. Parent directories
+must already exist. Exit codes are 0 for accepted outcomes, 1 for failures,
+XPASS or timeouts, 2 for invalid options/unavailable capability, and 130 for
+Ctrl-C cancellation. Reports preserve assertion/setup details and manifest
+order; Bash remains usable after a batch. Refresh the launcher explicitly with
+`make -C src/cli-rt guest-test-install`, rebuild the page, and use
+`make -C src/cli-rt guest-test-check` for native/production-worker parity.
+
+Keep page generation, focused checks and browser acceptance separate:
+
+```sh
+./start.sh --html-bash
+./start.sh --html-check
+python3 tests/test-corpus-bash.py build/html-rt/bash.html
+node tests/c-engine-vfs-browser.cjs build/html-rt/bash.html
+make -C src/cli-rt vfs-check
+```
+
+The shell sweep checks guest redirection (`--limit N` bounds diagnosis); the
+compiled-engine VFS probe checks exact mounted bytes and metadata. `--html-check`
+uses Node without launching Chromium. `./start.sh --html-browser-full` explicitly
+launches Chromium; manual offline-browser evidence is separate from worker VM
+results and is useful on hosts where browser automation crashes.
+
+The packaging harness extracts the embedded tar via `readOfflinePackage`
+without opening a browser. Its synchronous checkpoints append to
+`build/html-rt/frontend-packaging.log`, overridable with
+`WASTE_FRONTEND_PACKAGING_LOG`. Compare large buffers with `Buffer.equals` and
+concise path/length diagnostics to avoid constructing enormous failure diffs.
+The last checkpoint narrows a crash location but does not establish its cause.
+
+## Wasm32 Varargs and Callback Adapters
+
+Decode C varargs through the guest ABI before calling a fixed-width host import.
+Guest `open(path, flags, ...)` extracts mode only for `O_CREAT` and calls
+`waste_kernel.open_v1(path, flags, mode)`; the kernel applies the creation mask
+(initially `0022`). Bash's variadic `fcntl` passes a guest argument-area pointer.
+`waste_kernel.fcntl_varargs_v1` reads the integer there, while `fcntl_v1` and
+compatibility `env.fcntl` take a direct integer. Mistaking the pointer for an
+`F_DUPFD` minimum produces descriptor exhaustion during shell redirection.
+Verify guest redirection as well as lower-level VFS access.
+
+Function-table calls must retain exact Wasm signatures. Bash's `pop_scope`
+cleanup callback returns void but its unwind-protect dispatcher expects an
+integer result; the launch builder supplies a typed adapter. Do not weaken
+validation to make such calls succeed. Compiled guest ABI/layout probes and
+shared native/browser read-to-prompt sessions cover different parts of this
+boundary; use both when changing it.
 
 ## Browser and Differential Testing
 
@@ -634,13 +868,12 @@ updates exclude SIGKILL/SIGSTOP; pending queries observe blocked queued signals
 without consuming them. Keep handler delivery at the existing pselect boundary
 until a separate change establishes other safe points and C function-pointer
 semantics. WAST tests real imported state; compiled C clients separately preserve
-public-header/layout and canary coverage. See `docs/test-coverage.md` Stage 6B.26.
+public-header/layout and canary coverage.
 
 ## Retain segment declarations or reject the resource bound
 
-Stage 6B.43 found correctly encoded unsigned segment operands failing validation
-because WAT parsing silently dropped declarations after the 32nd segment.
-Data/element capacity now includes 128 segments, with the same bound in parser
+Correct unsigned segment operands cannot compensate for dropped declarations.
+Take data/element capacities from `src/config.h`, with the same bound in parser
 metadata, names, loader and evaluator state. Every append form checks capacity;
 excess declarations fail parsing and unretained data payloads are freed. Resource
 bounds remain hard parse errors inside `assert_invalid`, rather than satisfying
@@ -651,7 +884,8 @@ segment probe checks distinct values at 31/32/63/64/127, numeric and deferred na
 32/64-bit memory/table operands, post-drop traps and zero-length operations.
 OCaml compares language semantics only; capacity overflow is a C implementation
 boundary, not an OCaml rejection requirement. The existing fixed capacities do
-not promise arbitrary segment counts. See [the setup ledger](wast-setup-coverage.md).
+not promise arbitrary segment counts. Generate overflow probes from the current
+configured bound instead of fixing the fixture size to a historical limit.
 
 ## Preserve Element Segment Nullability
 
@@ -671,8 +905,8 @@ Verify table contents and lifetime as well as setup: bare/empty vectors,
 nullable null slots, passive `table.init`, dropped active/declarative segments,
 post-drop traps, table64 and all eight binary modes. Reject nullable segments
 when targeting non-null tables even if their vectors contain only `ref.func`.
-Stage 6B.44 uses C/native/browser checks and the OCaml language-only OCaml reference implementation;
-no kernel/provider changes are involved. See [the setup ledger](wast-setup-coverage.md).
+Compare native/browser C results with the OCaml reference implementation for
+these language checks; no kernel/provider changes are involved.
 
 
 ## Standard language-test host tables
@@ -689,9 +923,9 @@ owners; separately scheduled scripts receive fresh host objects. Include both
 host tables in checkpoint capture even before a module imports them. Store
 teardown releases entries after engines, and snapshots restore object identity
 and original bounds/contents. Keep private checkpoint ownership checks as well
-as portable WAST bounds/growth/import and isolation probes. Stage 6B.45 runs
-both manifest orders sequentially and concurrently, compares C/native/browser
-and OCaml language results, and verifies C-encoded modules in source order so
+as portable WAST bounds/growth/import and isolation probes. Run
+both manifest orders sequentially and concurrently, compare native/browser C
+and OCaml language results, and verify C-encoded modules in source order so
 prior actions establish shared table state. Standard spectest scaffolding does
 not require OCaml kernel development.
 
@@ -714,8 +948,8 @@ table; successful setup alone cannot prove the instruction was emitted. Check
 both address widths, repeated drops, post-drop traps and zero-length operations.
 Pair invalid-module assertions with quoted malformed-text assertions, and run
 C-encoded binaries through the OCaml reference implementation while preserving script order.
-Stage 6B.46 uses 190 portable checks and separate ordinary rejection probes;
-resource bounds and unrelated language acceptance remain explicit.
+`tests/test-suite-flat-bulk.wast` supplies the portable checks; keep ordinary
+rejection probes and resource-bound failures explicit too.
 
 
 `table.copy` accepts no table indices (both zero) or two explicit indices;
@@ -730,12 +964,10 @@ Copy addresses use each table's width. The count is i64 only when both tables
 are table64, otherwise i32; fill uses its table's width for address and count.
 Check both overlap directions with distinct entries, no writes after a bounds
 trap, zero-length boundary behavior, nulls, reference identity/nullability and
-cross-module function owners. Stage 6B.47 keeps these in 611 portable checks,
-with invalid/malformed and ordinary rejection probes, C-encoded OCaml reference implementation
-verification and sanitizer/leak cleanup gates. Equivalent explicit table/export
-declarations avoid broadening this slice to exported-table shorthand. Official
-language acceptance still needs a finite comparison ledger; POSIX and kernel
-providers are outside the scope of the OCaml reference implementation.
+cross-module function owners. `tests/test-suite-table-copy-fill.wast` covers
+portable valid/invalid/malformed cases; retain ordinary rejection probes,
+C-encoded OCaml reference implementation verification and sanitizer/leak gates.
+POSIX and kernel providers remain outside the language comparison scope.
 
 ## Exported table shorthand
 
@@ -746,9 +978,9 @@ funcref (elem ...))` and table64 `(table (export "name") i64 funcref (elem
 element segment to the just-declared table, and emit the inline export through
 the ordinary table export metadata. Test both address widths with indirect
 calls, then import the exported table from a second module to verify aliasing
-and shared contents. Stage 6B.52 covers these paths in native C, the production
-browser runtime and the OCaml language-only OCaml reference implementation; it does not change official
-corpus identity counts or require OCaml kernel capabilities.
+and shared contents. `tests/test-suite-exported-table-shorthand.wast` covers
+these paths in native C, the production browser runtime and the OCaml reference
+implementation without requiring OCaml kernel capabilities.
 
 
 ## Finite OCaml reference implementation comparison
@@ -775,8 +1007,29 @@ Pin known gaps by identity, source hash and exact issue categories. Fail new
 or changed gaps and repaired baselines; strict comparison fails known gaps
 as well. Preserve raw metadata/traces, commands and artifact/report hashes.
 The report format does not bind source hashes, so supply current reports and
-retain freshness evidence. Stage 6B.48's [finite ledger](wasm-language-coverage.md)
-classifies all 265 official identities; 261 accept independently, 259 agree
-on check/setup identity, and name truncation/inline setup profiles remain open.
+retain freshness evidence. Corpus membership, counts and gaps belong in the
+generated ledger rather than a second hand-maintained Markdown table.
 Installed-script agreement does not imply every C-encoded module or arbitrary
 text form has been compared. No OCaml kernel/provider development is added.
+
+```sh
+build/cli-rt/waste-test --vfs-root=src/vfs --jobs=1 \
+  --expected-failures=tests/native-corpus-expected-failures.txt \
+  --results=build/cli-rt/language-corpus-results.json
+python3 tests/language-oracle-check.py \
+  --native-results=build/cli-rt/language-corpus-results.json --strict
+python3 tests/language-oracle-ledger-check.py
+```
+
+These historical tool filenames still contain `oracle`; their scope is only
+the OCaml reference implementation's language semantics. Supply an existing
+reference executable built from staged source under `build/`, following the
+read-only submodule policy. `--browser-results=PATH` reconciles an actual browser
+report; `--output=PATH` selects evidence storage. The checker has its own bounded
+subprocess timeout, independent of C corpus deadlines. New/changed gaps or
+repaired baselines exit 1; configuration or stale-corpus errors exit 2.
+
+The comparison checker's manifest lookup still uses the legacy `tests/manifest.json`
+relative to the VFS root. It needs migration to `root/waste/tests/manifest.json`
+before the command above can audit the current installed layout. This is a
+checker-path limitation, not a new language gap or an OCaml kernel requirement.

@@ -17,7 +17,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define REPORT_MAX (16u * 1024u * 1024u)
+#define REPORT_MAX SUITE_OUTPUT_MAX_BYTES
 #define FILTER_MAX 128u
 
 typedef struct {
@@ -115,17 +115,17 @@ static unsigned positive_ms(const char *value) {
     unsigned n = 0;
     if (!*value) return 0;
     for (; *value; value++) {
-        if (*value < '0' || *value > '9' || n > 360000u) return 0;
+        if (*value < '0' || *value > '9' || n > (EXECUTION_MAX_TIMEOUT_MS - (unsigned)(*value - '0')) / 10u) return 0;
         n = n * 10u + (unsigned)(*value - '0');
     }
-    return n <= 3600000u ? n : 0;
+    return n <= EXECUTION_MAX_TIMEOUT_MS ? n : 0;
 }
 
 static unsigned group_budget(const char *group) {
-    if (!strcmp(group, "core")) return 15000;
+    if (!strcmp(group, "core")) return SUITE_TIMEOUT_CORE_MS;
     if (!strcmp(group, "core/simd") || !strcmp(group, "core/bulk-memory") ||
-        !strcmp(group, "core/memory64")) return 10000;
-    return 5000;
+        !strcmp(group, "core/memory64")) return SUITE_TIMEOUT_HEAVY_MS;
+    return SUITE_TIMEOUT_DEFAULT_MS;
 }
 
 static int expected_load(const char *path, const waste_suite *suite, unsigned char *expected) {
@@ -291,18 +291,20 @@ static void report_record(FILE *out, const test_record *record) {
 }
 
 static void usage(void) {
-    puts("usage: waste-test --vfs-root=DIRECTORY [OPTIONS] [IDENTITY ...]\n"
+    printf("usage: waste-test --vfs-root=DIRECTORY [OPTIONS] [IDENTITY ...]\n"
          "  --manifest=" WASTE_SUITE_MANIFEST "   mounted format-1 manifest\n"
          "  --list                           enumerate selected tests, including skips\n"
          "  --group=NAME --exclude=FILE --exclude-group=NAME (repeatable)\n"
          "  --expected-failures=PATH          tracked host-side XFAIL list\n"
          "  --results=PATH --json             assertion JSON file / stdout summary\n"
-         "  --jobs=N                         isolated native children (1..64, default 1)\n"
-         "  --timeout-ms=N                    global deadline override (1..3600000 ms)\n"
+         "  --jobs=N                         isolated native children (1..%u, default 1)\n"
+         "  --timeout-ms=N                    global deadline override (1..%u ms)\n"
          "  --timeout-group=NAME:N            repeatable per-group override\n"
-         "Default deadlines: core 15s; SIMD/bulk-memory/memory64 10s; other groups 5s.\n"
+         "Default deadlines (ms): core %u; SIMD/bulk-memory/memory64 %u; other groups %u.\n"
          "PASS/FAIL/XFAIL/XPASS/TIMEOUT/CANCELLED/SKIP; unexpected outcomes exit 1.\n"
-         "Sources and companions are read exclusively from the installed tree.");
+         "Sources and companions are read exclusively from the installed tree.\n",
+         SUITE_NATIVE_MAX_JOBS, EXECUTION_MAX_TIMEOUT_MS, SUITE_TIMEOUT_CORE_MS,
+         SUITE_TIMEOUT_HEAVY_MS, SUITE_TIMEOUT_DEFAULT_MS);
 }
 
 static int same_file(const char *a, const char *b) {
@@ -353,7 +355,7 @@ int main(int argc, char **argv) {
         else if (!strncmp(arg, "--expected-failures=", 20)) expected_path = arg + 20;
         else if (!strncmp(arg, "--jobs=", 7)) {
             jobs = positive_ms(arg + 7);
-            if (!jobs || jobs > 64) goto bad_options;
+            if (!jobs || jobs > SUITE_NATIVE_MAX_JOBS) goto bad_options;
         } else if (!strncmp(arg, "--timeout-ms=", 13)) {
             global_timeout = positive_ms(arg + 13);
             if (!global_timeout) goto bad_options;

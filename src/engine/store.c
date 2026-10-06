@@ -529,7 +529,11 @@ exec_status native_store_instantiate_executable(
     }
     memset(&vfs_executable, 0, sizeof(vfs_executable));
     if (store->kernel) {
-        vfs_status = posix_kernel_path_snapshot(
+        /* An explicit interpreter reads its input; only direct exec requires
+         * the input file itself to have executable permission. Installed WAST
+         * corpus snapshots deliberately have mode 0644. */
+        vfs_status = (wat_handler || wast_handler ?
+            posix_kernel_path_read_snapshot : posix_kernel_path_snapshot)(
             store->kernel, (const uint8_t *)load_path,
             strlen(load_path), NATIVE_EXEC_BYTES_MAX, &vfs_bytes,
             &vfs_size, &vfs_metadata);

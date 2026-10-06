@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 "use strict";
+const {config, withConfig} = require("./runtime-config.cjs");
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -68,10 +69,12 @@ logStep("PAGE ASSERT staging disabled target=bash");
 assert(archive.html.includes("is_staging: false"));
 logStep("BASH ASSERT app sources are not inlined into HTML");
 for (const name of ["app.js", "worker.js", "test-suite.js", "style.css",
-  "terminal/model.js", "terminal/glf.js", "terminal/renderer.js"]) {
+  "terminal/model.js", "terminal/glf.js", "terminal/renderer.js", "terminal/render-test.js"]) {
   assert(!archive.html.includes(fs.readFileSync(path.join(frontend, name), "utf8")));
   assertBytesEqual(archive.read("root/waste/app/" + name),
-    fs.readFileSync(path.join(frontend, name)), `bash VFS app ${name}`);
+    Buffer.from(["worker.js", "test-suite.js"].includes(name)
+      ? withConfig(fs.readFileSync(path.join(frontend, name), "utf8"))
+      : fs.readFileSync(path.join(frontend, name))), `bash VFS app ${name}`);
 }
 logStep("PAGE ASSERT engine bytes target=bash file=waste-wast.wasm");
 assertBytesEqual(archive.read("waste-wast.wasm"),
@@ -102,15 +105,13 @@ assert(archive.html.includes("WebAssembly.compile(zlibBytes)"));
 logStep("PAGE PASS target=bash");
 console.log("PASS bash: authored sources, embedded bytes, offline references and staging paths");
 
-const payload = JSON.parse(fs.readFileSync(path.join(root, "build/html-rt/tests/payload.json"), "utf8"));
-assert.equal(payload.tests.length, 296);
-assert.equal(payload.tests.filter(test => !test.unsupported).length, 292);
-assert.equal(new Set(payload.tests.map(test => test.path)).size, 296);
-for (const test of payload.tests) {
-  if (!test.spec.sourcePath) continue;
-  logStep(`WORKER CORPUS CHECK ${test.path}`);
-  const bytes = fs.readFileSync(path.resolve(root, test.spec.sourcePath));
-  assert.equal(bytes.length, test.spec.sourceBytes, `stale length: ${test.path}`);
+const corpus = JSON.parse(archive.read("root/waste/tests/manifest.json"));
+assert.equal(new Set(corpus.tests.map(test => test.path)).size, corpus.tests.length);
+for (const test of corpus.tests) {
+  if (test.executionSpec.mode !== "wast-stream") continue;
+  logStep(`PACKAGED CORPUS CHECK ${test.id}`);
+  const bytes = archive.read(test.path.slice(1));
+  assert.equal(bytes.length, test.executionSpec.sourceBytes, `stale length: ${test.id}`);
 }
 assert(fs.existsSync(path.join(frontend, "tests-worker.js")), "Node worker conformance harness remains available");
 

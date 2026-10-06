@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 "use strict";
+const {config, withConfig} = require("./runtime-config.cjs");
 const {treeVfs, stageVfs} = require("./vfs-package.cjs");
 // Boundary-only driver: fixture/inputs/expectations are shared with native.
 const assert = require("node:assert/strict");
@@ -138,11 +139,11 @@ const scenario = JSON.parse(fs.readFileSync(process.argv[4] || "tests/guest-sess
   const pointer = exp.waste_wast_results_ptr();
   const errors = [], results = [];
   for (let i = 0; i < total; i++) {
-    const record = Buffer.from(new Uint8Array(exp.memory.buffer, pointer + i * 256, 256));
+    const record = Buffer.from(new Uint8Array(exp.memory.buffer, pointer + i * config.BROWSER_RESULT_BYTES, config.BROWSER_RESULT_BYTES));
     const name = exp.waste_wast_result_name_ptr(i);
     results.push({func:Buffer.from(new Uint8Array(exp.memory.buffer, name,
       exp.waste_wast_result_name_len(i))).toString(), pass:Boolean(record[0])});
-    if (!record[0]) errors.push(record.subarray(64).toString().split("\0")[0]);
+    if (!record[0]) errors.push(record.subarray(config.BROWSER_RESULT_ERROR_OFFSET).toString().split("\0")[0]);
   }
   assert.equal(total, scenario.assertions, errors.join("\n"));
   assert.equal(passed, scenario.expectedPassed ?? total, errors.join("\n"));

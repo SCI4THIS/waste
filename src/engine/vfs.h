@@ -2,11 +2,12 @@
 #define WASTE_VFS_H
 #include <stddef.h>
 #include <stdint.h>
+#include "../config.h"
 #include "lib/include/path.h"
 struct posix_kernel;
-#define WASTE_VFS_MAX_BYTES (64u * 1024u * 1024u)
-#define WASTE_VFS_MAX_ENTRIES 960u
-#define WASTE_VFS_INVENTORY_MAX (2u * 1024u * 1024u)
+#define WASTE_VFS_MAX_BYTES VFS_MAX_BYTES
+#define WASTE_VFS_MAX_ENTRIES VFS_MAX_ENTRIES
+#define WASTE_VFS_INVENTORY_MAX VFS_INVENTORY_MAX_BYTES
 /* Installed inventory with separately supplied native/tree or browser/tar
  * bytes. This is an owned in-memory catalogue, not a serialized format. */
 typedef struct {

@@ -1,7 +1,7 @@
 ;; Guest counterparts of posix-path-vfs.c. All files are private kernel files;
 ;; no installed VFS or host filesystem mutations are needed. Stat offsets are
 ;; the public Wasm32 ABI. Installation, symlink seeding, snapshot ownership and
-;; codec round trips remain direct C probes (see docs/test-coverage.md).
+;; codec round trips remain direct C probes (see docs/techniques.md).
 (module
   (import "env" "open" (func $open (param i32 i32 i32) (result i32)))
   (import "env" "close" (func $close (param i32) (result i32)))

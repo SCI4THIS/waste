@@ -1,6 +1,6 @@
 # WASTE Architecture
 
-## Purpose and Sources of Truth
+## Purpose and References
 
 WASTE runs WebAssembly applications and specification scripts in a native C
 diagnostic runtime and in a self-contained browser runtime.  The repository-owned
@@ -21,7 +21,6 @@ POSIX imports are outside the scope of the OCaml reference implementation and do
 This document records durable system boundaries and ownership rules.  Concrete
 unfinished work belongs in the active plans:
 
-- [active-browser-vfs-layout-plan.md](active-browser-vfs-layout-plan.md)
 - [active-ocaml-language-oracle-plan.md](active-ocaml-language-oracle-plan.md)
 
 [techniques.md](techniques.md) records reusable implementation and testing
@@ -65,6 +64,13 @@ build/html-rt/  browser Wasm, bash.html, worker-test payloads, and libc fixtures
 build/ocaml/    OCaml reference implementation builds and staging
 ```
 
+Checked-out submodules are read-only source dependencies. Build tools must copy
+or stage their inputs under `build/` before applying repository patches or
+running generators, bootstrap/configure steps, and compilers. All such outputs,
+including test-runner output, belong under `build/`; see
+[the submodule policy](submodule-policy.md) for existing helpers that still
+need this refactor.
+
 `examples/bash.wat` is the compiled Bash input.  Guest-libc sources are under
 `src/html-rt/lib/`, and browser packaging tools are under
 `src/html-rt/tools/`.  Nothing under `build/` is a source of truth.
@@ -87,7 +93,7 @@ guest libc builds consume this same mounted tree without host header fallback.
 Private engine/native/libc headers stay beside their implementations; package
 compatibility shims remain separate named build profiles. The SDK records its
 audited function providers, signatures and unavailable capabilities; see
-`guest-sdk.md` and Stage 4 of the active VFS plan.
+`guest-sdk.md`.
 
 `src/html-rt/tools/vfs.py install` explicitly publishes validated snapshots;
 build tools compile under `build/` and support a separate `--install` step.
@@ -102,7 +108,7 @@ The native option
 establishes mount parity; the separate `waste-session` companion adds shared
 guest imports and bounded child-first fork/exec terminal sessions through the
 shared process driver. Both runtimes use the shared WAST child handler, retaining
-assertions across READ/SELECT resumes and mapping failed child assertions to an
+assertions across READ/SELECT/HOST_IO resumes and mapping failed child assertions to an
 exit status without stopping the parent shell. See `native-guest-session.md`.
 Host engine/worker assets and the host inventory are not guest VFS nodes.
 
@@ -139,8 +145,11 @@ in C. The live shell has its own instance. Browser expected-failure policy is a
 tracked host package asset, separate from the guest inventory. Both batch paths
 retain manifest order and distinguish infrastructure failures from XFAIL.
 The installed guest batch launcher uses the runtime capability. Coverage
-accounting, compatibility fixtures and supported WebAssembly-language comparisons with the OCaml reference implementation remain pending. See `test-corpus.md` for execution, refresh and mount verification, and
-`test-coverage.md` for assertion-level C/WAST mappings and retained private gates.
+accounting for legacy compatibility fixtures remains separate from supported
+WebAssembly-language comparison with the OCaml reference implementation. See
+[installed corpus workflow](techniques.md#installed-corpus-workflow) for refresh,
+execution and mount checks, and [test boundary selection](techniques.md#test-boundary-selection)
+for the contracts that require direct C or host tests.
 
 Focused worker-test metadata lives in `build/html-rt/tests/payload.json` and
 the Bash page bootstrap inputs live in
@@ -166,8 +175,12 @@ errno conversion and operations on the store-owned kernel/process state.
 Its private header is not a mounted application SDK header. A borrowed immutable
 capability table and per-store context connect it to platform operations;
 missing callbacks return unsupported errors, not implicit host access.
-`src/html-rt/posix_stubs.c` owns browser imports, wall-clock conversion and
-upload/download dialogs. Native polling, clocks and transcript output live in
+`src/html-rt/posix_stubs.c` owns browser imports and wall-clock conversion.
+Upload/download requests yield through `EXEC_YIELD_HOST_IO`, with pending state
+in `native_store.host_io`. `browser_api.c` exposes the request to `worker.js`;
+`app.js` owns the browser file picker, FileReader and Blob download. The engine
+copies uploaded bytes into owned storage before the worker frees its temporary
+buffer, then commits the file to the guest VFS on resume. Native polling, clocks and transcript output live in
 `src/cli-rt/guest_session.c`; guest paths are never forwarded to host syscalls.
 Both runtimes resume explicitly saved evaluator state through ordinary C calls.
 
@@ -184,6 +197,35 @@ not a production fallback or a kernel reference to develop further. Historical
 comparisons do not create an ongoing OCaml kernel parity requirement.
 
 An executing application never switches engines midway through a process.
+
+## Browser Terminal Contract
+
+The terminal is a byte-stream boundary. The C kernel owns termios, canonical
+editing, echo, output processing, signals, foreground process groups, window
+size and descriptor readiness. Browser code forwards keyboard/paste bytes and
+resize events; it presents output through the VT model without another shell
+line editor or newline conversion. Guest ncurses uses ordinary descriptors and
+VT sequences, including alternate-screen and application-cursor modes.
+
+`src/html-rt/src/terminal/model.js` owns cells, colors, cursor and escape state.
+`renderer.js` draws those cells from the vendored GLF curve geometry in
+`glf.js`, using the rogue-wasm-derived analytic Bézier shader and Unicode cmap
+lookup. The WebGL path uses static point/index buffers, never a glyph texture
+atlas. Backgrounds, underlines and the cursor are separate geometry. Canvas2D
+is only a fallback when WebGL is unavailable; the bounded text transcript is
+an accessibility/diagnostic mirror. Neither changes terminal semantics.
+
+The renderer/font provenance and MIT/OFL notices live in
+`src/html-rt/src/terminal/GLF-NOTICES.md`. These assets and notices are installed
+under `/root/waste/app/terminal` and extracted from the offline VFS tarball
+before the shell starts. No font fetch, server, cross-origin isolation,
+SharedArrayBuffer or Asyncify is required.
+
+Packaged applications execute through the engine's VFS and process-owned
+address spaces. Coreutils pipelines and redirection use kernel descriptors;
+process exit closes pipe endpoints so readers can observe EOF. Rogue and
+ncurses use the shared-library loader and the same TTY path. Further explicit
+guest loader acceptance remains in the [shared-library plan](active-shared-library-plan.md).
 
 ## Input and Module Pipeline
 
@@ -254,6 +296,41 @@ future WebAssembly proposals.  The generated test results are authoritative if
 a submodule update changes the corpus.  DIY POSIX and libc groups are separate
 runtime regression suites and must not be counted as official WebAssembly
 language conformance.
+
+### Installed corpus and result contract
+
+The mounted manifest records identities, source/companion hashes, pinned upstream
+revision, grouping, runtime profiles and unsupported reasons. Provenance paths
+are not execution fallbacks. Runners read WAST and `.support` assets from the
+validated installed directory or extracted browser package; declared `vfs-file`
+assets are copied to their guest paths before execution. The upstream test
+license is installed at `/usr/share/licenses/wasm-spec-tests/LICENSE`.
+
+Every scheduled test receives a fresh store/kernel; explicit imported-object
+aliases persist within one script. Parallel results retain manifest order.
+Native children and browser workers isolate tests from the interactive shell.
+The guest `/bin/waste-test` command delegates to this runtime capability and
+cannot override host root, executable, manifest or expected-failure policy paths.
+Shell overlay edits do not alter the inputs used by isolated batch workers.
+Browser-only compatibility and interactive renderer fixtures have explicit
+runtime eligibility; a SKIP is not evidence of language or kernel acceptance.
+
+Reports preserve per-assertion outcomes and a separate `setup` object:
+`total` attempted instantiations, `passed` successes, `complete` diagnostic
+collection, and ordered `failures` with `line`, `status`, `phase` and `error`.
+Definitions retain syntax and count only when instantiated. Explicit module
+assertions remain assertions. `completed` means the command scanner reached EOF,
+independently of guest exit or assertion counts. An empty completed script may
+pass; an ordinary invalid, unlinkable, trapping or unencodable module fails the
+file even if later assertions pass. Recovery never clears that failed setup.
+
+Tracked runtime policies classify completed semantic failures as XFAIL and
+repaired expectations as XPASS. Missing inputs, mount failures, crashes,
+timeouts, cancellation and incomplete diagnostics cannot become XFAIL.
+Native/browser records share identity, status, count and timing fields and
+retain detailed `nativeReport`/`browserReport` results. Interrupted browser
+records discard partial assertion reports. The official language comparison
+policy is separate and pins differences by identity, source hash and issue kind.
 
 ## Ownership Hierarchy
 
@@ -530,6 +607,67 @@ Generated libc fixtures instantiate client modules against libc's exported
 memory and table.  This is an ABI test as well as a functional test: pointers,
 callbacks, allocator metadata, and errno must be observed through the actual
 cross-module aliases.
+
+## Wasm32 Application ABI
+
+Application images are ordinary wasm32 modules with process-owned memory,
+mutable globals and tables. Modules in one process may explicitly import its
+shared `exec_memory`; independent processes share backing only through explicit
+shared mappings. Guest pointers are bounded wasm32 offsets, never host addresses.
+The virtual-memory ownership and fault rules above also apply at every import.
+
+Registered executable images use ABI version 1 and an exported `_start` entry
+of type `() -> ()`. The guest libc startup shim calls conventional
+`main(argc, argv, envp)` from that entry. Constructors run before the entry, and returning from
+the entry means exit status zero. Loader metadata records path, modes, ABI,
+module and entry information. Invalid modules, unsupported ABI/imports or
+missing entries are rejected before committing an `execve` replacement.
+
+The versioned `waste_kernel` boundary carries integer handles and validated
+guest byte spans. Compatibility `env` imports remain for prebuilt applications
+and probes; their error conventions must not be inferred from a libc signature.
+Kernel calls such as `open_v1` and `startup_v1` return negative errno values;
+guest libc translates errors to its public return convention and image-local
+errno. Some legacy imports return raw errors or `-1`. Provider signatures and
+availability are maintained in [guest-sdk.md](guest-sdk.md).
+
+### Startup block
+
+The engine copies argument/environment strings and cwd into the replacement
+image before committing it. `waste_kernel.startup_v1() -> i32` returns the
+startup-block offset, or `-ENOENT` if unavailable. An optional
+`__waste_startup(i32 block) -> ()` export receives the same offset;
+`__waste_startup_call(entry)` in guest libc decodes it for a C main function.
+The block's fields are fixed-width guest values:
+
+| Byte offset | Field |
+| --- | --- |
+| 0 | argc |
+| 4 | argv vector pointer |
+| 8 | envc |
+| 12 | envp vector pointer |
+| 16 | PID |
+| 20 | NUL-terminated cwd pointer |
+
+Argument/environment vectors contain 32-bit pointers and end in zero. Storage
+lives at the top of the image's linear memory; pointers must refer to copied
+strings in that image, including the cwd independently of argv[0].
+
+### Guest structure and timestamp layouts
+
+Guest structures are wire layouts, not the host compiler's C structures.
+`struct dirent` has 64-bit `d_ino` and `d_off`, then 16-bit `d_reclen`, 8-bit
+`d_type`, and `d_name` at byte offset 19, matching prebuilt Bash. The compact
+pathname metadata record is 48 bytes: kind/mode/uid/gid at offsets 0/4/8/12,
+signed size at 16, inode at 24, signed mtime seconds at 32, nanoseconds at 40.
+Guest `stat` expands it into the 128-byte public structure. Guest `time_t` is
+signed 64-bit. Public headers and compiled guest ABI tests preserve these layouts.
+
+`waste_kernel.realtime_v1` writes epoch seconds/nanoseconds into guest memory;
+the browser derives realtime from `Date.now()`. Browser staging passes seconds
+as explicit low/high 32-bit words plus nanoseconds. `waste_wast_stage_mtime`
+applies source metadata to the last staged entry; `waste_wast_stage_build_mtime`
+supplies timestamps for synthetic runtime/interpreter nodes.
 
 ## Testing, Measurement, and Deployment Policy
 

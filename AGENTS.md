@@ -28,6 +28,14 @@ are in `tests/`, especially `tests/diy-posix-test/` and `tests/libc-test/`.
 Treat all of `build/` as generated output. Shared generated engine sources and
 logs go under `build/engine/`, native executables under `build/cli-rt/`, browser
 artifacts under `build/html-rt/`, and OCaml intermediates under `build/ocaml/`.
+Treat every checked-out submodule as a read-only source dependency. Never apply
+patches, generate files, bootstrap, configure, or build inside a submodule
+checkout. Copy or stage inputs under `build/` first, apply repository-owned
+patches to that staging copy, and direct every generated output into `build/`.
+For upstream test runners with an output option, set it to a path under
+`build/`; for example, use `--out build/ocaml/spec-roundtrip` with the
+WebAssembly spec test runner. See `docs/submodule-policy.md` for existing
+helpers that still need migration to this policy.
 Guest distribution snapshots are explicitly installed into `src/vfs` using
 `src/html-rt/tools/vfs.py`; its `.inventory.json` is the mounted path/metadata
 contract. Compile under `build/`, then install; HTML packaging must not compile
@@ -41,9 +49,9 @@ Test files in `src/vfs/root/waste/tests` are installed distribution snapshots,
 not authored sources. They mount at `/root/waste/tests`. Refresh with
 `vfs-tests-install` and audit with `vfs-tests-check`; the single `bash.html`
 page runs browser corpus diagnostics from these mounted snapshots. See
-`docs/test-corpus.md`.
+`docs/techniques.md` (Installed Corpus Workflow).
 Authored portable executor regressions live in `tests/engine-regressions/*.wast`;
-`docs/test-coverage.md` records their C assertion mappings and retained private
+`docs/techniques.md` (Test Boundary Selection) explains the retained private
 checks. The `i32-smoke`, `caller-instance` and `continuation` gates require their
 installed regression snapshots to match authored inputs.
 
@@ -77,15 +85,15 @@ this explicit return path as stack unwinding/rewinding.
   against the generated page without launching Chromium.
 - `./start.sh --html-browser-full`: run the full offline Chromium/browser suite
   against `bash.html`.
-- `./start.sh --compile`: build direct and CPS OCaml-to-Wasm artifacts.
+- `./start.sh --compile`: legacy OCaml build path; currently blocked until it
+  applies the managed patch to staged source under `build/ocaml/` only.
 - `./start.sh --build-libc`: build the guest libc module and generated test
   fixtures.
 - `./start.sh --generate-bash-html`: generate the offline WASTE Bash page.
-- `make -C submodules SWITCH_NAME=waste-wasm wasm`: temporarily apply the
-  repository-owned OCaml patch, build sequential and CPS OCaml-to-Wasm
-  artifacts, and restore the spec submodule even if the build fails.
-- `make -C submodules SWITCH_NAME=waste-wasm native`: use the same patch
-  transaction to build the native OCaml differential OCaml reference implementation.
+- OCaml reference builds under `make -C submodules` are currently blocked by
+  the read-only submodule policy: their legacy patch transaction edits the spec
+  checkout. Refactor them to patch a staged copy under `build/ocaml/` before
+  using those targets.
 - `make -C src/cli-rt BUILD_DIR=../../build/cli-rt wast-native`: build the
   native CLI runner.
 - `make -C src/cli-rt corpus-native`: build the native batch companion and

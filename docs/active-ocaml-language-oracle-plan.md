@@ -44,7 +44,11 @@ artifacts or tests immediately.
 3. Remove the OCaml kernel and application-only integration from the
    repository-owned patch/build inputs. Retain only justified OCaml reference implementation
    fixes and scaffolding. Do not commit changes into upstream submodule history;
-   use `submodules/wasm-spec-i31-int32.patch` and its build transaction.
+   keep them in `submodules/wasm-spec-i31-int32.patch`. Stage the pinned source
+   under `build/ocaml/` and apply the patch only to that copy; the spec
+   submodule checkout remains read-only. Existing in-place patch transactions
+   are legacy and must be refactored before use; see
+   [the submodule policy](submodule-policy.md).
 4. Remove dependent OCaml application-runtime commands, packaging, artifacts
    and direct/threaded POSIX test requirements. Keep the supported language
    OCaml reference implementation build/run path and official test provenance; select its build variants
@@ -63,14 +67,8 @@ artifacts or tests immediately.
   OCaml reference implementation. Legacy application artifacts and commands are removed with
   explicit replacements where needed.
 
-OCaml reference implementation comparisons remain part of the
-[browser/VFS plan](active-browser-vfs-layout-plan.md). Kernel retirement is
-deferred follow-up work, not an additional Stage 6B kernel migration gate.
-
-
-Stage 6B.48 records the pinned installed language corpus in
-[the official comparison ledger](wasm-language-coverage.md): 265 official
-identities, 261 compared inputs, four legacy exclusions and two explicit C
-name/setup-profile differences. That ledger and its standard spec scaffolding
-are retained language verification work. Its comparisons do not authorize any
-additional OCaml kernel or application-runtime development.
+OCaml reference implementation comparisons remain required language verification;
+see [the comparison workflow](techniques.md#finite-ocaml-reference-implementation-comparison).
+The generated identity/hash ledger and standard spec scaffolding are retained.
+Kernel retirement is separate deferred work; language comparisons do not
+authorize additional OCaml kernel or application-runtime development.

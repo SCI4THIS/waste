@@ -36,7 +36,7 @@ parity gates for C kernel development. OCaml is now used only for Wasm/WAT/WAST
 language checks; no additional OCaml POSIX/kernel capabilities will be added,
 and its existing kernel is planned for removal. See
 [the retirement plan](../../docs/active-ocaml-language-oracle-plan.md) and
-[the C coverage ledger](../../docs/test-coverage.md).
+[test boundary selection](../../docs/techniques.md#test-boundary-selection).
 
 The current native control gate runs without Node or HTML generation:
 

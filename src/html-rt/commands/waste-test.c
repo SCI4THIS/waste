@@ -1,3 +1,4 @@
+#include "../../config.h"
 /* Guest batch launcher: bounded ABI request, guest descriptor output/results.
  * Deliberately freestanding; it does not require an additional libc provider. */
 typedef unsigned int u32;
@@ -14,7 +15,7 @@ __attribute__((import_module("env"), import_name("close")))
 extern int close_fd(int);
 __attribute__((import_module("env"), import_name("exit")))
 extern void exit_guest(int);
-static u8 request[4096], reply[16 * 1024 * 1024];
+static u8 request[SUITE_GUEST_REQUEST_MAX_BYTES], reply[SUITE_GUEST_REPLY_MAX_BYTES];
 static const char usage[] = "usage: waste-test [--list] [--group=NAME] [FILE...] [--exclude=FILE]\n"
  "       [--exclude-group=NAME] [--jobs=1..8] [--timeout-ms=N]\n"
  "       [--timeout-group=NAME:N] [--json] [--results=GUEST_PATH]\n";
@@ -38,16 +39,16 @@ int start(void) {
  if (block < 0) { fail("waste-test: startup unavailable\n"); return 2; }
  const u32 *state = (const u32 *)(unsigned long)(u32)block;
  u32 argc = state[0]; const char **argv = (const char **)(unsigned long)state[1];
- if (argc > 65) { fail("waste-test: too many arguments\n"); return 2; }
+ if (argc > SUITE_GUEST_MAX_ARGS + 1) { fail("waste-test: too many arguments\n"); return 2; }
  const char *result_path = 0; u32 size = 4; request[0] = 1;
  for (u32 i = 1; i < argc; i++) {
   if (equal(argv[i], "--help")) { write_all(1, (const u8 *)usage, sizeof(usage)-1); exit_guest(0); return 0; }
   if (starts(argv[i], "--results=")) {
-   if (result_path || !argv[i][10] || length(argv[i]+10) >= 256) { fail(usage); return 2; }
+   if (result_path || !argv[i][10] || length(argv[i]+10) >= VFS_PATH_MAX_BYTES) { fail(usage); return 2; }
    result_path = argv[i]+10; continue;
   }
   u32 n = length(argv[i]);
-  if (!n || n >= sizeof(request)-size) { fail("waste-test: arguments exceed 4096 bytes\n"); return 2; }
+  if (!n || n >= sizeof(request)-size) { fail("waste-test: arguments exceed configured request limit\n"); return 2; }
   for (u32 j = 0; j <= n; j++) request[size++] = (u8)argv[i][j];
  }
  int got = suite(request, size, reply, sizeof(reply));

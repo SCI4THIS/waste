@@ -50,8 +50,8 @@ var WasteTestSuite = class {
         worker.onmessage = ({data}) => {
           if (data.type === "output") {
             output += data.text;
-            if (output.length > 16 * 1024 * 1024)
-              complete({error: "test output exceeded 16 MiB"});
+            if (output.length > WASTE_CONFIG.SUITE_OUTPUT_MAX_BYTES)
+              complete({error: "test output exceeded configured limit"});
           } else if (data.type === "suite-list" || data.type === "done") complete(data);
           else if (data.type === "host-upload-request" || data.type === "host-download")
             complete({error: "batch test requested an interactive host transfer"});
@@ -109,7 +109,7 @@ var WasteTestSuite = class {
   static guestReply(code, output, report = null) {
     const encoder = new TextEncoder();
     const out = encoder.encode(output), json = report ? encoder.encode(JSON.stringify(report) + "\n") : new Uint8Array();
-    if (16 + out.length + json.length > 16 * 1024 * 1024) throw new Error("Batch response exceeds 16 MiB");
+    if (16 + out.length + json.length > WASTE_CONFIG.SUITE_GUEST_REPLY_MAX_BYTES) throw new Error("Batch response exceeds configured limit");
     const bytes = new Uint8Array(16 + out.length + json.length);
     const header = new DataView(bytes.buffer);
     [1, code, out.length, json.length].forEach((value, i) => header.setUint32(i*4, value, true));
@@ -124,16 +124,16 @@ var WasteTestSuite = class {
       pending = {cancelled: false, active: new Set()};
       this.guestPending = pending;
       const bytes = new Uint8Array(request);
-      if (bytes.length < 4 || bytes.length > 4096 || new DataView(bytes.buffer, bytes.byteOffset).getUint32(0, true) !== 1)
+      if (bytes.length < 4 || bytes.length > WASTE_CONFIG.SUITE_GUEST_REQUEST_MAX_BYTES || new DataView(bytes.buffer, bytes.byteOffset).getUint32(0, true) !== 1)
         throw new Error("Invalid batch request");
       const strings = new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(bytes.subarray(4));
       if (strings && !strings.endsWith("\0")) throw new Error("Unterminated batch arguments");
       const args = strings ? strings.slice(0,-1).split("\0") : [];
-      if (args.length > 64 || args.some(arg => !arg)) throw new Error("Invalid batch arguments");
-      const options = {jobs: 2, groups: [], files: [], excludeFiles: [], excludeGroups: [], timeoutGroups: Object.create(null)};
+      if (args.length > WASTE_CONFIG.SUITE_GUEST_MAX_ARGS || args.some(arg => !arg)) throw new Error("Invalid batch arguments");
+      const options = {jobs: WASTE_CONFIG.SUITE_GUEST_DEFAULT_JOBS, groups: [], files: [], excludeFiles: [], excludeGroups: [], timeoutGroups: Object.create(null)};
       let list = false, json = false;
       const ms = text => {
-        if (!/^[0-9]+$/.test(text) || Number(text) < 1 || Number(text) > 3600000)
+        if (!/^[0-9]+$/.test(text) || Number(text) < 1 || Number(text) > WASTE_CONFIG.EXECUTION_MAX_TIMEOUT_MS)
           throw new Error("Invalid execution deadline");
         return Number(text);
       };
@@ -152,7 +152,7 @@ var WasteTestSuite = class {
         } else if (arg.startsWith("-")) throw new Error("Unknown batch option");
         else options.files.push(arg);
       }
-      if (options.jobs > 8) throw new Error("Invalid jobs");
+      if (options.jobs > WASTE_CONFIG.SUITE_BROWSER_MAX_JOBS) throw new Error("Invalid jobs");
       const catalogue = await this.list(pending);
       if (pending.cancelled) throw new Error("Batch cancelled before enumeration");
       const selected = this.select(catalogue, options);
@@ -192,9 +192,9 @@ var WasteTestSuite = class {
 
   async run(options = {}, onResult = () => {}) {
     if (this.running) throw new Error("A batch is already running");
-    const {jobs = 2, timeoutMs, timeoutGroups = {}} = options;
-    const validMs = value => Number.isInteger(value) && value > 0 && value <= 3600000;
-    if (!Number.isInteger(jobs) || jobs < 1 || jobs > 8 ||
+    const {jobs = WASTE_CONFIG.SUITE_GUEST_DEFAULT_JOBS, timeoutMs, timeoutGroups = {}} = options;
+    const validMs = value => Number.isInteger(value) && value > 0 && value <= WASTE_CONFIG.EXECUTION_MAX_TIMEOUT_MS;
+    if (!Number.isInteger(jobs) || jobs < 1 || jobs > WASTE_CONFIG.SUITE_BROWSER_MAX_JOBS ||
         (timeoutMs !== undefined && !validMs(timeoutMs)) ||
         !timeoutGroups || typeof timeoutGroups !== "object" || Array.isArray(timeoutGroups) ||
         Object.values(timeoutGroups).some(value => !validMs(value)))
@@ -217,8 +217,8 @@ var WasteTestSuite = class {
           else if (state.cancelled) record.status = "CANCELLED";
           else {
             const budget = timeoutGroups[test.group] ?? timeoutMs ??
-              (test.group === "core" ? 15000 :
-                ["core/simd", "core/bulk-memory", "core/memory64"].includes(test.group) ? 10000 : 5000);
+              (test.group === "core" ? WASTE_CONFIG.SUITE_TIMEOUT_CORE_MS :
+                ["core/simd", "core/bulk-memory", "core/memory64"].includes(test.group) ? WASTE_CONFIG.SUITE_TIMEOUT_HEAVY_MS : WASTE_CONFIG.SUITE_TIMEOUT_DEFAULT_MS);
             let response;
             try { response = await this.request({mode: "run", identity: test.identity,
               browserNativeSpec: this.browserNativeSpecs.get(test.identity)}, budget, state); }
@@ -339,6 +339,10 @@ async function showInstalledTests(execute) {
 }
 
 if (typeof document !== "undefined") {
+  document.querySelector("#suite-jobs").max = WASTE_CONFIG.SUITE_BROWSER_MAX_JOBS;
+  document.querySelector("#suite-jobs").value = WASTE_CONFIG.SUITE_GUEST_DEFAULT_JOBS;
+  document.querySelector("#suite-timeout").max = WASTE_CONFIG.EXECUTION_MAX_TIMEOUT_MS;
+  document.querySelector("#suite-timeout").value = WASTE_CONFIG.SUITE_BROWSER_UI_TIMEOUT_MS;
   document.querySelector("#suite-list").onclick = () => showInstalledTests(false);
   document.querySelector("#suite-run").onclick = () => showInstalledTests(true);
   document.querySelector("#suite-cancel").onclick = () => browserTestSuite?.cancel();

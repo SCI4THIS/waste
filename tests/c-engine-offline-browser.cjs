@@ -250,10 +250,11 @@ async function waitSession(session, name = "waits") {
         await until(sessionId, `browserTestResults !== null && !document.querySelector('#suite-run').disabled`, 300000);
         const report = await evaluate(sessionId, "browserTestResults");
         fs.writeFileSync(path.join(artifacts, "mounted-suite-results.json"), JSON.stringify(report, null, 2) + "\n");
-        assert.deepEqual(report.summary, {pass: 290, fail: 0, xfail: 2, xpass: 0, skip: 4,
-          failures: [], unexpectedPasses: []});
+        const identities = await evaluate(sessionId,
+          "browserTestSuite.list().then(tests => tests.map(test => test.identity))");
+        assert.deepEqual(report.tests.map(test => test.identity), identities);
         assert.equal(report.exitCode, 0);
-        console.log("PASS production browser batch: full mounted corpus, 290 PASS / 2 XFAIL / 4 SKIP");
+        console.log("PASS production browser batch: full mounted corpus", report.summary);
       }
       await evaluate(sessionId, `document.querySelector('#terminal-input').value =
         '/bin/echo __BASH_AFTER_SUITE__';

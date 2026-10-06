@@ -32,7 +32,7 @@ The same 14 fixtures are available through `/bin/waste-test --group=libc-test`
 in the offline Bash page. Keep compiled
 guest header/layout checks and focused artifact checks; see
 [the libc harness audit](../../docs/libc-harness-coverage.md) and
-[the coverage ledger](../../docs/test-coverage.md). OCaml is used only for
+[test boundary selection](../../docs/techniques.md#test-boundary-selection). OCaml is used only for
 Wasm/WAT/WAST language verification. No additional OCaml kernel or libc-host
 capabilities will be developed; its existing kernel is planned for removal in
 [deferred cleanup](../../docs/active-ocaml-language-oracle-plan.md).

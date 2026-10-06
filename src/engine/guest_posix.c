@@ -2542,6 +2542,41 @@ static int guest_posix_suite_reply_range(exec_memory *memory, uint32_t offset,
     return 1;
 }
 
+/* render_test_v1(reply, capacity) -> response length, or -1 if unavailable.
+ * (0, 0) queries the configured capacity. The response is a little-endian
+ * u32 pass flag followed by JSON bytes. The guest owns file creation. */
+static exec_status guest_posix_render_test_v1(
+        void *data, const wasm_value *args, int arg_count,
+        wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    native_store *store = data;
+    exec_memory *memory = NULL;
+    if (!store || !store->render_test_enabled || arg_count != 2)
+        return guest_posix_result(-1, results, result_count);
+    uint32_t offset = (uint32_t)args[0].i32, capacity = (uint32_t)args[1].i32;
+    if (!offset && !capacity)
+        return guest_posix_result(RENDER_TEST_REPLY_MAX_BYTES, results, result_count);
+    if (guest_posix_memory(caller, &memory, error) != EXEC_OK ||
+        capacity < 4 || capacity > RENDER_TEST_REPLY_MAX_BYTES ||
+        !guest_posix_suite_reply_range(memory, offset, capacity))
+        return guest_posix_result(-1, results, result_count);
+    native_host_io_state *io = &store->host_io;
+    if (io->kind == NATIVE_HOST_IO_RENDER_TEST && io->result) {
+        int32_t length = -1;
+        if (io->result == 1 && io->data_len >= 4 && io->data_len <= capacity &&
+            guest_posix_write_guest(memory, offset, io->data, io->data_len))
+            length = (int32_t)io->data_len;
+        free(io->data);
+        memset(io, 0, sizeof(*io));
+        return guest_posix_result(length, results, result_count);
+    }
+    if (io->kind != NATIVE_HOST_IO_NONE)
+        return guest_posix_result(-1, results, result_count);
+    io->kind = NATIVE_HOST_IO_RENDER_TEST;
+    error->yield_reason = EXEC_YIELD_HOST_IO;
+    return EXEC_YIELD;
+}
+
 static exec_status guest_posix_test_suite_v1(
         void *data, const wasm_value *args, int arg_count,
         wasm_value *results, int *result_count, exec_error *error,
@@ -2555,7 +2590,7 @@ static exec_status guest_posix_test_suite_v1(
     if (io->kind == NATIVE_HOST_IO_TEST_SUITE && io->result) {
         int32_t length = -1;
         if (io->result == 1 && io->data_len <= (uint32_t)args[3].i32 &&
-            io->data_len <= 16u * 1024u * 1024u &&
+            io->data_len <= SUITE_GUEST_REPLY_MAX_BYTES &&
             guest_posix_write_guest(memory, (uint32_t)args[2].i32, io->data, io->data_len))
             length = (int32_t)io->data_len;
         free(io->data);
@@ -2564,8 +2599,8 @@ static exec_status guest_posix_test_suite_v1(
     }
     uint32_t length = (uint32_t)args[1].i32;
     uint32_t capacity = (uint32_t)args[3].i32;
-    if (io->kind != NATIVE_HOST_IO_NONE || length < 4 || length > 4096 ||
-        capacity < 16 || capacity > 16u * 1024u * 1024u ||
+    if (io->kind != NATIVE_HOST_IO_NONE || length < 4 || length > SUITE_GUEST_REQUEST_MAX_BYTES ||
+        capacity < 16 || capacity > SUITE_GUEST_REPLY_MAX_BYTES ||
         !guest_posix_suite_reply_range(memory, (uint32_t)args[2].i32, capacity))
         return guest_posix_result(-1, results, result_count);
     uint8_t *request = malloc(length);
@@ -2576,15 +2611,25 @@ static exec_status guest_posix_test_suite_v1(
     for (size_t i = 4; valid && i < length;) {
         size_t start = i;
         while (i < length && request[i]) i++;
-        if (i == length || i == start || ++count > 64) { valid = 0; break; }
+        if (i == length || i == start || ++count > SUITE_GUEST_MAX_ARGS) { valid = 0; break; }
         const char *arg = (const char *)request + start;
         if (arg[0] == '-' && strcmp(arg, "--list") && strcmp(arg, "--help") &&
             strcmp(arg, "--json") && strncmp(arg, "--group=", 8) &&
             strncmp(arg, "--exclude=", 10) && strncmp(arg, "--exclude-group=", 16) &&
             strncmp(arg, "--jobs=", 7) && strncmp(arg, "--timeout-ms=", 13) &&
             strncmp(arg, "--timeout-group=", 16)) valid = 0;
-        if (!strncmp(arg, "--jobs=", 7) &&
-            (arg[7] < '1' || arg[7] > '8' || arg[8])) valid = 0;
+        if (!strncmp(arg, "--jobs=", 7)) {
+            unsigned jobs = 0;
+            const char *number = arg + 7;
+            if (!*number) valid = 0;
+            for (; valid && *number; number++) {
+                if (*number < '0' || *number > '9' ||
+                    jobs > SUITE_BROWSER_MAX_JOBS / 10u) { valid = 0; break; }
+                jobs = jobs * 10u + (unsigned)(*number - '0');
+                if (jobs > SUITE_BROWSER_MAX_JOBS) valid = 0;
+            }
+            if (!jobs) valid = 0;
+        }
         i++;
     }
     if (!valid) { free(request); return guest_posix_result(-1, results, result_count); }
@@ -2756,6 +2801,7 @@ static exec_host_func guest_posix_function(const char *module,
         if (strcmp(name, "dlsym_v1") == 0) return guest_posix_dlsym_v1;
         if (strcmp(name, "dlclose_v1") == 0) return guest_posix_dlclose_v1;
         if (strcmp(name, "test_suite_v1") == 0) return guest_posix_test_suite_v1;
+        if (strcmp(name, "render_test_v1") == 0) return guest_posix_render_test_v1;
         if (strcmp(name, "host_upload_v1") == 0) return guest_posix_host_upload_v1;
         if (strcmp(name, "host_download_v1") == 0) return guest_posix_host_download_v1;
         return (void *)0;

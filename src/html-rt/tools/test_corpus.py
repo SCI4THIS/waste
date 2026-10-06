@@ -6,7 +6,8 @@ def layout_roots(repo):
     return [(repo / "submodules/wasm-spec/test", "wasm-spec", ""),
             (repo / "tests/diy-posix-test", "diy-posix-test", "diy-posix-test"),
             (repo / "build/html-rt/waste-libc/tests", "libc-test", "libc-test"),
-            (repo / "tests/engine-regressions", "engine-regressions", "engine-regressions")]
+            (repo / "tests/engine-regressions", "engine-regressions", "engine-regressions"),
+            (repo / "tests/render", "render", "render")]
 
 
 def collect_layout_tests(test_root: Path, suite: str, path_prefix: str = "", evaluator="engine"):
@@ -19,9 +20,10 @@ def collect_layout_tests(test_root: Path, suite: str, path_prefix: str = "", eva
         relative = "/".join(part for part in (path_prefix, local_relative) if part)
         parent = path.parent.relative_to(test_root).as_posix()
         group = "/".join(part for part in (path_prefix, parent if parent != "." else "") if part) or "root"
-        unsupported = suite == "wasm-spec" and local_relative.startswith("legacy/")
+        unsupported = suite == "render" or (suite == "wasm-spec" and local_relative.startswith("legacy/"))
         tests.append(dict(path=path, relative=relative, group=group, suite=suite,
                           expectFailure=".fail." in path.name, unsupported=unsupported,
-                          unsupportedReason=("Legacy exception syntax is not supported by the current "
+                          unsupportedReason=("Requires the interactive bash.html renderer; run with /bin/wast" if suite == "render" else
+                                             "Legacy exception syntax is not supported by the current "
                                              f"WebAssembly 3.0 {evaluator}" if unsupported else None)))
     return tests

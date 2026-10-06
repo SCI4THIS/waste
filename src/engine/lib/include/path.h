@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "../../../config.h"
 
 /* POSIX values used by the engine-owned pathname boundary.  They are kept
  * here, rather than taking host errno values, so native and Wasm runtimes
@@ -23,8 +24,8 @@
 /* This is a bounded in-engine inode table, not a package manifest limit.
  * Leave room for the base runtime, packaged commands and aliases, and files
  * created by the guest after boot. */
-#define POSIX_PATH_NODE_MAX 1024
-#define POSIX_PATH_NODE_NAME_MAX 256
+#define POSIX_PATH_NODE_MAX (VFS_MAX_ENTRIES + VFS_RUNTIME_NODE_RESERVE)
+#define POSIX_PATH_NODE_NAME_MAX VFS_PATH_MAX_BYTES
 
 #define POSIX_F_OK 0
 #define POSIX_X_OK 1

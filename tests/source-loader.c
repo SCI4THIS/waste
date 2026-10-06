@@ -21,7 +21,7 @@ int main(void) {
     static const char relative[] = "#!wat\n(module)";
     static const char empty[] = "#!\n(module)";
     static const char extra[] = "#!/bin/wat one two\n(module)";
-    char overlong[4096 + 32];
+    char overlong[SOURCE_SHEBANG_MAX_BYTES + 32];
 
     result = waste_source_view_init(crlf, sizeof(crlf) - 1, &view);
     CHECK(result == WASTE_SOURCE_OK && view.has_shebang,

@@ -1,5 +1,6 @@
 "use strict";
 let guestSuitePending = 0, guestSuiteSequence = 0;
+let renderTestPending = 0;
 
 function decodeB64(text) {
   const raw = atob(text), bytes = new Uint8Array(raw.length);
@@ -297,7 +298,7 @@ let pendingInput = [];
 let pendingInputBytes = 0;
 let pendingSignals = [];
 let pendingClocks = null;
-const pendingInputLimit = 4096;
+const pendingInputLimit = WASTE_CONFIG.TERMINAL_INPUT_CAPACITY;
 const pendingSignalLimit = 16;
 
 function wakeIO() {
@@ -434,6 +435,7 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
   if (!suiteRequest) {
     exp.waste_wast_enable_terminal();
     exp.waste_wast_enable_test_suite?.();
+    exp.waste_wast_enable_render_test?.();
   }
   if (vfs) stageInstalledVfs(exp, vfs);
   if (buildMtime && exp.waste_wast_stage_build_mtime) {
@@ -571,11 +573,11 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
   if (executionLimits) {
     const timeout = executionLimits.timeoutMs ?? 0;
     const cancel = executionLimits.cancelAfterMs ?? 0;
-    if (![timeout, cancel].every(value => Number.isInteger(value) && value >= 0 && value <= 3600000) ||
+    if (![timeout, cancel].every(value => Number.isInteger(value) && value >= 0 && value <= WASTE_CONFIG.EXECUTION_MAX_TIMEOUT_MS) ||
         exp.waste_wast_set_execution_limits?.(timeout, cancel) !== 0)
       throw new Error("Invalid execution limits");
     const pump = executionLimits.pumpQuantumMs ?? 0;
-    if (pump && (!Number.isInteger(pump) || pump < 0 || pump > 60000 ||
+    if (pump && (!Number.isInteger(pump) || pump < 0 || pump > WASTE_CONFIG.EXECUTION_MAX_PUMP_QUANTUM_MS ||
         !exp.waste_wast_set_pump_quantum_ms ||
         exp.waste_wast_set_pump_quantum_ms(pump) !== 0))
       throw new Error("Invalid pump quantum");
@@ -666,6 +668,9 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
         const request = new Uint8Array(engineMemory.buffer, ptr, len).slice();
         guestSuitePending = ++guestSuiteSequence;
         self.postMessage({type: "guest-suite-request", id: guestSuitePending, request}, [request.buffer]);
+      } else if (ioKind === 4) { /* browser renderer diagnostic */
+        renderTestPending = ++guestSuiteSequence;
+        self.postMessage({type: "render-test-request", id: renderTestPending});
       } else if (ioKind === 2) { /* HOST_IO_DOWNLOAD */
         const dataPtr = exp.waste_wast_host_io_data_ptr();
         const dataLen = exp.waste_wast_host_io_data_len();
@@ -684,7 +689,7 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
     // SELECT can become ready solely because its kernel deadline expires.
     // Re-enter to let the kernel decide; READ still waits for an outside event.
     do { await waitForIO(waitKind === 2 ? 10 : 0); }
-    while (guestSuitePending && !terminated);
+    while ((guestSuitePending || renderTestPending) && !terminated);
     if (terminated) break;
     yielded = exp.waste_wast_resume();
     flushOutput();
@@ -711,17 +716,17 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
   const nameDecoder = new TextDecoder("utf-8", {ignoreBOM: true});
   const results = [];
   for (let i = 0; i < total; i++) {
-    const base = resultsPtr + i * 256;
+    const base = resultsPtr + i * WASTE_CONFIG.BROWSER_RESULT_BYTES;
     let funcEnd = 1;
-    while (funcEnd < 64 && resultBytes[base + funcEnd]) funcEnd++;
-    let errorEnd = 64;
-    while (errorEnd < 256 && resultBytes[base + errorEnd]) errorEnd++;
+    while (funcEnd < WASTE_CONFIG.BROWSER_RESULT_ERROR_OFFSET && resultBytes[base + funcEnd]) funcEnd++;
+    let errorEnd = WASTE_CONFIG.BROWSER_RESULT_ERROR_OFFSET;
+    while (errorEnd < WASTE_CONFIG.BROWSER_RESULT_BYTES && resultBytes[base + errorEnd]) errorEnd++;
     const nameStart = exp.waste_wast_result_name_ptr ? exp.waste_wast_result_name_ptr(i) : base + 1;
     const nameEnd = exp.waste_wast_result_name_len ? nameStart + exp.waste_wast_result_name_len(i) : base + funcEnd;
     results.push({
       pass: resultBytes[base] !== 0,
       func: nameDecoder.decode(resultBytes.subarray(nameStart, nameEnd)),
-      error: decoder.decode(resultBytes.subarray(base + 64, base + errorEnd)),
+      error: decoder.decode(resultBytes.subarray(base + WASTE_CONFIG.BROWSER_RESULT_ERROR_OFFSET, base + errorEnd)),
     });
   }
   const setup = {total: exp.waste_wast_setup_total(),
@@ -730,8 +735,8 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
   const phases = ["", "encode", "load", "definition", "retain"];
   for (let i = 0; i < exp.waste_wast_setup_failure_count(); i++) {
     const ptr = exp.waste_wast_setup_failure_ptr(i);
-    const view = new DataView(engineMemory.buffer, ptr, 268);
-    const bytes = new Uint8Array(engineMemory.buffer, ptr + 12, 256);
+    const view = new DataView(engineMemory.buffer, ptr, 12 + WASTE_CONFIG.WAST_SETUP_ERROR_BYTES);
+    const bytes = new Uint8Array(engineMemory.buffer, ptr + 12, WASTE_CONFIG.WAST_SETUP_ERROR_BYTES);
     const end = bytes.indexOf(0);
     setup.failures.push({line: view.getUint32(0, true),
       status: view.getInt32(4, true), phase: phases[view.getUint32(8, true)],
@@ -850,17 +855,49 @@ self.onmessage = function(e) {
     exp.waste_wast_free(ptr);
     if (result !== 0) exp.waste_wast_host_io_cancel();
     wakeIO();
+  } else if (msg.type === "render-test-response") {
+    if (!engineReady || !renderTestPending || msg.id !== renderTestPending ||
+        exp.waste_wast_host_io_kind() !== 4) return;
+    renderTestPending = 0;
+    const bytes = new Uint8Array(msg.bytes || []);
+    if (bytes.length < 4 || bytes.length > WASTE_CONFIG.RENDER_TEST_REPLY_MAX_BYTES) {
+      exp.waste_wast_host_io_cancel();
+    } else {
+      const ptr = exp.waste_wast_alloc(bytes.length);
+      if (!ptr) exp.waste_wast_host_io_cancel();
+      else {
+        new Uint8Array(engineMemory.buffer, ptr, bytes.length).set(bytes);
+        const result = exp.waste_wast_render_test_reply(ptr, bytes.length);
+        exp.waste_wast_free(ptr);
+        if (result !== 0) exp.waste_wast_host_io_cancel();
+      }
+    }
+    wakeIO();
   } else if (msg.type === "host-upload-response") {
+    if (!engineReady || terminated || exp.waste_wast_host_io_kind() !== 1) return;
     if (msg.cancelled) {
       exp.waste_wast_host_io_cancel();
     } else {
-      const bytes = new Uint8Array(msg.bytes);
-      const ptr = exp.waste_wast_alloc(bytes.length);
-      new Uint8Array(engineMemory.buffer, ptr, bytes.length).set(bytes);
-      exp.waste_wast_host_io_provide_upload(ptr, bytes.length);
+      let ptr = 0;
+      try {
+        const bytes = new Uint8Array(msg.bytes);
+        ptr = exp.waste_wast_alloc(Math.max(1, bytes.length));
+        if (!ptr) exp.waste_wast_host_io_cancel();
+        else {
+          new Uint8Array(engineMemory.buffer, ptr, bytes.length).set(bytes);
+          if (exp.waste_wast_host_io_provide_upload(ptr, bytes.length) !== 0)
+            exp.waste_wast_host_io_cancel();
+        }
+      } catch (error) {
+        exp.waste_wast_host_io_cancel();
+      } finally {
+        // The engine owns a copy; release the temporary transfer buffer.
+        if (ptr) exp.waste_wast_free(ptr);
+      }
     }
-    if (ioResolve) { ioResolve(); ioResolve = null; }
+    wakeIO();
   } else if (msg.type === "cancel") {
+    renderTestPending = 0;
     /* Cooperative immediate cancellation.  The engine's pump yield returns
      * control here between opcodes; we flag the store so the next dispatch
      * safepoint reports EXEC_STOP_CANCELLED.  Without a pump quantum this
@@ -870,6 +907,7 @@ self.onmessage = function(e) {
     if (exp.waste_wast_request_cancel) exp.waste_wast_request_cancel();
     if (ioResolve) { ioResolve(); ioResolve = null; }
   } else if (msg.type === "stop") {
+    renderTestPending = 0;
     if (guestSuitePending) self.postMessage({type: "guest-suite-cancel", id: guestSuitePending});
     guestSuitePending = 0;
     terminated = true;

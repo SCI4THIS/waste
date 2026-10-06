@@ -3,8 +3,9 @@
 Stage 6B.38 completes the current CHECK inventory of `tests/posix-kernel.c`:
 **21 helpers, 121 retained CHECK sites and 261 successful runtime checks**.
 Ordinals below are local to each current helper, after earlier migrations.
-The historical ordinals in [the migration ledger](test-coverage.md) refer to
-their dated source snapshots instead.
+Historical migration ordinals in Git history refer to their dated source
+snapshots instead. See [test boundary selection](techniques.md#test-boundary-selection)
+for the distinction between guest outcomes and private C invariants.
 
 One final standalone guest check, pipe creation in `test_pipe_full`, moved to
 `pipe-descriptors.wast` assertion 36. Real creation remains as setup. Its four

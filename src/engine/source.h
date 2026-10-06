@@ -2,6 +2,7 @@
 #define WASTE_SOURCE_H
 
 #include <stddef.h>
+#include "../config.h"
 
 typedef enum {
     WASTE_SOURCE_OK = 0,

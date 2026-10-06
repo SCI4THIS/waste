@@ -275,7 +275,8 @@ typedef enum {
     NATIVE_HOST_IO_NONE = 0,
     NATIVE_HOST_IO_UPLOAD = 1,
     NATIVE_HOST_IO_DOWNLOAD = 2,
-    NATIVE_HOST_IO_TEST_SUITE = 3
+    NATIVE_HOST_IO_TEST_SUITE = 3,
+    NATIVE_HOST_IO_RENDER_TEST = 4
 } native_host_io_kind;
 
 typedef struct {
@@ -340,6 +341,7 @@ typedef struct native_store {
     native_library_load_context library_load_ctx;
     native_host_io_state host_io;
     int test_suite_enabled; /* runtime opt-in; no nested batch capability */
+    int render_test_enabled; /* browser shell opt-in; unavailable in batch/CLI */
 } native_store;
 
 void native_exec_request_init(native_exec_request *request);

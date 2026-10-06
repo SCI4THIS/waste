@@ -1,0 +1,22 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "events": [
+    {"after": "bash-5.2#", "text": "wast /root/waste/tests/render/terminal.wast; printf '__RENDER_EXIT__%s\\n' \"$?\"; cat /tmp/terminal-renderer-results.json; printf '__REPORT_END__\\n'\n"},
+    {"after": "__REPORT_END__\r\n", "text": "wast /root/waste/tests/render/terminal.wast; printf '__RENDER_FAIL_EXIT__%s\\n' \"$?\"; cat /tmp/terminal-renderer-results.json; printf '__FAILED_REPORT_END__\\n'\n"},
+    {"after": "__FAILED_REPORT_END__\r\n", "text": "exit\n"}
+  ],
+  "renderReplies": [
+    {"ok": true, "checks": [{"name": "scripted transport check, not real pixels", "pass": true}]},
+    {"ok": false}
+  ],
+  "contains": [
+    "__RENDER_EXIT__0\r\n",
+    "{\"ok\":true,\"checks\":[{\"name\":\"scripted transport check, not real pixels\",\"pass\":true}]}\r\n__REPORT_END__",
+    "__RENDER_FAIL_EXIT__1\r\n",
+    "{\"ok\":false}\r\n__FAILED_REPORT_END__"
+  ],
+  "assertions": 11,
+  "expectedPassed": 10,
+  "expectedError": "result mismatch for render_passed (actual 0, expected 1)",
+  "exitStatus": 0
+}

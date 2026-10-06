@@ -47,7 +47,7 @@ ENGINE_HEADERS := $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
 	$(ENGINE_DIR)/instantiate.h $(ENGINE_DIR)/runtime_internal.h
 
 ENGINE_HEADERS += native_vfs.h $(ENGINE_DIR)/lib/json.h $(ENGINE_DIR)/process_driver.h $(ENGINE_DIR)/vfs.h $(ENGINE_DIR)/guest_posix.h $(ENGINE_DIR)/include/waste.h \
-	$(ENGINE_DIR)/lib/include/kernel.h \
+	$(ENGINE_DIR)/../config.h $(ENGINE_DIR)/lib/include/kernel.h \
 	$(ENGINE_DIR)/lib/include/path.h
 ENGINE_HEADERS += $(ENGINE_DIR)/wast/setup.h
 
@@ -935,11 +935,13 @@ clean:
 .PHONY: guest-test-launcher
 guest-test-launcher: $(BUILD_DIR)/waste-test.wasm
 
-$(BUILD_DIR)/waste-test.wasm: ../html-rt/commands/waste-test.c
+GUEST_TEST_MAX_MEMORY = $(shell python3 ../html-rt/tools/runtime_config.py --get GUEST_TEST_MAX_MEMORY_BYTES)
+
+$(BUILD_DIR)/waste-test.wasm: ../html-rt/commands/waste-test.c ../config.h ../html-rt/tools/runtime_config.py
 	mkdir -p $(BUILD_DIR)
 	LD_LIBRARY_PATH=$(WASM_LD_LIB) clang --target=wasm32 -O2 -std=c11 -Wall -Wextra -Werror -nostdlib -fno-builtin \
 		-fuse-ld=$(WASM_LD) -Wl,--no-entry -Wl,--export-memory -Wl,--allow-undefined \
-		-Wl,--export=_start -Wl,--initial-memory=17039360 -Wl,--max-memory=33554432 $< -o $@
+		-Wl,--export=_start -Wl,--max-memory=$(GUEST_TEST_MAX_MEMORY) $< -o $@
 
 $(BUILD_DIR)/native-corpus-expected-failures.txt: ../../tests/native-corpus-expected-failures.txt
 	mkdir -p $(BUILD_DIR)
@@ -955,3 +957,25 @@ guest-test-install: guest-test-launcher
 guest-test-check: guest-session
 	cd ../.. && python3 tests/guest-test-launcher-check.py --native $(abspath $(SESSION_TARGET)) \
 		--vfs-root $(abspath ../vfs)
+
+# Shared configuration also reaches the small standalone C gates.
+$(WASM_BINARY_TEST_TARGET) \
+	$(WASM_IMPORT_TEST_TARGET) \
+	$(SOURCE_LOADER_TEST_TARGET) \
+	$(PARSER_REENTRANT_TEST_TARGET) \
+	$(WASM_VALIDATION_TEST_TARGET) \
+	$(POSIX_PATH_ABI_TEST_TARGET) \
+	$(POSIX_PATH_VFS_TEST_TARGET) \
+	$(POSIX_SELECT_ABI_TEST_TARGET) \
+	$(POSIX_KERNEL_TEST_TARGET) \
+	$(POSIX_SELECT_TEST_TARGET) \
+	$(POSIX_WAIT_TEST_TARGET) \
+	$(POSIX_SIGNAL_TEST_TARGET) \
+	$(CALLER_INSTANCE_TEST_TARGET) \
+	$(PROCESS_CONTINUATION_TEST_TARGET) \
+	$(TWO_WAIT_TEST_TARGET) \
+	$(EXEC_MATRIX_TEST_TARGET) \
+	$(EXEC_LIFECYCLE_TEST_TARGET) \
+	$(PROCESS_LIFECYCLE_TEST_TARGET) \
+	$(STORE_CHECKPOINT_TEST_TARGET) \
+	$(CONTINUATION_TEST_TARGET): ../config.h

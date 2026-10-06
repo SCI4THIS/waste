@@ -16,8 +16,8 @@ const self = {postMessage(message) {
   if (message.type === "host-download") downloads.push(message);
   if (message.type === "host-upload-request") {
     uploads++;
-    setTimeout(() => self.onmessage({data: uploads === 1 ?
-      {type:"host-upload-response", bytes:payload} :
+    setTimeout(() => self.onmessage({data: uploads <= 2 ?
+      {type:"host-upload-response", bytes:uploads === 1 ? payload : new Uint8Array()} :
       {type:"host-upload-response", cancelled:true}}), 25);
   }
 }};
@@ -50,13 +50,18 @@ async function command(source, tag, status) {
   assert.equal(downloads.length, 1);
   assert.equal(downloads[0].name, "roundtrip.bin");
   assert.deepEqual(Buffer.from(downloads[0].bytes), payload);
+  await command("/bin/upload /tmp/empty.bin", "__EMPTY_UPLOAD", 0);
+  await command("/bin/download /tmp/empty.bin", "__EMPTY_DOWNLOAD", 0);
+  assert.equal(downloads.length, 2);
+  assert.equal(downloads[1].name, "empty.bin");
+  assert.equal(downloads[1].bytes.length, 0);
   await command("/usr/bin/upload /tmp/cancelled.bin", "__CANCEL", 1);
   await command("/bin/download /tmp/cancelled.bin", "__MISSING", 1);
-  assert.equal(downloads.length, 1);
+  assert.equal(downloads.length, 2);
   await command("echo __TRANSFER_AFTER__", "__AFTER", 0);
   self.onmessage({data:{type:"input", bytes:new TextEncoder().encode("exit\n")}});
   await wait(() => done);
   assert.equal(done.ok, true);
-  assert.equal(uploads, 2);
-  console.log("PASS installed upload/download: binary roundtrip, cancellation, absent file, subsequent input and exit");
+  assert.equal(uploads, 3);
+  console.log("PASS installed upload/download: binary and empty roundtrips, cancellation, absent file, subsequent input and exit");
 })().catch(e => { console.error(e); self.onmessage({data:{type:"stop"}}); process.exitCode = 1; });

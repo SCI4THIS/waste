@@ -13,6 +13,7 @@ No asyncify transform, no SharedArrayBuffer, works on file://.
 import argparse
 import subprocess
 from pathlib import Path
+from runtime_config import javascript
 
 
 
@@ -52,6 +53,7 @@ def main() -> None:
         import shutil
         out_dir = args.output_dir
         out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "runtime-config.js").write_text(javascript())
 
         def safe_copy(src: Path, dst: Path) -> None:
             """Copy src to dst, skipping if they resolve to the same file."""

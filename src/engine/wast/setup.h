@@ -15,9 +15,8 @@ typedef struct {
     uint32_t line;
     int32_t status;
     uint32_t phase;
-    char error[256];
+    char error[WAST_SETUP_ERROR_BYTES];
 } wast_setup_failure;
-_Static_assert(sizeof(wast_setup_failure) == 268, "setup report ABI");
 typedef struct {
     uint32_t total, passed, count, capacity;
     int incomplete;

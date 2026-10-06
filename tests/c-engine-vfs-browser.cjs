@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 "use strict";
+const {config, withConfig} = require("./runtime-config.cjs");
 const {packageVfs, stageVfs} = require("./vfs-package.cjs");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -62,14 +63,14 @@ const {readOfflinePackage} = require("./offline-html-package.cjs");
   const ptr = exp.waste_wast_results_ptr();
   let details = "";
   for (let i = 0; i < exp.waste_wast_results_total(); ++i) {
-    const bytes = new Uint8Array(exp.memory.buffer, ptr + i * 256 + 64, 192);
+    const bytes = new Uint8Array(exp.memory.buffer, ptr + i * config.BROWSER_RESULT_BYTES + config.BROWSER_RESULT_ERROR_OFFSET, config.BROWSER_RESULT_ERROR_BYTES);
     const end = bytes.indexOf(0);
     details += Buffer.from(bytes.subarray(0, end)).toString() + "\n";
   }
   assert.equal(exp.waste_wast_results_total(), 4, details);
   assert.equal(exp.waste_wast_results_passed(), 4, details);
   console.log("PASS mounted-only C SDK: real compiled engine varargs, stat/signal canaries and assert trap");
-  const corpus = JSON.parse(page.read("tests/manifest.json"));
+  const corpus = JSON.parse(page.read("root/waste/tests/manifest.json"));
   let offset = 16384;
   const data = [], checks = [];
   for (const test of corpus.tests) {
@@ -87,7 +88,7 @@ const {readOfflinePackage} = require("./offline-html-package.cjs");
     (import "env" "close" (func $close (param i32) (result i32)))
     (memory (export "__waste_memory") 1)
     (func (export "__errno_location") (result i32) (i32.const 0))
-    ;; Use one data segment: the engine's reviewed per-module bound is 32.
+    ;; Pack all path strings into one data segment.
     (data (i32.const 16384) "${data.join("")}")
     (func $corpus_open (param $path i32) (param $size i32) (param $first i32) (param $last i32) (result i32)
       (local $fd i32) (local $count i32) (local $total i32) (local $seen_first i32) (local $seen_last i32)
@@ -113,16 +114,16 @@ const {readOfflinePackage} = require("./offline-html-package.cjs");
     (func (export "corpus-all") (result i32) (local $total i32)
       ${checks.join("\n")}
       (local.get $total)))
-    (assert_return (invoke "corpus-all") (i32.const 296))`);
+    (assert_return (invoke "corpus-all") (i32.const ${corpus.tests.length}))`);
   stageVfs(exp, vfs);
   assert.equal(stage(corpusProbe, exp.waste_wast_run_script), 0);
   assert.equal(exp.waste_wast_results_total(), 1);
   const resultPointer = exp.waste_wast_results_ptr();
   const failures = [];
   for (let i = 0; i < exp.waste_wast_results_total(); i++) {
-    const record = new Uint8Array(exp.memory.buffer, resultPointer + i * 256, 256);
+    const record = new Uint8Array(exp.memory.buffer, resultPointer + i * config.BROWSER_RESULT_BYTES, config.BROWSER_RESULT_BYTES);
     if (record[0]) continue;
-    const message = record.subarray(64);
+    const message = record.subarray(config.BROWSER_RESULT_ERROR_OFFSET);
     failures.push(Buffer.from(message.subarray(0, message.indexOf(0))).toString());
   }
   assert.equal(exp.waste_wast_results_passed(), 1, failures.join("\n"));

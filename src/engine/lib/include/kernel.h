@@ -9,11 +9,10 @@
 
 /* --- Constants --- */
 
-#define POSIX_KERNEL_FD_MAX      64
 #define POSIX_SHM_NAME_MAX      128
 #define POSIX_SHM_OBJECT_MAX     64
 #define POSIX_PIPE_CAPACITY    4096
-#define POSIX_TERMINAL_INPUT_CAPACITY 4096
+#define POSIX_TERMINAL_INPUT_CAPACITY TERMINAL_INPUT_CAPACITY
 #define POSIX_TERMIOS_CC_COUNT 32
 
 /* Stable wasm32 terminal ABI.  The layout matches musl's struct termios

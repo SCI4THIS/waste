@@ -261,16 +261,16 @@ async function runWastScript(wasmBytes, testSpec) {
   const results = [];
 
   for (let i = 0; i < total; i++) {
-    const base = resultsPtr + i * 256;
+    const base = resultsPtr + i * WASTE_CONFIG.BROWSER_RESULT_BYTES;
     const pass = mem[base] !== 0;
     let funcEnd = 1;
-    while (funcEnd < 64 && mem[base + funcEnd] !== 0) funcEnd++;
+    while (funcEnd < WASTE_CONFIG.BROWSER_RESULT_ERROR_OFFSET && mem[base + funcEnd] !== 0) funcEnd++;
     const nameStart = exp.waste_wast_result_name_ptr ? exp.waste_wast_result_name_ptr(i) : base + 1;
     const nameEnd = exp.waste_wast_result_name_len ? nameStart + exp.waste_wast_result_name_len(i) : base + funcEnd;
     const func = nameDecoder.decode(mem.subarray(nameStart, nameEnd));
-    let errEnd = 64;
-    while (errEnd < 256 && mem[base + errEnd] !== 0) errEnd++;
-    const error = pass ? "" : decoder.decode(mem.subarray(base + 64, base + errEnd));
+    let errEnd = WASTE_CONFIG.BROWSER_RESULT_ERROR_OFFSET;
+    while (errEnd < WASTE_CONFIG.BROWSER_RESULT_BYTES && mem[base + errEnd] !== 0) errEnd++;
+    const error = pass ? "" : decoder.decode(mem.subarray(base + WASTE_CONFIG.BROWSER_RESULT_ERROR_OFFSET, base + errEnd));
     results.push({func, pass, error});
   }
   if (sharedFilePageProbe !== null)
@@ -284,8 +284,8 @@ async function runWastScript(wasmBytes, testSpec) {
   const phases = ["", "encode", "load", "definition", "retain"];
   for (let i = 0; i < exp.waste_wast_setup_failure_count(); i++) {
     const ptr = exp.waste_wast_setup_failure_ptr(i);
-    const view = new DataView(exp.memory.buffer, ptr, 268);
-    const bytes = new Uint8Array(exp.memory.buffer, ptr + 12, 256);
+    const view = new DataView(exp.memory.buffer, ptr, 12 + WASTE_CONFIG.WAST_SETUP_ERROR_BYTES);
+    const bytes = new Uint8Array(exp.memory.buffer, ptr + 12, WASTE_CONFIG.WAST_SETUP_ERROR_BYTES);
     const end = bytes.indexOf(0);
     setup.failures.push({line: view.getUint32(0, true),
       status: view.getInt32(4, true), phase: phases[view.getUint32(8, true)],

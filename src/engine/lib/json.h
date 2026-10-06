@@ -1,5 +1,6 @@
 #ifndef WASTE_JSON_H
 #define WASTE_JSON_H
+#include "../../config.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -56,7 +57,7 @@ static inline int digit(json_reader *r) {
 
 static inline int value(json_reader *r, json_view *out, unsigned depth) {
     whitespace(r);
-    if (r->at == r->end || depth > 64) return 0;
+    if (r->at == r->end || depth > JSON_MAX_DEPTH) return 0;
     out->start = r->at;
     out->type = *r->at++;
     if (out->type == '"') {

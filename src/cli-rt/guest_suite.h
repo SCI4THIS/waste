@@ -6,8 +6,8 @@
 static int session_suite_reply(native_host_io_state *io, unsigned code,
                                const uint8_t *out, size_t out_length,
                                const uint8_t *json, size_t json_length) {
-    if (out_length > 16u * 1024u * 1024u - 16u ||
-        json_length > 16u * 1024u * 1024u - 16u - out_length) return 0;
+    if (out_length > SUITE_GUEST_REPLY_MAX_BYTES - 16u ||
+        json_length > SUITE_GUEST_REPLY_MAX_BYTES - 16u - out_length) return 0;
     size_t length = 16 + out_length + json_length;
     uint8_t *reply = malloc(length);
     if (!reply) return 0;
@@ -49,7 +49,9 @@ static int session_test_suite(cli_guest_session *session, exec_error *error) {
     close(report_fd);
     char report_arg[128];
     snprintf(report_arg, sizeof(report_arg), "--results=%s", report_path);
-    char *argv[71] = {executable, root_arg, baseline, report_arg, "--jobs=2"};
+    char jobs_arg[32];
+    snprintf(jobs_arg, sizeof(jobs_arg), "--jobs=%u", SUITE_GUEST_DEFAULT_JOBS);
+    char *argv[SUITE_GUEST_MAX_ARGS + 7] = {executable, root_arg, baseline, report_arg, jobs_arg};
     unsigned argc = 5; int json_output = 0;
     for (size_t i = 4; i < io->data_len;) {
         char *arg = (char *)io->data+i;

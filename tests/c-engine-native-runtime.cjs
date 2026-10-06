@@ -1,4 +1,5 @@
 "use strict";
+const {config, withConfig} = require("./runtime-config.cjs");
 
 /* Native-side corpus runner: feeds every wast-stream fixture in the shared
  * payload.json through build/cli-rt/waste-wast and classifies the result into
@@ -32,26 +33,26 @@ const excludedGroups = new Set(flagArgs
   .map(arg => arg.slice("--exclude-group=".length)));
 const requestedFiles = new Set(positional.slice(1));
 const timeoutFlag = flagArgs.find(arg => arg.startsWith("--timeout-ms="));
-const defaultTimeoutMs = timeoutFlag ? Number(timeoutFlag.slice("--timeout-ms=".length)) : 30000;
+const defaultTimeoutMs = timeoutFlag ? Number(timeoutFlag.slice("--timeout-ms=".length)) : config.LEGACY_NATIVE_TIMEOUT_DEFAULT_MS;
 /* Per-group timeout budgets.  Native is substantially faster than the
  * browser worker — observed maxima from Stage 6B.11 top out at 7.7s
  * (core) and sit under 4.3s for every other group.  Budgets add ~2x
  * headroom.  --timeout-group=NAME:MS overrides individual entries;
  * --timeout-ms= still sets the fallback for groups not listed. */
 const GROUP_TIMEOUT_MS = {
-  "core": 15000,
-  "core/simd": 10000,
-  "core/bulk-memory": 10000,
-  "core/memory64": 10000,
-  "core/gc": 5000,
-  "core/multi-memory": 5000,
-  "core/exceptions": 5000,
-  "core/relaxed-simd": 5000,
-  "libc-test": 5000,
-  "diy-posix-test": 5000,
-  "custom/custom": 5000,
-  "custom/name": 5000,
-  "custom/metadata.code.branch_hint": 5000,
+  "core": config.SUITE_TIMEOUT_CORE_MS,
+  "core/simd": config.SUITE_TIMEOUT_HEAVY_MS,
+  "core/bulk-memory": config.SUITE_TIMEOUT_HEAVY_MS,
+  "core/memory64": config.SUITE_TIMEOUT_HEAVY_MS,
+  "core/gc": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "core/multi-memory": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "core/exceptions": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "core/relaxed-simd": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "libc-test": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "diy-posix-test": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "custom/custom": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "custom/name": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "custom/metadata.code.branch_hint": config.SUITE_TIMEOUT_DEFAULT_MS,
 };
 for (const arg of flagArgs.filter(a => a.startsWith("--timeout-group="))) {
   const spec = arg.slice("--timeout-group=".length);

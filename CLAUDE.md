@@ -8,6 +8,13 @@ WASTE is a browser-hosted WebAssembly Threading Environment.  It passes the ${VE
 
 This project approaches multi-threading with frames and program counters, which currently allows for sigset / longjmp and execution pausing.  
 
+Treat all checked-out submodules as read-only source dependencies. Stage source
+under `build/` before applying repository patches or running generators,
+bootstrap/configure steps, or builds; all resulting files must stay under
+`build/`. See `docs/submodule-policy.md`. Existing OCaml and Coreutils patch
+helpers still mutate their checkouts and must be refactored before use under
+this policy.
+
 OCaml is retained only as a reference for Wasm/WAT/WAST language semantics and
 standard spec-test scaffolding. The application-engine experiment was not
 practical. Do not develop additional OCaml kernel, POSIX, process, scheduler,
@@ -39,13 +46,13 @@ This opens an interactive wizard for dependency checks, compilation, and test ex
 ```sh
 ./start.sh --check              # Inspect dependencies and submodule state
 ./start.sh --install-deps       # Install missing system/OPAM packages
-./start.sh --compile            # Build OCaml-to-Wasm interpreter (direct + CPS)
+./start.sh --compile            # Legacy OCaml build; blocked pending read-only staging refactor
 ./start.sh --build-libc         # Build waste-libc.wasm and its tests
 ./start.sh --generate-bash-html # Generate self-contained WASTE Bash page
 ./start.sh --patch-status       # Show Wasm32 compatibility patch status
-./start.sh --apply-i31          # Apply Wasm32 i31-int32 patch
-./start.sh --revert-i31         # Revert Wasm32 patch
-./start.sh --update             # Safe git pull, submodule update, restore patch
+./start.sh --apply-i31          # Legacy in-place patch operation; do not use under read-only policy
+./start.sh --revert-i31         # Legacy in-place patch operation; do not use under read-only policy
+./start.sh --update             # Legacy mutating update path; not for ordinary builds under read-only policy
 ```
 
 ### Test Suites
@@ -347,7 +354,7 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 
 - Environment variable overrides: `WASTE_*` (e.g., `WASTE_OCAML_SWITCH`, `WASTE_INSTRUCTION_QUANTUM`)
 - Patch status: reported as `available`, `applied`, or `conflict`
-- Submodule patch: always represent as `submodules/wasm-spec-i31-int32.patch`, never edit submodule history directly
+- Submodule patch: represent repository changes in `submodules/wasm-spec-i31-int32.patch` and apply it only to staged source under `build/`; never edit submodule history or working trees
 
 ## Advanced Topics
 

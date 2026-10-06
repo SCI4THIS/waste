@@ -1,4 +1,5 @@
 "use strict";
+const {config, withConfig} = require("./runtime-config.cjs");
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -30,7 +31,7 @@ const excludedGroups = new Set(flagArgs
   .map(arg => arg.slice("--exclude-group=".length)));
 const requestedFiles = new Set(positional.slice(1));
 const timeoutFlag = flagArgs.find(arg => arg.startsWith("--timeout-ms="));
-const defaultTimeoutMs = timeoutFlag ? Number(timeoutFlag.slice("--timeout-ms=".length)) : 60000;
+const defaultTimeoutMs = timeoutFlag ? Number(timeoutFlag.slice("--timeout-ms=".length)) : config.LEGACY_BROWSER_TIMEOUT_DEFAULT_MS;
 /* Per-group timeout budgets.  Rationale: core/bulk-memory, core/simd,
  * core/memory64, and core legitimately run 15-28s per fixture; the
  * remaining groups all finish under ~1.5s.  A single 60s ceiling
@@ -39,19 +40,19 @@ const defaultTimeoutMs = timeoutFlag ? Number(timeoutFlag.slice("--timeout-ms=".
  * individual entries, and --timeout-ms= still sets the fallback for
  * groups not listed below. */
 const GROUP_TIMEOUT_MS = {
-  "core/bulk-memory": 60000,
-  "core/simd": 50000,
-  "core/memory64": 50000,
-  "core": 35000,
-  "core/gc": 5000,
-  "core/multi-memory": 5000,
-  "core/exceptions": 5000,
-  "core/relaxed-simd": 5000,
-  "libc-test": 5000,
-  "diy-posix-test": 5000,
-  "custom/custom": 5000,
-  "custom/name": 5000,
-  "custom/metadata.code.branch_hint": 5000,
+  "core/bulk-memory": config.LEGACY_BROWSER_TIMEOUT_BULK_MS,
+  "core/simd": config.LEGACY_BROWSER_TIMEOUT_SIMD_MS,
+  "core/memory64": config.LEGACY_BROWSER_TIMEOUT_SIMD_MS,
+  "core": config.LEGACY_BROWSER_TIMEOUT_CORE_MS,
+  "core/gc": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "core/multi-memory": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "core/exceptions": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "core/relaxed-simd": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "libc-test": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "diy-posix-test": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "custom/custom": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "custom/name": config.SUITE_TIMEOUT_DEFAULT_MS,
+  "custom/metadata.code.branch_hint": config.SUITE_TIMEOUT_DEFAULT_MS,
 };
 for (const arg of flagArgs.filter(a => a.startsWith("--timeout-group="))) {
   const spec = arg.slice("--timeout-group=".length);
@@ -76,7 +77,7 @@ if (fs.existsSync(expectedFailuresPath)) {
 const payload = JSON.parse(fs.readFileSync(payloadPath, "utf8"));
 const wasmPath = path.join(root, "build/html-rt/waste-wast.wasm");
 const engineBytes = new Uint8Array(fs.readFileSync(wasmPath));
-const workerSrc = fs.readFileSync(workerSourcePath, "utf8");
+const workerSrc = withConfig(fs.readFileSync(workerSourcePath, "utf8"));
 
 (async () => {
   const summary = {pass: 0, fail: 0, xfail: 0, xpass: 0,

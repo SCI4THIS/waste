@@ -60,7 +60,7 @@
   }
 
   class TerminalRenderer {
-    constructor(canvas, model) {
+    constructor(canvas, model, {observe = true} = {}) {
       this.canvas = canvas;
       this.model = model;
       /* Device-pixel cell size, derived from the canvas' CSS width in resize(). */
@@ -80,6 +80,7 @@
       this.matrix = new Float32Array(16);
       this.useWebGL = false;
       this.resizeObserver = null;
+      this.observe = observe;
       this.init();
     }
 
@@ -99,10 +100,10 @@
       /* Observe the container, not the canvas: resize() sets the canvas' own
        * CSS size, so observing it would feed back into itself. */
       const target = this.canvas.parentElement || this.canvas;
-      this.resizeObserver = typeof ResizeObserver === "function"
+      this.resizeObserver = this.observe && typeof ResizeObserver === "function"
         ? new ResizeObserver(() => this.resize()) : null;
       this.resizeObserver?.observe(target);
-      if (typeof matchMedia === "function") this.watchPixelRatio();
+      if (this.observe && typeof matchMedia === "function") this.watchPixelRatio();
       this.resize();
     }
 

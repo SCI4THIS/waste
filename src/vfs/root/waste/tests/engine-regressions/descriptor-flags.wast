@@ -1,5 +1,5 @@
 ;; Descriptor flags and bounded descriptor-table exhaustion through real imports.
-;; Batch kernels start noninteractive with all 64 descriptor slots closed.
+;; Batch kernels start noninteractive with all descriptor slots closed.
 ;; POSIX descriptor calls return -1 and set guest errno on failure.
 ;; Direct close-on-exec execution, clone ownership and raw HUP stay C gates.
 (module
@@ -12,7 +12,7 @@
   (import "env" "write" (func $write (param i32 i32 i32) (result i32)))
   (memory 1)
   ;; errno: 8; pairs: 16/24; source: 256; read buffer: 512;
-  ;; exhaustion allocation vector: 2048..2303 (32 real pipe calls).
+  ;; exhaustion allocation vector starts at 2048 and grows with the discovered capacity.
   (data (i32.const 256) "test")
   (func (export "__errno_location") (result i32) (i32.const 8))
   (func (export "errno") (result i32) (i32.load (i32.const 8)))
@@ -34,30 +34,43 @@
     (call $write (local.get 0) (i32.const 256) (i32.const 4)))
   (func (export "read") (param i32) (result i32)
     (call $read (local.get 0) (i32.const 512) (i32.const 4)))
-  (func (export "fill_table") (result i32) (local $pairs i32)
+  (global $allocated (mut i32) (i32.const 0))
+  (func (export "fill_table") (result i32) (local $address i32) (local $fd i32)
+    (global.set $allocated (i32.const 0))
     (block $done (loop $next
-      (br_if $done (i32.eq (local.get $pairs) (i32.const 32)))
-      (br_if $done (i32.ne (call $pipe
-        (i32.add (i32.const 2048) (i32.mul (local.get $pairs) (i32.const 8))))
-        (i32.const 0)))
-      (local.set $pairs (i32.add (local.get $pairs) (i32.const 1)))
+      (local.set $address (i32.add (i32.const 2048)
+        (i32.mul (global.get $allocated) (i32.const 4))))
+      (if (i32.gt_u (i32.add (local.get $address) (i32.const 8))
+          (i32.mul (memory.size) (i32.const 65536)))
+        (then (drop (memory.grow (i32.const 1)))))
+      (br_if $done (i32.ne (call $pipe (local.get $address)) (i32.const 0)))
+      (global.set $allocated (i32.add (global.get $allocated) (i32.const 2)))
       (br $next)))
-    (local.get $pairs))
+    ;; An odd-sized descriptor table can leave one slot after the last pipe.
+    (local.set $fd (call $dup (i32.const 0)))
+    (if (i32.ge_s (local.get $fd) (i32.const 0)) (then
+      (i32.store (local.get $address) (local.get $fd))
+      (global.set $allocated (i32.add (global.get $allocated) (i32.const 1)))))
+    (i32.gt_u (global.get $allocated) (i32.const 0)))
+  (func (export "tail_slot") (param $back i32) (result i32) (local $index i32)
+    (local.set $index (i32.sub (global.get $allocated) (local.get $back)))
+    (i32.eq (i32.load (i32.add (i32.const 2048)
+      (i32.mul (local.get $index) (i32.const 4)))) (local.get $index)))
   (func (export "sequential_fds") (result i32) (local $i i32)
     (loop $next
       (if (i32.ne (i32.load
           (i32.add (i32.const 2048) (i32.mul (local.get $i) (i32.const 4))))
           (local.get $i)) (then (return (i32.const 0))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br_if $next (i32.lt_u (local.get $i) (i32.const 64))))
+      (br_if $next (i32.lt_u (local.get $i) (global.get $allocated))))
     (i32.const 1))
   (func (export "close_table") (result i32) (local $i i32) (local $closed i32)
     (loop $next
       (if (i32.eq (call $close (local.get $i)) (i32.const 0))
         (then (local.set $closed (i32.add (local.get $closed) (i32.const 1)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br_if $next (i32.lt_u (local.get $i) (i32.const 64))))
-    (local.get $closed)))
+      (br_if $next (i32.lt_u (local.get $i) (global.get $allocated))))
+    (i32.eq (local.get $closed) (global.get $allocated))))
 
 ;; Allocation order and per-descriptor close-on-exec flags.
 (assert_return (invoke "pipe" (i32.const 16)) (i32.const 0))
@@ -85,15 +98,15 @@
 (assert_return (invoke "fcntl" (i32.const 12) (i32.const 1) (i32.const 0)) (i32.const 1))
 (assert_return (invoke "fcntl" (i32.const 1) (i32.const 0) (i32.const 10)) (i32.const 11))
 (assert_return (invoke "fcntl" (i32.const 11) (i32.const 1) (i32.const 0)) (i32.const 0))
-(assert_return (invoke "fcntl" (i32.const 1) (i32.const 1030) (i32.const 63)) (i32.const 63))
-(assert_return (invoke "fcntl" (i32.const 63) (i32.const 1) (i32.const 0)) (i32.const 1))
+(assert_return (invoke "fcntl" (i32.const 1) (i32.const 1030) (i32.const 15)) (i32.const 15))
+(assert_return (invoke "fcntl" (i32.const 15) (i32.const 1) (i32.const 0)) (i32.const 1))
 (assert_return (invoke "write" (i32.const 10)) (i32.const 4))
 (assert_return (invoke "read" (i32.const 0)) (i32.const 4))
 (assert_return (invoke "word" (i32.const 512)) (i32.const 1953719668))
 (assert_return (invoke "write" (i32.const 12)) (i32.const 4))
 (assert_return (invoke "read" (i32.const 4)) (i32.const 4))
 (assert_return (invoke "word" (i32.const 512)) (i32.const 1953719668))
-(assert_return (invoke "write" (i32.const 63)) (i32.const 4))
+(assert_return (invoke "write" (i32.const 15)) (i32.const 4))
 (assert_return (invoke "read" (i32.const 0)) (i32.const 4))
 (assert_return (invoke "word" (i32.const 512)) (i32.const 1953719668))
 ;; Invalid inputs preserve flag state and adapter error conventions.
@@ -102,19 +115,19 @@
 (assert_return (invoke "fcntl" (i32.const 1) (i32.const 1) (i32.const 0)) (i32.const 1))
 (assert_return (invoke "fcntl" (i32.const 1) (i32.const 999) (i32.const 0)) (i32.const -1))
 (assert_return (invoke "errno") (i32.const 22))
-(assert_return (invoke "fcntl" (i32.const 50) (i32.const 1) (i32.const 0)) (i32.const -1))
+(assert_return (invoke "fcntl" (i32.const 14) (i32.const 1) (i32.const 0)) (i32.const -1))
 (assert_return (invoke "errno") (i32.const 9))
-(assert_return (invoke "fcntl" (i32.const 50) (i32.const 2) (i32.const 1)) (i32.const -1))
+(assert_return (invoke "fcntl" (i32.const 14) (i32.const 2) (i32.const 1)) (i32.const -1))
 (assert_return (invoke "errno") (i32.const 9))
-(assert_return (invoke "dup" (i32.const 50)) (i32.const -1))
+(assert_return (invoke "dup" (i32.const 14)) (i32.const -1))
 (assert_return (invoke "errno") (i32.const 9))
 (assert_return (invoke "dup" (i32.const -1)) (i32.const -1))
 (assert_return (invoke "errno") (i32.const 22))
 (assert_return (invoke "fcntl" (i32.const 1) (i32.const 0) (i32.const -1)) (i32.const -1))
 (assert_return (invoke "errno") (i32.const 22))
-(assert_return (invoke "fcntl" (i32.const 1) (i32.const 0) (i32.const 64)) (i32.const -1))
+(assert_return (invoke "fcntl" (i32.const 1) (i32.const 0) (i32.const 2147483647)) (i32.const -1))
 (assert_return (invoke "errno") (i32.const 24))
-(assert_return (invoke "fcntl" (i32.const 50) (i32.const 0) (i32.const 0)) (i32.const -1))
+(assert_return (invoke "fcntl" (i32.const 14) (i32.const 0) (i32.const 0)) (i32.const -1))
 (assert_return (invoke "errno") (i32.const 9))
 (assert_return (invoke "close" (i32.const 0)) (i32.const 0))
 (assert_return (invoke "close" (i32.const 1)) (i32.const 0))
@@ -124,17 +137,17 @@
 (assert_return (invoke "close" (i32.const 10)) (i32.const 0))
 (assert_return (invoke "close" (i32.const 11)) (i32.const 0))
 (assert_return (invoke "close" (i32.const 12)) (i32.const 0))
-(assert_return (invoke "close" (i32.const 63)) (i32.const 0))
-;; Exactly 32 pipes fill 64 slots; failed allocations preserve the table.
-(assert_return (invoke "fill_table") (i32.const 32))
+(assert_return (invoke "close" (i32.const 15)) (i32.const 0))
+;; Discover the table capacity; failed allocations preserve all existing slots.
+(assert_return (invoke "fill_table") (i32.const 1))
 (assert_return (invoke "sequential_fds") (i32.const 1))
 ;; Recycled reader and writer slots must not inherit their old CLOEXEC flags.
 (assert_return (invoke "fcntl" (i32.const 1) (i32.const 1) (i32.const 0)) (i32.const 0))
 (assert_return (invoke "fcntl" (i32.const 12) (i32.const 1) (i32.const 0)) (i32.const 0))
 (assert_return (invoke "word" (i32.const 2048)) (i32.const 0))
 (assert_return (invoke "word" (i32.const 2052)) (i32.const 1))
-(assert_return (invoke "word" (i32.const 2296)) (i32.const 62))
-(assert_return (invoke "word" (i32.const 2300)) (i32.const 63))
+(assert_return (invoke "tail_slot" (i32.const 2)) (i32.const 1))
+(assert_return (invoke "tail_slot" (i32.const 1)) (i32.const 1))
 (assert_return (invoke "pipe" (i32.const 16)) (i32.const -1))
 (assert_return (invoke "errno") (i32.const 24))
 (assert_return (invoke "word" (i32.const 16)) (i32.const 0))
@@ -156,12 +169,12 @@
 (assert_return (invoke "pipe" (i32.const 16)) (i32.const 0))
 (assert_return (invoke "word" (i32.const 16)) (i32.const 0))
 (assert_return (invoke "word" (i32.const 20)) (i32.const 2))
-(assert_return (invoke "fcntl" (i32.const 63) (i32.const 1) (i32.const 0)) (i32.const 0))
+(assert_return (invoke "fcntl" (i32.const 15) (i32.const 1) (i32.const 0)) (i32.const 0))
 (assert_return (invoke "write" (i32.const 2)) (i32.const 4))
 (assert_return (invoke "read" (i32.const 0)) (i32.const 4))
 (assert_return (invoke "word" (i32.const 512)) (i32.const 1953719668))
 ;; Release every descriptor and prove the next pipe reuses the first pair.
-(assert_return (invoke "close_table") (i32.const 64))
+(assert_return (invoke "close_table") (i32.const 1))
 (assert_return (invoke "pipe" (i32.const 16)) (i32.const 0))
 (assert_return (invoke "word" (i32.const 16)) (i32.const 0))
 (assert_return (invoke "word" (i32.const 20)) (i32.const 1))

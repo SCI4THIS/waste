@@ -41,11 +41,12 @@ def main() -> int:
     terminal_model_js = terminal_dir / "model.js"
     terminal_glf_js = terminal_dir / "glf.js"
     terminal_renderer_js = terminal_dir / "renderer.js"
+    terminal_render_test_js = terminal_dir / "render-test.js"
     test_suite_js = page_dir / "test-suite.js"
 
     sources = [index_html, style_css, app_js, args.tarball_js, args.loader_js,
                args.manifest_tar_gz, args.zlibaux_wasm, terminal_model_js,
-               terminal_glf_js, terminal_renderer_js, test_suite_js]
+               terminal_glf_js, terminal_renderer_js, terminal_render_test_js, test_suite_js]
     for f in sources:
         if not f.is_file():
             print(f"error: required file not found: {f}", file=sys.stderr)
@@ -74,6 +75,8 @@ def main() -> int:
     # 4. The Bash runtime executes from the extracted package, not from HTML.
     inline(f'<script src="{app_js.name}"></script>', "")
     inline('<script src="test-suite.js"></script>', "")
+    inline('<script src="terminal/render-test.js"></script>', "")
+    inline('<script src="../../../build/html-rt/runtime-config.js"></script>', "")
 
     # 4b. Inline the terminal model and renderer.  These are intentionally
     # separate source files for Node fixtures, but the final page must remain

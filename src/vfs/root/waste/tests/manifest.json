@@ -113,12 +113,13 @@
       "custom/metadata.code.branch_hint": 1,
       "custom/name": 1,
       "diy-posix-test": 5,
-      "engine-regressions": 12,
+      "engine-regressions": 13,
       "legacy/exceptions/core": 4,
-      "libc-test": 14
+      "libc-test": 14,
+      "render": 1
     },
-    "supported": 292,
-    "tests": 296
+    "supported": 293,
+    "tests": 298
   },
   "files": [
     {
@@ -2119,8 +2120,8 @@
     {
       "path": "/root/waste/tests/engine-regressions/descriptor-flags.wast",
       "role": "test-input",
-      "sha256": "b582fab2a8f71ce8181ccd1984f4a99c639143ef59c369d0709d308f4779163b",
-      "size": 10686,
+      "sha256": "1a534a3102a3bc32f01ce8db60e287ead3a47c72d772c23eaf7fb36f9b37c9ac",
+      "size": 11653,
       "source": "tests/engine-regressions/descriptor-flags.wast"
     },
     {
@@ -2140,8 +2141,8 @@
     {
       "path": "/root/waste/tests/engine-regressions/i32-smoke.wast",
       "role": "test-input",
-      "sha256": "31348ee04baa4fc4f1667de9318abce1f981e2aec023bfee02dd86f64f0d7b13",
-      "size": 6094,
+      "sha256": "13ee5edc79cd56c910c88727408a041729e215d68c14cb28bf75751dbd43b93c",
+      "size": 6091,
       "source": "tests/engine-regressions/i32-smoke.wast"
     },
     {
@@ -2154,8 +2155,8 @@
     {
       "path": "/root/waste/tests/engine-regressions/path-vfs.wast",
       "role": "test-input",
-      "sha256": "b87bf2f5f79cd6c74dd101dd5702d976e71a6b7a6b2f5ca0d2948249f22a66f9",
-      "size": 10040,
+      "sha256": "b539aaa9492eec16ad8bff8cbfb4eac615da85d121fa029712f77977d4365085",
+      "size": 10037,
       "source": "tests/engine-regressions/path-vfs.wast"
     },
     {
@@ -2164,6 +2165,13 @@
       "sha256": "e41d8dfa207dc66c809625d11a7dace93de47d5930e1bc6823de9b7be696ce90",
       "size": 17053,
       "source": "tests/engine-regressions/pipe-descriptors.wast"
+    },
+    {
+      "path": "/root/waste/tests/engine-regressions/render-capability.wast",
+      "role": "test-input",
+      "sha256": "0fd060312c314e8a70a4be9230b4c3a1545f296a0ced99868d4e45489f8cb157",
+      "size": 484,
+      "source": "tests/engine-regressions/render-capability.wast"
     },
     {
       "path": "/root/waste/tests/engine-regressions/select-polling.wast",
@@ -2313,6 +2321,13 @@
       "source": "build/html-rt/waste-libc/tests/time-resource.wast"
     },
     {
+      "path": "/root/waste/tests/render/terminal.wast",
+      "role": "test-input",
+      "sha256": "1bc3a3508b943e8374d05cd2f67ccc887e2888db4428f452d0a85748d15b2d47",
+      "size": 3005,
+      "source": "tests/render/terminal.wast"
+    },
+    {
       "path": "/usr/share/licenses/wasm-spec-tests/LICENSE",
       "role": "notice",
       "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
@@ -2352,13 +2367,13 @@
       ]
     }
   },
-  "selection_sha256": "95078ad7cde3d6923d9d7515bf84ccffff22a187797ea56eb6e3e84408861e1d",
+  "selection_sha256": "bc39b04b22c640002215a8e3664a10b9cad221aeec4161f3d35549db339e6c95",
   "sourceInputs": [
     {
       "hostOnly": true,
       "path": "tests/diy-posix-test/README.md",
-      "sha256": "08f12514742cd5d662007e26671a35cc14541035f81d5abe7e7ebf6de33e604f",
-      "size": 3159
+      "sha256": "0eee1c5c4c2a70c22b1c78dd32080ceec563d5a07872fdf9abc8940018a6eb49",
+      "size": 3182
     },
     {
       "hostOnly": true,
@@ -2375,8 +2390,8 @@
     {
       "hostOnly": true,
       "path": "tests/libc-test/README.md",
-      "sha256": "6579da08a4737803b585580c17027760f8ba3505298951d2e06ab694b65477df",
-      "size": 2637
+      "sha256": "d4f5d4bfa889a602a13873f5a9cfd89b9db603182ac6c5f9c68f96a352ec95d3",
+      "size": 2662
     },
     {
       "hostOnly": false,
@@ -10830,7 +10845,7 @@
         "assertionCount": 0,
         "file": "engine-regressions/descriptor-flags.wast",
         "mode": "wast-stream",
-        "sourceBytes": 10686,
+        "sourceBytes": 11653,
         "sourcePath": "tests/engine-regressions/descriptor-flags.wast"
       },
       "expectFailure": false,
@@ -10843,10 +10858,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "tests/engine-regressions/descriptor-flags.wast",
-        "sha256": "b582fab2a8f71ce8181ccd1984f4a99c639143ef59c369d0709d308f4779163b",
-        "size": 10686
+        "sha256": "1a534a3102a3bc32f01ce8db60e287ead3a47c72d772c23eaf7fb36f9b37c9ac",
+        "size": 11653
       },
-      "spec_sha256": "65d8ac5607a84eee2c3723a3993dac96e60fb665f36c11af9f31996dc912f8ec",
+      "spec_sha256": "0d220393077fe3d91e7c6506933e34f9cb761540fe91873c9ddc5b1e45ee4351",
       "suite": "engine-regressions",
       "unsupported": false,
       "unsupportedReason": null
@@ -10911,7 +10926,7 @@
         "assertionCount": 0,
         "file": "engine-regressions/i32-smoke.wast",
         "mode": "wast-stream",
-        "sourceBytes": 6094,
+        "sourceBytes": 6091,
         "sourcePath": "tests/engine-regressions/i32-smoke.wast"
       },
       "expectFailure": false,
@@ -10924,10 +10939,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "tests/engine-regressions/i32-smoke.wast",
-        "sha256": "31348ee04baa4fc4f1667de9318abce1f981e2aec023bfee02dd86f64f0d7b13",
-        "size": 6094
+        "sha256": "13ee5edc79cd56c910c88727408a041729e215d68c14cb28bf75751dbd43b93c",
+        "size": 6091
       },
-      "spec_sha256": "b84dd363297aff4c1bdf5d79964907ceadfb6f8a8668cb62a30be026c5ca6a94",
+      "spec_sha256": "962d3665c41e14069ce99c968f380ea4566edb0b33e1a6f63a94e8706eb74374",
       "suite": "engine-regressions",
       "unsupported": false,
       "unsupportedReason": null
@@ -10965,7 +10980,7 @@
         "assertionCount": 0,
         "file": "engine-regressions/path-vfs.wast",
         "mode": "wast-stream",
-        "sourceBytes": 10040,
+        "sourceBytes": 10037,
         "sourcePath": "tests/engine-regressions/path-vfs.wast"
       },
       "expectFailure": false,
@@ -10978,10 +10993,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "tests/engine-regressions/path-vfs.wast",
-        "sha256": "b87bf2f5f79cd6c74dd101dd5702d976e71a6b7a6b2f5ca0d2948249f22a66f9",
-        "size": 10040
+        "sha256": "b539aaa9492eec16ad8bff8cbfb4eac615da85d121fa029712f77977d4365085",
+        "size": 10037
       },
-      "spec_sha256": "28475e90ee19d7465476d1eebab5cf85f92e4a84e53d3e89450e1e9f956e6bd8",
+      "spec_sha256": "24c4628da48bf56ab86784f802c074680728611dbc878a102e73b5cdba637a00",
       "suite": "engine-regressions",
       "unsupported": false,
       "unsupportedReason": null
@@ -11009,6 +11024,33 @@
         "size": 17053
       },
       "spec_sha256": "f2113d0ee8b4c183abc7cb07b27fb79c44b5fae715323f57e909ddd16bfc2d1f",
+      "suite": "engine-regressions",
+      "unsupported": false,
+      "unsupportedReason": null
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "engine-regressions/render-capability.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 484,
+        "sourcePath": "tests/engine-regressions/render-capability.wast"
+      },
+      "expectFailure": false,
+      "group": "engine-regressions",
+      "id": "engine-regressions/render-capability.wast",
+      "name": "render-capability.wast",
+      "nativeParity": "shared-engine",
+      "path": "/root/waste/tests/engine-regressions/render-capability.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "tests/engine-regressions/render-capability.wast",
+        "sha256": "0fd060312c314e8a70a4be9230b4c3a1545f296a0ced99868d4e45489f8cb157",
+        "size": 484
+      },
+      "spec_sha256": "8fcbc53eb945982709ac2d157420b202ab3d5ce93364b29fdf88392240cbb2c8",
       "suite": "engine-regressions",
       "unsupported": false,
       "unsupportedReason": null
@@ -11093,6 +11135,33 @@
       "suite": "engine-regressions",
       "unsupported": false,
       "unsupportedReason": null
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "render/terminal.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3005,
+        "sourcePath": "tests/render/terminal.wast"
+      },
+      "expectFailure": false,
+      "group": "render",
+      "id": "render/terminal.wast",
+      "name": "terminal.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/waste/tests/render/terminal.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "tests/render/terminal.wast",
+        "sha256": "1bc3a3508b943e8374d05cd2f67ccc887e2888db4428f452d0a85748d15b2d47",
+        "size": 3005
+      },
+      "spec_sha256": "3419be007dbcc8de7e035d77c3d175892dd9e21991da1f21070c7fe48b587cda",
+      "suite": "render",
+      "unsupported": true,
+      "unsupportedReason": "Requires the interactive bash.html renderer; run with /bin/wast"
     }
   ]
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 "use strict";
+const {config, withConfig} = require("./runtime-config.cjs");
 
 /* Host-boundary gate only. Guest behavior is asserted by authored WAST. The
  * controller and production worker are exactly those used in the offline page. */
@@ -11,9 +12,9 @@ const {Worker} = require("node:worker_threads");
 const {installedVfs, treeVfs} = require("./vfs-package.cjs");
 const root = path.resolve(__dirname, "..");
 const frontend = path.join(root, "src/html-rt/src");
-const workerSource = fs.readFileSync(path.join(frontend, "worker.js"), "utf8");
+const workerSource = withConfig(fs.readFileSync(path.join(frontend, "worker.js"), "utf8"));
 const context = vm.createContext({setTimeout, clearTimeout, performance, TextEncoder, TextDecoder});
-vm.runInContext(fs.readFileSync(path.join(frontend, "test-suite.js"), "utf8"), context);
+vm.runInContext(withConfig(fs.readFileSync(path.join(frontend, "test-suite.js"), "utf8")), context);
 let live = 0;
 function createWorker() {
   const native = new Worker(`
@@ -80,10 +81,8 @@ const plain = value => JSON.parse(JSON.stringify(value));
     if (resultFlag) fs.writeFileSync(resultFlag.slice("--results=".length), JSON.stringify(report, null, 2) + "\n");
     assert.equal(report.exitCode, 0, JSON.stringify(report.summary));
     assert(report.tests.length > 0 && (installedAll || report.tests.every(test => test.group === group)));
-    if (installedAll) assert.deepEqual(plain(report.summary), {
-      pass: 290, fail: 0, xfail: 2, xpass: 0, skip: 4,
-      failures: [], unexpectedPasses: [],
-    });
+    if (installedAll) assert.deepEqual(plain(report.tests.map(test => test.identity)),
+      plain((await runner.list()).map(test => test.identity)));
     console.log(`PASS browser installed ${installedAll ? "full corpus" : "group " + group}: ${report.tests.length} tests, ` +
       `${report.tests.reduce((total, test) => total + (test.total || 0), 0)} assertions`);
     return;
@@ -141,7 +140,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
   const guestPass = decodeReply(await guestRunner.guestCommand(wire("--json", "pass.wast")));
   assert.equal(guestPass.report.summary.pass, 1);
   assert.deepEqual(JSON.parse(guestPass.output), guestPass.report);
-  for (const args of [["--jobs=9"], ["--vfs-root=/host"], ["--results=/host"], ["missing.wast"]])
+  for (const args of [["--jobs=" + (config.SUITE_BROWSER_MAX_JOBS + 1)], ["--vfs-root=/host"], ["--results=/host"], ["missing.wast"]])
     assert.equal(decodeReply(await guestRunner.guestCommand(wire(...args))).code, 2);
   const early = suite(filesystem(), baseline);
   const pending = early.guestCommand(wire("--list"));
@@ -152,6 +151,10 @@ const plain = value => JSON.parse(JSON.stringify(value));
   const nested = await suite(filesystem([test("nested.wast", read("guest-test-nested-capability.wast"))])).run();
   assert.equal(nested.tests[0].passed, 1);
   assert.equal(nested.summary.pass, 1);
+  const rendererUnavailable = await suite(filesystem([
+    test("render-capability.wast", read("engine-regressions/render-capability.wast"))])).run();
+  assert.equal(rendererUnavailable.summary.pass, 1);
+  assert.equal(rendererUnavailable.tests[0].passed, 2);
   const minLiteral = await suite(filesystem([test("i64-min.wast", read("test-suite-i64-min-literal.wast"))])).run();
   assert.equal(minLiteral.tests[0].passed, 2);
   assert.equal(minLiteral.summary.pass, 1);
@@ -263,14 +266,16 @@ const plain = value => JSON.parse(JSON.stringify(value));
   assert.equal(segments.tests[0].browserReport.setup.total, 2);
   const capacity = [];
   for (const [kind, label] of [["data", "data"], ["elem", "element"]]) {
-    const source = read(`test-suite-segment-capacity-${kind}.wast`);
+    const limit = config[kind === "data" ? "WAST_MAX_DATA_SEGS" : "WAST_MAX_ELEM_SEGS"];
+    const segment = kind === "data" ? '(data "x")' : '(elem func)';
+    const source = Buffer.from("(module\n" + (segment + "\n").repeat(limit + 1) + ")");
     for (const wrapped of [false, true]) {
       const probe = wrapped ? Buffer.concat([Buffer.from("(assert_invalid "), source,
         Buffer.from(' "invalid")')]) : source;
       const report = await suite(filesystem([test("capacity.wast", probe)])).run();
       assert.equal(report.tests[0].status, "FAIL");
       assert(report.tests[0].browserReport.results.some(result =>
-        result.func === "(parse)" && result.error.includes(`${label} segment capacity exceeded (128)`)));
+        result.func === "(parse)" && result.error.includes(`${label} segment capacity exceeded (${limit})`)));
       capacity.push(report);
     }
   }

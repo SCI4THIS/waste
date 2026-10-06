@@ -125,6 +125,35 @@ function finish(message) {
   worker = null;
 }
 
+function requestHostUpload(requester, data) {
+  let replied = false;
+  const reply = result => {
+    if (replied) return;
+    replied = true;
+    if (worker === requester)
+      requester.postMessage({type: "host-upload-response", ...result});
+  };
+  const cancel = () => reply({cancelled: true});
+  if (data.verbose) console.log("[upload] open file picker, destPath=" + data.destPath);
+  const input = document.createElement("input");
+  input.type = "file";
+  input.onchange = () => {
+    const file = input.files[0];
+    if (!file) { cancel(); return; }
+    try {
+      const reader = new FileReader();
+      reader.onload = () => reply({bytes: new Uint8Array(reader.result)});
+      reader.onerror = reader.onabort = cancel;
+      reader.readAsArrayBuffer(file);
+    } catch (error) {
+      if (data.verbose) console.log("[upload] file read failed", error);
+      cancel();
+    }
+  };
+  input.addEventListener("cancel", cancel);
+  input.click();
+}
+
 async function startShell(event) {
   event?.preventDefault();
   try {
@@ -205,6 +234,18 @@ async function startShell(event) {
       else if (data.type === "guest-suite-cancel" && guestSuiteId === data.id) {
         installedBrowserSuite().then(suite => { if (guestSuiteId === data.id) suite.cancel(); });
       }
+      else if (data.type === "render-test-request") {
+        const requester = worker;
+        let report;
+        try { report = WasteTerminalRenderTest(renderer); }
+        catch (error) { report = {ok: false, error: String(error.stack || error)}; }
+        const json = new TextEncoder().encode(JSON.stringify(report, null, 2) + "\n");
+        const bytes = new Uint8Array(4 + json.length);
+        new DataView(bytes.buffer).setUint32(0, report.ok ? 1 : 0, true);
+        bytes.set(json, 4);
+        if (worker === requester)
+          requester.postMessage({type: "render-test-response", id: data.id, bytes}, [bytes.buffer]);
+      }
       else if (data.type === "host-download") {
         if (data.verbose) console.log("[download] trigger browser save, name=" +
           data.name + " size=" + data.bytes.length);
@@ -219,34 +260,7 @@ async function startShell(event) {
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
       else if (data.type === "host-upload-request") {
-        if (data.verbose) console.log("[upload] open file picker, destPath=" +
-          data.destPath);
-        const uploadVerbose = data.verbose;
-        const input = document.createElement("input");
-        input.type = "file";
-        input.onchange = () => {
-          const file = input.files[0];
-          if (!file) {
-            if (uploadVerbose) console.log("[upload] no file selected");
-            worker.postMessage({type: "host-upload-response", cancelled: true});
-            return;
-          }
-          if (uploadVerbose) console.log("[upload] reading " +
-            file.name + " (" + file.size + " bytes)");
-          const reader = new FileReader();
-          reader.onload = () => {
-            if (uploadVerbose) console.log("[upload] sending " +
-              reader.result.byteLength + " bytes to worker");
-            worker.postMessage({type: "host-upload-response",
-              bytes: new Uint8Array(reader.result)});
-          };
-          reader.readAsArrayBuffer(file);
-        };
-        input.addEventListener("cancel", () => {
-          if (uploadVerbose) console.log("[upload] file dialog cancelled");
-          worker.postMessage({type: "host-upload-response", cancelled: true});
-        });
-        input.click();
+        requestHostUpload(worker, data);
       }
       else if (data.type === "done") {
         if (data.error) append(data.error);

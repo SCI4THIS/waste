@@ -12,8 +12,10 @@ int waste_wat_compile(const char *bytes, size_t length, uint8_t **wasm_out,
     return -1;
 }
 
+static int readable_script_reached_parser;
 int wast_parse_bytes(const char *bytes, size_t length, wast_script *script) {
-    (void)bytes; (void)length;
+    readable_script_reached_parser = length == sizeof("(module)\n") - 1 &&
+        memcmp(bytes, "(module)\n", length) == 0;
     if (script) memset(script, 0, sizeof(*script));
     return -1;
 }
@@ -162,6 +164,30 @@ int main(int argc, char **argv) {
     CHECK(native_store_instantiate_executable(&store, &request, &image,
                                               &error) == EXEC_ERROR_NOT_FOUND,
           "directory cannot be instantiated as an executable");
+    {
+        static const uint8_t script[] = "(module)\n";
+        posix_path_metadata metadata = {
+            POSIX_NODE_REGULAR, 0644u, 0, 0, sizeof(script) - 1, 0, 0, 0
+        };
+        native_exec_request interpreted = {0};
+        interpreted.active = 1;
+        interpreted.pid = 1;
+        strcpy(interpreted.path, "/bin/wast");
+        interpreted.argc = 2;
+        interpreted.argv[0] = malloc(sizeof("/bin/wast"));
+        interpreted.argv[1] = malloc(sizeof("/bin/read-only.wast"));
+        if (!interpreted.argv[0] || !interpreted.argv[1]) return 1;
+        strcpy(interpreted.argv[0], "/bin/wast");
+        strcpy(interpreted.argv[1], "/bin/read-only.wast");
+        CHECK(interpreted.argv[0] && interpreted.argv[1] &&
+              posix_kernel_path_add_data(store.kernel, "/bin/read-only.wast",
+                  &metadata, script, sizeof(script) - 1) == 0,
+              "stage non-executable WAST source");
+        CHECK(native_store_instantiate_executable(&store, &interpreted, &image,
+                  &error) == EXEC_ERROR_FORMAT && readable_script_reached_parser,
+              "explicit WAST interpreter reads 0644 source into parser stub");
+        native_exec_request_destroy(&interpreted);
+    }
     snprintf(request.path, sizeof(request.path), "/tmp/probe-link");
     memset(&error, 0, sizeof(error));
     CHECK(native_store_instantiate_executable(&store, &request, &image,

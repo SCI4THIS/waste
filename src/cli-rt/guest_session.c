@@ -623,9 +623,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(option, "--script")) script_path = value;
         else if (!strcmp(option, "--result-file")) result_path = value;
         else if (!strcmp(option, "--timeout-ms")) {
-            if (!session_number(value, 3600000, &timeout)) goto invalid;
+            if (!session_number(value, EXECUTION_MAX_TIMEOUT_MS, &timeout)) goto invalid;
         } else if (!strcmp(option, "--cancel-after-ms")) {
-            if (!session_number(value, 3600000, &cancel_after)) goto invalid;
+            if (!session_number(value, EXECUTION_MAX_TIMEOUT_MS, &cancel_after)) goto invalid;
         } else if (!strcmp(option, "--columns")) {
             if (!session_number(value, 65535, &columns)) goto invalid;
         } else if (!strcmp(option, "--rows")) {

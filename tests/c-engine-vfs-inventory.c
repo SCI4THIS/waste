@@ -6,9 +6,7 @@
 #include <string.h>
 
 static void capacity_check(void) {
-    _Static_assert(POSIX_PATH_NODE_MAX - WASTE_VFS_MAX_ENTRIES == 64,
-                   "reserve 64 runtime nodes after the installed tree");
-    size_t capacity = 400000, at = 0;
+    size_t capacity = ((size_t)WASTE_VFS_MAX_ENTRIES + 1) * 256 + 128, at = 0;
     char *json = malloc(capacity);
     assert(json);
     at += (size_t)snprintf(json+at, capacity-at, "{\"version\":1,\"entries\":[");
@@ -34,9 +32,9 @@ static void capacity_check(void) {
     assert(vfs.count == WASTE_VFS_MAX_ENTRIES); // Failed replacement preserves input.
     posix_kernel *kernel = posix_kernel_create(0);
     assert(kernel && !waste_vfs_mount(kernel, &vfs));
-    for (int i = 0; i < 64; i++) {
+    for (uint32_t i = 0; i < VFS_RUNTIME_NODE_RESERVE; i++) {
         char path[32];
-        int n = snprintf(path, sizeof(path), "/runtime-%d", i);
+        int n = snprintf(path, sizeof(path), "/runtime-%u", i);
         int fd = posix_kernel_open(kernel, (const uint8_t *)path, (size_t)n,
                                    POSIX_O_CREAT | POSIX_O_WRONLY, 0600);
         assert(fd >= 0 && !posix_kernel_close(kernel, fd));
@@ -47,7 +45,7 @@ static void capacity_check(void) {
     posix_kernel_destroy(kernel);
     waste_vfs_free(&vfs);
     free(json);
-    puts("PASS inventory capacity: 960 installed nodes, 64 runtime nodes, overflow rejection");
+    puts("PASS inventory capacity: installed nodes, runtime reserve, overflow rejection");
 }
 
 int main(int argc, char **argv) {
