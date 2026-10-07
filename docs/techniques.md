@@ -9,10 +9,10 @@ reintroducing earlier ambiguity, ownership, or portability failures.
 
 System ownership and runtime boundaries are defined in
 [architecture.md](architecture.md).  Unfinished staged work belongs in the
-active plans rather than this document. OCaml is used only for Wasm/WAT/WAST
-language comparisons. No additional OCaml kernel/application-runtime
-development is planned; the existing kernel is to be removed in deferred
-cleanup under [the OCaml retirement plan](active-ocaml-language-oracle-plan.md).
+active plans rather than this document. The OCaml reference interpreter in
+`submodules/wasm-spec/interpreter` may be built via
+`./start.sh --ocaml-reference` to cross-check Wasm/WAT/WAST language semantics;
+see [ocaml-reference-build.md](ocaml-reference-build.md).
 
 ## Browser File Transfer
 
@@ -368,11 +368,9 @@ update of the active interpreter frame:
 5. Continue the dispatch loop with the original return continuation.
 
 Do not represent each tail transfer with C recursion, heap allocation, or an
-exception.  The OCaml implementation's boxed continuation and exception path
-was useful as a behavioral OCaml reference implementation but demonstrated why the C engine needs an
-explicit frame-reuse operation.  Deep official tail-call fixtures and a large
-bounded native loop should show constant C stack and no allocation per
-transfer.
+exception. The C engine needs an explicit frame-reuse operation. Deep official
+tail-call fixtures and a large bounded native loop should show constant C
+stack and no allocation per transfer.
 
 ## Guest Non-Local Control Transfer
 
@@ -592,10 +590,8 @@ Private C memory probes must use bounded `exec_memory_read` and initialized
 sparse-page observations rather than a removed contiguous `memory->data` field.
 The native WAST adapter services finite SELECT deadlines with a monotonic clock
 and bounded host sleeps; external input and indefinite waits use the session
-driver. POSIX imports are outside the scope of the OCaml reference implementation: an
-unavailable import is not a differential pass, a C kernel acceptance blocker
-or a request to implement an OCaml provider. Verify these fixtures through
-C native/browser parity and the retained sanitizer/session contracts.
+driver. Verify POSIX fixtures through C native/browser parity and the retained
+sanitizer/session contracts.
 
 Path regressions can create private files with real guest imports instead of
 depending on installed executable bytes or host filesystem writes. Assert the
@@ -636,9 +632,8 @@ Keep private NULL/overflow guards, raw readiness bits, injected credentials or
 clocks, object/reference identity and independent-kernel checks even where
 guest calls cover corresponding visible effects. Direct mapping reads reject
 ranges beyond EOF; ordinary POSIX reads may return partial bytes. Preserve
-these distinct contracts. [Retained kernel checks](posix-kernel-retained-coverage.md),
-[libc harness coverage](libc-harness-coverage.md) and
-[DIY harness coverage](diy-posix-harness-coverage.md) retain detailed boundaries.
+these distinct contracts. [Retained kernel checks](posix-kernel-retained-coverage.md)
+and [libc harness coverage](libc-harness-coverage.md) retain detailed boundaries.
 
 Tests must call the production implementation to establish its coverage. The
 legacy `c-engine-shared-lib-dylink.c` probe duplicates a parser, and its checked-in
@@ -760,14 +755,10 @@ Interactive runtime changes also run:
 node tests/c-engine-bash-browser-runtime.cjs build/html-rt/bash.html
 ```
 
-Compare supported official Wasm/WAT/WAST language tests with the OCaml reference implementation.
-Use native/browser C checks for kernel, shared ABI, scheduler, signal, process
-and libc behavior. Existing sequential/threaded OCaml POSIX probes are legacy
-evidence for coverage accounting during removal, not required gates for new
-C work. Do not extend the OCaml kernel to make these fixtures run. Keep
-repository-owned OCaml reference implementation fixes and retirement changes in
-`submodules/wasm-spec-i31-int32.patch`; do not commit them into submodule
-history.
+Supported official Wasm/WAT/WAST language tests may be cross-checked against
+the OCaml reference interpreter via `./start.sh --ocaml-reference`; see
+[ocaml-reference-build.md](ocaml-reference-build.md). Use native/browser C
+checks for kernel, shared ABI, scheduler, signal, process and libc behavior.
 
 Each scheduled test needs a fresh store and kernel.  Run isolation-sensitive
 fixtures in different orders and concurrency settings.  Imported-memory tests
@@ -793,8 +784,8 @@ For a failure cluster, identify the earliest phase that diverges:
 9. result comparison.
 
 Use independent tools such as Binaryen validation only as a triage signal.
-They do not replace the project validator or OCaml reference implementation, especially for
-proposal and WAST assertion semantics.
+They do not replace the project validator, especially for proposal and WAST
+assertion semantics.
 
 ## Common Failure Patterns
 
@@ -814,7 +805,6 @@ proposal and WAST assertion semantics.
 - Do not send `close` or another descriptor-lifecycle operation to a host shim
   when `open`, `pipe`, `read`, and `write` use the engine kernel; all operations
   on one descriptor must update the same open-file description.
-- Do not claim browser performance from native OCaml measurements.
 
 After shell or Python changes, run `bash -n start.sh`, bytecode checks for
 changed `src/html-rt/tools/*.py`, and `git diff --check`.
@@ -882,10 +872,10 @@ semantic-invalid expectations with truncated syntax.
 Verify initialization and drop behavior as well as setup acceptance: the portable
 segment probe checks distinct values at 31/32/63/64/127, numeric and deferred names,
 32/64-bit memory/table operands, post-drop traps and zero-length operations.
-OCaml compares language semantics only; capacity overflow is a C implementation
-boundary, not an OCaml rejection requirement. The existing fixed capacities do
-not promise arbitrary segment counts. Generate overflow probes from the current
-configured bound instead of fixing the fixture size to a historical limit.
+Capacity overflow is a C implementation boundary. The existing fixed capacities
+do not promise arbitrary segment counts. Generate overflow probes from the
+current configured bound instead of fixing the fixture size to a historical
+limit.
 
 ## Preserve Element Segment Nullability
 
@@ -899,14 +889,12 @@ and modes 5–7 carry an explicit reference type. Store that declared type for
 both active initialization and instruction validation. Do not infer a narrower
 segment type because every current item happens to be a non-null function.
 The text encoder may use expression vectors with an explicit non-null type;
-it need not produce byte-identical encodings to the OCaml reference implementation.
+it need not produce byte-identical encodings.
 
 Verify table contents and lifetime as well as setup: bare/empty vectors,
 nullable null slots, passive `table.init`, dropped active/declarative segments,
 post-drop traps, table64 and all eight binary modes. Reject nullable segments
 when targeting non-null tables even if their vectors contain only `ref.func`.
-Compare native/browser C results with the OCaml reference implementation for
-these language checks; no kernel/provider changes are involved.
 
 
 ## Standard language-test host tables
@@ -923,11 +911,9 @@ owners; separately scheduled scripts receive fresh host objects. Include both
 host tables in checkpoint capture even before a module imports them. Store
 teardown releases entries after engines, and snapshots restore object identity
 and original bounds/contents. Keep private checkpoint ownership checks as well
-as portable WAST bounds/growth/import and isolation probes. Run
-both manifest orders sequentially and concurrently, compare native/browser C
-and OCaml language results, and verify C-encoded modules in source order so
-prior actions establish shared table state. Standard spectest scaffolding does
-not require OCaml kernel development.
+as portable WAST bounds/growth/import and isolation probes. Run both manifest
+orders sequentially and concurrently, and verify C-encoded modules in source
+order so prior actions establish shared table state.
 
 
 ## Plain and folded bulk instructions
@@ -946,8 +932,7 @@ immediates or unresolved symbols through normal text parsing.
 Compare effects using distinct source functions/data and an untouched peer
 table; successful setup alone cannot prove the instruction was emitted. Check
 both address widths, repeated drops, post-drop traps and zero-length operations.
-Pair invalid-module assertions with quoted malformed-text assertions, and run
-C-encoded binaries through the OCaml reference implementation while preserving script order.
+Pair invalid-module assertions with quoted malformed-text assertions.
 `tests/test-suite-flat-bulk.wast` supplies the portable checks; keep ordinary
 rejection probes and resource-bound failures explicit too.
 
@@ -965,9 +950,8 @@ are table64, otherwise i32; fill uses its table's width for address and count.
 Check both overlap directions with distinct entries, no writes after a bounds
 trap, zero-length boundary behavior, nulls, reference identity/nullability and
 cross-module function owners. `tests/test-suite-table-copy-fill.wast` covers
-portable valid/invalid/malformed cases; retain ordinary rejection probes,
-C-encoded OCaml reference implementation verification and sanitizer/leak gates.
-POSIX and kernel providers remain outside the language comparison scope.
+portable valid/invalid/malformed cases; retain ordinary rejection probes
+and sanitizer/leak gates.
 
 ## Exported table shorthand
 
@@ -979,57 +963,4 @@ element segment to the just-declared table, and emit the inline export through
 the ordinary table export metadata. Test both address widths with indirect
 calls, then import the exported table from a second module to verify aliasing
 and shared contents. `tests/test-suite-exported-table-shorthand.wast` covers
-these paths in native C, the production browser runtime and the OCaml reference
-implementation without requiring OCaml kernel capabilities.
-
-
-## Finite OCaml reference implementation comparison
-
-Enumerate installed manifest identities and audit inventory/upstream/source
-hashes before comparison. Keep legacy syntax exclusions and repository runtime
-fixtures explicit; WAST with POSIX imports is outside the official language
-ledger. Run unchanged language scripts in fresh OCaml reference implementation processes with standard
-spec scaffolding. Enable custom handlers only for custom-annotation suites:
-core binary custom sections deliberately contain opaque payloads.
-
-Use C parser metadata and interpreter assertion traces to compare ordered
-check kinds and full action names, alongside actual native/browser assertion
-results, ordinary setup diagnostics and EOF completion. Do not introduce a
-second WAST command scanner or infer setup acceptance from assertion counts.
-Keep runtime traps distinct from instantiation traps, custom checks distinct
-in the OCaml reference implementation inventory, and bare actions visible even if C reports them as
-return checks. Decode displayed name escapes without Unicode normalization,
-truncation or prefix matching. A declaration and invocation truncated in the
-same way can pass while hiding a language difference; test distinct names
-sharing a prefix and equivalent escape spellings independently.
-
-Pin known gaps by identity, source hash and exact issue categories. Fail new
-or changed gaps and repaired baselines; strict comparison fails known gaps
-as well. Preserve raw metadata/traces, commands and artifact/report hashes.
-The report format does not bind source hashes, so supply current reports and
-retain freshness evidence. Corpus membership, counts and gaps belong in the
-generated ledger rather than a second hand-maintained Markdown table.
-Installed-script agreement does not imply every C-encoded module or arbitrary
-text form has been compared. No OCaml kernel/provider development is added.
-
-```sh
-build/cli-rt/waste-test --vfs-root=src/vfs --jobs=1 \
-  --expected-failures=tests/native-corpus-expected-failures.txt \
-  --results=build/cli-rt/language-corpus-results.json
-python3 tests/language-oracle-check.py \
-  --native-results=build/cli-rt/language-corpus-results.json --strict
-python3 tests/language-oracle-ledger-check.py
-```
-
-These historical tool filenames still contain `oracle`; their scope is only
-the OCaml reference implementation's language semantics. Supply an existing
-reference executable built from staged source under `build/`, following the
-read-only submodule policy. `--browser-results=PATH` reconciles an actual browser
-report; `--output=PATH` selects evidence storage. The checker has its own bounded
-subprocess timeout, independent of C corpus deadlines. New/changed gaps or
-repaired baselines exit 1; configuration or stale-corpus errors exit 2.
-
-The comparison checker's manifest lookup still uses the legacy `tests/manifest.json`
-relative to the VFS root. It needs migration to `root/waste/tests/manifest.json`
-before the command above can audit the current installed layout. This is a
-checker-path limitation, not a new language gap or an OCaml kernel requirement.
+these paths in native C and the production browser runtime.

@@ -186,7 +186,7 @@ repeated WAST, definitions/registration/module assertions, two READ pauses in
 one assertion, a resumed expected trap, SELECT readiness, a resumed mismatch
 and successful parent recovery. Its expected score is 22/23, with exactly one
 intentional failure and child status 1; that negative check is not a conformance
-pass. The non-POSIX handler fixture also passes the OCaml differential OCaml reference implementation.
+pass.
 The separate `handler-start` negative contract rejects a yielding module start
 with status 126 (7/8 results), proving it cannot falsely pass `assert_invalid`
 and that the parent shell can still recover.
@@ -430,9 +430,7 @@ outside the unchanged installed batch. No runtime API or timer model changed.
 
 Stage 6B.34 adds `tests/guest-session-process-groups.wast` and its JSON event
 contract, with 71 checks through real process/foreground-group, termios,
-pselect and signal-handler imports. This is a C POSIX session contract;
-OCaml reference implementation comparisons and additional OCaml providers are outside
-its scope.
+pselect and signal-handler imports.
 
 ```sh
 make -C src/cli-rt process-groups
@@ -496,5 +494,4 @@ same source/contract and pass 120 checks with the exact transcript. The five
 audited shared sessions total 351 checks after Stage 6B.37, outside the installed
 batch.
 Raw readiness, OFD/reference lifetime and independent kernel isolation remain
-private C gates. No runtime API or error convention changed, and OCaml kernel
-development/comparisons are outside this C POSIX contract's scope.
+private C gates. No runtime API or error convention changed.

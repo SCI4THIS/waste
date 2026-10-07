@@ -11,31 +11,25 @@ build rules live in `src/html-rt/`. Keep shared semantics in `src/engine/`; add
 platform behavior only to the matching runtime directory. Compiled Bash input
 is in `examples/bash.wat`.
 
-Follow `docs/architecture.md`: C is the browser runtime, while the official
-OCaml interpreter in `submodules/wasm-spec` is the differential OCaml reference implementation only
-for Wasm/WAT/WAST language semantics. Do not add OCaml kernel or application
-runtime capabilities. Its existing kernel is scheduled for removal in deferred
-cleanup; see `docs/active-ocaml-language-oracle-plan.md`.
+Follow `docs/architecture.md`: C is the browser runtime. The OCaml reference
+interpreter in `submodules/wasm-spec/interpreter` was used as a language
+reference while implementing the WAT/WAST portions of the C engine. See
+`docs/ocaml-reference-build.md` for the minimal build/test instructions.
 Read `docs/techniques.md` before extending the engine; it records the parser,
 validation, execution, linking, browser, and verification practices established
 during the port. Current staged work is tracked in the `docs/active-*.md`
 plans.
-Represent repository-owned OCaml changes in
-`submodules/wasm-spec-i31-int32.patch`, never in submodule history. Dashboard
-and packaging tools are in `src/html-rt/tools/`; guest libc sources are in
+Packaging tools are in `src/html-rt/tools/`; guest libc sources are in
 `src/html-rt/lib/`. Architecture notes are in `docs/`, and project probes
 are in `tests/`, especially `tests/diy-posix-test/` and `tests/libc-test/`.
 Treat all of `build/` as generated output. Shared generated engine sources and
-logs go under `build/engine/`, native executables under `build/cli-rt/`, browser
-artifacts under `build/html-rt/`, and OCaml intermediates under `build/ocaml/`.
+logs go under `build/engine/`, native executables under `build/cli-rt/`, and
+browser artifacts under `build/html-rt/`.
 Treat every checked-out submodule as a read-only source dependency. Never apply
 patches, generate files, bootstrap, configure, or build inside a submodule
 checkout. Copy or stage inputs under `build/` first, apply repository-owned
 patches to that staging copy, and direct every generated output into `build/`.
-For upstream test runners with an output option, set it to a path under
-`build/`; for example, use `--out build/ocaml/spec-roundtrip` with the
-WebAssembly spec test runner. See `docs/submodule-policy.md` for existing
-helpers that still need migration to this policy.
+See `docs/submodule-policy.md`.
 Guest distribution snapshots are explicitly installed into `src/vfs` using
 `src/html-rt/tools/vfs.py`; its `.inventory.json` is the mounted path/metadata
 contract. Compile under `build/`, then install; HTML packaging must not compile
@@ -59,8 +53,7 @@ installed regression snapshots to match authored inputs.
 
 Use browser primitives when faithful and emulate practical OS semantics in the
 C engine-owned kernel. Verify kernel/POSIX behavior across the native and
-browser C runtimes; OCaml kernel parity is not required. Route unavailable
-capabilities such as raw sockets
+browser C runtimes. Route unavailable capabilities such as raw sockets
 through an optional WebSocket POSIX broker. Keep POSIX state in the engine—not
 the broker—and make the protocol versioned, asynchronous, capability-scoped,
 and explicit about `errno`, cancellation, and readiness. Without it, return an
@@ -85,15 +78,11 @@ this explicit return path as stack unwinding/rewinding.
   against the generated page without launching Chromium.
 - `./start.sh --html-browser-full`: run the full offline Chromium/browser suite
   against `bash.html`.
-- `./start.sh --compile`: legacy OCaml build path; currently blocked until it
-  applies the managed patch to staged source under `build/ocaml/` only.
 - `./start.sh --build-libc`: build the guest libc module and generated test
   fixtures.
 - `./start.sh --generate-bash-html`: generate the offline WASTE Bash page.
-- OCaml reference builds under `make -C submodules` are currently blocked by
-  the read-only submodule policy: their legacy patch transaction edits the spec
-  checkout. Refactor them to patch a staged copy under `build/ocaml/` before
-  using those targets.
+- `./start.sh --ocaml-reference`: stage and run the OCaml reference interpreter
+  under `build/ocaml-interpreter/`; see `docs/ocaml-reference-build.md`.
 - `make -C src/cli-rt BUILD_DIR=../../build/cli-rt wast-native`: build the
   native CLI runner.
 - `make -C src/cli-rt corpus-native`: build the native batch companion and
@@ -125,10 +114,6 @@ this explicit return path as stack unwinding/rewinding.
   select, run or cancel the mounted corpus and download assertion JSON without
   Node. `node tests/c-engine-offline-browser.cjs --suite-full` is the focused
   automation gate for full production-browser batch execution.
-- `node tests/diy-posix-test/posix-{kernel,control}-runtime.cjs [threaded]`:
-  run legacy OCaml-runtime DIY POSIX probes.
-- `node tests/libc-test/libc-runtime.cjs [threaded]`: run legacy OCaml-runtime
-  guest libc probes pending coverage accounting and kernel retirement.
 - `node tests/libc-test/allocator-native.cjs`: stress the built allocator natively.
 
 Retired dashboard options (`--html-test`, `--c-engine-html`, and
@@ -151,25 +136,22 @@ execution paths allocation-free and place optional counters behind
 
 ## Testing Guidelines
 
-Name DIY fixtures `tests/diy-posix-test/*.wast` and Node harnesses
-`tests/diy-posix-test/*-runtime.cjs`. Test native and browser C artifacts when
-changing shared engine semantics. Use OCaml only to compare Wasm/WAT/WAST
-language behavior. Existing direct/threaded OCaml POSIX probes are legacy
-coverage to account for during kernel retirement, not gates for C kernel work.
-Browser changes must continue to work as a single offline `file://` document;
-do not introduce a server, external assets, or cross-origin-isolation
-requirements. Treat local POSIX fixtures as regression probes. Broader
-conformance work should trace tests to The Open Group suites. Revisit LTP's
-`testcases/open_posix_testsuite` after a guest C compiler works; then record
-upstream revisions and keep licensing and Wasm-adaptation patches separate.
+Name DIY fixtures `tests/diy-posix-test/*.wast`. Test native and browser C
+artifacts when changing shared engine semantics. Browser changes must continue
+to work as a single offline `file://` document; do not introduce a server,
+external assets, or cross-origin-isolation requirements. Treat local POSIX
+fixtures as regression probes. Broader conformance work should trace tests to
+The Open Group suites. Revisit LTP's `testcases/open_posix_testsuite` after a
+guest C compiler works; then record upstream revisions and keep licensing and
+Wasm-adaptation patches separate.
 Keep libc test clients in `tests/libc-test/*.wast.inc`; generated fixtures
 belong under `build/html-rt/waste-libc/tests/`.
-Compare C Wasm/WAT/WAST language behavior with the OCaml reference implementation for every
-supported official language test. Missing OCaml POSIX imports are outside
-OCaml reference implementation’s scope; do not develop providers or block C kernel acceptance on them.
+The OCaml reference interpreter (`./start.sh --ocaml-reference`) may be used
+to cross-check WAT/WAST language behavior on supported official tests; see
+`docs/ocaml-reference-build.md`.
 Run C decoder/executor tests natively with warnings-as-errors, AddressSanitizer,
 and UndefinedBehaviorSanitizer, then exercise the same artifact through the
-offline Bash/test page. Do not claim a browser speedup from native OCaml timings.
+offline Bash/test page.
 Keep engine-global data immutable. Give each scheduled test an isolated host
 store and kernel; model processes with private address spaces and threads with
 shared process memory. Preserve explicit imported-memory aliasing within one

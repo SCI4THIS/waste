@@ -11,17 +11,12 @@ This project approaches multi-threading with frames and program counters, which 
 Treat all checked-out submodules as read-only source dependencies. Stage source
 under `build/` before applying repository patches or running generators,
 bootstrap/configure steps, or builds; all resulting files must stay under
-`build/`. See `docs/submodule-policy.md`. Existing OCaml and Coreutils patch
-helpers still mutate their checkouts and must be refactored before use under
-this policy.
+`build/`. See `docs/submodule-policy.md`.
 
-OCaml is retained only as a reference for Wasm/WAT/WAST language semantics and
-standard spec-test scaffolding. The application-engine experiment was not
-practical. Do not develop additional OCaml kernel, POSIX, process, scheduler,
-VFS, signal, terminal, libc-host or broker capabilities. The existing OCaml
-kernel and application-runtime integration are planned for removal in deferred
-cleanup; see `docs/active-ocaml-language-oracle-plan.md`. C owns production
-application execution. Missing OCaml POSIX imports do not block C acceptance.
+The OCaml reference interpreter in `submodules/wasm-spec/interpreter` was used
+as a language reference while implementing the WAT/WAST portions of the C
+engine. See `docs/ocaml-reference-build.md` for the minimal build/test
+instructions.
 
 There are 3 categories of POSIX functionality:
 
@@ -45,36 +40,17 @@ This opens an interactive wizard for dependency checks, compilation, and test ex
 
 ```sh
 ./start.sh --check              # Inspect dependencies and submodule state
-./start.sh --install-deps       # Install missing system/OPAM packages
-./start.sh --compile            # Legacy OCaml build; blocked pending read-only staging refactor
+./start.sh --install-deps       # Install missing system packages
 ./start.sh --build-libc         # Build waste-libc.wasm and its tests
 ./start.sh --generate-bash-html # Generate self-contained WASTE Bash page
-./start.sh --patch-status       # Show Wasm32 compatibility patch status
-./start.sh --apply-i31          # Legacy in-place patch operation; do not use under read-only policy
-./start.sh --revert-i31         # Legacy in-place patch operation; do not use under read-only policy
-./start.sh --update             # Legacy mutating update path; not for ordinary builds under read-only policy
-```
-
-### Test Suites
-
-```sh
-# Legacy DIY POSIX probes (OCaml; retained pending deferred retirement)
-node tests/diy-posix-test/posix-kernel-runtime.cjs
-node tests/diy-posix-test/posix-kernel-runtime.cjs threaded
-
-# Legacy OCaml guest libc probes; native allocator check remains separate
-node tests/libc-test/libc-runtime.cjs
-node tests/libc-test/libc-runtime.cjs threaded
-node tests/libc-test/allocator-native.cjs
+./start.sh --ocaml-reference    # Stage and run the OCaml spec-test interpreter
 ```
 
 ### Build Output Locations
 
 ```
-build/ocaml/dist/                               # Sequential OCaml-Wasm interpreter + assets
-build/ocaml/dist-threaded/                      # CPS OCaml-Wasm interpreter + assets
-build/html-rt/bash-ocaml.html                   # Self-contained OCaml Bash interpreter
 build/html-rt/waste-libc/waste-libc.wasm        # Guest libc binary
+build/ocaml-interpreter/                        # Staged OCaml reference interpreter
 ```
 
 ### Build Logs
@@ -82,28 +58,24 @@ build/html-rt/waste-libc/waste-libc.wasm        # Guest libc binary
 All logs are written to `build/engine/logs/`:
 
 ```
-build/engine/logs/build.log            # Latest OCaml-to-Wasm compilation
-build/engine/logs/bash-html.log        # WASTE Bash page generation transcript
 build/engine/logs/libc-build.log       # libc build log
 build/engine/logs/test.log             # Test suite results
-build/engine/logs/update.log           # Safe pull/submodule update transcript
 build/engine/logs/c-engine-build.log   # C engine build transcript
 build/engine/logs/c-engine-bash.log    # C engine Bash page generation
+build/engine/logs/ocaml-reference.log  # OCaml reference interpreter build + spec tests
 ```
 
 ### Dependencies
 
 **System packages** (Arch/Omarchy):
 ```sh
-sudo pacman -S --needed git opam bubblewrap base-devel binaryen libnewt
+sudo pacman -S --needed git bubblewrap base-devel binaryen libnewt
 ```
 
-**OPAM packages** (managed by start.sh, installed in isolated switch `waste-wasm`):
-- `dune`, `menhir`
-- `wasm_of_ocaml-compiler`, `js_of_ocaml`, `js_of_ocaml-ppx`
+OPAM/dune/menhir/OCaml are only required for `--ocaml-reference`; see
+`docs/ocaml-reference-build.md`.
 
 **Key versions:**
-- OCaml: 5.3.0
 - Binaryen wasm-opt: 119 or newer
 
 ## High-Level Architecture
@@ -119,21 +91,6 @@ The C engine distinguishes four explicit ownership levels:
 
 This hierarchy prevents accidental cross-test memory corruption: each spec `.wast` file gets a fresh sandbox, and modules within a sandbox may only share memory through explicit WebAssembly imports.
 
-### Legacy OCaml Scheduler: Cooperative with Quantum Boundaries
-
-This records the earlier scheduled OCaml experiment for deferred retirement.
-It does not authorize additional OCaml scheduler/kernel development. Current
-C evaluator/session ownership is described in `docs/architecture.md`.
-
-The legacy interpreter yields to the browser event loop after each configured instruction quantum (default: 10,000 guest opcodes):
-
-- Evaluator-only transitions (call, label, exception, signal frames) do not consume fuel
-- Pause/resume are worker messages that gate the next slice
-- Signals enter a versioned command ring at quantum boundaries
-- Each test task owns an isolated continuation and runner state
-
-Dashboard concurrency controls limit concurrently runnable test *sandboxes*, not guest threads (guest threading is future work).
-
 ### Engine Architecture
 
 The engine (`src/engine/`) provides:
@@ -147,24 +104,6 @@ The engine (`src/engine/`) provides:
 - **Browser API:** Exported WAST API functions, legacy per-module linking, browser streaming, yield/resume (`browser_api.c`)
 - **Freestanding library:** Portable string, math, allocation, formatting, and errno support shared by native and Wasm builds (`src/engine/lib/`)
 - **Platform backends:** Native Linux x86_64 support in `src/cli-rt/lib/` and Wasm/browser support in `src/html-rt/lib/`
-
-### Legacy OCaml Browser Dashboard Architecture
-
-The description below records the earlier experiment. It is not a runtime
-to develop further; production execution uses the C engine and worker. Useful
-legacy coverage must be accounted for before deferred kernel removal.
-
-**Generate time:**
-- Collects `.wast` test files from `submodules/wasm-spec/test`
-- Embeds the CPS interpreter Wasm module as base64
-- Groups tests by directory, marks legacy exception tests as unsupported
-- Generates one self-contained `file://` HTML file
-
-**Runtime:**
-- Worker wraps the interpreter with pause/resume, signal ring, and quantum control
-- No server, no cross-origin isolation, no `SharedArrayBuffer` required
-- Signals validated via SHA-256 identities (source, CPS loader, interpreter Wasm)
-- Test results can be downloaded as JSON (timing, exit code, output, errors)
 
 ### POSIX Runtime Model
 
@@ -194,13 +133,12 @@ Split across `src/html-rt/lib/` in focused modules, this owns guest linear memor
 
 Guest libc delegates kernel operations to the C engine through its shared
 guest ABI and native/browser adapters. Dynamic loading, process/VFS behavior
-and optional broker capabilities belong to C. The earlier OCaml env overlay
-is legacy integration to remove, not a provider implementation target.
+and optional broker capabilities belong to C.
 
 Test fixture:
 ```sh
 ./start.sh --build-libc
-# Outputs: build/html-rt/waste-libc/waste-libc.wasm, build/ocaml/bash-runtime.wast
+# Outputs: build/html-rt/waste-libc/waste-libc.wasm, build/html-rt/bash-runtime.wast
 ```
 
 ### Shared-Library Libc Roadmap
@@ -252,7 +190,6 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 - `lib/pattern.c` — Regex and pattern matching
 - `lib/misc.c` — Resource-limit, time-formatting, terminal, and diagnostic helpers
 - `lib/include/helper.h` — Shared declarations across guest libc modules
-- `tools/generate-bash-html.py` — Generates self-contained Bash interpreter page with CPS loader and libc
 - `tools/build-bash-runtime.py` — Relinks Bash and libc binaries to shared `waste-runtime` module
 - `tools/build-waste-libc.py` — Builds libc Wasm binary and test fixtures
 
@@ -261,33 +198,29 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 
 ### Tests
 - `tests/diy-posix-test/*.wast` — POSIX regression probes (process control, signals, VFS, clock)
-- `tests/diy-posix-test/*-runtime.cjs` — Legacy OCaml probe harnesses pending coverage accounting and deferred kernel retirement
 - `tests/libc-test/*.wast.inc` — libc test clients
-- `tests/libc-test/*-runtime.cjs` — Node.js harnesses for allocator and libc tests
-- `tests/tail-call-smoke.wast` — Minimal CPS Bash smoke test
+- `tests/libc-test/allocator-native.cjs` — Native allocator check
+- `tests/tail-call-smoke.wast` — Minimal Bash smoke test
 
 ### Build & Configuration
 - `start.sh` — Main interactive/non-interactive build wizard
 - `.gitmodules` — Submodule reference to `submodules/wasm-spec`
-- `submodules/wasm-spec-i31-int32.patch` — Wasm32 compatibility patch (applied/reverted via start.sh)
 
 ### Spec Submodule
-- `submodules/wasm-spec/interpreter/` — Official OCaml WebAssembly reference interpreter
-- `submodules/wasm-spec/test/` — Official Wasm core test suite and OCaml reference implementation inputs
+- `submodules/wasm-spec/interpreter/` — OCaml reference interpreter used only as a WAT/WAST language reference
+- `submodules/wasm-spec/test/` — Official Wasm core test suite
 
 ## Key Design Decisions & Constraints
 
-### Migration & Testing Strategy
+### Testing Strategy
 
-1. **OCaml reference implementation:** Compare supported official Wasm/WAT/WAST language
-   tests with the OCaml reference interpreter in `submodules/wasm-spec`.
-   POSIX imports in WAST clients are outside that OCaml reference implementation’s scope.
-
-2. **Verification:** C language changes use fixtures and OCaml language
-   comparison. Kernel/libc/application changes use native/browser C parity,
-   private sanitizer gates, compiled guest ABI checks and POSIX contract
-   fixtures. No OCaml kernel parity or new providers are required. See
-   `docs/architecture.md` and `docs/techniques.md`.
+**Verification:** C engine language changes use fixtures. The OCaml reference
+interpreter in `submodules/wasm-spec/interpreter` may be built via
+`./start.sh --ocaml-reference` to cross-check WAT/WAST semantics; see
+`docs/ocaml-reference-build.md`. Kernel/libc/application changes use
+native/browser C parity, private sanitizer gates, compiled guest ABI checks
+and POSIX contract fixtures. See `docs/architecture.md` and
+`docs/techniques.md`.
 
 ### Ownership & Memory Safety
 
@@ -304,18 +237,13 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 1. **Self-contained deployment:** `bash.html` serves shell and installed-test diagnostics as one `file://` HTML page. No server or external assets are required.
 
 2. **C control APIs:** Use C engine/session control contracts and versioned
-   integer handles. The legacy OCaml signal ring is not a required C ABI.
-
-3. **Legacy validation caching:** The OCaml dashboard used source/CPS-loader/
-   interpreter hashes. Keep this as historical context for deferred removal,
-   not an acceptance rule for the current C worker.
+   integer handles.
 
 ### POSIX Model
 
 1. **Unavailable capabilities:** Return unsupported errors when the C
    engine/native/browser adapters cannot provide an operation. Route delegated
-   capabilities through the optional WebSocket broker. Do not route C runtime
-   behavior through OCaml or implement new OCaml kernel providers.
+   capabilities through the optional WebSocket broker.
 
 2. **Deterministic entropy:** The built-in entropy generator is for repeatable tests; production must seed from browser cryptography.
 
@@ -333,14 +261,12 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 ### Testing Checklist
 
 - **Kernel/runtime:** Test native and browser C paths for scheduler, signal,
-  POSIX, process and libc changes. Legacy direct/threaded OCaml POSIX checks
-  are coverage evidence for deferred retirement, not C acceptance gates.
-- **Spec tests:** Compare supported Wasm/WAT/WAST language behavior with the
-  OCaml reference implementation on official language tests.
+  POSIX, process and libc changes.
+- **Spec tests:** Optionally cross-check supported Wasm/WAT/WAST language
+  behavior with the OCaml reference interpreter via
+  `./start.sh --ocaml-reference`.
 - **Browser page:** Keep shell and installed-test diagnostics in one offline HTML; do not introduce server requirements or external assets
-- **POSIX regression:** Local DIY/libc fixtures are C runtime regression
-  probes. Preserve useful legacy assertions through explicit coverage mapping
-  before removing OCaml kernel-dependent drivers.
+- **POSIX regression:** Local DIY/libc fixtures are C runtime regression probes.
 
 ### Code Style
 
@@ -352,27 +278,21 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 
 ### Naming Conventions
 
-- Environment variable overrides: `WASTE_*` (e.g., `WASTE_OCAML_SWITCH`, `WASTE_INSTRUCTION_QUANTUM`)
-- Patch status: reported as `available`, `applied`, or `conflict`
-- Submodule patch: represent repository changes in `submodules/wasm-spec-i31-int32.patch` and apply it only to staged source under `build/`; never edit submodule history or working trees
+- Environment variable overrides: `WASTE_*` (e.g., `WASTE_INSTRUCTION_QUANTUM`)
+- Submodule patches: represent repository changes as patch files in the
+  repository and apply them only to staged source under `build/`; never edit
+  submodule history or working trees
 
 ## Advanced Topics
 
 ### Instruction Quantum & Scheduling
 
-The CPS interpreter executes `WASTE_INSTRUCTION_QUANTUM` guest opcodes per time slice (default: 10,000). Evaluator transitions are free; only decoded guest opcodes consume fuel. Use `WASTE_BASH_INSTRUCTION_QUANTUM` for the Bash page generator (default: 1,000,000 for faster startup).
-
-### Profile Startup Phases
-
-Enable in the Bash HTML generator to print cumulative millisecond timestamps for parsing, decoding, validation, import resolution, evaluator initialization, registration, invocation, opcode-category sampling, and browser markers (Date.now vs performance.now deltas).
+The engine supports a configurable quantum for cooperative yielding. See
+`docs/architecture.md` for the current scheduling model.
 
 ### WebSocket Broker Protocol
 
 If implementing broker-backed capabilities, design the protocol to be versioned, asynchronous, capability-scoped, with explicit `errno` translation, cancellation, and readiness notifications. The C engine must retain descriptor identity and blocking behavior; the broker is a capability transport only.
-
-### Wasm32 Compatibility
-
-The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCaml `int` is 32 bits. Apply/revert via `./start.sh --apply-i31` or `--revert-i31`. The patch preserves unsigned i31 and decoded u32, prevents alignment-shift overflow, and rejects unrepresentable local counts. Patch changes do not affect existing build artifacts until recompilation.
 
 ## Repository Layout Quick Reference
 
@@ -416,7 +336,6 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 │       │   └── include/
 │       │       └── helper.h          # Shared guest libc declarations
 │       └── tools/                     # HTML generators & builders
-│           ├── generate-bash-html.py
 │           ├── build-bash-runtime.py
 │           └── build-waste-libc.py
 │
@@ -430,19 +349,17 @@ The optional `wasm-spec-i31-int32.patch` allows compilation on systems where OCa
 │   ├── c-engine-i32-smoke.c           # Sanitizer smoke test source
 │   ├── diy-posix-test/                # POSIX regression probes
 │   ├── libc-test/                     # libc regression probes
-│   └── tail-call-smoke.wast           # Bash CPS smoke test
+│   └── tail-call-smoke.wast           # Bash tail-call smoke test
 │
 ├── docs/                              # Architecture & planning
 │
 ├── submodules/                        # External dependencies
-│   ├── wasm-spec/                     # Official OCaml interpreter & tests
-│   └── wasm-spec-i31-int32.patch      # Wasm32 compatibility patch
+│   └── wasm-spec/                     # Reference interpreter & test corpus
 │
 ├── build/                             # Generated output (git-ignored)
-│   ├── ocaml-wasm/                    # OCaml interpreter artifacts
 │   ├── engine/                        # Engine build artifacts
-│   ├── logs/                          # All build/test log files
-│   ├── waste-libc/                    # libc artifacts
+│   ├── html-rt/                       # Browser artifacts (libc, bash runtime)
+│   ├── ocaml-interpreter/             # Staged OCaml reference interpreter
 │   └── toolchain/                     # Wasm toolchain (if built locally)
 │
 └── .agents/, .codex/                 # Internal directories

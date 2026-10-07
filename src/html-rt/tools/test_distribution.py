@@ -154,7 +154,7 @@ def prepare(repo, output, payload_path, baseline=None):
                 add(TEST_ROOT + "/.support/libc-test/" + path.name, data, "test-support", relative)
     for path in (repo / "src/html-rt/lib/stdlib.wat", repo / "build/html-rt/waste-libc/waste-libc.wasm",
                  repo / "src/vfs/usr/share/waste/sdk.json", repo / "src/html-rt/tools/build-waste-libc.py",
-                 repo / "src/html-rt/lib/include/helper.h", repo / "submodules/wasm-spec-i31-int32.patch",
+                 repo / "src/html-rt/lib/include/helper.h",
                  *libc_source_paths(repo)):
         data = path.read_bytes()
         inputs.append(dict(path=path.relative_to(repo).as_posix(), size=len(data), sha256=sha(data), hostOnly=True))
@@ -163,8 +163,7 @@ def prepare(repo, output, payload_path, baseline=None):
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo / "submodules/wasm-spec", text=True).strip()
     groups = dict(sorted(Counter(t["group"] for t in tests).items()))
     manifest = dict(format=1, status="distribution snapshots; native runtime/harness parity remains Stage 6",
-                    oracle=dict(source="submodules/wasm-spec", revision=revision, license=LICENSE,
-                                patch="submodules/wasm-spec-i31-int32.patch", patchScope="oracle build only; installed test sources unchanged"),
+                    oracle=dict(source="submodules/wasm-spec", revision=revision, license=LICENSE),
                     counts=dict(tests=len(tests), supported=sum(not t["unsupported"] for t in tests), groups=groups),
                     baselineRepairs=repairs,
                     selection_sha256=sha(encoded(selection(tests))), tests=tests,
@@ -172,10 +171,7 @@ def prepare(repo, output, payload_path, baseline=None):
                     runtimeProfiles={
                         "c-wast-stream": dict(backend="C engine", timeoutMs=None, timeoutScope="existing dashboard has no per-test deadline"),
                         "c-browser-compat": dict(backend="browser-native WebAssembly with compatibility imports", timeoutMs=None,
-                                                 nativeEquivalent=False, note="Do not report these as C-engine or native CLI passes"),
-                        "ocaml-oracle": dict(backend="official OCaml interpreter", variants=["direct", "threaded"],
-                                             dashboardVariant="threaded", quantum=10000, timeoutMs=1800000,
-                                             artifacts="build/ocaml/dist{,-threaded}; host oracle dependencies, not guest programs")})
+                                                 nativeEquivalent=False, note="Do not report these as C-engine or native CLI passes")})
     (output / MANIFEST.lstrip("/")).write_bytes(encoded(manifest))
     return manifest
 

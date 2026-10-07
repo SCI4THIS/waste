@@ -1,25 +1,20 @@
 # Retained native kernel coverage
 
-Stage 6B.38 completes the current CHECK inventory of `tests/posix-kernel.c`:
-**21 helpers, 121 retained CHECK sites and 261 successful runtime checks**.
-Ordinals below are local to each current helper, after earlier migrations.
-Historical migration ordinals in Git history refer to their dated source
-snapshots instead. See [test boundary selection](techniques.md#test-boundary-selection)
-for the distinction between guest outcomes and private C invariants.
+Current CHECK inventory of `tests/posix-kernel.c`: **21 helpers, 121 retained
+CHECK sites and 261 successful runtime checks**. See
+[test boundary selection](techniques.md#test-boundary-selection) for the
+distinction between guest outcomes and private C invariants.
 
-One final standalone guest check, pipe creation in `test_pipe_full`, moved to
-`pipe-descriptors.wast` assertion 36. Real creation remains as setup. Its four
-remaining sites execute 19 times: sixteen positive 256-byte writes, exact
-4096-byte capacity, and two raw readiness queries. The five lifecycle sites
-execute 130 times: two allocation guards and descriptor loops of 64/3/61.
-Every other site executes once. Thus 121 source sites produce 261 checks;
-the larger runtime count is not an additional migration count.
+The four `test_pipe_full` sites execute 19 times (sixteen positive 256-byte
+writes, exact 4096-byte capacity, two raw readiness queries). The five
+lifecycle sites execute 130 times (two allocation guards and descriptor loops
+of 64/3/61). Every other site executes once. 121 source sites produce 261
+checks.
 
 Each retained ordinal is classified below. Guest complements exercise public
 behavior but do not replace the named C boundary. Supporting open/read/write
 guards stay when they validate the host-seeded or cloned fixture used by a
-compound ownership/API probe. No partial compound check is counted as fully
-migrated.
+compound ownership/API probe.
 
 ## Allocation, mapping objects and namespace publication
 
@@ -113,14 +108,4 @@ bytes, executes the WAST fixtures and verifies shared native event contracts.
 Make retains the documented sandbox-ptrace LeakSanitizer exception; standalone
 leak verification runs outside that environment.
 
-The dated evidence directory
-`build/engine/refactor-stage6b-retained-kernel-audit/` contains the complete
-per-site inventory, expression hashes, expected execution multiplicities, one
-full migration mapping and the preserved-expression/runtime-count proof.
-It also records unchanged installed fixture bytes and native/browser parity.
-
-This completes classification of the current helpers in this C file. Audits of
-other C harnesses and legacy libc/CJS assertions, supported OCaml reference implementation
-comparison and consolidation/retirement work remain in the active plan.
-These kernel contracts use C native/browser parity; OCaml remains a language
-OCaml reference implementation, with no additional kernel/provider development or comparison required.
+These kernel contracts use C native/browser parity.

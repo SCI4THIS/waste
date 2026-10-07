@@ -3,26 +3,14 @@
 ## Purpose and References
 
 WASTE runs WebAssembly applications and specification scripts in a native C
-diagnostic runtime and in a self-contained browser runtime.  The repository-owned
-C engine is the production direction.  The official OCaml interpreter in
-`submodules/wasm-spec` is the differential OCaml reference implementation only for Wasm/WAT/WAST
-language semantics: parsing, encoding/decoding, validation, linking,
-instantiation, execution, traps and script assertions. Standard spec-test
-imports and minimal language-test scaffolding remain in scope.
+diagnostic runtime and in a self-contained browser runtime. The repository-owned
+C engine is the production runtime. The OCaml reference interpreter in
+`submodules/wasm-spec/interpreter` was used as a language reference while
+implementing the WAT/WAST portions of the C engine. See
+[ocaml-reference-build.md](ocaml-reference-build.md) for the minimal
+build/test instructions.
 
-The OCaml application-engine experiment was not practical. No further OCaml
-kernel, VFS, process, signal, scheduler, terminal, libc-host or broker
-development is planned. The existing repository-added OCaml kernel and
-application-runtime integration will be removed in deferred cleanup; see
-[the OCaml scope and retirement plan](active-ocaml-language-oracle-plan.md).
-C owns production application execution and kernel behavior. Missing OCaml
-POSIX imports are outside the scope of the OCaml reference implementation and do not block C kernel acceptance.
-
-This document records durable system boundaries and ownership rules.  Concrete
-unfinished work belongs in the active plans:
-
-- [active-ocaml-language-oracle-plan.md](active-ocaml-language-oracle-plan.md)
-
+This document records durable system boundaries and ownership rules.
 [techniques.md](techniques.md) records reusable implementation and testing
 practices.  Dated pass counts, resolved failure lists, and build-history notes
 belong in Git history or test result artifacts rather than this document.
@@ -58,10 +46,10 @@ root. Generated Flex/Bison files remain under `build/engine/gen/`.
 Generated files stay under `build/`:
 
 ```text
-build/engine/   shared generated parser sources, toolchain, and logs
-build/cli-rt/   native executables, including waste-cli
-build/html-rt/  browser Wasm, bash.html, worker-test payloads, and libc fixtures
-build/ocaml/    OCaml reference implementation builds and staging
+build/engine/           shared generated parser sources, toolchain, and logs
+build/cli-rt/           native executables, including waste-cli
+build/html-rt/          browser Wasm, bash.html, worker-test payloads, and libc fixtures
+build/ocaml-interpreter/  staged OCaml reference interpreter (optional)
 ```
 
 Checked-out submodules are read-only source dependencies. Build tools must copy
@@ -144,9 +132,7 @@ owns worker scheduling, watchdogs and cancellation; assertion execution remains
 in C. The live shell has its own instance. Browser expected-failure policy is a
 tracked host package asset, separate from the guest inventory. Both batch paths
 retain manifest order and distinguish infrastructure failures from XFAIL.
-The installed guest batch launcher uses the runtime capability. Coverage
-accounting for legacy compatibility fixtures remains separate from supported
-WebAssembly-language comparison with the OCaml reference implementation. See
+The installed guest batch launcher uses the runtime capability. See
 [installed corpus workflow](techniques.md#installed-corpus-workflow) for refresh,
 execution and mount checks, and [test boundary selection](techniques.md#test-boundary-selection)
 for the contracts that require direct C or host tests.
@@ -190,11 +176,6 @@ per-session record. Native polling and browser event delivery remain in runtime
 adapters. Borrowed trace/command-stream hooks do not grant host capabilities.
 Capsules retain an explicit owner for fork root-engine clones across image or
 handler replacement, releasing them during reaping or store teardown.
-
-The OCaml interpreter supplies the official WebAssembly OCaml reference implementation. Its
-existing POSIX/application artifacts are remnants of the earlier experiment,
-not a production fallback or a kernel reference to develop further. Historical
-comparisons do not create an ongoing OCaml kernel parity requirement.
 
 An executing application never switches engines midway through a process.
 
@@ -443,31 +424,11 @@ survive a call capable of growing that memory.
 
 ### Browser control channels
 
-The legacy OCaml scheduled runtime has a version 1 control-page ABI. This
-records the existing interface for deferred retirement; it is not a required
-C control ABI or a target for further OCaml scheduler/signal development.
-The page is an array of 32-bit words:
-
-| Word | Purpose |
-| ---: | --- |
-| 0 | Published command sequence |
-| 1 | Pause state (`0` running, `1` paused) |
-| 2 | Reserved runtime status |
-| 3 | ABI version (`1`) |
-| 4–259 | 256-word command ring |
-
-A command packs a 16-bit operation and 16-bit argument.  Operations are pause,
-POSIX signal, and termination.  The producer writes a ring entry before
-publishing its sequence.  A single-worker `file://` page can alternate producer
-and consumer work without shared memory; external controllers may use the same
-layout in a `SharedArrayBuffer` with atomic publication.
-
-The C runtime does not depend on the OCaml control-page representation.  It
-currently returns explicit exit or yield statuses and resumes saved evaluator
-frames through exported functions. New C control APIs use versioned
-integer-handle messages appropriate to the C scheduler. Verify observable
-pause, signal, termination and scheduling behavior with the shared C session
-contracts and native/browser parity, rather than OCaml control-page parity.
+The C runtime returns explicit exit or yield statuses and resumes saved
+evaluator frames through exported functions. Control APIs use versioned
+integer-handle messages. Verify observable pause, signal, termination and
+scheduling behavior with the shared C session contracts and native/browser
+parity.
 
 ## POSIX Capability Model
 
@@ -551,15 +512,27 @@ child begins with only the calling thread.  Page-granular copy-on-write may
 replace eager copying behind one memory-clone boundary without changing these
 semantics.
 
-The legacy OCaml artifacts still contain a process/VFS/signal kernel used by
-older scheduled POSIX probes. That kernel is outside the OCaml reference implementation
-scope and is planned for removal, not further development. The C browser
-runtime owns the bounded child-first fork/failed-`execve`/exit/`waitpid` continuation used by the Bash
+The C browser runtime owns the bounded child-first
+fork/failed-`execve`/exit/`waitpid` continuation used by the Bash
 command-not-found path, including evaluator snapshots and store checkpoints.
 It still does not provide general concurrent process or guest-thread
 scheduling; remaining C capabilities belong to the active runtime plans.
-Their acceptance uses C native/browser contracts, not an obligation to mirror
-or extend the OCaml kernel. Legacy behavior alone does not prove a C capability.
+Acceptance uses C native/browser contracts.
+
+Two POSIX scenarios remain explicit profile gaps and have no C regression
+fixture:
+
+- **Stopped-then-continued wait.** A parent that `waitpid`s a child through
+  SIGSTOP/SIGCONT to final exit (expecting composed status 5759) does not yet
+  reproduce the full legacy sequence under child-first scheduling.
+- **Foreground-job group-kill.** A parent that creates a child, places it in
+  its own process group, sleeps briefly, and sends SIGTERM to the group
+  (expecting wait status 15) races with the child's exit before group
+  configuration completes.
+
+Both scenarios are known limitations of the current scheduler/signal
+interleaving; the APIs they exercise (`waitpid`, `kill`, `setpgid`) have
+separate per-API coverage.
 
 ### Engine-owned virtual memory
 
@@ -678,13 +651,14 @@ documented ptrace environment.  Binary tests cover truncation, malformed LEBs,
 overflow, invalid UTF-8, ordering, duplicate sections, bad indexes, and type
 mismatches.
 
-Official Wasm/WAT/WAST language tests are compared with the OCaml reference implementation.
-POSIX imports in a WAST client do not make its kernel behavior part of that
-OCaml reference implementation. Kernel, libc and application behavior uses C native/browser parity,
-private sanitizer gates and compiled guest ABI checks. Local DIY POSIX and
-libc tests are regression probes, not formal POSIX certification.
-Independent scripts must be tested in different orders and at different
-dashboard concurrency settings to expose unintended global state.
+Official Wasm/WAT/WAST language tests may be cross-checked against the OCaml
+reference interpreter via `./start.sh --ocaml-reference`; see
+[ocaml-reference-build.md](ocaml-reference-build.md). Kernel, libc and
+application behavior uses C native/browser parity, private sanitizer gates and
+compiled guest ABI checks. Local DIY POSIX and libc tests are regression
+probes, not formal POSIX certification. Independent scripts must be tested in
+different orders and at different dashboard concurrency settings to expose
+unintended global state.
 
 Formal POSIX claims require an applicable licensed Open Group suite.  The Linux
 Test Project's `testcases/open_posix_testsuite` is an open development baseline,
@@ -693,10 +667,10 @@ licensing and Wasm adaptation patches separate, preserve upstream assertion
 identities, and classify results as emulated, browser-backed, broker-backed,
 unsupported, or failed.
 
-Browser results refer to the actual browser C artifact.  Native OCaml timings
-must not be presented as browser speedups.  Performance reports identify the
-artifact, engine, browser, machine, workload, instruction or allocation count,
-and elapsed time; build and execution time are separate measurements.
+Browser results refer to the actual browser C artifact. Performance reports
+identify the artifact, engine, browser, machine, workload, instruction or
+allocation count, and elapsed time; build and execution time are separate
+measurements.
 
 The Bash and installed-test interface share one offline HTML document.
 Optional broker use does not change the packaging requirement: opening the

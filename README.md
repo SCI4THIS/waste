@@ -10,13 +10,6 @@ ran in a browser's webassembly module.  The nested approach allows for the waste
 implementation to provide features that aren't available in the browser.  It allows 
 for threading and for process yielding and restarting without use of asyncify.
 
-
-OCaml is retained only as a reference for wasm, wat, and wast language behavior.
-The experiment using it as an application engine was not practical. Kernel and
-POSIX development belongs to the C engine; no additional OCaml kernel work is
-planned. The existing OCaml kernel will be removed in deferred cleanup; see
-[the scope and retirement plan](docs/active-ocaml-language-oracle-plan.md).
-
 ## Webassembly terms
 
 .wasm files are binary files that contain webassembly op-codes and can be ran by a web assembly machine

@@ -230,7 +230,7 @@ corpus-native: test-suite
 
 # Guest values remain in the installed WAST clients. Check complete ordered
 # outcomes, including individual mismatches inside the two tracked XFAILs.
-# This consumes the installed tree; it does not build HTML or OCaml artifacts.
+# This consumes the installed tree; it does not build HTML artifacts.
 .PHONY: libc-native libc-sanitize
 libc-native: wast-native test-suite
 	python3 ../../tests/libc-corpus-check.py --runner $(SUITE_TARGET) --parser $(WAST_TARGET) \

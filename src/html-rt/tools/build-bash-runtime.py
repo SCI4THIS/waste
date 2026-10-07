@@ -228,7 +228,7 @@ def main() -> None:
     args = parser.parse_args()
 
     root = args.repo_root.resolve()
-    output = args.output or root / "build" / "ocaml" / "bash-runtime.wast"
+    output = args.output or root / "build" / "html-rt" / "bash-runtime.wast"
     environment = tool_environment(root)
     output.parent.mkdir(parents=True, exist_ok=True)
 
