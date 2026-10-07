@@ -3,11 +3,11 @@
   "events": [
     {
       "after": "bash-5.2# ",
-      "text": "/bin/cat > hello.txt <<EOF\nHello world!\nEOF\n"
+      "text": "cat > hello.txt <<EOF\nHello world!\nEOF\n"
     },
     {
       "after": "bash-5.2# ",
-      "text": "/bin/cat hello.txt; printf '__HEREDOC_STATUS_%s__\\n' \"$?\"\n"
+      "text": "cat hello.txt; printf '__HEREDOC_STATUS_%s__\\n' \"$?\"\n"
     },
     {
       "after": "bash-5.2# ",
@@ -15,7 +15,7 @@
     },
     {
       "after": "bash-5.2# ",
-      "text": "/bin/cat <<EOF\nHello stdout heredoc!\nEOF\n"
+      "text": "cat <<EOF\nHello stdout heredoc!\nEOF\n"
     },
     {
       "after": "bash-5.2# ",

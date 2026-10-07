@@ -27,7 +27,12 @@ MANIFEST = ".inventory.json"
 COREUTILS = "true false pwd echo printf basename dirname cat wc ls date".split()
 COMMANDS = COREUTILS + ["rogue", "ldd", "upload", "download", "waste-probe"]
 OPTIONAL_COMMANDS = ["waste-test"]
-COMPONENTS = COMMANDS + OPTIONAL_COMMANDS + ["libncurses", "launch", "app"]
+BIN_COMMANDS = {"waste-probe", "waste-test"}
+
+
+def command_path(name):
+    return ("/bin/" if name in BIN_COMMANDS else "/usr/bin/") + name
+COMPONENTS = COMMANDS + OPTIONAL_COMMANDS + ["libncurses", "libc", "launch", "app"]
 APP_FILES = {
     "app.js": "app.js",
     "worker.js": "worker.js",
@@ -81,11 +86,12 @@ console.log(JSON.stringify({imports:WebAssembly.Module.imports(m),exports:WebAss
              for i in contract["imports"]]
     if any("asyncify" in n.lower() for n in names + [e["name"] for e in contract["exports"]]):
         raise ValueError(f"Asyncify is forbidden: {source}")
-    allowed = {"env", "waste_kernel", "libncurses", "GOT.mem", "GOT.func"}
+    allowed = {"env", "waste_kernel", "libncurses", "libc", "GOT.mem", "GOT.func"}
     if any(i["module"] not in allowed for i in contract["imports"]):
         raise ValueError(f"unsupported import namespace: {source}")
     exports = {e["name"]: e["kind"] for e in contract["exports"]}
-    required = ["initscr", "endwin", "wrefresh"] if library else ["_start"]
+    required = (["malloc", "free", "memcpy", "strcpy", "printf", "dlopen", "dlsym", "dlclose"]
+                if library == "libc" else ["initscr", "endwin", "wrefresh"] if library else ["_start"])
     if any(exports.get(n) != "function" for n in required):
         raise ValueError(f"missing required function exports {required}: {source}")
     return {"imports": sorted(names), "required_exports": required}
@@ -145,8 +151,8 @@ def audit(manifest, read, physical=None, upgrading_app=False):
             for field in ("sha256", "size", "mode", "mtime_sec", "mtime_nsec"):
                 if e.get(field) != other.get(field):
                     raise ValueError(f"alias differs: {path}")
-    required = ["/usr/bin/" + n for n in COMMANDS] + [
-        "/lib/libncurses.so.wasm", "/bin/wat", "/bin/wast",
+    required = [command_path(n) for n in COMMANDS] + [
+        "/lib/libncurses.so.wasm", "/lib/libc.so.wasm", "/bin/wat", "/bin/wast",
         "/usr/share/waste/launch.wast", "/usr/share/waste/coreutils-provenance.json",
         "/usr/share/waste/coreutils-source-package.json", "/usr/share/licenses/coreutils/COPYING",
         "/usr/share/licenses/ncurses/COPYING", "/usr/share/licenses/rogue/LICENSE.TXT"]
@@ -158,16 +164,14 @@ def audit(manifest, read, physical=None, upgrading_app=False):
                  for prefix in ("/root/waste/app/", "/waste/app/")]
     if not any(paths <= seen.keys() for paths in app_paths):
         raise ValueError("missing mandatory Bash webapp paths under /root/waste/app")
-    for n in COMMANDS + [n for n in OPTIONAL_COMMANDS
-                         if "/usr/bin/" + n in seen or "/bin/" + n in seen]:
-        canonical = seen.get("/usr/bin/" + n, {})
-        alias = seen.get("/bin/" + n, {})
+    for n in COMMANDS + [n for n in OPTIONAL_COMMANDS if command_path(n) in seen]:
+        canonical = seen.get(command_path(n), {})
         if canonical.get("kind") != 1 or canonical.get("mode") != 0o755:
             raise ValueError(f"invalid executable metadata: {n}")
-        if alias.get("alias_of") != "/usr/bin/" + n or alias.get("kind") != 1:
-            raise ValueError(f"missing command alias: {n}")
-    if seen.get("/usr/lib/libncurses.so.wasm", {}).get("alias_of") != "/lib/libncurses.so.wasm":
-        raise ValueError("missing library compatibility alias")
+    for name in ("libncurses", "libc"):
+        canonical = f"/lib/{name}.so.wasm"
+        if canonical in seen and seen.get(f"/usr/lib/{name}.so.wasm", {}).get("alias_of") != canonical:
+            raise ValueError(f"missing library compatibility alias: {name}")
     for path in ("/bin/wat", "/bin/wast"):
         if seen[path]["role"] != "interpreter" or seen[path]["mode"] != 0o755:
             raise ValueError(f"invalid virtual interpreter: {path}")
@@ -212,19 +216,20 @@ def audit_tree(root, manifest, upgrading_app=False):
         if stat.st_mode & 0o777 != e["mode"] or not local(root, p).is_file():
             raise ValueError(f"installed metadata differs: {p}")
     for name, contract in manifest["contracts"].items():
-        path = "/lib/libncurses.so.wasm" if name == "libncurses" else "/usr/bin/" + name
-        actual = wasm_contract(local(root, path), name == "libncurses")
+        library = name in ("libncurses", "libc")
+        path = "/lib/" + name + ".so.wasm" if library else command_path(name)
+        actual = wasm_contract(local(root, path), name if library else False)
         if actual != contract:
             raise ValueError(f"installed Wasm contract differs: {name}")
     if set(manifest["contracts"]) != set(COMMANDS + [n for n in OPTIONAL_COMMANDS
-                                           if "/usr/bin/" + n in result] + ["libncurses"]):
+                                           if command_path(n) in result] + ["libncurses", "libc"]):
         raise ValueError("missing mandatory Wasm import/export contract")
     if any(e["path"] == "/usr/share/waste/sdk.json" for e in manifest["entries"]):
         guest_sdk.audit(root)
     return result
 
 
-def install_sdk(root, source, sdk, library=None):
+def install_sdk(root, source, sdk, library=None, review_import=()):
     """Refresh authored public headers and explicitly selected upstream snapshots.
 
     Unrelated binary snapshots remain immutable. Existing generated SDK files
@@ -234,7 +239,7 @@ def install_sdk(root, source, sdk, library=None):
     contracts = dict(old["contracts"])
     if library:
         contract = wasm_contract(library, library=True)
-        if not set(contract["imports"]) <= set(contracts["libncurses"]["imports"]):
+        if not set(contract["imports"]) <= set(contracts["libncurses"]["imports"]) | set(review_import):
             raise ValueError("new ncurses imports require explicit ABI review")
         contracts["libncurses"] = contract
     paths = {e["path"] for e in sdk["headers"]} | {"/usr/share/waste/sdk.json"}
@@ -332,6 +337,7 @@ def install(root, legacy=None, component=None, source=None, review_import=()):
         if probe.is_file():
             inputs["waste-probe"] = probe
         inputs["libncurses"] = legacy / "libncurses.so.wasm"
+        inputs["libc"] = legacy / "libc.so.wasm"
         inputs["launch"] = REPO / "build/html-rt/bash-runtime.wast"
     else:
         if not component or not source or len(component) != len(source):
@@ -349,7 +355,7 @@ def install(root, legacy=None, component=None, source=None, review_import=()):
         if not src.is_file():
             raise ValueError(f"missing mandatory compiler result: {src}")
         if n != "launch":
-            contract = wasm_contract(src, n == "libncurses")
+            contract = wasm_contract(src, n if n in ("libncurses", "libc") else False)
             if old and not set(contract["imports"]) <= set(contracts.get(n, {}).get("imports", [])) | set(review_import):
                 raise ValueError(f"new imports require an explicit ABI review: {n}")
             contracts[n] = contract
@@ -367,6 +373,19 @@ def install(root, legacy=None, component=None, source=None, review_import=()):
         stale_webapp = stage / "waste"
         if stale_webapp.exists():
             shutil.rmtree(stale_webapp)
+        # /bin now holds only wat, wast, waste-probe, waste-test; coreutils
+        # live under /usr/bin and are reached through PATH resolution. Drop
+        # stale /bin coreutils aliases and the former /usr/bin copies of the
+        # engine-adjacent utilities when upgrading an older inventory.
+        for path in [p for p in entries if p.startswith("/bin/")
+                     and p not in ("/bin/wat", "/bin/wast",
+                                   "/bin/waste-probe", "/bin/waste-test")] + [
+                "/usr/bin/waste-probe", "/usr/bin/waste-test"]:
+            if path in entries:
+                del entries[path]
+            stale = local(stage, path)
+            if stale.exists():
+                stale.unlink()
 
         def put(path, src, role, mode, alias=None):
             guest_path(path)
@@ -394,12 +413,12 @@ def install(root, legacy=None, component=None, source=None, review_import=()):
                         "webapp", 0o644)
             elif n == "launch":
                 put("/usr/share/waste/launch.wast", src, "bootstrap", 0o644)
-            elif n == "libncurses":
-                put("/lib/libncurses.so.wasm", src, "library", 0o644)
-                put("/usr/lib/libncurses.so.wasm", src, "library", 0o644, "/lib/libncurses.so.wasm")
+            elif n in ("libncurses", "libc"):
+                path = "/lib/" + n + ".so.wasm"
+                put(path, src, "library", 0o644)
+                put("/usr" + path, src, "library", 0o644, path)
             else:
-                put("/usr/bin/" + n, src, "test-executable" if n == "waste-probe" else "executable", 0o755)
-                put("/bin/" + n, src, "alias", 0o755, "/usr/bin/" + n)
+                put(command_path(n), src, "test-executable" if n == "waste-probe" else "executable", 0o755)
         for path, src in [
             ("/usr/share/waste/waste-interpreters.json", REPO / "src/html-rt/tools/vfs-interpreters.json"),
             ("/usr/share/waste/coreutils-provenance.json", REPO / "build/coreutils/provenance.json"),

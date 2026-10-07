@@ -1302,7 +1302,11 @@ exec_status native_load_module(native_store *store,
         global_count += decoded_imports[i].kind == WASM_IMPORT_GLOBAL;
         got_count += decoded_imports[i].kind == WASM_IMPORT_GLOBAL &&
             (!strcmp(decoded_imports[i].module, "GOT.func") ||
-             !strcmp(decoded_imports[i].module, "GOT.mem"));
+             !strcmp(decoded_imports[i].module, "GOT.mem") ||
+             (store->library_load_ctx.active &&
+              !strcmp(decoded_imports[i].module, "env") &&
+              (!strcmp(decoded_imports[i].name, "__memory_base") ||
+               !strcmp(decoded_imports[i].name, "__table_base"))));
         tag_count += decoded_imports[i].kind == WASM_IMPORT_TAG;
     }
 
@@ -1539,10 +1543,15 @@ exec_status native_load_module(native_store *store,
              * __stack_pointer are provided by the library load context. */
             if (store->library_load_ctx.active &&
                 strcmp(request->module, "env") == 0) {
-                if (strcmp(request->name, "__memory_base") == 0)
-                    value = &store->library_load_ctx.memory_base_global;
-                else if (strcmp(request->name, "__table_base") == 0)
-                    value = &store->library_load_ctx.table_base_global;
+                /* Each DSO owns its relocation bases. The transient load
+                 * context is overwritten when the next library is loaded. */
+                if (strcmp(request->name, "__memory_base") == 0) {
+                    value = &call_block->got_globals[ngot++];
+                    *value = store->library_load_ctx.memory_base_global;
+                } else if (strcmp(request->name, "__table_base") == 0) {
+                    value = &call_block->got_globals[ngot++];
+                    *value = store->library_load_ctx.table_base_global;
+                }
                 else if (strcmp(request->name, "__stack_pointer") == 0)
                     value = store->library_load_ctx.stack_pointer;
             }
@@ -1804,7 +1813,7 @@ native_loaded_library *native_store_find_library(native_store *store,
     return NULL;
 }
 
-int native_store_load_library(native_store *store, const char *path,
+static int native_store_load_library_sync(native_store *store, const char *path,
                               exec_error *error) {
     if (!store || !path) {
         if (error) {
@@ -1826,7 +1835,8 @@ int native_store_load_library(native_store *store, const char *path,
 
     /* Check if already loaded. */
     for (uint32_t i = 0; i < capsule->loaded_library_count; i++) {
-        if (strcmp(capsule->loaded_libraries[i].path, path) == 0) {
+        if (capsule->loaded_libraries[i].engine &&
+            strcmp(capsule->loaded_libraries[i].path, path) == 0) {
             capsule->loaded_libraries[i].ref_count++;
             return 0;
         }
@@ -1838,6 +1848,19 @@ int native_store_load_library(native_store *store, const char *path,
                      "shared-library table is full");
         }
         return -POSIX_ENOMEM;
+    }
+
+    /* Fork clones allocate only the inherited entries. Reserve room before
+     * appending another DSO, and before publishing any loader state. */
+    if (capsule->loaded_library_count >= capsule->loaded_library_capacity) {
+        native_loaded_library *libraries = realloc(capsule->loaded_libraries,
+            NATIVE_LOADED_LIBRARY_MAX * sizeof(*libraries));
+        if (!libraries) return -POSIX_ENOMEM;
+        memset(libraries + capsule->loaded_library_capacity, 0,
+            (NATIVE_LOADED_LIBRARY_MAX - capsule->loaded_library_capacity) *
+                sizeof(*libraries));
+        capsule->loaded_libraries = libraries;
+        capsule->loaded_library_capacity = NATIVE_LOADED_LIBRARY_MAX;
     }
 
     /* Load bytes from VFS. */
@@ -1952,6 +1975,14 @@ int native_store_load_library(native_store *store, const char *path,
                                     &sp, &ignored) == EXEC_OK)
             store->library_load_ctx.stack_pointer = sp;
     }
+    if (!store->library_load_ctx.stack_pointer) {
+        native_linked_module *runtime = native_registered_module(store, "waste-runtime");
+        exec_global *sp = NULL;
+        exec_error ignored = {0};
+        if (runtime && exec_find_export_global(native_store_process_engine(
+                store, runtime->engine), "__stack_pointer", &sp, &ignored) == EXEC_OK)
+            store->library_load_ctx.stack_pointer = sp;
+    }
 
     /* Load the module through the normal resolution pipeline. */
     waste_exec_engine *lib_engine = NULL;
@@ -1966,6 +1997,7 @@ int native_store_load_library(native_store *store, const char *path,
             snprintf(error->message, sizeof(error->message),
                      "cannot instantiate shared library %.160s", path);
         }
+        if (lib_engine) exec_free(lib_engine);
         return -POSIX_ENOEXEC;
     }
 
@@ -2047,12 +2079,6 @@ int native_store_load_library(native_store *store, const char *path,
              reg_name);
 
     /* Record in the capsule's loaded library list. */
-    if (!capsule->loaded_libraries) {
-        capsule->loaded_libraries = calloc(NATIVE_LOADED_LIBRARY_MAX,
-                                           sizeof(*capsule->loaded_libraries));
-        if (!capsule->loaded_libraries) return -POSIX_ENOMEM;
-        capsule->loaded_library_capacity = NATIVE_LOADED_LIBRARY_MAX;
-    }
     native_loaded_library *lib =
         &capsule->loaded_libraries[capsule->loaded_library_count++];
     snprintf(lib->name, sizeof(lib->name), "%s", reg_name);
@@ -2065,6 +2091,20 @@ int native_store_load_library(native_store *store, const char *path,
     lib->ref_count = 1;
     lib->initialized = 1;
     return 0;
+}
+
+int native_store_load_library(native_store *store, const char *path,
+                              exec_error *error) {
+    if (!store) return -POSIX_EINVAL;
+    /* Module starts, relocations and constructors form one synchronous
+     * loader transaction. A pump yield cannot resume this C call's local
+     * state. Keep timeout/cancellation polling active, but defer cooperative
+     * event-loop yields until the import has returned to its caller. */
+    uint64_t quantum = store->execution_control.pump_quantum_ns;
+    store->execution_control.pump_quantum_ns = 0;
+    int status = native_store_load_library_sync(store, path, error);
+    store->execution_control.pump_quantum_ns = quantum;
+    return status;
 }
 
 static void native_store_run_library_dtors(waste_exec_engine *engine) {
@@ -2140,6 +2180,7 @@ int native_store_unload_library(native_store *store, uint32_t index) {
     if (!capsule) return -POSIX_EINVAL;
     if (index >= capsule->loaded_library_count) return -POSIX_EINVAL;
     native_loaded_library *lib = &capsule->loaded_libraries[index];
+    if (!lib->engine || !lib->ref_count) return -POSIX_EINVAL;
     if (lib->ref_count > 1) { lib->ref_count--; return 0; }
 
     waste_exec_engine *engine = lib->engine;
@@ -2151,8 +2192,25 @@ int native_store_unload_library(native_store *store, uint32_t index) {
      * no longer finds this library's exports. */
     (void)native_store_unregister_engine(store, engine);
 
+    /* A dlsym result is a borrowed table reference. Do not leave a freed
+     * function owner reachable by indirect calls or the next fork clone. */
+    exec_table *table = capsule->engine && capsule->engine->table_count ?
+        capsule->engine->tables[0] : NULL;
+    if (table) {
+        for (uint64_t i = 0; i < table->size; i++) {
+            if (table->elements[i].owner == engine) {
+                table->elements[i].owner = NULL;
+                table->elements[i].func_idx = 0;
+            }
+        }
+    }
+
     /* Free the engine.  Memory/table regions remain allocated — reclaiming
      * regions from the middle of linear memory is not yet supported. */
+    for (uint32_t i = 0; i < capsule->linked_engine_count; i++) {
+        if (capsule->linked_engines[i] == engine)
+            capsule->linked_engines[i] = NULL;
+    }
     if (engine) exec_free(engine);
 
     /* Mark the slot as unused.  The slot is not compacted so that existing
@@ -2160,5 +2218,6 @@ int native_store_unload_library(native_store *store, uint32_t index) {
     lib->ref_count = 0;
     lib->engine = NULL;
     lib->name[0] = '\0';
+    lib->path[0] = '\0';
     return 0;
 }

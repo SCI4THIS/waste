@@ -1,16 +1,16 @@
 {
   "fixture": "src/vfs/usr/share/waste/launch.wast",
   "events": [
-    {"after": "bash-5.2# ", "text": "/bin/cat > /tmp/session-heredoc.txt <<EOF\nHello shared heredoc!\nEOF\n"},
-    {"after": "bash-5.2# ", "text": "/bin/cat /tmp/session-heredoc.txt; printf '__LONG_STATUS_%s__\\n' \"$?\"\n"},
-    {"after": "bash-5.2# ", "text": "/bin/cat > /tmp/session-heredoc.txt <<'EOF'\nLiteral $HOME \\path survives repeated cleanup!\nEOF\n"},
-    {"after": "bash-5.2# ", "text": "/bin/cat /tmp/session-heredoc.txt; printf '__REPEAT_STATUS_%s__\\n' \"$?\"\n"},
-    {"after": "bash-5.2# ", "text": "/bin/cat 9<&99 <<EOF\nFailed redirect cleanup\nEOF\nprintf '__REDIRECT_STATUS_%s__\\n' \"$?\"\n"},
-    {"after": "bash-5.2# ", "text": "/bin/cat > /tmp/session-heredoc-fragmented.txt <<EOF\n"},
+    {"after": "bash-5.2# ", "text": "cat > /tmp/session-heredoc.txt <<EOF\nHello shared heredoc!\nEOF\n"},
+    {"after": "bash-5.2# ", "text": "cat /tmp/session-heredoc.txt; printf '__LONG_STATUS_%s__\\n' \"$?\"\n"},
+    {"after": "bash-5.2# ", "text": "cat > /tmp/session-heredoc.txt <<'EOF'\nLiteral $HOME \\path survives repeated cleanup!\nEOF\n"},
+    {"after": "bash-5.2# ", "text": "cat /tmp/session-heredoc.txt; printf '__REPEAT_STATUS_%s__\\n' \"$?\"\n"},
+    {"after": "bash-5.2# ", "text": "cat 9<&99 <<EOF\nFailed redirect cleanup\nEOF\nprintf '__REDIRECT_STATUS_%s__\\n' \"$?\"\n"},
+    {"after": "bash-5.2# ", "text": "cat > /tmp/session-heredoc-fragmented.txt <<EOF\n"},
     {"after": "> ", "text": "First fragmented heredoc line\n"},
     {"after": "> ", "text": "Second fragmented heredoc line\n"},
     {"after": "> ", "text": "EOF\n"},
-    {"after": "bash-5.2# ", "text": "/bin/cat /tmp/session-heredoc-fragmented.txt; printf '__FRAGMENT_STATUS_%s__\\n' \"$?\"\n"},
+    {"after": "bash-5.2# ", "text": "cat /tmp/session-heredoc-fragmented.txt; printf '__FRAGMENT_STATUS_%s__\\n' \"$?\"\n"},
     {"after": "bash-5.2# ", "text": "read value <<EOF\nParent builtin after fragmented child cleanup\nEOF\nprintf '__LONG_BUILTIN_%s__\\n' \"$value\"\n"},
     {"after": "bash-5.2# ", "text": "exit\n"}
   ],

@@ -152,9 +152,9 @@ def prepare(repo, output, payload_path, baseline=None):
             inputs.append(dict(path=relative, size=len(data), sha256=sha(data), hostOnly=not path.name.endswith(".wast.inc")))
             if path.name.endswith(".wast.inc"):
                 add(TEST_ROOT + "/.support/libc-test/" + path.name, data, "test-support", relative)
-    for path in (repo / "src/html-rt/lib/stdlib.wat", repo / "build/html-rt/waste-libc/waste-libc.wasm",
+    for path in (repo / "src/libc/stdlib.wat", repo / "build/html-rt/waste-libc/waste-libc.wasm",
                  repo / "src/vfs/usr/share/waste/sdk.json", repo / "src/html-rt/tools/build-waste-libc.py",
-                 repo / "src/html-rt/lib/include/helper.h",
+                 repo / "src/libc/include/helper.h",
                  *libc_source_paths(repo)):
         data = path.read_bytes()
         inputs.append(dict(path=path.relative_to(repo).as_posix(), size=len(data), sha256=sha(data), hostOnly=True))

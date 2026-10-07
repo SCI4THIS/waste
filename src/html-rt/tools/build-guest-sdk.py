@@ -13,6 +13,8 @@ def main():
     parser.add_argument("--install", action="store_true")
     parser.add_argument("--audit", action="store_true")
     parser.add_argument("--library", type=Path, help="Publish matching ncurses DSO and headers atomically")
+    parser.add_argument("--review-import", action="append", default=[],
+                        help="Explicitly reviewed ABI additions for --library")
     args = parser.parse_args()
     if args.audit:
         guest_sdk.audit(vfs.ROOT)
@@ -25,7 +27,7 @@ def main():
         manifest = guest_sdk.prepare(vfs.REPO, stage, args.library)
         guest_sdk.audit(stage)
         if args.install:
-            vfs.install_sdk(vfs.ROOT, stage, manifest, args.library)
+            vfs.install_sdk(vfs.ROOT, stage, manifest, args.library, args.review_import)
         else:
             print(f"Prepared and audited {len(manifest['headers'])} SDK files; use --install to publish")
 

@@ -1,0 +1,8 @@
+{
+  "fixture": "tests/engine-regressions/shared-libc.wast",
+  "events": [],
+  "assertions": 26,
+  "exited": false,
+  "exitStatus": 0,
+  "output": "__SHARED_LIBC__shared libc:42\r\n"
+}

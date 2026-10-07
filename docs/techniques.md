@@ -12,7 +12,7 @@ System ownership and runtime boundaries are defined in
 active plans rather than this document. The OCaml reference interpreter in
 `submodules/wasm-spec/interpreter` may be built via
 `./start.sh --ocaml-reference` to cross-check Wasm/WAT/WAST language semantics;
-see [ocaml-reference-build.md](ocaml-reference-build.md).
+see [OCaml reference interpreter build](#ocaml-reference-interpreter-build).
 
 ## Browser File Transfer
 
@@ -190,8 +190,57 @@ Run `--missing-command` without `--full-package`: its reduced fixture
 deliberately omits `ls` to check command-not-found recovery.
 The Rogue fixture must enter/leave the alternate screen, consume an arrow and
 a game turn, and return to a usable Bash prompt twice in the same shell.
-Explicit guest `dlopen`/`dlsym`/`dlclose` acceptance is tracked separately in
-the [shared-library plan](active-shared-library-plan.md).
+`python3 tests/guest-session-check.py --scenario shared-libc` checks explicit
+guest `dlopen`/`dlsym`/`dlclose`, error consumption, reference counts and reopen
+through the installed libc/ncurses libraries in both C builds. Its authored
+fixture is `tests/engine-regressions/shared-libc.wast`; the installed copy can
+also run from Bash with `/bin/waste-test engine-regressions/shared-libc.wast`.
+Use the installed-test runner so this bootstrap test gets an isolated module
+store instead of inheriting the shell's already-loaded libc.
+
+Production packaging also needs a dependency check: a loader fixture alone
+cannot establish that applications use the shared provider. Run
+`python3 tests/shared-library-packaging-check.py` to inspect installed consumers,
+then the `shared-dependencies`, `matrix` and `rogue` scenarios in
+`tests/guest-session-check.py` to verify actual `ldd` output and execution
+in both C runtimes. `shared_libc.py` rewrites only matching function imports,
+checks the installed provider's exact signatures, and leaves memory, table,
+relocation and kernel imports intact. Coreutils links imported process memory
+without imposing a maximum absent from the exporter; ordinary Wasm limit
+validation still applies. The install review flags cover those checked libc
+imports explicitly. Preserve the separate static libc fixture profile.
+
+For PIC libraries, keep relocation bases in storage owned by the loaded
+module's call block. A pointer into the loader's temporary context silently
+changes an existing DSO's base when another library loads. Patch GOT entries,
+apply data relocations, then run constructors. Reserve executable table slots
+before allocating dependency slots. Reuse the process's shared stack global,
+falling back to the `waste-runtime` owner when the active application does not
+export it. Test libc allocation after loading another DSO.
+
+The synchronous loader defers cooperative pump yields across instantiation,
+relocations and constructors, while retaining deadline/cancellation polling.
+Restore the caller's pump quantum on every return. A yielded constructor
+cannot resume a loader C activation that has already returned; do not report a
+cooperative timeslice as `dlopen` failure. Verify through the installed browser
+batch runner, which enables the pump, as well as direct engine calls.
+
+Exec bootstrap must find the process-local libc through the loaded-library
+catalogue before using legacy `env` fallback. Reset the allocator beyond the
+immutable startup block, then set the environment and stdio. Registration
+aliases alone do not identify the provider reliably; skipping initialization
+can let inherited allocator state overlap a new executable's data. Verify `ls`
+as well as simpler utilities. Native `waste-session --trace-process` writes
+JSON process events to stderr, including exec rejection and child trap details;
+redirect stderr under `build/engine/logs/` when diagnosing status 126/127.
+
+Fork copies library metadata and rebinds providers to the child's graph.
+Grow that copied metadata array before appending dependencies. On final close,
+remove registrations and invalidate table references owned by the freed engine;
+clear the handle's identity so reopen creates a live instance. Detach an
+inherited clone from capsule ownership before freeing it. Memory/table range
+and handle-slot reuse on ordinary close remain deferred; process exit releases the address
+space. Repeated Rogue children test these lifetimes across real fork/exec/wait.
 
 ## WAT and WAST Parser Policy
 
@@ -757,12 +806,55 @@ node tests/c-engine-bash-browser-runtime.cjs build/html-rt/bash.html
 
 Supported official Wasm/WAT/WAST language tests may be cross-checked against
 the OCaml reference interpreter via `./start.sh --ocaml-reference`; see
-[ocaml-reference-build.md](ocaml-reference-build.md). Use native/browser C
+[OCaml reference interpreter build](#ocaml-reference-interpreter-build). Use native/browser C
 checks for kernel, shared ABI, scheduler, signal, process and libc behavior.
 
 Each scheduled test needs a fresh store and kernel.  Run isolation-sensitive
 fixtures in different orders and concurrency settings.  Imported-memory tests
 must still observe intentional aliases inside one sandbox.
+
+### OCaml reference interpreter build
+
+The OCaml reference interpreter in `submodules/wasm-spec/interpreter` was used
+as a language reference while implementing the WAT/WAST portions of the C
+engine. Use it only to cross-check Wasm/WAT/WAST language behavior. WASTE
+runtime and kernel development belongs in C; no additional kernel development
+is planned in OCaml. The procedure below reproduces upstream reference behavior.
+
+The upstream interpreter requires:
+
+- `opam`
+- `dune`
+- `menhir`
+- OCaml &ge; 4.12 (per the upstream README)
+
+Install them through your system package manager and `opam` as usual.
+
+From the repository root:
+
+```sh
+./start.sh --ocaml-reference
+```
+
+That subcommand invokes `make -C submodules ocaml-test`, which:
+
+1. Copies `submodules/wasm-spec/interpreter` to `build/ocaml-interpreter/`
+   (via the `ocaml` target).
+2. Runs `make` in the staged copy.
+3. Runs `make test`, which executes the upstream spec test suite.
+4. Logs output to `build/engine/logs/ocaml-reference.log`.
+
+The individual targets are also available directly:
+
+```sh
+make -C submodules ocaml         # stage and build without the test suite
+make -C submodules ocaml-test    # stage, build, and run the spec tests
+make -C submodules ocaml-clean   # remove the staged copy
+```
+
+The checked-out submodule remains read-only; every generated build output
+belongs under `build/`. The staged copy under `build/ocaml-interpreter/` is
+disposable.
 
 ## Diagnostics and Error Quality
 

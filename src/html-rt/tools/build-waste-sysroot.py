@@ -54,7 +54,7 @@ def build(repo_root, output):
         source = repo_root / f"build/coreutils/source/gnulib/lib/{name}.in.h"
         if source.is_file():
             shutil.copyfile(source, profile / f"{name}.h")
-    crt = repo_root / "src/html-rt/lib/waste-crt.c"
+    crt = repo_root / "src/libc/waste-crt.c"
     shutil.copyfile(crt, output / "lib/waste-crt.c")
     (output / "bin").mkdir(exist_ok=True)
     write_wrapper(output / "bin/waste-wasm-clang", repo_root)
@@ -62,7 +62,7 @@ def build(repo_root, output):
     (output / "manifest.json").write_text(json.dumps(dict(
         format=2, sdk=sdk, sdk_sha256=guest_sdk.sha(root / "usr/share/waste/sdk.json"),
         profiles=["default", "coreutils (gnulib/SELinux compatibility declarations; not guest libc)"],
-        crt=dict(source="src/html-rt/lib/waste-crt.c", sha256=guest_sdk.sha(crt)),
+        crt=dict(source="src/libc/waste-crt.c", sha256=guest_sdk.sha(crt)),
     ), indent=2, sort_keys=True) + "\n")
 
 

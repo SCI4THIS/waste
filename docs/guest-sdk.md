@@ -8,7 +8,7 @@ in-guest compiler; a provider can still be a documented compatibility stub.
 ## Ownership and installation
 
 Authored guest headers live in `src/vfs/usr/include`. Private libc helpers remain
-in `src/html-rt/lib/include/helper.h`; engine and native headers remain in their
+in `src/libc/include/helper.h`; engine and native headers remain in their
 own include roots. `waste/abi/posix.h` contains fixed-width guest wire layouts,
 not Linux host structures. Public `FILE` is opaque.
 
@@ -127,7 +127,7 @@ python3 src/html-rt/tools/audit-guest-providers.py --strict
 ```
 
 Both commands inspect declarations and compile an address-reference probe to
-compare actual Wasm signatures against guest-libc/ncurses exports. Ncurses's
+compare actual Wasm signatures against installed libc.so.wasm/ncurses exports. Ncurses's
 imports must also match their providers. Browser-only signatures and binding
 precedence are explicitly reviewed in `sdk-api-policy.json`, pinned to the
 adapter source hash; changing that source requires another review. This is

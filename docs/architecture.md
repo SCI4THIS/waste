@@ -7,7 +7,7 @@ diagnostic runtime and in a self-contained browser runtime. The repository-owned
 C engine is the production runtime. The OCaml reference interpreter in
 `submodules/wasm-spec/interpreter` was used as a language reference while
 implementing the WAT/WAST portions of the C engine. See
-[ocaml-reference-build.md](ocaml-reference-build.md) for the minimal
+[OCaml reference interpreter build](techniques.md#ocaml-reference-interpreter-build) for the minimal
 build/test instructions.
 
 This document records durable system boundaries and ownership rules.
@@ -24,7 +24,8 @@ src/engine/    platform-neutral parser, encoder, decoder, validator,
                instantiation, linker, runner, executor and guest POSIX ABI
 src/cli-rt/    native CLI/session drivers, mmap harness, platform library,
                and Makefile
-src/html-rt/   browser API, browser POSIX adapter, guest libc, HTML tools,
+src/libc/      guest libc.so.wasm sources and portable interpreter support
+src/html-rt/   browser API, browser POSIX adapter, HTML tools,
                and Wasm Makefile
 ```
 
@@ -60,7 +61,7 @@ including test-runner output, belong under `build/`; see
 need this refactor.
 
 `examples/bash.wat` is the compiled Bash input.  Guest-libc sources are under
-`src/html-rt/lib/`, and browser packaging tools are under
+`src/libc/`, and browser packaging tools are under
 `src/html-rt/tools/`.  Nothing under `build/` is a source of truth.
 
 Authored browser assets are flattened under `src/html-rt/src/`: the shell/test
@@ -205,8 +206,9 @@ SharedArrayBuffer or Asyncify is required.
 Packaged applications execute through the engine's VFS and process-owned
 address spaces. Coreutils pipelines and redirection use kernel descriptors;
 process exit closes pipe endpoints so readers can observe EOF. Rogue and
-ncurses use the shared-library loader and the same TTY path. Further explicit
-guest loader acceptance remains in the [shared-library plan](active-shared-library-plan.md).
+ncurses use the shared-library loader and the same TTY path. The portable
+`tests/engine-regressions/shared-libc.wast` regression exercises explicit guest
+`dlopen`, `dlsym`, final `dlclose`, and reopening the installed libraries.
 
 ## Input and Module Pipeline
 
@@ -560,26 +562,57 @@ browser runtime follows these same rules and does not use host `mmap`,
 
 ## Guest Libc
 
-`waste-libc.wasm` is built from `src/html-rt/lib/stdlib.wat` and the focused C
-sources beside it.  It owns and exports guest linear memory, allocator state,
-stdio objects, errno storage, string and conversion helpers, locale and wide
-character support, identity databases, patterns, time/resource helpers, and
-terminal or environment boundary functions.
+Production Bash loads `/usr/lib/libc.so.wasm` from the installed VFS. Build
+and install it with `make -C src/libc install`; HTML packaging consumes that
+snapshot just as the native runtime mounts it. `src/libc/allocator.c` and the
+focused C sources beside it compile with PIC and link as a `dylink.0` shared
+object. The library provides allocator state, stdio objects, errno storage,
+string and conversion helpers, locale and wide character support, identity
+databases, patterns, and terminal/environment wrappers. `/lib/libc.so.wasm`
+and `/usr/lib/libc.so.wasm` are inventory aliases, like the ncurses library.
 
-Applications and libc are relinked to a neutral `waste-runtime` memory and
-table owner.  Registering libc under the expected namespace supplies pure
-libc exports, while unresolved process, descriptor, VFS, signal, clock, and
-broker operations pass through the active runtime's kernel boundary.
+The Bash bootstrap owns the neutral `waste-runtime` memory, table and stack
+pointer, loads libc and initializes its allocator. Named `libc` imports resolve
+through the process's loaded-library catalogue; the `env` registration remains
+for legacy fixtures and kernel ABI adapters. It embeds no libc module. Libraries share the process
+memory/table while keeping their own relocated data and globals. `printf`
+formats in guest libc and calls `write`, which passes through engine-owned
+descriptors to the native or browser I/O adapter. Process, exec, fork, wait,
+thread, VFS, signal and clock semantics remain in the C engine's kernel.
+
+On final `dlclose`, the loader frees the library engine and invalidates its
+function-table references. Memory/table ranges and handle slots are retained
+until process exit, so the per-process library bound also limits reopen cycles.
+Range/slot reuse, blocking constructors and general POSIX loader conformance
+remain deferred.
+
+`src/libc/runtime/` contains the small freestanding C support library used by
+the interpreter itself: memory/string operations, allocation helpers, math,
+formatting and host errno. Those sources compile into each runtime because the
+interpreter needs them to load and execute guest Wasm. They operate on host
+pointers, independently of the guest ABI. Platform backends remain in
+`src/cli-rt/lib/` and `src/html-rt/lib/`.
 
 Guest errno lives in guest memory.  Host adapters return explicit results or
 error numbers and must never depend on the build host's global errno.  Calls
 that require unavailable capabilities fail explicitly rather than pretending
 to succeed.
 
-Generated libc fixtures instantiate client modules against libc's exported
-memory and table.  This is an ABI test as well as a functional test: pointers,
+The static test profile (`build-waste-libc.py`) still combines `stdlib.wat`
+with the same C helpers for isolated legacy fixtures. Production Coreutils,
+Bash, Rogue, ncurses, ldd, upload and download import matching function signatures
+from `libc`; the Coreutils build does not merge libc into utility images. Memory
+and table imports remain process resources, and engine imports retain their
+runtime namespaces. The freestanding waste-test command has no libc dependency.
+`ldd` walks the unique import-module dependency closure without executing code,
+reporting the installed library paths, built-in adapters and unresolved libraries.
+Bash retains two legacy `env` adapters (`lseek` and `__fpurge`) with signatures
+that differ from the public libc ABI. Generated libc fixtures instantiate client modules against the
+test library's memory and table. This is an ABI test as well as a functional test: pointers,
 callbacks, allocator metadata, and errno must be observed through the actual
-cross-module aliases.
+cross-module aliases. `guest-session-check.py --scenario shared-libc` instead
+checks the installed production library in both native and browser C builds,
+including actual printf output and ncurses handle/reference lifetime.
 
 ## Wasm32 Application ABI
 
@@ -653,7 +686,7 @@ mismatches.
 
 Official Wasm/WAT/WAST language tests may be cross-checked against the OCaml
 reference interpreter via `./start.sh --ocaml-reference`; see
-[ocaml-reference-build.md](ocaml-reference-build.md). Kernel, libc and
+[OCaml reference interpreter build](techniques.md#ocaml-reference-interpreter-build). Kernel, libc and
 application behavior uses C native/browser parity, private sanitizer gates and
 compiled guest ABI checks. Local DIY POSIX and libc tests are regression
 probes, not formal POSIX certification. Independent scripts must be tested in

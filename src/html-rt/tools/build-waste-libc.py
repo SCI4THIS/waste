@@ -25,7 +25,7 @@ def main() -> None:
     args = parser.parse_args()
 
     root = args.repo_root.resolve()
-    source_path = root / "src" / "html-rt" / "lib" / "stdlib.wat"
+    source_path = root / "src" / "libc" / "stdlib.wat"
     client_root = root / "tests" / "libc-test"
     output_path = root / "build" / "html-rt" / "waste-libc" / "waste-libc.wasm"
     fixture_root = root / "build" / "html-rt" / "waste-libc" / "tests"

@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 
 import argparse
-import os
 import re
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
-from libc_sources import guest_include_flags, libc_source_paths
-
+from shared_libc import rewrite
 
 RUNTIME_MODULE = "waste-runtime"
 RUNTIME_PAGES = 5
@@ -54,54 +51,13 @@ def module_name(source: str, name: str) -> str:
     return re.sub(r"\(module\b", f"(module ${name}", source, count=1)
 
 
-def tool_environment(root: Path) -> dict[str, str]:
-    environment = os.environ.copy()
-    local_bin = root / "build" / "engine" / "toolchain" / "usr" / "bin"
-    local_lib = root / "build" / "engine" / "toolchain" / "usr" / "lib"
-    if not shutil.which("wasm-ld") and (local_bin / "wasm-ld").is_file():
-        environment["PATH"] = str(local_bin) + os.pathsep + environment.get("PATH", "")
-        environment["LD_LIBRARY_PATH"] = str(local_lib) + os.pathsep + environment.get("LD_LIBRARY_PATH", "")
-    return environment
-
-
-def rewrite_libc(source: str) -> str:
-    memory = re.search(r"^ \(memory (\$[^ ]+) 5\)$", source, re.MULTILINE)
-    if not memory:
-        raise RuntimeError("integrated libc does not define the expected five-page memory")
-    memory_name = memory.group(1)
-    source = source[:memory.start()] + source[memory.end() + 1:]
-    source = re.sub(
-        r'^ \(import "env" "__indirect_function_table" (\(table [^\n]+\))\)$',
-        rf' (import "{RUNTIME_MODULE}" "table" \1)', source,
-        count=1, flags=re.MULTILINE,
-    )
-    first_global = re.search(r"^ \(global ", source, re.MULTILINE)
-    if not first_global:
-        raise RuntimeError("could not locate libc globals")
-    memory_import = f' (import "{RUNTIME_MODULE}" "memory" (memory {memory_name} 5))\n'
-    source = source[:first_global.start()] + memory_import + source[first_global.start():]
-
-    stack_export = re.search(r'^ \(export "__stack_pointer" \(global (\$[^)]+)\)\)$', source, re.MULTILINE)
-    if not stack_export:
-        raise RuntimeError("could not locate libc stack pointer export")
-    stack_name = re.escape(stack_export.group(1))
-    source, replacements = re.subn(
-        rf"^ \(global {stack_name} \(mut i32\) \(i32.const [0-9]+\)\)$",
-        f" (global {stack_export.group(1)} (mut i32) (i32.const 262144))",
-        source, count=1, flags=re.MULTILINE,
-    )
-    if replacements != 1:
-        raise RuntimeError("could not relocate libc stack pointer")
-    return module_name(source, "waste_libc")
-
-
 def rewrite_bash(source: str) -> str:
     # Bash already imports memory and table from waste-runtime (compiled with
     # --import-memory --import-table or equivalent WAT edits).  Expand the
     # imported table to accommodate the ABI adapter entries added below.
     source, tables = re.subn(
         rf'^  \(import "{RUNTIME_MODULE}" "table" \(table \(;0;\) 488 488 funcref\)\)$',
-        f'  (import "{RUNTIME_MODULE}" "table" (table (;0;) {SHARED_TABLE_SIZE} {SHARED_TABLE_SIZE} funcref))',
+        f'  (import "{RUNTIME_MODULE}" "table" (table (;0;) {SHARED_TABLE_SIZE} funcref))',
         source, count=1, flags=re.MULTILINE,
     )
     if tables != 1:
@@ -208,7 +164,20 @@ def runtime_module(interactive: bool) -> str:
         )
         argument_data = f"bash\\00-c\\00{COMMAND_MARKER}\\00"
     return f'''(module $waste_runtime
-  (table (export "table") {SHARED_TABLE_SIZE} {SHARED_TABLE_SIZE} funcref)
+  (import "waste_kernel" "dlopen_v1" (func $dlopen (param i32 i32 i32) (result i32)))
+  (import "waste_kernel" "dlsym_v1" (func $dlsym (param i32 i32 i32) (result i32)))
+  (type $initialize (func (param i32) (result i32)))
+  (table (export "table") {SHARED_TABLE_SIZE} funcref)
+  (global (export "__stack_pointer") (mut i32) (i32.const 262144))
+  (data (i32.const 239900) "/usr/lib/libc.so.wasm\\00")
+  (data (i32.const 239930) "waste_allocator_init\\00")
+  (func (export "waste_allocator_init") (param $base i32) (result i32)
+    (local $handle i32) (local $initialize i32)
+    (local.set $handle (call $dlopen (i32.const 239900) (i32.const 21) (i32.const 2)))
+    (if (i32.eqz (local.get $handle)) (then (return (i32.const 0))))
+    (local.set $initialize (call $dlsym (local.get $handle) (i32.const 239930) (i32.const 20)))
+    (if (i32.eqz (local.get $initialize)) (then (return (i32.const 0))))
+    (call_indirect (type $initialize) (local.get $base) (local.get $initialize)))
   (memory (export "memory") {RUNTIME_PAGES})
   (data (i32.const {ARGV_ADDRESS}) "{wat_bytes(pointers)}")
   (data (i32.const {ENVP_ADDRESS}) "{wat_bytes(environment_pointers)}")
@@ -220,7 +189,7 @@ def runtime_module(interactive: bool) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Relink Bash, waste-libc, and the WASTE runtime namespace")
+    parser = argparse.ArgumentParser(description="Build the Bash bootstrap using installed libc.so.wasm")
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[3])
     parser.add_argument("--output", type=Path)
     parser.add_argument("--interactive", action="store_true",
@@ -229,70 +198,30 @@ def main() -> None:
 
     root = args.repo_root.resolve()
     output = args.output or root / "build" / "html-rt" / "bash-runtime.wast"
-    environment = tool_environment(root)
     output.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(dir=output.parent) as temporary_name:
         temporary = Path(temporary_name)
-        core_wat = temporary / "core.wat"
-        core_wasm = temporary / "core.wasm"
-        helpers_wasm = temporary / "helpers.wasm"
-        merged_wasm = temporary / "libc.wasm"
-        merged_wat = temporary / "libc.wat"
-        linked_libc_wat = temporary / "linked-libc.wat"
-        linked_libc_wasm = temporary / "linked-libc.wasm"
         linked_bash_wat = temporary / "linked-bash.wat"
         linked_bash_wasm = temporary / "linked-bash.wasm"
-        optimized_libc_wasm = temporary / "optimized-libc.wasm"
         optimized_bash_wasm = temporary / "optimized-bash.wasm"
-
-        core_source = (root / "src" / "html-rt" / "lib" / "stdlib.wat").read_text(encoding="utf-8")
-        core_source, changed = re.subn(
-            r'\(memory \(export "memory"\) 4\)',
-            '(memory (export "memory") 5)', core_source, count=1,
-        )
-        if changed != 1:
-            raise RuntimeError("guest libc core memory declaration changed")
-        core_wat.write_text(core_source, encoding="utf-8")
-        run(["wasm-as", str(core_wat), "-o", str(core_wasm), "--enable-bulk-memory"])
-        run([
-            "clang", "--target=wasm32", "-O2", "-nostdlib", "-fno-builtin",
-            *guest_include_flags(root),
-            "-DWASTE_POSIX_IO",
-            *(str(path) for path in libc_source_paths(root)),
-            "-Wl,--no-entry",
-            "-Wl,--import-memory", "-Wl,--import-table", "-Wl,--global-base=262144",
-            "-Wl,-z,stack-size=16384", "-Wl,--initial-memory=327680",
-            "-Wl,--allow-undefined", "-Wl,--export-all", "-Wl,--strip-all",
-            "-o", str(helpers_wasm),
-        ], environment)
-        run(["wasm-merge", str(core_wasm), "env", str(helpers_wasm), "helpers",
-             "-o", str(merged_wasm), "--enable-bulk-memory",
-             "--enable-nontrapping-float-to-int"])
-        run(["wasm-dis", str(merged_wasm), "-o", str(merged_wat),
-             "--enable-nontrapping-float-to-int"])
-        libc_source = rewrite_libc(merged_wat.read_text(encoding="utf-8"))
-        linked_libc_wat.write_text(libc_source, encoding="utf-8")
-        run(["wasm-as", str(linked_libc_wat), "-o", str(linked_libc_wasm),
-             "--enable-bulk-memory", "--enable-nontrapping-float-to-int"])
-        run(["wasm-opt", str(linked_libc_wasm), "-O2", "--strip-debug",
-             "--enable-bulk-memory", "--enable-nontrapping-float-to-int",
-             "-o", str(optimized_libc_wasm)])
 
         bash_source = rewrite_bash((root / "examples" / "bash.wat").read_text(encoding="utf-8"))
         linked_bash_wat.write_text(bash_source, encoding="utf-8")
         run(["wasm-as", str(linked_bash_wat), "-o", str(linked_bash_wasm)])
         run(["wasm-opt", str(linked_bash_wasm), "-O2", "--strip-debug",
              "-o", str(optimized_bash_wasm)])
-        libc_binary = wat_bytes(optimized_libc_wasm.read_bytes())
+        # Retain the legacy typed kernel adapters: Bash uses i64 off_t
+        # and an i32-returning __fpurge instead of libc's void API.
+        rewrite(optimized_bash_wasm, root / "src/vfs/lib/libc.so.wasm",
+                kernel_functions=("lseek", "__fpurge"))
         bash_binary = wat_bytes(optimized_bash_wasm.read_bytes())
 
     launch = "\n".join([
         ";; Generated by src/html-rt/tools/build-bash-runtime.py; do not edit.",
         runtime_module(args.interactive),
-        f'(module $waste_libc binary "{libc_binary}")',
-        '(register "env")',
         f'(assert_return (invoke "waste_allocator_init" (i32.const {ALLOCATOR_BASE})) (i32.const 1))',
+        '(register "env")',
         '(assert_return (invoke "waste_stdio_init" (i32.const 65536)) (i32.const 1))',
         f'(assert_return (invoke "waste_stdio_bind" '
         f'(i32.const {BASH_STDIN_SLOT}) (i32.const {BASH_STDOUT_SLOT}) '

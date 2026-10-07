@@ -3,11 +3,11 @@
   "events": [
     {
       "after": "bash-5.2# ",
-      "text": "printf 'alpha\\nbeta\\n' > /tmp/pipe-source.txt; /bin/cat /tmp/pipe-source.txt | /bin/wc -l; printf '__PIPE_STATUS_%s__\\n' \"$?\"\n"
+      "text": "printf 'alpha\\nbeta\\n' > /tmp/pipe-source.txt; cat /tmp/pipe-source.txt | wc -l; printf '__PIPE_STATUS_%s__\\n' \"$?\"\n"
     },
     {
       "after": "bash-5.2# ",
-      "text": "/bin/ls -1 /bin > /tmp/session-list.txt; /bin/cat /tmp/session-list.txt; printf '__REDIRECT_STATUS_%s__\\n' \"$?\"\n"
+      "text": "ls -1 /bin > /tmp/session-list.txt; cat /tmp/session-list.txt; printf '__REDIRECT_STATUS_%s__\\n' \"$?\"\n"
     },
     {
       "after": "bash-5.2# ",

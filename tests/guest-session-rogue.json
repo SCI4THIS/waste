@@ -6,12 +6,12 @@
     {
       "after": "bash-5.2# ",
       "pid": 1,
-      "text": "/bin/ldd /bin/rogue; printf '__LDD_%s__\\n' \"$?\"\n"
+      "text": "ldd /usr/bin/rogue; printf '__LDD_%s__\\n' \"$?\"\n"
     },
     {
       "after": "bash-5.2# ",
       "pid": 1,
-      "text": "/bin/rogue; printf '__ROGUE_1_%s__\\n' \"$?\"\n"
+      "text": "rogue; printf '__ROGUE_1_%s__\\n' \"$?\"\n"
     },
     {
       "after": "Level:",
@@ -40,7 +40,7 @@
     {
       "after": "bash-5.2# ",
       "pid": 1,
-      "text": "/bin/rogue; printf '__ROGUE_2_%s__\\n' \"$?\"\n"
+      "text": "rogue; printf '__ROGUE_2_%s__\\n' \"$?\"\n"
     },
     {
       "after": "Level:",
@@ -84,6 +84,7 @@
   ],
   "contains": [
     "libncurses.so.wasm",
+    "libc => /usr/lib/libc.so.wasm",
     "__LDD_0__\r\n",
     "__ROGUE_1_0__\r\n",
     "__ROGUE_2_0__\r\n",

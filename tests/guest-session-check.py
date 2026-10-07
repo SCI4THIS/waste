@@ -13,8 +13,8 @@ import tempfile
 import time
 
 
-def native_session(executable, vfs_root, script, events, result, timeout=10, expected_error=None, files=(), extra_args=(), before_event=None, asan_options="detect_leaks=1:halt_on_error=1"):
-    env = dict(os.environ, ASAN_OPTIONS=asan_options,
+def native_session(executable, vfs_root, script, events, result, timeout=10, expected_error=None, files=(), extra_args=(), before_event=None, asan_options=None):
+    env = dict(os.environ, ASAN_OPTIONS=asan_options or os.environ.get("ASAN_OPTIONS", "detect_leaks=1:halt_on_error=1"),
                UBSAN_OPTIONS="halt_on_error=1")
     command = [executable, "--vfs-root", vfs_root, "--result-file", str(result), "--trace-waits"]
     if script is not None:
@@ -147,15 +147,15 @@ def main():
     parser.add_argument("--native", default="build/cli-rt/waste-session")
     parser.add_argument("--vfs-root", default="src/vfs")
     parser.add_argument("--wasm", default="build/html-rt/waste-wast.wasm")
-    parser.add_argument("--scenario", action="append", choices=("io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "matrix", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"))
+    parser.add_argument("--scenario", action="append", choices=("shared-dependencies", "shared-libc", "io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "matrix", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"))
     parser.add_argument("--page", help="Also check identical scenarios through the packaged production worker")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="guest-session-", dir="build/engine") as temporary:
-        for name in args.scenario or ("io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "matrix", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"):
+        for name in args.scenario or ("shared-dependencies", "shared-libc", "io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "matrix", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"):
             contract = f"tests/guest-session-{name}.json"
             scenario = json.loads(Path(contract).read_text())
             # Bash exercises the default mounted bootstrap, not a host copy.
-            script = scenario["fixture"] if name in ("io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded") else None
+            script = scenario["fixture"] if name in ("shared-libc", "io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded") else None
             extra_args = []
             if "clockRealtimeNs" in scenario:
                 extra_args += ["--clock-realtime-ns", str(scenario["clockRealtimeNs"])]
@@ -183,6 +183,8 @@ def main():
                 assert output == scenario["output"].encode(), output
             for marker in scenario.get("contains", []):
                 assert marker.encode() in output, output
+            for marker, count in scenario.get("outputCounts", {}).items():
+                assert output.count(marker.encode()) == count, (marker, count, output)
             assert result["total"] == scenario["assertions"], result
             assert result["passed"] == scenario.get("expectedPassed", result["total"]), result
             for key, value in scenario.get("nativeCounts", {}).items():
@@ -201,7 +203,7 @@ def main():
                 assert result["downloadEvents"] == download_count, result
             else:
                 assert result["readWaits"] + result["selectWaits"] >= min(4, len(scenario["events"])), result
-            assert result["exited"] and result["exitStatus"] == code and not result["error"], result
+            assert result["exited"] == scenario.get("exited", True) and result["exitStatus"] == code and not result["error"], result
             if "processes" in scenario:
                 assert result["forks"] == result["childExits"] == scenario["processes"], result
             if "execs" in scenario:
@@ -212,7 +214,7 @@ def main():
                 assert browser["output"] == output.decode(), browser
             assert browser["passed"] == result["passed"], browser
             assert browser["exited"] == result["exited"] and browser["exitStatus"] == code, browser
-            if args.page and name not in ("io", "clock", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded"):
+            if args.page and name not in ("shared-libc", "io", "clock", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded"):
                 worker = json.loads(subprocess.check_output([
                     "node", "tests/guest-session-worker.cjs", args.page, contract], text=True))
                 assert worker["passed"] == result["passed"] and worker["exitStatus"] == code, worker
@@ -223,7 +225,7 @@ def main():
                     assert worker["output"] == output.decode(), worker
             print(json.dumps(dict(scenario=name, native=result, browser=browser,
                                   nativeOutputBase64=base64.b64encode(output).decode(),
-                                  **({"worker": worker} if args.page and name not in ("io", "clock", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded") else {})), indent=2))
+                                  **({"worker": worker} if args.page and name not in ("shared-libc", "io", "clock", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded") else {})), indent=2))
         # An independent multi-module probe catches child provider mutations
         # even when a particular Bash allocation layout happens not to trap.
         contract = "tests/guest-session-linked-fork.json"

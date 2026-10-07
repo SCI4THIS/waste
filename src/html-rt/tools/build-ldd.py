@@ -14,6 +14,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from shared_libc import rewrite, review_flags
+
 
 LDD_SOURCE = r"""
 /* ldd.c — List dynamic dependencies of a WebAssembly binary.
@@ -58,80 +60,87 @@ static int add_dep(const char *name, int len) {
     return ndeps++;
 }
 
+/* A failed bounded read poisons the cursor; callers reject the section. */
 static unsigned int read_leb128(const unsigned char *data, int size, int *pos) {
     unsigned int value = 0;
-    int shift = 0;
-    while (*pos < size) {
-        unsigned char b = data[*pos]; (*pos)++;
+    for (int shift = 0; shift <= 28 && *pos < size; shift += 7) {
+        unsigned char b = data[(*pos)++];
+        if (shift == 28 && (b & 0xf0)) break;
         value |= (unsigned int)(b & 0x7f) << shift;
-        shift += 7;
-        if (!(b & 0x80)) break;
+        if (!(b & 0x80)) return value;
     }
-    return value;
+    *pos = size + 1;
+    return 0;
 }
 
-/* Skip a type descriptor in the import section (varies by kind). */
-static void skip_import_desc(const unsigned char *data, int size,
-                             int *pos, int kind) {
-    if (kind == 0) {
-        /* function: typeidx */
-        read_leb128(data, size, pos);
-    } else if (kind == 1) {
-        /* table: elemtype + limits */
-        read_leb128(data, size, pos);  /* elem type */
+static int skip_import_desc(const unsigned char *data, int size,
+                            int *pos, int kind) {
+    if (kind == 0) read_leb128(data, size, pos);
+    else if (kind == 3) {
+        if (size - *pos < 2) return -1;
+        *pos += 2;
+    } else if (kind == 1 || kind == 2) {
+        if (kind == 1) {
+            if (*pos >= size || data[(*pos)++] != 0x70) return -1;
+        }
         unsigned int flags = read_leb128(data, size, pos);
-        read_leb128(data, size, pos);  /* min */
-        if (flags & 1) read_leb128(data, size, pos);  /* max */
-    } else if (kind == 2) {
-        /* memory: limits */
-        unsigned int flags = read_leb128(data, size, pos);
-        read_leb128(data, size, pos);  /* min */
-        if (flags & 1) read_leb128(data, size, pos);  /* max */
-    } else if (kind == 3) {
-        /* global: type + mutability */
+        if (flags > 1) return -1;
         read_leb128(data, size, pos);
-        read_leb128(data, size, pos);
-    }
+        if (flags & 1) read_leb128(data, size, pos);
+    } else return -1;
+    return *pos <= size ? 0 : -1;
 }
 
 static int parse_imports(const unsigned char *data, int size) {
-    if (size < 8) return -1;
-    /* Check magic: \0asm */
-    if (data[0] != 0x00 || data[1] != 0x61 ||
-        data[2] != 0x73 || data[3] != 0x6d) {
-        return -1;
-    }
-
-    int pos = 8;  /* skip magic + version */
+    if (size < 8 || memcmp(data, "\0asm\1\0\0\0", 8)) return -1;
+    int pos = 8;
     while (pos < size) {
-        int section_id = data[pos]; pos++;
+        int section_id = data[pos++];
         unsigned int section_size = read_leb128(data, size, &pos);
-        int section_end = pos + (int)section_size;
-        if (section_end > size) break;
-
-        if (section_id == 2) {  /* import section */
-            unsigned int count = read_leb128(data, size, &pos);
-            for (unsigned int i = 0; i < count && pos < section_end; i++) {
-                unsigned int mod_len = read_leb128(data, size, &pos);
-                if (pos + (int)mod_len > section_end) break;
-                add_dep((const char *)data + pos, (int)mod_len);
-                pos += (int)mod_len;
-
-                /* skip import name */
-                unsigned int name_len = read_leb128(data, size, &pos);
-                pos += (int)name_len;
-
-                /* skip kind + descriptor */
-                if (pos < section_end) {
-                    int kind = data[pos]; pos++;
-                    skip_import_desc(data, size, &pos, kind);
-                }
+        if (pos > size || section_size > (unsigned int)(size - pos)) return -1;
+        int end = pos + (int)section_size;
+        if (section_id == 2) {
+            unsigned int count = read_leb128(data, end, &pos);
+            for (unsigned int i = 0; i < count && pos <= end; i++) {
+                unsigned int len = read_leb128(data, end, &pos);
+                if (pos > end || len >= MAX_NAME || len > (unsigned int)(end-pos)) return -1;
+                if (add_dep((const char *)data + pos, (int)len) < 0) return -1;
+                pos += (int)len;
+                len = read_leb128(data, end, &pos);
+                if (pos > end || len > (unsigned int)(end-pos)) return -1;
+                pos += (int)len;
+                if (pos >= end) return -1;
+                int kind = data[pos++];
+                if (skip_import_desc(data, end, &pos, kind)) return -1;
             }
-            break;  /* only need the import section */
+            return pos == end ? 0 : -1;
         }
-        pos = section_end;
+        pos = end;
     }
     return 0;
+}
+
+static int scan_file(const char *target) {
+    struct stat st;
+    int fd = open(target, O_RDONLY);
+    if (fd < 0) return -1;
+    if (fstat(fd, &st) || st.st_size < 8 || st.st_size > 64 * 1024 * 1024) {
+        close(fd);
+        return -1;
+    }
+    int size = (int)st.st_size;
+    unsigned char *data = malloc(size);
+    if (!data) { close(fd); return -1; }
+    int total = 0;
+    while (total < size) {
+        int n = read(fd, data + total, size - total);
+        if (n <= 0) break;
+        total += n;
+    }
+    close(fd);
+    int status = total == size ? parse_imports(data, size) : -1;
+    free(data);
+    return status;
 }
 
 static int try_resolve(const char *name, char *path, int pathsz) {
@@ -174,51 +183,10 @@ int main(int argc, char **argv, char **envp) {
     }
 
     const char *target = argv[1];
-    struct stat st;
-    if (stat(target, &st) != 0) {
-        fprintf(stderr, "\tldd: %s: not found\n", target);
+    if (scan_file(target)) {
+        fprintf(stderr, "\tldd: %s: cannot read Wasm imports\n", target);
         return 1;
     }
-
-    int file_size = (int)st.st_size;
-    if (file_size < 8) {
-        fprintf(stderr, "\tldd: %s: too small to be a wasm binary\n", target);
-        return 1;
-    }
-
-    unsigned char *data = (unsigned char *)malloc(file_size);
-    if (!data) {
-        fprintf(stderr, "\tldd: out of memory\n");
-        return 1;
-    }
-
-    int fd = open(target, O_RDONLY);
-    if (fd < 0) {
-        fprintf(stderr, "\tldd: %s: cannot open\n", target);
-        free(data);
-        return 1;
-    }
-
-    int total = 0;
-    while (total < file_size) {
-        int n = read(fd, data + total, file_size - total);
-        if (n <= 0) break;
-        total += n;
-    }
-    close(fd);
-
-    if (total < 8) {
-        fprintf(stderr, "\tldd: %s: read error\n", target);
-        free(data);
-        return 1;
-    }
-
-    if (parse_imports(data, total) != 0) {
-        fprintf(stderr, "\tldd: %s: not a valid wasm binary\n", target);
-        free(data);
-        return 1;
-    }
-    free(data);
 
     if (ndeps == 0) {
         printf("\tstatically linked\n");
@@ -241,6 +209,12 @@ int main(int argc, char **argv, char **envp) {
         if (try_resolve(deps[i].name, path, sizeof(path))) {
             printf("\t%s => %s (%d imports)\n",
                    deps[i].name, path, deps[i].count);
+            /* Newly discovered names extend this worklist. Unique names
+             * bound the closure and terminate cycles without loading code. */
+            if (scan_file(path)) {
+                fprintf(stderr, "\tldd: %s: cannot read Wasm imports\n", path);
+                unresolved++;
+            }
         } else {
             printf("\t%s => not found (%d imports)\n",
                    deps[i].name, deps[i].count);
@@ -331,6 +305,7 @@ def main() -> int:
     if result.returncode != 0:
         print(f"link failed:\n{result.stderr}")
         return 1
+    rewrite(ldd_wasm, repo_root / "src/vfs/lib/libc.so.wasm")
     size = ldd_wasm.stat().st_size
     print(f"link: ldd.wasm ({size} bytes)")
 
@@ -352,7 +327,8 @@ def main() -> int:
     if args.install:
         subprocess.run(["python3", str(repo_root / "src/html-rt/tools/vfs.py"),
                         "install", "--component", "ldd", "--source",
-                        str(vfs_stage / "ldd")], check=True)
+                        str(vfs_stage / "ldd"),
+                        *review_flags([vfs_stage / "ldd"], repo_root / "src/vfs/lib/libc.so.wasm"), "--review-import", "env:fstat:function"], check=True)
     return 0
 
 

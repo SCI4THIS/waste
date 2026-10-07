@@ -52,7 +52,7 @@ const fullPackageProbe = process.argv.includes("--full-package");
 const expectedPipelineBinNames = fullPackageProbe
   ? manifest.entries.filter(e => e.path.startsWith("/bin/") && !e.path.slice(5).includes("/"))
       .map(e => e.path.slice(5)).sort()
-  : ["cat", "ls", "wast", "waste-probe", "wat", "wc"];
+  : ["wast", "waste-probe", "wat"];
 const expectedRootNames = fullPackageProbe
   ? manifest.entries.filter(e => e.kind === 2 && /^\/[^/]+$/.test(e.path))
       .map(e => e.path.slice(1)).sort()
@@ -60,7 +60,7 @@ const expectedRootNames = fullPackageProbe
 const expectedBinNames = fullPackageProbe
   ? manifest.entries.filter(e => /^\/bin\/[^/]+$/.test(e.path))
       .map(e => e.path.slice(5)).sort()
-  : ["cat", "ls", "wast", "waste-probe", "wat"];
+  : ["wast", "waste-probe", "wat"];
 function rootListingSeen(text) {
   return listingSeen(text, "__LS_ROOT_BEGIN__", expectedRootNames);
 }
@@ -129,19 +129,19 @@ const runTextProbe = runWatProbe || wastProbe || wastShebangProbe ||
 const watExpectedStatus = watFailureProbe || wastFailureProbe ? 126 : 0;
 const genericMissingCommand = "waste-definitely-missing-command";
 const matrixCommands = [
-  {tag: "TRUE", command: "/bin/true", status: 0},
-  {tag: "FALSE", command: "/bin/false", status: 1},
-  {tag: "PWD", command: "/bin/pwd", status: 0},
-  {tag: "ECHO", command: "/bin/echo MATRIX_ECHO_OUTPUT", status: 0},
-  {tag: "PRINTF", command: "/bin/printf 'MATRIX_PRINTF_OUTPUT\\n'", status: 0},
-  {tag: "BASENAME", command: "/bin/basename /alpha/MATRIX_BASENAME_OUTPUT", status: 0},
-  {tag: "DIRNAME", command: "/bin/dirname /alpha/beta/MATRIX_FILE", status: 0},
-  {tag: "CAT", command: "/bin/cat /tmp/matrix-cat.txt", status: 0},
-  {tag: "WC", command: "/bin/wc -l -w -c /tmp/matrix-wc.txt", status: 0},
-  {tag: "LS", command: "/bin/ls -1 /bin", status: 0},
-  {tag: "DATE", command: "/bin/date -u +%Y", status: 0},
-  {tag: "WAT", command: "/bin/wat /tmp/matrix.wat", status: 0},
-  {tag: "WAST", command: "/bin/wast /tmp/matrix.wast", status: 0},
+  {tag: "TRUE", command: "true", status: 0},
+  {tag: "FALSE", command: "false", status: 1},
+  {tag: "PWD", command: "pwd", status: 0},
+  {tag: "ECHO", command: "echo MATRIX_ECHO_OUTPUT", status: 0},
+  {tag: "PRINTF", command: "printf 'MATRIX_PRINTF_OUTPUT\\n'", status: 0},
+  {tag: "BASENAME", command: "basename /alpha/MATRIX_BASENAME_OUTPUT", status: 0},
+  {tag: "DIRNAME", command: "dirname /alpha/beta/MATRIX_FILE", status: 0},
+  {tag: "CAT", command: "cat /tmp/matrix-cat.txt", status: 0},
+  {tag: "WC", command: "wc -l -w -c /tmp/matrix-wc.txt", status: 0},
+  {tag: "LS", command: "ls -1 /bin /usr/bin", status: 0},
+  {tag: "DATE", command: "date -u +%Y", status: 0},
+  {tag: "WAT", command: "wat /tmp/matrix.wat", status: 0},
+  {tag: "WAST", command: "wast /tmp/matrix.wast", status: 0},
 ];
 const matrixSteps = matrixCommands.flatMap(({tag, command}) => [
   command + "\n",
@@ -338,43 +338,28 @@ const self = {
             !wastRepeatProbe && !(heredocProbe || heredocStdoutProbe) && !sharedLibraryProbe) ||
             (sharedLibraryProbe &&
              message.paths?.includes("/usr/bin/rogue") &&
-             message.paths?.includes("/bin/rogue") &&
              message.paths?.includes("/usr/bin/ldd") &&
-             message.paths?.includes("/bin/ldd") &&
              message.paths?.includes("/usr/lib/libncurses.so.wasm") &&
              message.paths?.includes("/lib/libncurses.so.wasm")) ||
-            (coreutilsTrueProbe && message.paths?.includes("/usr/bin/true") &&
-             message.paths?.includes("/bin/true")) ||
-            (coreutilsFalseProbe && message.paths?.includes("/usr/bin/false") &&
-             message.paths?.includes("/bin/false")) ||
-            (coreutilsPwdProbe && message.paths?.includes("/usr/bin/pwd") &&
-             message.paths?.includes("/bin/pwd")) ||
-            (coreutilsEchoProbe && message.paths?.includes("/usr/bin/echo") &&
-             message.paths?.includes("/bin/echo")) ||
-            (coreutilsBasenameProbe && message.paths?.includes("/usr/bin/basename") &&
-             message.paths?.includes("/bin/basename")) ||
-            (coreutilsPrintfProbe && message.paths?.includes("/usr/bin/printf") &&
-             message.paths?.includes("/bin/printf")) ||
-            (coreutilsDirnameProbe && message.paths?.includes("/usr/bin/dirname") &&
-             message.paths?.includes("/bin/dirname")) ||
+            (coreutilsTrueProbe && message.paths?.includes("/usr/bin/true")) ||
+            (coreutilsFalseProbe && message.paths?.includes("/usr/bin/false")) ||
+            (coreutilsPwdProbe && message.paths?.includes("/usr/bin/pwd")) ||
+            (coreutilsEchoProbe && message.paths?.includes("/usr/bin/echo")) ||
+            (coreutilsBasenameProbe && message.paths?.includes("/usr/bin/basename")) ||
+            (coreutilsPrintfProbe && message.paths?.includes("/usr/bin/printf")) ||
+            (coreutilsDirnameProbe && message.paths?.includes("/usr/bin/dirname")) ||
             (coreutilsCatProbe && message.paths?.includes("/usr/bin/cat") &&
-             message.paths?.includes("/bin/cat") &&
              message.paths?.includes("/usr/share/waste/cat-fixture.txt")) ||
-            (heredocStdoutProbe && message.paths?.includes("/usr/bin/cat") &&
-             message.paths?.includes("/bin/cat")) ||
+            (heredocStdoutProbe && message.paths?.includes("/usr/bin/cat")) ||
             (heredocProbe && message.paths?.includes("/usr/bin/cat") &&
-             message.paths?.includes("/bin/cat") &&
-             message.paths?.includes("/usr/bin/ls") &&
-             message.paths?.includes("/bin/ls")) ||
+             message.paths?.includes("/usr/bin/ls")) ||
             (coreutilsWcProbe && message.paths?.includes("/usr/bin/wc") &&
-             message.paths?.includes("/bin/wc") &&
              message.paths?.includes("/usr/share/waste/wc-fixture.txt")) ||
-            (coreutilsLsProbe && message.paths?.includes("/usr/bin/ls") &&
-             message.paths?.includes("/bin/ls")) ||
+            (coreutilsLsProbe && message.paths?.includes("/usr/bin/ls")) ||
             (coreutilsMatrixProbe &&
              ["true", "false", "pwd", "echo", "printf", "basename",
               "dirname", "cat", "wc", "ls", "date"].every(name =>
-                message.paths?.includes(`/bin/${name}`)) &&
+                message.paths?.includes(`/usr/bin/${name}`)) &&
              message.paths?.includes("/bin/wat") &&
              message.paths?.includes("/bin/wast") &&
              message.paths?.includes("/tmp/matrix.wat") &&
@@ -385,7 +370,7 @@ const self = {
                 message.paths?.includes(path))) ||
             (pipelineProbe &&
              ["ls", "wc", "cat"].every(name =>
-                message.paths?.includes(`/bin/${name}`))))) vfsSeen = true;
+                message.paths?.includes(`/usr/bin/${name}`))))) vfsSeen = true;
     } else if (message.type === "output") {
       output += message.text;
       process.stdout.write(message.text);
@@ -408,14 +393,14 @@ const self = {
         }}), 10);
       }
       if (readlineCompletionProbe && !readlineTabSent &&
-          output.includes("/bin/pw")) {
+          output.includes("/usr/bin/pw")) {
         readlineTabSent = true;
         setTimeout(() => self.onmessage({data: {
           type: "input", bytes: [9],
         }}), 10);
       }
       if (readlineCompletionProbe && readlineTabSent &&
-          !readlineCompletionEnterSent && output.includes("/bin/pwd")) {
+          !readlineCompletionEnterSent && output.includes("/usr/bin/pwd")) {
         readlineCompletionSeen = true;
         readlineCompletionEnterSent = true;
         setTimeout(() => self.onmessage({data: {
@@ -512,7 +497,7 @@ const self = {
         }
         if (output.includes("__C_ENGINE_SHARED_LAYOUT_OK__") &&
             /d[rwx-]{9}[^\r\n]* \/usr(?:\r?\n|$)/.test(output) &&
-            /-[rwx-]{9}[^\r\n]* \/bin\/rogue(?:\r?\n|$)/.test(output) &&
+            /-[rwx-]{9}[^\r\n]* \/usr\/bin\/rogue(?:\r?\n|$)/.test(output) &&
             /-[rwx-]{9}[^\r\n]* \/lib\/libncurses\.so\.wasm(?:\r?\n|$)/.test(output)) {
           sharedLayoutSeen = true;
         }
@@ -522,7 +507,7 @@ const self = {
           lddRequested = true;
           setTimeout(() => self.onmessage({data: {type: "input",
             bytes: Array.from(new TextEncoder().encode(
-              "/bin/ldd /bin/rogue; " +
+              "ldd /usr/bin/rogue; " +
               "printf '__C_ENGINE_LDD_STATUS_%s__\\n' \"$?\"\n",
             ))}}), 10);
         }
@@ -533,12 +518,12 @@ const self = {
           rogueRun = 1;
           setTimeout(() => self.onmessage({data: {type: "input",
             bytes: Array.from(new TextEncoder().encode(
-              "/bin/rogue; " +
+              "rogue; " +
               "printf '__C_ENGINE_ROGUE_1_STATUS_%s__\\n' \"$?\"\n",
             )),
           }}), 10);
         }
-        if (!rogueLoadFailureSeen && output.includes("bash: /bin/rogue: errno 8")) {
+        if (!rogueLoadFailureSeen && output.includes("bash: rogue: errno 8")) {
           rogueLoadFailureSeen = true;
           exitSent = true;
           setTimeout(() => self.onmessage({data: {type: "input",
@@ -586,7 +571,7 @@ const self = {
           rogueContinueSent = false;
           setTimeout(() => self.onmessage({data: {type: "input",
             bytes: Array.from(new TextEncoder().encode(
-              "/bin/rogue; " +
+              "rogue; " +
               "printf '__C_ENGINE_ROGUE_2_STATUS_%s__\\n' \"$?\"\n",
             )),
           }}), 10);
@@ -714,7 +699,7 @@ const self = {
           probeSecondOutputOffset = output.length;
           setTimeout(() => self.onmessage({data: {type: "input",
             bytes: Array.from(new TextEncoder().encode(
-              "/bin/waste-probe again; printf '__C_ENGINE_EXEC_SECOND_STATUS_%s__\\n' \"$?\"; exit\n",
+              "waste-probe again; printf '__C_ENGINE_EXEC_SECOND_STATUS_%s__\\n' \"$?\"; exit\n",
             ))}}), 10);
         }
         const secondStatus = output.match(/__C_ENGINE_EXEC_SECOND_STATUS_(\d+)__/);
@@ -738,9 +723,9 @@ const self = {
       } else if (pipelineProbe) {
         const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
         const pipelineCommands = [
-          "echo __PIPELINE_PIPE_BEGIN__; /bin/ls /bin | /bin/wc -l; echo __PIPELINE_PIPE_END__\n",
-          "/bin/ls -1 /bin > /tmp/pipeline-list.txt; printf '__PIPELINE_REDIRECT_STATUS_%s__\\n' \"$?\"\n",
-          "echo __PIPELINE_CAT_BEGIN__; /bin/cat /tmp/pipeline-list.txt; echo __PIPELINE_CAT_END__\n",
+          "echo __PIPELINE_PIPE_BEGIN__; ls /bin | wc -l; echo __PIPELINE_PIPE_END__\n",
+          "ls -1 /bin > /tmp/pipeline-list.txt; printf '__PIPELINE_REDIRECT_STATUS_%s__\\n' \"$?\"\n",
+          "echo __PIPELINE_CAT_BEGIN__; cat /tmp/pipeline-list.txt; echo __PIPELINE_CAT_END__\n",
           "echo __PIPELINE_AFTER__\n",
           "exit\n",
         ];
@@ -878,11 +863,11 @@ const self = {
         if (commandSent && messageHasPrompt) {
           const commands = [
             "printf '__C_ENGINE_WAT_REPEAT_1_%s__\\n' \"$?\"\n",
-            "/bin/wat /tmp/checks.wast\n",
+            "wat /tmp/checks.wast\n",
             "printf '__C_ENGINE_WAT_REPEAT_2_%s__\\n' \"$?\"\n",
-            "/bin/wat /tmp/checks.wast\n",
+            "wat /tmp/checks.wast\n",
             "printf '__C_ENGINE_WAT_REPEAT_3_%s__\\n' \"$?\"\n",
-            "/bin/wast /tmp/checks.wast\n",
+            "wast /tmp/checks.wast\n",
             "printf '__C_ENGINE_WAST_REPEAT_1_%s__\\n' \"$?\"\n",
             "/tmp/checks-direct.wast\n",
             "printf '__C_ENGINE_WAST_REPEAT_2_%s__\\n' \"$?\"\n",
@@ -931,68 +916,68 @@ const self = {
               baselineMissingCommand
                 ? "HOME_DIR=/home/a\n"
                 : pipelineProbe
-                  ? "echo __PIPELINE_PIPE_BEGIN__; /bin/ls /bin | /bin/wc -l; echo __PIPELINE_PIPE_END__\n"
+                  ? "echo __PIPELINE_PIPE_BEGIN__; ls /bin | wc -l; echo __PIPELINE_PIPE_END__\n"
                 : coreutilsMatrixProbe
                   ? matrixSteps[0]
                 : runTextProbe
-                  ? (wastRepeatProbe ? "/bin/wat /tmp/checks.wast\n" :
+                  ? (wastRepeatProbe ? "wat /tmp/checks.wast\n" :
                      watShebangProbe ? "/tmp/wat-shebang.wat\n" :
                      watFailureProbe ? "wat /tmp/wat-bad.wat\n" :
                      watDirectProbe ? "/tmp/wat-direct.wat\n" :
                      (wastProbe || wastShebangProbe || wastFailureProbe ||
                       wastDirectProbe || wastRepeatProbe) ?
                        (wastShebangProbe ? "/tmp/wast-shebang.wast\n" :
-                         wastFailureProbe ? "/bin/wast /tmp/bad.wast\n" :
+                         wastFailureProbe ? "wast /tmp/bad.wast\n" :
                          wastDirectProbe ? "/tmp/checks-direct.wast\n" :
-                                           "/bin/wast /tmp/checks.wast\n") :
+                                           "wast /tmp/checks.wast\n") :
                      "wat /tmp/wat-probe.wat\n")
                 : sharedLibraryProbe
                   ? "printf '__C_ENGINE_ENV_%s|%s|%s|%s|%s|%s__\\n' " +
                     "\"$HOME\" \"$USER\" \"$LOGNAME\" \"$PWD\" \"$PATH\" \"$TERM\"; " +
-                    "/bin/ls -ld /usr /usr/bin /usr/lib /lib /bin/ldd /bin/rogue " +
+                    "ls -ld /usr /usr/bin /usr/lib /lib /usr/bin/ldd " +
                     "/usr/bin/rogue /lib/libncurses.so.wasm " +
                     "/usr/lib/libncurses.so.wasm && " +
                     "echo __C_ENGINE_SHARED_''LAYOUT_OK__\n"
                 : executableExitProbe
-                  ? "WASTE_PROBE_EXIT=7 /bin/waste-probe\n"
+                  ? "WASTE_PROBE_EXIT=7 waste-probe\n"
                 : executableProbe
-                  ? "/bin/waste-probe one two; printf '__C_ENGINE_EXEC_INITIAL_STATUS_%s__\\n' \"$?\"\n"
+                  ? "waste-probe one two; printf '__C_ENGINE_EXEC_INITIAL_STATUS_%s__\\n' \"$?\"\n"
                 : coreutilsTrueProbe
-                  ? "/bin/true\n"
+                  ? "true\n"
                 : coreutilsFalseProbe
-                  ? "/bin/false\n"
+                  ? "false\n"
                 : coreutilsPwdProbe
-                  ? "/bin/pwd\n"
+                  ? "pwd\n"
                 : coreutilsEchoProbe
-                  ? "/bin/echo hello world\n"
+                  ? "echo hello world\n"
                 : coreutilsBasenameProbe
-                  ? "/bin/basename /usr/local/file.txt\n"
+                  ? "basename /usr/local/file.txt\n"
                 : coreutilsPrintfProbe
-                  ? "/bin/printf '%d\\n' 42\n"
+                  ? "printf '%d\\n' 42\n"
                 : coreutilsDirnameProbe
-                  ? "/bin/dirname /usr/local/file.txt\n"
+                  ? "dirname /usr/local/file.txt\n"
                 : coreutilsCatProbe
-                  ? "/bin/cat -n /usr/share/waste/cat-fixture.txt\n"
+                  ? "cat -n /usr/share/waste/cat-fixture.txt\n"
                 : coreutilsWcProbe
-                  ? "/bin/wc -l -w -c /usr/share/waste/wc-fixture.txt\n"
+                  ? "wc -l -w -c /usr/share/waste/wc-fixture.txt\n"
                 : coreutilsLsProbe
                   ? coreutilsLsCommand ? coreutilsLsCommand + "\n" : [
-                      "echo __LS_ROOT_BEGIN__; /bin/ls -1 /",
-                      "echo __LS_BIN_BEGIN__; /bin/ls -1 /bin",
-                      "echo __LS_EMPTY_BEGIN__; /bin/ls -A /tmp/ls-empty; echo __LS_EMPTY_END__",
-                      "echo __LS_DOT_BEGIN__; /bin/ls -la /tmp/ls-fixture; echo __LS_DOT_END__",
-                      "echo __LS_HIDDEN_BEGIN__; /bin/ls -A1 /tmp/ls-fixture",
-                      "echo __LS_LONG_BEGIN__; /bin/ls -l /tmp/ls-fixture",
-                      "echo __LS_TTY_BEGIN__; /bin/ls /tmp/ls-fixture; echo __LS_TTY_END__",
-                      "/bin/ls /tmp/ls-fixture > /tmp/ls-nontty.out",
-                      "echo __LS_REDIRECT_BEGIN__; /bin/cat /tmp/ls-nontty.out; echo __LS_REDIRECT_END__",
-                      "echo __LS_MULTI_BEGIN__; /bin/ls -1 /tmp/ls-empty /tmp/ls-fixture",
-                      "/bin/ls /tmp/ls-missing; echo __LS_MISSING_STATUS_$?__",
+                      "echo __LS_ROOT_BEGIN__; ls -1 /",
+                      "echo __LS_BIN_BEGIN__; ls -1 /bin",
+                      "echo __LS_EMPTY_BEGIN__; ls -A /tmp/ls-empty; echo __LS_EMPTY_END__",
+                      "echo __LS_DOT_BEGIN__; ls -la /tmp/ls-fixture; echo __LS_DOT_END__",
+                      "echo __LS_HIDDEN_BEGIN__; ls -A1 /tmp/ls-fixture",
+                      "echo __LS_LONG_BEGIN__; ls -l /tmp/ls-fixture",
+                      "echo __LS_TTY_BEGIN__; ls /tmp/ls-fixture; echo __LS_TTY_END__",
+                      "ls /tmp/ls-fixture > /tmp/ls-nontty.out",
+                      "echo __LS_REDIRECT_BEGIN__; cat /tmp/ls-nontty.out; echo __LS_REDIRECT_END__",
+                      "echo __LS_MULTI_BEGIN__; ls -1 /tmp/ls-empty /tmp/ls-fixture",
+                      "ls /tmp/ls-missing; echo __LS_MISSING_STATUS_$?__",
                       "echo __LS_SECOND_COMMAND__",
                     ].join("\n") + "\n"
                   : heredocStdoutProbe
                     ? [
-                        "/bin/cat <<EOF",
+                        "cat <<EOF",
                         "Hello world!",
                         "EOF",
                         "exit",
@@ -1007,21 +992,21 @@ const self = {
                       ].join("\n") + "\n"
                   : heredocProbe
                     ? [
-                        "/bin/cat > hello.txt <<EOF",
+                        "cat > hello.txt <<EOF",
                         "Hello world!",
                         "EOF",
                         "echo __C_ENGINE_HEREDOC_BEGIN__",
-                        "/bin/cat hello.txt",
+                        "cat hello.txt",
                         "echo __C_ENGINE_HEREDOC_END__",
                         "echo __C_ENGINE_HEREDOC_MODE_BEGIN__",
-                        "/bin/ls -l hello.txt",
+                        "ls -l hello.txt",
                         "echo __C_ENGINE_HEREDOC_MODE_END__",
                         "exit",
                       ].join("\n") + "\n"
                   : readlineEchoProbe
                     ? "echo __C_ENGINE_READLINE_RESULT__"
                   : readlineCompletionProbe
-                    ? "/bin/pw"
+                    ? "/usr/bin/pw"
                   : readlineArrowProbe
                     ? "echo __C_ENGINE_ARROW_HISTORY__\n"
                     : "echo __C_ENGINE_BASH_OK__\n");
@@ -1116,6 +1101,10 @@ self.onmessage({data: {
   vfsPaths: mountedVfs ? manifest.entries.map(e => e.path) : [],
   probeBytes: asArrayBuffer(probeBytes),
   vfsFiles: [...(mountedVfs ? [] : [{
+    path: "/usr/lib/libc.so.wasm",
+    bytes: asArrayBuffer(readAsset(path.join(vfsRoot, "usr/lib/libc.so.wasm"))),
+    mode: 0o644,
+  }, {
     path: "/usr/share/waste/launch.wast",
     bytes: asArrayBuffer(Buffer.from(launchSource, "utf8")),
     mode: 0o644,
@@ -1127,64 +1116,32 @@ self.onmessage({data: {
     path: "/usr/bin/true",
     bytes: asArrayBuffer(coreutilsTrueBytes),
     mode: 0o755,
-  }, {
-    path: "/bin/true",
-    bytes: asArrayBuffer(coreutilsTrueBytes),
-    mode: 0o755,
   }] : []), ...(coreutilsFalseBytes ? [{
     path: "/usr/bin/false",
-    bytes: asArrayBuffer(coreutilsFalseBytes),
-    mode: 0o755,
-  }, {
-    path: "/bin/false",
     bytes: asArrayBuffer(coreutilsFalseBytes),
     mode: 0o755,
   }] : []), ...(coreutilsPwdBytes ? [{
     path: "/usr/bin/pwd",
     bytes: asArrayBuffer(coreutilsPwdBytes),
     mode: 0o755,
-  }, {
-    path: "/bin/pwd",
-    bytes: asArrayBuffer(coreutilsPwdBytes),
-    mode: 0o755,
   }] : []), ...(coreutilsEchoBytes ? [{
     path: "/usr/bin/echo",
-    bytes: asArrayBuffer(coreutilsEchoBytes),
-    mode: 0o755,
-  }, {
-    path: "/bin/echo",
     bytes: asArrayBuffer(coreutilsEchoBytes),
     mode: 0o755,
   }] : []), ...(coreutilsBasenameBytes ? [{
     path: "/usr/bin/basename",
     bytes: asArrayBuffer(coreutilsBasenameBytes),
     mode: 0o755,
-  }, {
-    path: "/bin/basename",
-    bytes: asArrayBuffer(coreutilsBasenameBytes),
-    mode: 0o755,
   }] : []), ...(coreutilsPrintfBytes ? [{
     path: "/usr/bin/printf",
-    bytes: asArrayBuffer(coreutilsPrintfBytes),
-    mode: 0o755,
-  }, {
-    path: "/bin/printf",
     bytes: asArrayBuffer(coreutilsPrintfBytes),
     mode: 0o755,
   }] : []), ...(coreutilsDirnameBytes ? [{
     path: "/usr/bin/dirname",
     bytes: asArrayBuffer(coreutilsDirnameBytes),
     mode: 0o755,
-  }, {
-    path: "/bin/dirname",
-    bytes: asArrayBuffer(coreutilsDirnameBytes),
-    mode: 0o755,
   }] : []), ...(coreutilsCatBytes ? [{
     path: "/usr/bin/cat",
-    bytes: asArrayBuffer(coreutilsCatBytes),
-    mode: 0o755,
-  }, {
-    path: "/bin/cat",
     bytes: asArrayBuffer(coreutilsCatBytes),
     mode: 0o755,
   }, {
@@ -1193,10 +1150,6 @@ self.onmessage({data: {
     mode: 0o644,
   }] : []), ...(coreutilsLsBytes ? [{
     path: "/usr/bin/ls",
-    bytes: asArrayBuffer(coreutilsLsBytes),
-    mode: 0o755,
-  }, {
-    path: "/bin/ls",
     bytes: asArrayBuffer(coreutilsLsBytes),
     mode: 0o755,
   }, {
@@ -1224,16 +1177,8 @@ self.onmessage({data: {
     path: "/usr/bin/date",
     bytes: asArrayBuffer(coreutilsDateBytes),
     mode: 0o755,
-  }, {
-    path: "/bin/date",
-    bytes: asArrayBuffer(coreutilsDateBytes),
-    mode: 0o755,
   }] : []), ...(coreutilsWcBytes ? [{
     path: "/usr/bin/wc",
-    bytes: asArrayBuffer(coreutilsWcBytes),
-    mode: 0o755,
-  }, {
-    path: "/bin/wc",
     bytes: asArrayBuffer(coreutilsWcBytes),
     mode: 0o755,
   }, {
@@ -1343,7 +1288,7 @@ Promise.race([completion, timeout]).then(result => {
         exitSent && !doneBeforeExit && result.ok
     : heredocProbe
       ? promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&
-        /__C_ENGINE_HEREDOC_BEGIN__[\s\S]*\/bin\/cat hello\.txt[\s\S]*Hello world![\s\S]*__C_ENGINE_HEREDOC_END__/.test(output) &&
+        /__C_ENGINE_HEREDOC_BEGIN__[\s\S]*cat hello\.txt[\s\S]*Hello world![\s\S]*__C_ENGINE_HEREDOC_END__/.test(output) &&
         output.includes("__C_ENGINE_HEREDOC_END__") &&
         /__C_ENGINE_HEREDOC_MODE_BEGIN__[\s\S]*-rw-r--r--[^\r\n]* hello\.txt[\s\S]*__C_ENGINE_HEREDOC_MODE_END__/.test(output) &&
         !output.includes("Jan  1  1970") &&

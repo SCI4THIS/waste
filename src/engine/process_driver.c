@@ -198,6 +198,15 @@ static waste_exec_engine *process_image_runtime_export(
     waste_exec_engine *runtime;
     if (exec_find_export(image, name, index, error) == EXEC_OK)
         return image;
+    /* Production images import libc explicitly. Bootstrap the process-local
+     * DSO, independently of any WAST compatibility registration alias. */
+    native_loaded_library *libc = native_store_find_library(store, "libc");
+    runtime = libc ? libc->engine : NULL;
+    if (runtime && runtime->memory == image->memory) {
+        if (error) memset(error, 0, sizeof(*error));
+        if (exec_find_export(runtime, name, index, error) == EXEC_OK)
+            return runtime;
+    }
     env = native_registered_module(store, "env");
     runtime = env ? native_store_process_engine(store, env->engine) : NULL;
     if (!runtime || runtime->memory != image->memory) return NULL;

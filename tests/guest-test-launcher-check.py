@@ -61,7 +61,7 @@ def main():
         mutable_root = Path(tmp)/'mutable-root'
         shutil.copytree(args.vfs_root, mutable_root)
         snapshot_events = [{'after':'bash-5.2# ', 'text':
-            '/bin/waste-test --list path-runtime.wast; printf "__SNAPSHOT_STATUS__%s\\n" "$?"; exit 0\n'}]
+            'waste-test --list path-runtime.wast; printf "__SNAPSHOT_STATUS__%s\\n" "$?"; exit 0\n'}]
         code, snapshot_output, snapshot_result = native_session(args.native, str(mutable_root), None,
             snapshot_events, Path(tmp)/'snapshot.json', timeout=120,
             extra_args=['--timeout-ms', '120000'],
@@ -70,7 +70,7 @@ def main():
         assert b'__SNAPSHOT_STATUS__0\r\n' in snapshot_output, snapshot_output
         assert b'PASS? libc-test/path-runtime.wast' in snapshot_output, snapshot_output
         eof_events = [
-            {'after':'bash-5.2# ', 'text':'echo __EOF_BATCH_BEGIN__; /bin/waste-test address.wast\n'},
+            {'after':'bash-5.2# ', 'text':'echo __EOF_BATCH_BEGIN__; waste-test address.wast\n'},
             {'after':'__EOF_BATCH_BEGIN__\r\n', 'eof':True, 'duringBatch':True}]
         code, eof_output, eof_result = native_session(args.native, args.vfs_root, None,
             eof_events, Path(tmp)/'eof.json', timeout=120, extra_args=['--timeout-ms', '120000'])

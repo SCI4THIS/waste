@@ -22,7 +22,7 @@ def inspect_sdk(repo, root, manifest, library=None):
     for source, expected in review.get("additional_sources", {}).items():
         if guest_sdk.sha(repo / source) != expected:
             raise ValueError("browser SDK binding review is stale: " + source)
-    libc = repo / "build/html-rt/waste-libc/waste-libc.wasm"
+    libc = repo / "src/vfs/lib/libc.so.wasm"
     library = library or repo / "src/vfs/lib/libncurses.so.wasm"
     providers = [("guest-libc", wasm_signatures.inspect(libc)["exports"]),
                  ("ncurses", wasm_signatures.inspect(library)["exports"]),
@@ -90,7 +90,7 @@ def inspect_sdk(repo, root, manifest, library=None):
         if name in stubs:
             entry["compatibility_stub"] = stubs[name]
     # Data addresses are linker relocations, not function imports. Only the
-    # CRT's three opaque stream pointers and libc's exported environment are
+    # CRT/shared-libc stream pointers and libc's exported environment are
     # part of this profile; never silently accept wasm-ld's address-zero fixup.
     globals_ = set(wasm_signatures.inspect(libc)["globals"])
     ncurses_globals = set(wasm_signatures.inspect(library)["globals"])
@@ -98,8 +98,8 @@ def inspect_sdk(repo, root, manifest, library=None):
         if entry["unavailable"] and name in ("optarg", "optind", "opterr", "optopt",
                                              "error_message_count", "error_print_progname"):
             entry.update(provider="unavailable", reason="Package-owned gnulib state")
-        elif name in ("stdin", "stdout", "stderr"):
-            entry["provider"] = "waste-crt.c stream pointer"
+        elif name in ("stdin", "stdout", "stderr") and name in globals_:
+            entry["provider"] = "guest-libc/CRT stream pointer (requires link relocation)"
         elif name == "environ" and name in globals_:
             entry["provider"] = "guest-libc data address (requires link relocation)"
         elif name in ncurses_globals:
@@ -131,17 +131,19 @@ def inspect_sdk(repo, root, manifest, library=None):
     # Check the configured DSO's actual dependencies as well as its exports.
     # Internal libc accessor functions have no public declarations but still
     # require an exact compiled provider, never a name-only allowance.
+    libc_exports = wasm_signatures.inspect(libc)["exports"]
     for key, signature in wasm_signatures.inspect(library)["imports"].items():
         module, name = key.split(":", 1)
-        matches = [symbols[name] for _, symbols in providers if name in symbols]
-        if name in review["prefer_over_module"]:
+        matches = ([libc_exports[name]] if name in libc_exports else []) if module == "libc" else [
+            symbols[name] for _, symbols in providers if name in symbols]
+        if module == "env" and name in review["prefer_over_module"]:
             matches = [review["signatures"][name]]
-        if module != "env" or not matches or matches[0] != signature:
+        if module not in ("env", "libc") or not matches or matches[0] != signature:
             raise ValueError(f"ncurses dependency signature mismatch: {key}")
     sources = [repo / review["source"],
                *(repo / source for source in review.get("additional_sources", {})),
-               repo / "src/html-rt/lib/stdlib.wat",
-               repo / "src/html-rt/lib/waste-crt.c", *libc_source_paths(repo)]
+               repo / "src/libc/allocator.c", repo / "src/libc/runtime/math.c",
+               repo / "src/libc/waste-crt.c", *libc_source_paths(repo)]
     return dict(format=1, status="verified partial guest ABI; not C/POSIX conformance",
                 functions=functions, variables=variables,
                 removed_package_apis=sorted(set(unavailable) - set(functions)),

@@ -16785,8 +16785,8 @@
       }
     },
     "providers": {
-      "libc_sha256": "b3f894545b09ddfedc2a45723bca937ace6220a4cb9725e59b0bc9449d5ae514",
-      "ncurses_sha256": "7559060e05c3e9cb30e4fc0fac42686bfb38dd1a0619a06f5047864946bb8031"
+      "libc_sha256": "b033be57dc94226a14e52f4c6fdd7253b30843e00336e6af6df80ddce163498a",
+      "ncurses_sha256": "b5158484a4e54d9b6d84683dc3ef57b7d464ba11d061a26372d1507f43ddc232"
     },
     "removed_package_apis": [
       "btoc32",
@@ -16810,33 +16810,34 @@
       "setlocale_null_r"
     ],
     "source_sha256": {
-      "src/engine/guest_posix.c": "81bd570d43bda1c6c5cbb51d909124cada6bb8619b8cabd139695e1ec285033c",
+      "src/engine/guest_posix.c": "e6cbb8907a2aaaf70c2b7802cb51d73c24e9bed97b75e7e0ba677b71c2d62cb2",
       "src/engine/guest_posix.h": "16f60601d2b870a6de8dcea78f4361f13c137b59a69dd4ed7ce8f7673b266fa2",
-      "src/html-rt/lib/dirent.c": "395e625e434dca5120a4a70c5cc922ecc52dfb7feadb235a9c2753b6f24713b3",
-      "src/html-rt/lib/dlfcn.c": "bbbf0c89d85285ff5ee04a698eb59eb7d0353f94e51e4254fbb296cd4d766ea7",
-      "src/html-rt/lib/identity.c": "6121a0824c31e4610b71744960437c573503d91442d198cd95607c1ff0959cb7",
-      "src/html-rt/lib/locale.c": "b9cd5e1462824009d3f31dee269102cb1efc37730ce512a87512450cb89849bb",
-      "src/html-rt/lib/math.c": "c77190dde5b0228006a19a9c7ad5862945a3094b97d6ff2f3ed67611f0cec426",
-      "src/html-rt/lib/misc.c": "a1847b3933510fd4111864090fec5f38aef68fec9649a1cd1a4da85aa2851b32",
-      "src/html-rt/lib/netdb.c": "c829c4a5a4ba7950ed69f5600d154bc0d13ac8c70a49d01e071715eaba565157",
-      "src/html-rt/lib/pattern.c": "9c5463fafbebce745596a110bae48a45f0871aa0103fe18ade73b84423d147f9",
-      "src/html-rt/lib/quad.c": "e9ba992c14c956838cf30a8ca7249a2415dc4ab16a4dcd49f421faf73bb9f688",
-      "src/html-rt/lib/stdio.c": "ad32626d17948f7113d2c3cc649fcb61ea6934de2009f02ab66ec4744011b8b8",
-      "src/html-rt/lib/stdlib.c": "fc135b2d66eed733b89e7302c6fb431dfa8434f25c713dcb4f3eeb5579df21ad",
-      "src/html-rt/lib/stdlib.wat": "86694aa19de3c46d906ceb4aebef1b1abb58f4bf613511758287f363403c9d73",
-      "src/html-rt/lib/string.c": "cb7a013f3a9f88d6e4bdea36f3351f669164bfb7b771574971f36d394599b1f1",
-      "src/html-rt/lib/sys/ioctl.c": "bddf52a14447ada13e74d89bffcb72bfa441edf2da6e2a14f9b6cac96fb1a696",
-      "src/html-rt/lib/sys/random.c": "7e3ac3649213f3536657129f64f7e16a54bb7d3663fd9285c8eb92d1ab1215c5",
-      "src/html-rt/lib/sys/resource.c": "6a76e629ba271dab9ec08f66a4d8cd7e7482679607fa5317b44597fc90896875",
-      "src/html-rt/lib/sys/select.c": "4a132a1b5c4e19439585f73c2cb99ce58a28ced3fc90b8f07bfa573476c8ff4f",
-      "src/html-rt/lib/sys/socket.c": "1f9da6b52fceea7d42c497d5cb96c015d3e789f6e24b7bd162bac0e604ee075c",
-      "src/html-rt/lib/termcap.c": "cbf38231abd3b8a931ec400a25e7b0a2d0e402bf457825a5f05b69486306e252",
-      "src/html-rt/lib/termios.c": "aca583d27692638a43dd85da5c759f5bde6425fe9beef1b124a89481b13c2c82",
-      "src/html-rt/lib/time.c": "d8ac46eed8b498e6d670dfb7f4bbc2570247476f3f2e8df75fe9a5cf39c94f01",
-      "src/html-rt/lib/unistd.c": "8b05cbcf57de83a2c5f4429d44ec8120b2ae3cee9092ddb1cb5eb9697a07fa6f",
-      "src/html-rt/lib/waste-crt.c": "44109974a2f380a82045bbb473f224dbfee85355f34fc2673ef90e09885ddd94",
-      "src/html-rt/lib/wchar.c": "15bb204332a6ace132d7e0cd9a6ce79464c73a99afb62468847ea81f2ed62a47",
-      "src/html-rt/posix_stubs.c": "b8e2cb738c3d8d664705a432bcdbdf2330b7773cb1ef24946e9f3aea68db3d2b"
+      "src/html-rt/posix_stubs.c": "b8e2cb738c3d8d664705a432bcdbdf2330b7773cb1ef24946e9f3aea68db3d2b",
+      "src/libc/allocator.c": "33263c417eb8c4a01ea2d0f99a47992759b046b4440ad7edb9aa42d5d5b8c63c",
+      "src/libc/dirent.c": "395e625e434dca5120a4a70c5cc922ecc52dfb7feadb235a9c2753b6f24713b3",
+      "src/libc/dlfcn.c": "bbbf0c89d85285ff5ee04a698eb59eb7d0353f94e51e4254fbb296cd4d766ea7",
+      "src/libc/identity.c": "6121a0824c31e4610b71744960437c573503d91442d198cd95607c1ff0959cb7",
+      "src/libc/locale.c": "b9cd5e1462824009d3f31dee269102cb1efc37730ce512a87512450cb89849bb",
+      "src/libc/math.c": "0c683afec6f46eeb48ff4934956cda61be3807ceba52df2efa71930c8c7ce44a",
+      "src/libc/misc.c": "a1847b3933510fd4111864090fec5f38aef68fec9649a1cd1a4da85aa2851b32",
+      "src/libc/netdb.c": "c829c4a5a4ba7950ed69f5600d154bc0d13ac8c70a49d01e071715eaba565157",
+      "src/libc/pattern.c": "9c5463fafbebce745596a110bae48a45f0871aa0103fe18ade73b84423d147f9",
+      "src/libc/quad.c": "e9ba992c14c956838cf30a8ca7249a2415dc4ab16a4dcd49f421faf73bb9f688",
+      "src/libc/runtime/math.c": "da7bcda493c323c0a231b4734cd6755847cc33416efccc66f677d87438d42360",
+      "src/libc/stdio.c": "636da495b9ecefa264f5401b429dc9bd50acdfeb9804f4c38555734840f80ef2",
+      "src/libc/stdlib.c": "22a42dfcc3a017e5c95d46762adc828b7841bf88b588a8fc19912b04a91c4f2a",
+      "src/libc/string.c": "cb7a013f3a9f88d6e4bdea36f3351f669164bfb7b771574971f36d394599b1f1",
+      "src/libc/sys/ioctl.c": "bddf52a14447ada13e74d89bffcb72bfa441edf2da6e2a14f9b6cac96fb1a696",
+      "src/libc/sys/random.c": "7e3ac3649213f3536657129f64f7e16a54bb7d3663fd9285c8eb92d1ab1215c5",
+      "src/libc/sys/resource.c": "6a76e629ba271dab9ec08f66a4d8cd7e7482679607fa5317b44597fc90896875",
+      "src/libc/sys/select.c": "4a132a1b5c4e19439585f73c2cb99ce58a28ced3fc90b8f07bfa573476c8ff4f",
+      "src/libc/sys/socket.c": "1f9da6b52fceea7d42c497d5cb96c015d3e789f6e24b7bd162bac0e604ee075c",
+      "src/libc/termcap.c": "cbf38231abd3b8a931ec400a25e7b0a2d0e402bf457825a5f05b69486306e252",
+      "src/libc/termios.c": "aca583d27692638a43dd85da5c759f5bde6425fe9beef1b124a89481b13c2c82",
+      "src/libc/time.c": "d8ac46eed8b498e6d670dfb7f4bbc2570247476f3f2e8df75fe9a5cf39c94f01",
+      "src/libc/unistd.c": "e4f3421186addf33ca217cce25fcd7a38543b99518c295437687dd8338c6e0c2",
+      "src/libc/waste-crt.c": "eaa48d0f5411a90e4e28d23734c691dcaa27734eae9fc2ecef4221cfdf75948f",
+      "src/libc/wchar.c": "15bb204332a6ace132d7e0cd9a6ce79464c73a99afb62468847ea81f2ed62a47"
     },
     "status": "verified partial guest ABI; not C/POSIX conformance",
     "variables": {
@@ -17082,7 +17083,7 @@
           "unctrl.h"
         ],
         "inline": false,
-        "provider": "waste-crt.c stream pointer",
+        "provider": "guest-libc/CRT stream pointer (requires link relocation)",
         "type": "FILE *",
         "unavailable": false
       },
@@ -17096,7 +17097,7 @@
           "unctrl.h"
         ],
         "inline": false,
-        "provider": "waste-crt.c stream pointer",
+        "provider": "guest-libc/CRT stream pointer (requires link relocation)",
         "type": "FILE *",
         "unavailable": false
       },
@@ -17110,7 +17111,7 @@
           "unctrl.h"
         ],
         "inline": false,
-        "provider": "waste-crt.c stream pointer",
+        "provider": "guest-libc/CRT stream pointer (requires link relocation)",
         "type": "FILE *",
         "unavailable": false
       },
@@ -17176,7 +17177,7 @@
         "lseek",
         "__fpurge"
       ],
-      "sha256": "81bd570d43bda1c6c5cbb51d909124cada6bb8619b8cabd139695e1ec285033c",
+      "sha256": "e6cbb8907a2aaaf70c2b7802cb51d73c24e9bed97b75e7e0ba677b71c2d62cb2",
       "signatures": {
         "__fpurge": {
           "params": [
@@ -18139,7 +18140,7 @@
   "ncurses": {
     "boolean": "unsigned, 4 bytes",
     "configuration_sha256": "7acae5d39a2c37c13d86be35e18409ab155953b994521e045b4725218bbe27fe",
-    "library_sha256": "7559060e05c3e9cb30e4fc0fac42686bfb38dd1a0619a06f5047864946bb8031",
+    "library_sha256": "b5158484a4e54d9b6d84683dc3ef57b7d464ba11d061a26372d1507f43ddc232",
     "revision": "87c2c84cbd2332d6d94b12a1dcaf12ad1a51a938"
   },
   "private_exclusions": [

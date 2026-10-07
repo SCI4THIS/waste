@@ -11,7 +11,7 @@
     },
     {
       "after": "bash-5.2# ",
-      "text": "/bin/true; printf '__RECOVER_%s__\\n' \"$?\"\n"
+      "text": "true; printf '__RECOVER_%s__\\n' \"$?\"\n"
     },
     {
       "after": "bash-5.2# ",

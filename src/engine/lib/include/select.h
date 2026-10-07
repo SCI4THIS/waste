@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* Guest ABI constants — must match src/html-rt/lib/include/helper.h */
+/* Guest ABI constants — must match src/libc/include/helper.h */
 #define POSIX_FD_SETSIZE  1024
 #define POSIX_NFDBITS     32
 #define POSIX_FD_SET_WORDS (POSIX_FD_SETSIZE / POSIX_NFDBITS)

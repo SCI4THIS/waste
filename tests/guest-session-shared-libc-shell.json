@@ -1,0 +1,12 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "events": [
+    {"after": "bash-5.2# ", "text": "waste-test --results=/tmp/shared-libc-results.json engine-regressions/shared-libc.wast; printf '__SHARED_LIBC_EXIT__%s\\n' \"$?\"; cat /tmp/shared-libc-results.json\n"},
+    {"after": "bash-5.2# ", "text": "exit\n"}
+  ],
+  "contains": ["__SHARED_LIBC_EXIT__0\r\n"],
+  "assertions": 7,
+  "exitStatus": 0,
+  "processes": 2,
+  "execs": 2
+}

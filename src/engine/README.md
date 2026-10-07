@@ -29,7 +29,7 @@ Generated scanner and parser sources stay under `build/engine/gen/`.
 
 The OCaml reference interpreter in `submodules/wasm-spec/interpreter` was used
 as a language reference while implementing the WAT/WAST portions of the C
-engine. See [ocaml-reference-build.md](../../docs/ocaml-reference-build.md)
+engine. See [OCaml reference interpreter build](../../docs/techniques.md#ocaml-reference-interpreter-build)
 for the minimal build/test instructions. Kernel and application behavior uses
 C native/browser parity and private sanitizer/ABI checks.
 

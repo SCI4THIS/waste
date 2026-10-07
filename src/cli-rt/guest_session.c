@@ -550,10 +550,18 @@ static int session_queue_host_io_reply(cli_guest_session *session,
     return 0;
 }
 
+static void session_process_trace(void *context, const char *event) {
+    (void)context;
+    fputs("{\"process\":", stderr);
+    session_json_string(stderr, event);
+    fputs("}\n", stderr);
+    fflush(stderr);
+}
+
 int main(int argc, char **argv) {
     const char *root_path = NULL, *script_path = NULL, *result_path = NULL;
     unsigned timeout = 30000, cancel_after = 0, columns = 80, rows = 24;
-    int trace_waits = 0, control_fd = -1;
+    int trace_waits = 0, trace_process = 0, control_fd = -1;
     int clock_realtime_fixed = 0, clock_monotonic_fixed = 0;
     uint64_t clock_realtime_ns = 0, clock_monotonic_ns = 0;
     struct { const char *guest, *host; unsigned mode; } staged[64];
@@ -567,7 +575,7 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--help")) {
             puts("usage: waste-session --vfs-root DIRECTORY [--script HOST.wast] [--result-file JSON]\n"
                  "       [--timeout-ms N] [--columns N] [--rows N] [--trace-waits]\n"
-                 "       [--cancel-after-ms N] [--control-fd N]\n"
+                 "       [--cancel-after-ms N] [--control-fd N] [--trace-process]\n"
                  "       [--clock-realtime-ns N] [--clock-monotonic-ns N]\n"
                  "       [--host-upload-reply HOST_FILE | --host-upload-cancel]...\n"
                  "       [--host-download-complete | --host-download-cancel]...\n"
@@ -583,6 +591,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (!strcmp(argv[i], "--trace-waits")) { trace_waits = 1; continue; }
+        if (!strcmp(argv[i], "--trace-process")) { trace_process = 1; continue; }
         if (!strcmp(argv[i], "--host-upload-cancel")) {
             if (pending_io_count == SESSION_HOST_IO_REPLY_MAX) goto invalid;
             pending_io[pending_io_count].kind = NATIVE_HOST_IO_UPLOAD;
@@ -672,6 +681,7 @@ int main(int argc, char **argv) {
     if (sigaction(SIGINT, &interrupt_action, NULL) ||
         sigaction(SIGTERM, &interrupt_action, NULL)) return 2;
     native_process_driver_init(&session.driver);
+    if (trace_process) session.driver.trace = session_process_trace;
     wast_process_handler_init(&session.handler, &session.store, session_handler_result, &session);
     session.driver.handler_step = session_handler_step;
     session.driver.handler_reset = wast_process_handler_reset;

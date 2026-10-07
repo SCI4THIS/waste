@@ -51,9 +51,9 @@ ENGINE_HEADERS += native_vfs.h $(ENGINE_DIR)/lib/json.h $(ENGINE_DIR)/process_dr
 	$(ENGINE_DIR)/lib/include/path.h
 ENGINE_HEADERS += $(ENGINE_DIR)/wast/setup.h
 
-# Freestanding library: shared (portable) sources from engine
-LIB_SHARED := $(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdio.c \
-	$(ENGINE_DIR)/lib/stdlib.c $(ENGINE_DIR)/lib/math.c $(ENGINE_DIR)/lib/errno.c
+# Freestanding library: shared portable interpreter support
+LIB_SHARED := ../libc/runtime/string.c ../libc/runtime/stdio.c \
+	../libc/runtime/stdlib.c ../libc/runtime/math.c ../libc/runtime/errno.c
 
 # Freestanding library: native platform backend (local to cli-rt)
 LIB_NATIVE := lib/stdlib.c lib/stdio.c lib/fcntl.c \
@@ -800,8 +800,8 @@ $(EXEC_MATRIX_TEST_TARGET): ../../tests/c-engine-exec-matrix.c \
 		$(ENGINE_DIR)/op/execute_exception.c $(ENGINE_DIR)/op/execute_table.c \
 		$(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_DIR)/instance.c \
 		$(ENGINE_DIR)/api.c \
-		$(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdlib.c \
-		$(ENGINE_DIR)/lib/math.c $(ENGINE_DIR)/lib/errno.c \
+		../libc/runtime/string.c ../libc/runtime/stdlib.c \
+		../libc/runtime/math.c ../libc/runtime/errno.c \
 		lib/stdio.c -lm -o $@
 
 $(EXEC_LIFECYCLE_TEST_TARGET): ../../tests/c-engine-exec-lifecycle.c \

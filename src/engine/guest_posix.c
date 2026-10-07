@@ -2407,7 +2407,8 @@ static exec_status guest_posix_dlopen_v1(void *data, const wasm_value *args,
     }
     /* Check if already loaded — return existing handle. */
     for (uint32_t i = 0; i < capsule->loaded_library_count; i++) {
-        if (strcmp(capsule->loaded_libraries[i].path, load_path) == 0) {
+        if (capsule->loaded_libraries[i].engine &&
+            strcmp(capsule->loaded_libraries[i].path, load_path) == 0) {
             capsule->loaded_libraries[i].ref_count++;
             return guest_posix_result((int32_t)(i + 1), results,
                                        result_count);

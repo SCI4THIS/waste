@@ -41,7 +41,7 @@ def compile_objects(
     cc = str(sysroot / "bin" / "waste-wasm-clang")
     obj_dir.mkdir(parents=True, exist_ok=True)
 
-    pic_flags = ["-fPIC", "-fvisibility=default"]
+    pic_flags = ["-fPIC", "-fvisibility=default", "-DWASTE_POSIX_IO", "-DWASTE_SHARED_LIBC"]
     objects = []
     failed = []
 
@@ -66,6 +66,7 @@ def compile_objects(
         print(f"compile: {len(objects)} ok, {len(failed)} failed")
         for name, err in failed[:20]:
             print(f"  FAIL {name}: {err.strip()[:400]}")
+        raise RuntimeError("guest libc compilation failed; refusing a partial library")
     else:
         print(f"compile: {len(objects)} objects ok")
     return objects
@@ -74,10 +75,17 @@ def compile_objects(
 def link_shared_library(
     objects: list[Path],
     output: Path,
+    repo_root: Path,
 ) -> None:
     """Link object files into a PIC shared library with dylink.0."""
+    environment = os.environ.copy()
+    linker = shutil.which("wasm-ld")
+    if not linker:
+        toolchain = repo_root / "build/engine/toolchain/usr"
+        linker = str(toolchain / "bin/wasm-ld")
+        environment["LD_LIBRARY_PATH"] = str(toolchain / "lib") + os.pathsep + environment.get("LD_LIBRARY_PATH", "")
     command = [
-        "wasm-ld",
+        linker,
         "--shared",
         "--import-memory",
         "--import-table",
@@ -86,7 +94,7 @@ def link_shared_library(
         "--no-entry",
         "-o", str(output),
     ] + [str(o) for o in objects]
-    subprocess.run(command, check=True)
+    subprocess.run(command, check=True, env=environment)
     size = output.stat().st_size
     print(f"link: {output.name} ({size} bytes)")
 
@@ -153,7 +161,7 @@ def main() -> int:
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
 
-    lib_dir = repo_root / "src" / "html-rt" / "lib"
+    lib_dir = repo_root / "src" / "libc"
 
     # Gather all source files: allocator.c + libc C sources.
     sources: list[Path] = [lib_dir / "allocator.c"]
@@ -178,7 +186,7 @@ def main() -> int:
 
     # Link shared library.
     lib_output = output / "libc.so.wasm"
-    link_shared_library(objects, lib_output)
+    link_shared_library(objects, lib_output, repo_root)
 
     # Inspect the result.
     inspect_dylink(lib_output)

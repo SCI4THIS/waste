@@ -1,0 +1,114 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "events": [
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/true; printf '__DEPS_true_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/false; printf '__DEPS_false_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/pwd; printf '__DEPS_pwd_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/echo; printf '__DEPS_echo_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/printf; printf '__DEPS_printf_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/basename; printf '__DEPS_basename_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/dirname; printf '__DEPS_dirname_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/cat; printf '__DEPS_cat_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/wc; printf '__DEPS_wc_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/ls; printf '__DEPS_ls_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/date; printf '__DEPS_date_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/rogue; printf '__DEPS_rogue_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/ldd; printf '__DEPS_ldd_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/upload; printf '__DEPS_upload_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/download; printf '__DEPS_download_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /usr/lib/libncurses.so.wasm; printf '__DEPS_ncurses_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "ldd /bin/waste-test; printf '__DEPS_freestanding_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "printf '\\000\\141\\163\\155\\001\\000\\000\\000\\002\\002\\001\\377' > /tmp/ldd-malformed.wasm; ldd /tmp/ldd-malformed.wasm; printf '__DEPS_malformed_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "printf '\\000\\141\\163\\155\\001\\000\\000\\000\\001\\004\\001\\140\\000\\000\\002\\015\\001\\007\\155\\151\\163\\163\\151\\156\\147\\001\\170\\000\\000' > /tmp/ldd-missing.wasm; ldd /tmp/ldd-missing.wasm; printf '__DEPS_missing_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "exit\n"
+    }
+  ],
+  "contains": [
+    "__DEPS_true_0__\r\n",
+    "__DEPS_false_0__\r\n",
+    "__DEPS_pwd_0__\r\n",
+    "__DEPS_echo_0__\r\n",
+    "__DEPS_printf_0__\r\n",
+    "__DEPS_basename_0__\r\n",
+    "__DEPS_dirname_0__\r\n",
+    "__DEPS_cat_0__\r\n",
+    "__DEPS_wc_0__\r\n",
+    "__DEPS_ls_0__\r\n",
+    "__DEPS_date_0__\r\n",
+    "__DEPS_rogue_0__\r\n",
+    "__DEPS_ldd_0__\r\n",
+    "__DEPS_upload_0__\r\n",
+    "__DEPS_download_0__\r\n",
+    "__DEPS_ncurses_0__\r\n",
+    "__DEPS_freestanding_0__\r\n",
+    "__DEPS_malformed_1__\r\n",
+    "__DEPS_missing_1__\r\n",
+    "missing => not found (1 imports)"
+  ],
+  "outputCounts": {
+    "libc => /usr/lib/libc.so.wasm": 16
+  },
+  "assertions": 7,
+  "exitStatus": 0,
+  "processes": 19,
+  "execs": 19
+}

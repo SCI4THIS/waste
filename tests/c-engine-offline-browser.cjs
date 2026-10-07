@@ -173,12 +173,12 @@ async function waitSession(session, name = "waits") {
       await until(sessionId, "!document.querySelector('#terminal-input').disabled");
       assert.equal(await evaluate(sessionId, "renderer.useWebGL && !renderer.gl.isContextLost()"), true);
       await evaluate(sessionId, `document.querySelector('#terminal-input').value =
-        "/bin/echo __OFFLINE_LAYOUT_OK__";
+        "echo __OFFLINE_LAYOUT_OK__";
         document.querySelector('#terminal-form').dispatchEvent(new Event('submit', {cancelable: true}));`);
       await until(sessionId, `document.querySelector('#terminal-transcript').textContent
         .includes(String.fromCharCode(13) + '__OFFLINE_LAYOUT_OK__')`);
       await evaluate(sessionId, `document.querySelector('#terminal-input').value =
-        '/bin/waste-test --group=core --results=/tmp/early-cancel.json >/tmp/early-cancel.txt; printf "__EARLY_CANCEL__%s\\n" "$?"';
+        'waste-test --group=core --results=/tmp/early-cancel.json >/tmp/early-cancel.txt; printf "__EARLY_CANCEL__%s\\n" "$?"';
         document.querySelector('#terminal-form').dispatchEvent(new Event('submit', {cancelable: true}));`);
       await until(sessionId, `browserTestSuite !== null && browserTestSuite.guestPending !== null`);
       await evaluate(sessionId, `worker.postMessage({type:'input', bytes:[3]})`);
@@ -233,12 +233,12 @@ async function waitSession(session, name = "waits") {
       await until(sessionId, `browserTestResults !== null && !document.querySelector('#suite-run').disabled`);
       assert.equal(await evaluate(sessionId, "browserTestResults.exitCode"), 130);
       await evaluate(sessionId, `document.querySelector('#terminal-input').value =
-        '/bin/waste-test --json --results=/tmp/guest-suite.json path-runtime.wast >/tmp/guest-stdout.json; printf "__GUEST_BATCH__%s\\n" "$?"; /bin/cat /tmp/guest-suite.json';
+        'waste-test --json --results=/tmp/guest-suite.json path-runtime.wast >/tmp/guest-stdout.json; printf "__GUEST_BATCH__%s\\n" "$?"; cat /tmp/guest-suite.json';
         document.querySelector('#terminal-form').dispatchEvent(new Event('submit', {cancelable: true}));`);
       await until(sessionId, `document.querySelector('#terminal-transcript').textContent.includes('__GUEST_BATCH__0') &&
         document.querySelector('#terminal-transcript').textContent.includes('"identity":"libc-test/path-runtime.wast"')`);
       await evaluate(sessionId, `document.querySelector('#terminal-input').value =
-        '/bin/waste-test --group=core --results=/tmp/guest-cancel.json >/tmp/guest-cancel.txt; printf "__GUEST_CANCEL__%s\\n" "$?"';
+        'waste-test --group=core --results=/tmp/guest-cancel.json >/tmp/guest-cancel.txt; printf "__GUEST_CANCEL__%s\\n" "$?"';
         document.querySelector('#terminal-form').dispatchEvent(new Event('submit', {cancelable: true}));`);
       await until(sessionId, `browserTestSuite.running !== null`);
       await evaluate(sessionId, `worker.postMessage({type:'input', bytes:[3]})`);
@@ -257,7 +257,7 @@ async function waitSession(session, name = "waits") {
         console.log("PASS production browser batch: full mounted corpus", report.summary);
       }
       await evaluate(sessionId, `document.querySelector('#terminal-input').value =
-        '/bin/echo __BASH_AFTER_SUITE__';
+        'echo __BASH_AFTER_SUITE__';
         document.querySelector('#terminal-form').dispatchEvent(new Event('submit', {cancelable:true}));`);
       await until(sessionId, `document.querySelector('#terminal-transcript').textContent
         .includes(String.fromCharCode(13) + '__BASH_AFTER_SUITE__')`);

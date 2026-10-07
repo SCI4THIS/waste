@@ -18,7 +18,7 @@ import time
 FRONTEND = Path("src/html-rt/src")
 LEGACY_PATHS = (
     "src/html-rt/src/bash", "src/html-rt/src/tests",
-    "src/html-rt/src/shared", "src/html-rt/lib/include",
+    "src/html-rt/src/shared", "src/libc/include",
     "src/engine/lib/include", "src/engine/include", "lib/include/",
     "../shared/", "SRC_DIR", "PAGE_DIR", "HEADER_ROOT",
     '"bash"', '"shared"', '"tests"',
@@ -77,9 +77,8 @@ def collect(root: Path) -> dict:
         frontend.append({**fingerprint(root, path), "destination": destination,
                          "role": role})
         if role == "guest-executable":
-            frontend[-1]["guest_paths"] = (["/bin/waste-probe"] if
-                path.stem == "waste-probe" else ["/usr/bin/" + path.stem,
-                                                "/bin/" + path.stem])
+            prefix = "/bin/" if path.stem in ("waste-probe", "waste-test") else "/usr/bin/"
+            frontend[-1]["guest_paths"] = [prefix + path.stem]
         elif role == "vendor-link":
             frontend[-1]["target"] = "../../../submodules/tarballjs/tarball.js"
         elif role == "guest-library":
@@ -239,11 +238,11 @@ def measure(root: Path, output: Path, report: dict, selection: str | None) -> No
     root_mtime = next(e["mtime_sec"] for e in vfs["entries"] if e["path"] == "/")
     engine = root / "build/html-rt/waste-wast.wasm"
     for name, guest_command, expected, count in (
-            ("clock", "/bin/date -u +%Y", str(datetime.datetime.now(
+            ("clock", "date -u +%Y", str(datetime.datetime.now(
                 datetime.timezone.utc).year), 1),
-            ("file-mtime", "/bin/ls -l /bin/date", datetime.datetime.fromtimestamp(
+            ("file-mtime", "ls -l /usr/bin/date", datetime.datetime.fromtimestamp(
                 date_mtime, datetime.timezone.utc).strftime("%b %e %H:%M"), 1),
-            ("build-mtime", "/bin/ls -ld / /bin /bin/wat /bin/wast",
+            ("build-mtime", "ls -ld / /bin /bin/wat /bin/wast",
              datetime.datetime.fromtimestamp(root_mtime,
                 datetime.timezone.utc).strftime("%b %e %H:%M"), 4)):
         commands.append(("bash-" + name, ["env",

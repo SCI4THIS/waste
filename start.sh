@@ -68,7 +68,7 @@ Engine (C):
                    and install to repo
 
 Legacy / advanced:
-  --build-libc     build waste-libc.wasm and its libc tests
+  --build-libc     build libc.so.wasm and the static libc test profile
   --c-engine-tests build C engine and run relaxed-SIMD spec tests
   --c-engine-bash-html
                    alias for --html-bash
@@ -296,7 +296,7 @@ build_waste_libc() {
   {
     printf 'WASTE guest libc build\n'
     printf 'Started: %s\n' "$(date --iso-8601=seconds)"
-    printf 'Source: %s\n' "$REPO_ROOT/src/html-rt/lib/stdlib.wat"
+    printf 'Source: %s\n' "$REPO_ROOT/src/libc"
     printf 'Output: %s\n\n' "$LIBC_OUTPUT"
   } >>"$LIBC_LOG"
 
@@ -310,7 +310,7 @@ build_waste_libc() {
   fi
   if ! run_logged_step "Build guest libc and fixtures" "$LIBC_LOG" \
       make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$HTML_BUILD" \
-      ENGINE_BUILD_DIR="$ENGINE_BUILD" waste-libc; then
+      ENGINE_BUILD_DIR="$ENGINE_BUILD" libc-shared waste-libc; then
     if [[ "$quiet" != true ]]; then
       show_message "Guest libc build failed" "Could not build waste-libc.wasm.\n\nLog: $LIBC_LOG"
     fi
@@ -319,7 +319,7 @@ build_waste_libc() {
   printf 'Completed: %s\n' "$(date --iso-8601=seconds)" >>"$LIBC_LOG"
   if [[ "$quiet" != true ]]; then
     show_message "Guest libc build complete" \
-      "The shared-memory guest libc module and browser fixtures were generated.\n\nOutput: $LIBC_OUTPUT\nLog: $LIBC_LOG"
+      "The PIC shared library and static test fixtures were generated.\n\nShared library: $REPO_ROOT/build/libc-shared/libc.so.wasm\nTest profile: $LIBC_OUTPUT\nLog: $LIBC_LOG"
   fi
 }
 
@@ -510,8 +510,13 @@ build_single_aux() {
           "Linked artifact not found: $ncurses_out"
         return 1
       fi
+      local review_text
+      review_text=$(python3 "$REPO_ROOT/src/html-rt/tools/shared_libc.py" \
+        --review-imports "$ncurses_out") || return 1
+      local -a libc_reviews
+      read -r -a libc_reviews <<< "$review_text"
       python3 "$REPO_ROOT/src/html-rt/tools/build-guest-sdk.py" --install \
-        --library "$ncurses_out" || return 1
+        "${libc_reviews[@]}" --library "$ncurses_out" || return 1
       printf 'Installed %s → %s\n' "$ncurses_out" "$AUX_STAGING/libncurses.so.wasm"
       ;;
     rogue)
@@ -528,7 +533,13 @@ build_single_aux() {
           "Linked artifact not found: $rogue_out"
         return 1
       fi
+      local review_text
+      review_text=$(python3 "$REPO_ROOT/src/html-rt/tools/shared_libc.py" \
+        --review-imports "$rogue_out") || return 1
+      local -a libc_reviews
+      read -r -a libc_reviews <<< "$review_text"
       python3 "$REPO_ROOT/src/html-rt/tools/vfs.py" install \
+        "${libc_reviews[@]}" \
         --component "$utility" --source "$rogue_out" || return 1
       printf 'Installed %s → %s\n' "$rogue_out" "$AUX_STAGING/rogue.wasm"
       ;;
@@ -546,7 +557,13 @@ build_single_aux() {
           "Linked artifact not found: $ldd_out"
         return 1
       fi
+      local review_text
+      review_text=$(python3 "$REPO_ROOT/src/html-rt/tools/shared_libc.py" \
+        --review-imports "$ldd_out") || return 1
+      local -a libc_reviews
+      read -r -a libc_reviews <<< "$review_text"
       python3 "$REPO_ROOT/src/html-rt/tools/vfs.py" install \
+        "${libc_reviews[@]}" --review-import env:fstat:function \
         --component "$utility" --source "$ldd_out" || return 1
       printf 'Installed %s → %s\n' "$ldd_out" "$AUX_STAGING/ldd.wasm"
       ;;
@@ -564,7 +581,13 @@ build_single_aux() {
           "Linked artifact not found: $ud_out"
         return 1
       fi
+      local review_text
+      review_text=$(python3 "$REPO_ROOT/src/html-rt/tools/shared_libc.py" \
+        --review-imports "$ud_out") || return 1
+      local -a libc_reviews
+      read -r -a libc_reviews <<< "$review_text"
       python3 "$REPO_ROOT/src/html-rt/tools/vfs.py" install \
+        "${libc_reviews[@]}" \
         --component "$utility" --source "$ud_out" || return 1
       printf 'Installed %s → %s\n' "$ud_out" "$AUX_STAGING/${utility}.wasm"
       ;;
@@ -583,7 +606,13 @@ build_single_aux() {
           "Linked artifact not found: $linked"
         return 1
       fi
+      local review_text
+      review_text=$(python3 "$REPO_ROOT/src/html-rt/tools/shared_libc.py" \
+        --review-imports "$linked") || return 1
+      local -a libc_reviews
+      read -r -a libc_reviews <<< "$review_text"
       python3 "$REPO_ROOT/src/html-rt/tools/vfs.py" install \
+        "${libc_reviews[@]}" \
         --review-import waste_kernel:dlopen_v1:function \
         --review-import waste_kernel:dlsym_v1:function \
         --review-import waste_kernel:dlclose_v1:function \
@@ -681,6 +710,13 @@ generate_c_engine_bash_html() {
     return 1
   fi
 
+  if ! run_logged_step "Build and install shared guest libc" \
+      "$C_ENGINE_BASH_LOG" make -C "$REPO_ROOT/src/libc" install; then
+    show_message "C-engine Bash failed" \
+      "Could not build and install libc.so.wasm.\n\nLog: $C_ENGINE_BASH_LOG"
+    return 1
+  fi
+
   # Build the bash-runtime.wast (interactive mode for terminal I/O)
   if ! run_logged_step "Relink the interactive Bash runtime" \
       "$C_ENGINE_BASH_LOG" python3 "$BASH_RUNTIME_BUILDER" \
@@ -750,7 +786,7 @@ generate_c_engine_bash_html() {
 
   printf 'Completed: %s\n' "$(date --iso-8601=seconds)" >>"$C_ENGINE_BASH_LOG"
   show_message "C-engine Bash generated" \
-    "The static page embeds the C engine, shared runtime, waste-libc, and Bash. It can be opened directly with file:// and requires no server.\n\nOutput: $C_ENGINE_BASH_HTML\nLog: $C_ENGINE_BASH_LOG"
+    "The static page embeds the C engine, Bash, and the installed VFS including libc.so.wasm. It can be opened directly with file:// and requires no server.\n\nOutput: $C_ENGINE_BASH_HTML\nLog: $C_ENGINE_BASH_LOG"
 }
 
 check_c_engine_bash() {
@@ -849,7 +885,7 @@ check_c_engine_bash() {
   browser_date_year="$(date -u +%Y)"
   if ! run_logged_step "Run the C-engine Bash wall-clock/date test" \
       "$C_ENGINE_BASH_LOG" env \
-      WASTE_COREUTILS_LS_COMMAND='/bin/date -u +%Y' \
+      WASTE_COREUTILS_LS_COMMAND='date -u +%Y' \
       WASTE_COREUTILS_LS_EXPECT="$browser_date_year" \
       node "$C_ENGINE_BASH_BROWSER_TEST" --coreutils-ls --full-package; then
     show_message "C-engine Bash wall-clock/date test failed" \
@@ -862,11 +898,11 @@ check_c_engine_bash() {
   date_source_time="$(date -u -d "@$date_source_epoch" '+%b %e %H:%M')"
   if ! run_logged_step "Run the C-engine Bash packaged-mtime test" \
       "$C_ENGINE_BASH_LOG" env \
-      WASTE_COREUTILS_LS_COMMAND='/bin/ls -l /bin/date' \
+      WASTE_COREUTILS_LS_COMMAND='ls -l /usr/bin/date' \
       WASTE_COREUTILS_LS_EXPECT="$date_source_time" \
       node "$C_ENGINE_BASH_BROWSER_TEST" --coreutils-ls --full-package; then
     show_message "C-engine Bash packaged-mtime test failed" \
-      "The static page did not preserve the staged date.wasm source modification time in /bin/date.\n\nLog: $C_ENGINE_BASH_LOG"
+      "The static page did not preserve the staged date.wasm source modification time in /usr/bin/date.\n\nLog: $C_ENGINE_BASH_LOG"
     return 1
   fi
 
@@ -875,7 +911,7 @@ check_c_engine_bash() {
   engine_build_time="$(date -u -d "@$engine_build_epoch" '+%b %e %H:%M')"
   if ! run_logged_step "Run the C-engine Bash virtual-node build-mtime test" \
       "$C_ENGINE_BASH_LOG" env \
-      WASTE_COREUTILS_LS_COMMAND='/bin/ls -ld / /bin /bin/wat /bin/wast' \
+      WASTE_COREUTILS_LS_COMMAND='ls -ld / /bin /bin/wat /bin/wast' \
       WASTE_COREUTILS_LS_EXPECT="$engine_build_time" \
       WASTE_COREUTILS_LS_EXPECT_COUNT=4 \
       node "$C_ENGINE_BASH_BROWSER_TEST" --coreutils-ls --full-package; then

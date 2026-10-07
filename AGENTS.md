@@ -6,7 +6,7 @@ The production C implementation is split by responsibility. Platform-neutral
 parser, encoder, validator, linker, runner, and executor code lives in
 `src/engine/`. The native command-line runtime, mmap harness, syscall-backed C
 library, and native build rules live in `src/cli-rt/`. The browser/Wasm API,
-browser POSIX adapters, guest libc implementation, HTML generators, and browser
+browser POSIX adapters, HTML generators, and browser
 build rules live in `src/html-rt/`. Keep shared semantics in `src/engine/`; add
 platform behavior only to the matching runtime directory. Compiled Bash input
 is in `examples/bash.wat`.
@@ -14,13 +14,17 @@ is in `examples/bash.wat`.
 Follow `docs/architecture.md`: C is the browser runtime. The OCaml reference
 interpreter in `submodules/wasm-spec/interpreter` was used as a language
 reference while implementing the WAT/WAST portions of the C engine. See
-`docs/ocaml-reference-build.md` for the minimal build/test instructions.
+[OCaml reference interpreter build](docs/techniques.md#ocaml-reference-interpreter-build)
+for the minimal build/test instructions.
 Read `docs/techniques.md` before extending the engine; it records the parser,
 validation, execution, linking, browser, and verification practices established
 during the port. Current staged work is tracked in the `docs/active-*.md`
 plans.
 Packaging tools are in `src/html-rt/tools/`; guest libc sources are in
-`src/html-rt/lib/`. Architecture notes are in `docs/`, and project probes
+`src/libc/`. Build/install the shared guest library with `make -C src/libc install`.
+Portable support needed by the interpreter itself lives in `src/libc/runtime/`
+and is statically linked into each runtime; kernel semantics stay in `src/engine/`.
+Architecture notes are in `docs/`, and project probes
 are in `tests/`, especially `tests/diy-posix-test/` and `tests/libc-test/`.
 Treat all of `build/` as generated output. Shared generated engine sources and
 logs go under `build/engine/`, native executables under `build/cli-rt/`, and
@@ -82,7 +86,8 @@ this explicit return path as stack unwinding/rewinding.
   fixtures.
 - `./start.sh --generate-bash-html`: generate the offline WASTE Bash page.
 - `./start.sh --ocaml-reference`: stage and run the OCaml reference interpreter
-  under `build/ocaml-interpreter/`; see `docs/ocaml-reference-build.md`.
+  under `build/ocaml-interpreter/`; see
+  [OCaml reference interpreter build](docs/techniques.md#ocaml-reference-interpreter-build).
 - `make -C src/cli-rt BUILD_DIR=../../build/cli-rt wast-native`: build the
   native CLI runner.
 - `make -C src/cli-rt corpus-native`: build the native batch companion and
@@ -148,7 +153,7 @@ Keep libc test clients in `tests/libc-test/*.wast.inc`; generated fixtures
 belong under `build/html-rt/waste-libc/tests/`.
 The OCaml reference interpreter (`./start.sh --ocaml-reference`) may be used
 to cross-check WAT/WAST language behavior on supported official tests; see
-`docs/ocaml-reference-build.md`.
+[OCaml reference interpreter build](docs/techniques.md#ocaml-reference-interpreter-build).
 Run C decoder/executor tests natively with warnings-as-errors, AddressSanitizer,
 and UndefinedBehaviorSanitizer, then exercise the same artifact through the
 offline Bash/test page.

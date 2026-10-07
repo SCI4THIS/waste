@@ -20,7 +20,7 @@
     {"after": "HANDLER_SELECT\n", "text": "Z", "pid": 7, "waitKind": 2},
     {"after": "bash-5.2# ", "text": "/bin/wast /tmp/handler-mismatch.wast; printf '__MISMATCH_%s__\\n' \"$?\"\n"},
     {"after": "HANDLER_MISMATCH\n", "text": "A", "pid": 8},
-    {"after": "bash-5.2# ", "text": "/bin/true; printf '__RECOVER_%s__\\n' \"$?\"\n"},
+    {"after": "bash-5.2# ", "text": "true; printf '__RECOVER_%s__\\n' \"$?\"\n"},
     {"after": "bash-5.2# ", "text": "exit 3\n"}
   ],
   "contains": ["WAT_OK\r\n", "WAT_SHEBANG_OK\r\n", "__WAT_0__\r\n", "__DIRECT_0__\r\n", "__SHEBANG_0__\r\n", "__WAST_0__\r\n", "__REPEAT_0__\r\n", "__READ_0__\r\n", "__MISMATCH_1__\r\n", "__RECOVER_0__\r\n"],

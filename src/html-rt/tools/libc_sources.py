@@ -1,4 +1,4 @@
-"""Shared guest-libc source manifest for the HTML runtime builders."""
+"""Guest libc sources shared by the PIC library and static test builders."""
 
 from pathlib import Path
 
@@ -32,7 +32,7 @@ LIBC_C_SOURCES = (
 
 
 def libc_source_paths(root: Path) -> tuple[Path, ...]:
-    lib_dir = root / "src" / "html-rt" / "lib"
+    lib_dir = root / "src" / "libc"
     return tuple(lib_dir / name for name in LIBC_C_SOURCES)
 
 

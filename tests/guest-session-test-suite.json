@@ -3,39 +3,39 @@
   "events": [
     {
       "after": "bash-5.2# ",
-      "text": "/bin/waste-test --help\n"
+      "text": "waste-test --help\n"
     },
     {
       "after": "bash-5.2# ",
-      "text": "/bin/waste-test --list --json --results=/tmp/list.json path-runtime.wast >/tmp/list-stdout.json; printf \"__LIST_STATUS__%s\\n\" \"$?\"; /bin/cat /tmp/list.json; /bin/cat /tmp/list-stdout.json\n"
+      "text": "waste-test --list --json --results=/tmp/list.json path-runtime.wast >/tmp/list-stdout.json; printf \"__LIST_STATUS__%s\\n\" \"$?\"; cat /tmp/list.json; cat /tmp/list-stdout.json\n"
     },
     {
       "after": "bash-5.2# ",
-      "text": "/bin/waste-test --jobs=2 --results=/tmp/suite.json address.wast path-runtime.wast spectest-isolation-a.wast spectest-isolation-b.wast; printf \"__BATCH_STATUS__%s\\n\" \"$?\"; /bin/cat /tmp/suite.json\n"
+      "text": "waste-test --jobs=2 --results=/tmp/suite.json address.wast path-runtime.wast spectest-isolation-a.wast spectest-isolation-b.wast; printf \"__BATCH_STATUS__%s\\n\" \"$?\"; cat /tmp/suite.json\n"
     },
     {
       "after": "bash-5.2# ",
-      "text": "/bin/waste-test --timeout-ms=1 address.wast >/tmp/timeout.txt; printf \"__TIMEOUT_STATUS__%s\\n\" \"$?\"\n"
+      "text": "waste-test --timeout-ms=1 address.wast >/tmp/timeout.txt; printf \"__TIMEOUT_STATUS__%s\\n\" \"$?\"\n"
     },
     {
       "after": "bash-5.2# ",
-      "text": "/bin/waste-test --group=missing 2>/tmp/selection-error.txt; printf \"__INVALID_STATUS__%s\\n\" \"$?\"; /bin/cat /tmp/selection-error.txt\n"
+      "text": "waste-test --group=missing 2>/tmp/selection-error.txt; printf \"__INVALID_STATUS__%s\\n\" \"$?\"; cat /tmp/selection-error.txt\n"
     },
     {
       "after": "bash-5.2# ",
-      "text": "/bin/waste-test --vfs-root=/host; printf \"__CAPABILITY_STATUS__%s\\n\" \"$?\"\n"
+      "text": "waste-test --vfs-root=/host; printf \"__CAPABILITY_STATUS__%s\\n\" \"$?\"\n"
     },
     {
       "after": "bash-5.2# ",
-      "text": "/bin/waste-test --list --exclude=path-runtime.wast --group=libc-test >/tmp/selected.txt; printf \"__EXCLUDE_STATUS__%s\\n\" \"$?\"\n"
+      "text": "waste-test --list --exclude=path-runtime.wast --group=libc-test >/tmp/selected.txt; printf \"__EXCLUDE_STATUS__%s\\n\" \"$?\"\n"
     },
     {
       "after": "bash-5.2# ",
-      "text": "/bin/waste-test --json --results=/tmp/xfail.json environment-boundaries.wast >/tmp/json-stdout.txt; printf \"__XFAIL_STATUS__%s\\n\" \"$?\"; /bin/cat /tmp/xfail.json\n"
+      "text": "waste-test --json --results=/tmp/xfail.json environment-boundaries.wast >/tmp/json-stdout.txt; printf \"__XFAIL_STATUS__%s\\n\" \"$?\"; cat /tmp/xfail.json\n"
     },
     {
       "after": "bash-5.2# ",
-      "text": "echo __CANCEL_BEGIN__; /bin/waste-test --group=core --results=/tmp/cancel.json >/tmp/cancel-out.txt; printf \"__CANCEL_STATUS__%s\\n\" \"$?\"\n"
+      "text": "echo __CANCEL_BEGIN__; waste-test --group=core --results=/tmp/cancel.json >/tmp/cancel-out.txt; printf \"__CANCEL_STATUS__%s\\n\" \"$?\"\n"
     },
     {
       "after": "__CANCEL_BEGIN__\r\n",

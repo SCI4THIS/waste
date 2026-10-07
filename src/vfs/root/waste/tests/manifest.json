@@ -113,13 +113,13 @@
       "custom/metadata.code.branch_hint": 1,
       "custom/name": 1,
       "diy-posix-test": 5,
-      "engine-regressions": 13,
+      "engine-regressions": 14,
       "legacy/exceptions/core": 4,
       "libc-test": 14,
       "render": 1
     },
-    "supported": 293,
-    "tests": 298
+    "supported": 294,
+    "tests": 299
   },
   "files": [
     {
@@ -2181,6 +2181,13 @@
       "source": "tests/engine-regressions/select-polling.wast"
     },
     {
+      "path": "/root/waste/tests/engine-regressions/shared-libc.wast",
+      "role": "test-input",
+      "sha256": "04b156ba14b92bc0fd61d23a53f0777aba704280fdc4215afd4c17221fb08cc8",
+      "size": 4923,
+      "source": "tests/engine-regressions/shared-libc.wast"
+    },
+    {
       "path": "/root/waste/tests/engine-regressions/shared-memory.wast",
       "role": "test-input",
       "sha256": "05a4a05166773d2c9cbd75700ba13b1bcacfd956208841edd9d0964cd8438e4d",
@@ -2338,8 +2345,6 @@
   "format": 1,
   "oracle": {
     "license": "/usr/share/licenses/wasm-spec-tests/LICENSE",
-    "patch": "submodules/wasm-spec-i31-int32.patch",
-    "patchScope": "oracle build only; installed test sources unchanged",
     "revision": "4b29bdbced924599346ea2ffd9e975af5d28c735",
     "source": "submodules/wasm-spec"
   },
@@ -2354,44 +2359,21 @@
       "backend": "C engine",
       "timeoutMs": null,
       "timeoutScope": "existing dashboard has no per-test deadline"
-    },
-    "ocaml-oracle": {
-      "artifacts": "build/ocaml/dist{,-threaded}; host oracle dependencies, not guest programs",
-      "backend": "official OCaml interpreter",
-      "dashboardVariant": "threaded",
-      "quantum": 10000,
-      "timeoutMs": 1800000,
-      "variants": [
-        "direct",
-        "threaded"
-      ]
     }
   },
-  "selection_sha256": "bc39b04b22c640002215a8e3664a10b9cad221aeec4161f3d35549db339e6c95",
+  "selection_sha256": "f8a31826593d5bde17a84db771a2a5493270466cbaabcad7c81ce3854308f6ad",
   "sourceInputs": [
     {
       "hostOnly": true,
       "path": "tests/diy-posix-test/README.md",
-      "sha256": "0eee1c5c4c2a70c22b1c78dd32080ceec563d5a07872fdf9abc8940018a6eb49",
-      "size": 3182
-    },
-    {
-      "hostOnly": true,
-      "path": "tests/diy-posix-test/posix-control-runtime.cjs",
-      "sha256": "f0f5748cf1cd6c90291961d0797932e54fc3dc96c7d5a93a109620dcce206bbc",
-      "size": 2729
-    },
-    {
-      "hostOnly": true,
-      "path": "tests/diy-posix-test/posix-kernel-runtime.cjs",
-      "sha256": "acc6ce084b36cfd4af75f30b0ed233d25b08f14b8be1ad6a2995e5f9393e72e6",
-      "size": 934
+      "sha256": "fd5cdac4a181aa62dbd9fe1cfb660316f367251b1eb6d42fcd3d8a917aefa62b",
+      "size": 1780
     },
     {
       "hostOnly": true,
       "path": "tests/libc-test/README.md",
-      "sha256": "d4f5d4bfa889a602a13873f5a9cfd89b9db603182ac6c5f9c68f96a352ec95d3",
-      "size": 2662
+      "sha256": "71a3f48c18738ac9c5879b6cc6086269d2a168c10c6f3bba5de2f76ab54c8515",
+      "size": 1621
     },
     {
       "hostOnly": false,
@@ -2422,12 +2404,6 @@
       "path": "tests/libc-test/environment-boundaries-client.wast.inc",
       "sha256": "451cf933c858fa29cfbdcecbae15a088da5c4014a4a26bcb8a9befcaf6d70ac7",
       "size": 6803
-    },
-    {
-      "hostOnly": true,
-      "path": "tests/libc-test/libc-runtime.cjs",
-      "sha256": "ef35ea076fe402b7789b6d78a3703650d04d67c38e32ac53f6aa0c85def2c82d",
-      "size": 3466
     },
     {
       "hostOnly": false,
@@ -2491,7 +2467,7 @@
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/stdlib.wat",
+      "path": "src/libc/stdlib.wat",
       "sha256": "86694aa19de3c46d906ceb4aebef1b1abb58f4bf613511758287f363403c9d73",
       "size": 11958
     },
@@ -2504,156 +2480,150 @@
     {
       "hostOnly": true,
       "path": "src/vfs/usr/share/waste/sdk.json",
-      "sha256": "451a2ff7c60bd971652bda431dfcbd2b5209c7684cbf598a0a1efffc24a953f0",
-      "size": 525103
+      "sha256": "0429872fd9fdcbcb02c579e023262ea7c897ba8014ee00823605b37c62af1959",
+      "size": 525127
     },
     {
       "hostOnly": true,
       "path": "src/html-rt/tools/build-waste-libc.py",
-      "sha256": "fd4ff46e414f19fd2aae56540d4193c41bb56e66f2913282c10f2f1bc59f56e4",
-      "size": 3777
+      "sha256": "6ef541ef8adfb5e315aec84e682eb2dc209f0f09e783675bbe1255761d9e0276",
+      "size": 3766
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/include/helper.h",
+      "path": "src/libc/include/helper.h",
       "sha256": "2cbea14410661cf8d01a0def9979480ea172760f6ea2274ffa2b1166b96badd1",
       "size": 1970
     },
     {
       "hostOnly": true,
-      "path": "submodules/wasm-spec-i31-int32.patch",
-      "sha256": "f7c799209c39560f1f41f0aa27dc06efcc8421bf44ded7c8684c95ac0c36d4ec",
-      "size": 159894
+      "path": "src/libc/stdio.c",
+      "sha256": "636da495b9ecefa264f5401b429dc9bd50acdfeb9804f4c38555734840f80ef2",
+      "size": 25419
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/stdio.c",
-      "sha256": "ad32626d17948f7113d2c3cc649fcb61ea6934de2009f02ab66ec4744011b8b8",
-      "size": 26801
-    },
-    {
-      "hostOnly": true,
-      "path": "src/html-rt/lib/wchar.c",
+      "path": "src/libc/wchar.c",
       "sha256": "15bb204332a6ace132d7e0cd9a6ce79464c73a99afb62468847ea81f2ed62a47",
       "size": 7883
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/locale.c",
+      "path": "src/libc/locale.c",
       "sha256": "b9cd5e1462824009d3f31dee269102cb1efc37730ce512a87512450cb89849bb",
       "size": 3663
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/identity.c",
+      "path": "src/libc/identity.c",
       "sha256": "6121a0824c31e4610b71744960437c573503d91442d198cd95607c1ff0959cb7",
       "size": 4116
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/string.c",
+      "path": "src/libc/string.c",
       "sha256": "cb7a013f3a9f88d6e4bdea36f3351f669164bfb7b771574971f36d394599b1f1",
       "size": 4383
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/math.c",
-      "sha256": "c77190dde5b0228006a19a9c7ad5862945a3094b97d6ff2f3ed67611f0cec426",
-      "size": 116
+      "path": "src/libc/math.c",
+      "sha256": "0c683afec6f46eeb48ff4934956cda61be3807ceba52df2efa71930c8c7ce44a",
+      "size": 106
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/quad.c",
+      "path": "src/libc/quad.c",
       "sha256": "e9ba992c14c956838cf30a8ca7249a2415dc4ab16a4dcd49f421faf73bb9f688",
       "size": 3801
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/stdlib.c",
-      "sha256": "fc135b2d66eed733b89e7302c6fb431dfa8434f25c713dcb4f3eeb5579df21ad",
-      "size": 16626
+      "path": "src/libc/stdlib.c",
+      "sha256": "22a42dfcc3a017e5c95d46762adc828b7841bf88b588a8fc19912b04a91c4f2a",
+      "size": 8794
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/pattern.c",
+      "path": "src/libc/pattern.c",
       "sha256": "9c5463fafbebce745596a110bae48a45f0871aa0103fe18ade73b84423d147f9",
       "size": 1485
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/misc.c",
+      "path": "src/libc/misc.c",
       "sha256": "a1847b3933510fd4111864090fec5f38aef68fec9649a1cd1a4da85aa2851b32",
       "size": 905
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/time.c",
+      "path": "src/libc/time.c",
       "sha256": "d8ac46eed8b498e6d670dfb7f4bbc2570247476f3f2e8df75fe9a5cf39c94f01",
       "size": 4653
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/termcap.c",
+      "path": "src/libc/termcap.c",
       "sha256": "cbf38231abd3b8a931ec400a25e7b0a2d0e402bf457825a5f05b69486306e252",
       "size": 5938
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/termios.c",
+      "path": "src/libc/termios.c",
       "sha256": "aca583d27692638a43dd85da5c759f5bde6425fe9beef1b124a89481b13c2c82",
       "size": 1372
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/dirent.c",
+      "path": "src/libc/dirent.c",
       "sha256": "395e625e434dca5120a4a70c5cc922ecc52dfb7feadb235a9c2753b6f24713b3",
       "size": 1829
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/netdb.c",
+      "path": "src/libc/netdb.c",
       "sha256": "c829c4a5a4ba7950ed69f5600d154bc0d13ac8c70a49d01e071715eaba565157",
       "size": 476
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/dlfcn.c",
+      "path": "src/libc/dlfcn.c",
       "sha256": "bbbf0c89d85285ff5ee04a698eb59eb7d0353f94e51e4254fbb296cd4d766ea7",
       "size": 2135
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/unistd.c",
-      "sha256": "8b05cbcf57de83a2c5f4429d44ec8120b2ae3cee9092ddb1cb5eb9697a07fa6f",
-      "size": 11283
+      "path": "src/libc/unistd.c",
+      "sha256": "e4f3421186addf33ca217cce25fcd7a38543b99518c295437687dd8338c6e0c2",
+      "size": 10844
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/sys/random.c",
+      "path": "src/libc/sys/random.c",
       "sha256": "7e3ac3649213f3536657129f64f7e16a54bb7d3663fd9285c8eb92d1ab1215c5",
       "size": 369
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/sys/resource.c",
+      "path": "src/libc/sys/resource.c",
       "sha256": "6a76e629ba271dab9ec08f66a4d8cd7e7482679607fa5317b44597fc90896875",
       "size": 860
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/sys/select.c",
+      "path": "src/libc/sys/select.c",
       "sha256": "4a132a1b5c4e19439585f73c2cb99ce58a28ced3fc90b8f07bfa573476c8ff4f",
       "size": 1809
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/sys/ioctl.c",
+      "path": "src/libc/sys/ioctl.c",
       "sha256": "bddf52a14447ada13e74d89bffcb72bfa441edf2da6e2a14f9b6cac96fb1a696",
       "size": 591
     },
     {
       "hostOnly": true,
-      "path": "src/html-rt/lib/sys/socket.c",
+      "path": "src/libc/sys/socket.c",
       "sha256": "1f9da6b52fceea7d42c497d5cb96c015d3e789f6e24b7bd162bac0e604ee075c",
       "size": 418
     }
@@ -11078,6 +11048,33 @@
         "size": 22460
       },
       "spec_sha256": "fc3c3d5efa2044fcd1ea17f8b5cdd1a2773f032e715c776d937e53b5910a547e",
+      "suite": "engine-regressions",
+      "unsupported": false,
+      "unsupportedReason": null
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "engine-regressions/shared-libc.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4923,
+        "sourcePath": "tests/engine-regressions/shared-libc.wast"
+      },
+      "expectFailure": false,
+      "group": "engine-regressions",
+      "id": "engine-regressions/shared-libc.wast",
+      "name": "shared-libc.wast",
+      "nativeParity": "shared-engine",
+      "path": "/root/waste/tests/engine-regressions/shared-libc.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "tests/engine-regressions/shared-libc.wast",
+        "sha256": "04b156ba14b92bc0fd61d23a53f0777aba704280fdc4215afd4c17221fb08cc8",
+        "size": 4923
+      },
+      "spec_sha256": "beaec13df5e586c5fcc4607cf371fe1fa76dbabd589213caca33790532f4985d",
       "suite": "engine-regressions",
       "unsupported": false,
       "unsupportedReason": null

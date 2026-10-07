@@ -45,18 +45,18 @@ async function command(source, tag, status) {
     source:page.read("launch.wast").toString(), vfs:packageVfs(page),
     vfsPaths:manifest.entries.map(e => e.path)}});
   await wait(() => ready && /bash-[^\r\n]*[#$] ?/.test(transcript));
-  await command("/bin/upload /tmp/roundtrip.bin", "__UPLOAD", 0);
-  await command("/usr/bin/download /tmp/roundtrip.bin", "__DOWNLOAD", 0);
+  await command("upload /tmp/roundtrip.bin", "__UPLOAD", 0);
+  await command("download /tmp/roundtrip.bin", "__DOWNLOAD", 0);
   assert.equal(downloads.length, 1);
   assert.equal(downloads[0].name, "roundtrip.bin");
   assert.deepEqual(Buffer.from(downloads[0].bytes), payload);
-  await command("/bin/upload /tmp/empty.bin", "__EMPTY_UPLOAD", 0);
-  await command("/bin/download /tmp/empty.bin", "__EMPTY_DOWNLOAD", 0);
+  await command("upload /tmp/empty.bin", "__EMPTY_UPLOAD", 0);
+  await command("download /tmp/empty.bin", "__EMPTY_DOWNLOAD", 0);
   assert.equal(downloads.length, 2);
   assert.equal(downloads[1].name, "empty.bin");
   assert.equal(downloads[1].bytes.length, 0);
-  await command("/usr/bin/upload /tmp/cancelled.bin", "__CANCEL", 1);
-  await command("/bin/download /tmp/cancelled.bin", "__MISSING", 1);
+  await command("upload /tmp/cancelled.bin", "__CANCEL", 1);
+  await command("download /tmp/cancelled.bin", "__MISSING", 1);
   assert.equal(downloads.length, 2);
   await command("echo __TRANSFER_AFTER__", "__AFTER", 0);
   self.onmessage({data:{type:"input", bytes:new TextEncoder().encode("exit\n")}});

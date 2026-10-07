@@ -15,6 +15,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from shared_libc import rewrite, review_flags
+
 
 UPLOAD_SOURCE = r"""
 /* upload.c — Copy a host file into the browser VFS via a file picker.
@@ -161,7 +163,7 @@ def ensure_sysroot(repo_root: Path, output_base: Path) -> Path:
 
 
 def build_utility(name: str, source: str, cc: str, crt_obj: Path,
-                  output: Path) -> bool:
+                  output: Path, provider: Path) -> bool:
     """Compile and link a single utility. Returns True on success."""
     src = output / f"{name}.c"
     src.write_text(source.lstrip(), encoding="utf-8")
@@ -196,6 +198,7 @@ def build_utility(name: str, source: str, cc: str, crt_obj: Path,
     if result.returncode != 0:
         print(f"link {name} failed:\n{result.stderr}")
         return False
+    rewrite(wasm, provider)
     size = wasm.stat().st_size
     print(f"link: {name}.wasm ({size} bytes)")
     return True
@@ -229,8 +232,8 @@ def main() -> int:
     print("compile: waste-crt.o ok")
 
     ok = True
-    ok = build_utility("upload", UPLOAD_SOURCE, cc, crt_obj, output) and ok
-    ok = build_utility("download", DOWNLOAD_SOURCE, cc, crt_obj, output) and ok
+    ok = build_utility("upload", UPLOAD_SOURCE, cc, crt_obj, output, repo_root / "src/vfs/lib/libc.so.wasm") and ok
+    ok = build_utility("download", DOWNLOAD_SOURCE, cc, crt_obj, output, repo_root / "src/vfs/lib/libc.so.wasm") and ok
 
     if not ok:
         return 1
@@ -247,7 +250,9 @@ def main() -> int:
         subprocess.run(["python3", str(repo_root / "src/html-rt/tools/vfs.py"),
                         "install", "--component", "upload", "--source",
                         str(vfs_stage / "upload"), "--component", "download", "--source",
-                        str(vfs_stage / "download")], check=True)
+                        str(vfs_stage / "download"),
+                        *review_flags([vfs_stage / "upload", vfs_stage / "download"],
+                                      repo_root / "src/vfs/lib/libc.so.wasm")], check=True)
     return 0
 
 

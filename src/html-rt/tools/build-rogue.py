@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from shared_libc import rewrite, review_flags
+
 
 # All rogue source files.
 ROGUE_SOURCES = [
@@ -775,6 +777,7 @@ def main() -> int:
     # Rewrite imports: "env" -> "libncurses" for ncurses symbols.
     final_output = output / "rogue.wasm"
     rewritten = rewrite_imports(raw_output, ncurses_exports, final_output)
+    rewrite(final_output, repo_root / "src/vfs/lib/libc.so.wasm")
     size = final_output.stat().st_size
     print(f"import rewrite: {rewritten} imports moved env -> libncurses")
     print(f"output: {final_output.name} ({size} bytes)")
@@ -788,7 +791,8 @@ def main() -> int:
     if args.install:
         subprocess.run(["python3", str(repo_root / "src/html-rt/tools/vfs.py"),
                         "install", "--component", "rogue", "--source",
-                        str(vfs_stage / "rogue")], check=True)
+                        str(vfs_stage / "rogue"),
+                        *review_flags([vfs_stage / "rogue"], repo_root / "src/vfs/lib/libc.so.wasm")], check=True)
     return 0
 
 

@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from shared_libc import rewrite, review_flags
+
 
 # Ncurses source files needed for a minimal curses library.  These cover
 # the core screen/window API, terminal setup via built-in fallback
@@ -388,6 +390,7 @@ def link_shared_library(
         "-o", str(output),
     ] + [str(o) for o in objects]
     subprocess.run(command, check=True)
+    rewrite(output, Path(__file__).resolve().parents[3] / "src/vfs/lib/libc.so.wasm")
     size = output.stat().st_size
     print(f"link: {output.name} ({size} bytes)")
 
@@ -489,7 +492,8 @@ def main() -> int:
     if args.install:
         subprocess.run([sys.executable, str(repo_root / "src/html-rt/tools/build-guest-sdk.py"),
                         "--install", "--library",
-                        str(vfs_stage / "libncurses.so.wasm")], check=True)
+                        str(vfs_stage / "libncurses.so.wasm"),
+                        *review_flags([lib_output], repo_root / "src/vfs/lib/libc.so.wasm")], check=True)
     return 0
 
 

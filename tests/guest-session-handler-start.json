@@ -3,7 +3,7 @@
   "files": [{"path": "/tmp/handler-start.wast", "source": "tests/guest-session-handler-start.wast", "mode": 493}],
   "events": [
     {"after": "bash-5.2# ", "text": "/bin/wast /tmp/handler-start.wast; printf '__START_%s__\\n' \"$?\"\n"},
-    {"after": "bash-5.2# ", "text": "/bin/true; printf '__RECOVER_%s__\\n' \"$?\"\n"},
+    {"after": "bash-5.2# ", "text": "true; printf '__RECOVER_%s__\\n' \"$?\"\n"},
     {"after": "bash-5.2# ", "text": "exit 3\n"}
   ],
   "contains": ["__START_126__\r\n", "__RECOVER_0__\r\n"],

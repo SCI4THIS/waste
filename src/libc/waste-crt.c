@@ -11,7 +11,7 @@ __waste_crt_FILE *stdin;
 __waste_crt_FILE *stdout;
 __waste_crt_FILE *stderr;
 
-/* waste-libc accessor functions — resolved during wasm-merge. */
+/* Shared libc accessors; the static fixture profile may resolve them at link time. */
 extern __waste_crt_FILE *waste_stdin(void);
 extern __waste_crt_FILE *waste_stdout(void);
 extern __waste_crt_FILE *waste_stderr(void);

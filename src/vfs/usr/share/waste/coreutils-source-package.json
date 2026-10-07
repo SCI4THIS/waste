@@ -2,7 +2,7 @@
   "archive": "coreutils-corresponding-source.tar.gz",
   "format": 1,
   "instructions": "docs/coreutils-source-distribution.md",
-  "sha256": "607e923223df3ed4f1b92a43c8119eb9455ae36de7cce97537fe5421be396198",
+  "sha256": "d8a42eb36a70da9ee354c2072c7cc10c7f50525ea1c4f4190f5be75a791fba41",
   "source_commit": "cecd945aa93ab77e759fe766206cfe93e634d07b",
   "utilities": [
     "true",

@@ -47,7 +47,7 @@
       "__fpurge"
     ],
     "source": "src/engine/guest_posix.c",
-    "sha256": "81bd570d43bda1c6c5cbb51d909124cada6bb8619b8cabd139695e1ec285033c",
+    "sha256": "e6cbb8907a2aaaf70c2b7802cb51d73c24e9bed97b75e7e0ba677b71c2d62cb2",
     "additional_sources": {
       "src/engine/guest_posix.h": "16f60601d2b870a6de8dcea78f4361f13c137b59a69dd4ed7ce8f7673b266fa2",
       "src/html-rt/posix_stubs.c": "b8e2cb738c3d8d664705a432bcdbdf2330b7773cb1ef24946e9f3aea68db3d2b"

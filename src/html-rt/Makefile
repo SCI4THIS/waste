@@ -52,9 +52,9 @@ ENGINE_HEADERS += $(ENGINE_DIR)/wast/setup.h
 ENGINE_HEADERS += $(ENGINE_DIR)/lib/include/kernel.h \
 	$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h
 
-# Freestanding library: shared (portable) sources from engine
-LIB_SHARED_SRC := $(ENGINE_DIR)/lib/string.c $(ENGINE_DIR)/lib/stdio.c \
-	$(ENGINE_DIR)/lib/stdlib.c $(ENGINE_DIR)/lib/math.c $(ENGINE_DIR)/lib/errno.c
+# Freestanding library: shared portable interpreter support
+LIB_SHARED_SRC := ../libc/runtime/string.c ../libc/runtime/stdio.c \
+	../libc/runtime/stdlib.c ../libc/runtime/math.c ../libc/runtime/errno.c
 
 # Freestanding library: Wasm platform backend (local to html-rt)
 LIB_WASM_SRC := lib/stdlib.c lib/stdio.c lib/unistd.c
@@ -82,7 +82,7 @@ RT_OBJS := $(BUILD_DIR)/browser_api.o $(BUILD_DIR)/posix_stubs.o $(BUILD_DIR)/te
 
 ENGINE_HEADERS += $(ENGINE_DIR)/test_suite.h
 
-WASM_LIB_SHARED_O := $(patsubst $(ENGINE_DIR)/lib/%.c,$(BUILD_DIR)/lib_shared_%.o,$(LIB_SHARED_SRC))
+WASM_LIB_SHARED_O := $(patsubst ../libc/runtime/%.c,$(BUILD_DIR)/lib_shared_%.o,$(LIB_SHARED_SRC))
 WASM_LIB_WASM_O := $(patsubst lib/%.c,$(BUILD_DIR)/lib_wasm_%.o,$(LIB_WASM_SRC))
 
 WAST_TAB_C := $(WAST_GEN_DIR)/wast.tab.c
@@ -96,15 +96,15 @@ WAST_WASM_TARGET := $(BUILD_DIR)/waste-wast.wasm
 LIBC_BUILDER := tools/build-waste-libc.py
 LIBC_SOURCE_MANIFEST := tools/libc_sources.py
 LIBC_CLIENTS := $(wildcard $(REPO_ROOT)/tests/libc-test/*-client.wast.inc)
-LIBC_SOURCES := lib/stdlib.wat lib/stdio.c lib/wchar.c \
-	lib/locale.c lib/identity.c lib/string.c \
-	lib/math.c lib/quad.c \
-	lib/stdlib.c lib/pattern.c lib/misc.c \
-	lib/time.c lib/termcap.c lib/termios.c \
-	lib/dirent.c lib/netdb.c lib/dlfcn.c lib/unistd.c \
-	lib/sys/random.c lib/sys/resource.c lib/sys/select.c \
-	lib/sys/ioctl.c lib/sys/socket.c \
-	lib/include/helper.h $(LIBC_CLIENTS) $(LIBC_BUILDER) $(LIBC_SOURCE_MANIFEST)
+LIBC_SOURCES := ../libc/stdlib.wat ../libc/stdio.c ../libc/wchar.c \
+	../libc/locale.c ../libc/identity.c ../libc/string.c \
+	../libc/math.c ../libc/quad.c \
+	../libc/stdlib.c ../libc/pattern.c ../libc/misc.c \
+	../libc/time.c ../libc/termcap.c ../libc/termios.c \
+	../libc/dirent.c ../libc/netdb.c ../libc/dlfcn.c ../libc/unistd.c \
+	../libc/sys/random.c ../libc/sys/resource.c ../libc/sys/select.c \
+	../libc/sys/ioctl.c ../libc/sys/socket.c \
+	../libc/include/helper.h $(LIBC_CLIENTS) $(LIBC_BUILDER) $(LIBC_SOURCE_MANIFEST)
 LIBC_OUTPUT := $(BUILD_DIR)/waste-libc/waste-libc.wasm
 LIBC_FIXTURES := $(patsubst $(REPO_ROOT)/tests/libc-test/%-client.wast.inc,\
 	$(BUILD_DIR)/waste-libc/tests/%.wast,$(LIBC_CLIENTS))
@@ -134,11 +134,11 @@ COREUTILS_SOURCE_PACKAGER := tools/package-coreutils-source.py
 COREUTILS_SOURCE_ARCHIVE := $(COREUTILS_BUILD_DIR)/coreutils-corresponding-source.tar.gz
 COREUTILS_SOURCE_MAPPING := $(COREUTILS_BUILD_DIR)/coreutils-source-package.json
 COREUTILS_SOURCE_STAMP := $(COREUTILS_BUILD_DIR)/.source-package-stamp
-COREUTILS_SOURCE_INPUTS := $(shell find $(REPO_ROOT)/src/engine $(REPO_ROOT)/src/html-rt \
+COREUTILS_SOURCE_INPUTS := $(shell find $(REPO_ROOT)/src/engine $(REPO_ROOT)/src/libc $(REPO_ROOT)/src/html-rt \
 	$(REPO_ROOT)/src/vfs/usr/include $(REPO_ROOT)/src/vfs/usr/lib/waste/cc/include \
 	$(REPO_ROOT)/src/vfs/usr/share/licenses/clang \
 	-type f ! -name '*.wasm' ! -name '*.pyc' ! -path '*/__pycache__/*' -print)
-COREUTILS_SOURCE_INPUTS += $(REPO_ROOT)/src/vfs/usr/share/waste/sdk.json
+COREUTILS_SOURCE_INPUTS += $(REPO_ROOT)/src/config.h $(REPO_ROOT)/src/vfs/usr/share/waste/sdk.json
 COREUTILS_UTILITY_DIR := $(COREUTILS_BUILD_DIR)/utility-probe
 COREUTILS_UTILITY_REPORT := $(COREUTILS_UTILITY_DIR)/true-report.json
 COREUTILS_FALSE_REPORT := $(COREUTILS_UTILITY_DIR)/false-report.json
@@ -152,7 +152,7 @@ COREUTILS_WC_REPORT := $(COREUTILS_UTILITY_DIR)/wc-report.json
 COREUTILS_LS_REPORT := $(COREUTILS_UTILITY_DIR)/ls-report.json
 COREUTILS_DATE_REPORT := $(COREUTILS_UTILITY_DIR)/date-report.json
 COREUTILS_BOOTSTRAP := $(REPO_ROOT)/submodules/bootstrap-coreutils.sh
-WASTE_CRT_SOURCE := lib/waste-crt.c
+WASTE_CRT_SOURCE := ../libc/waste-crt.c
 WASTE_CRT_OBJECT := $(COREUTILS_BUILD_DIR)/waste-crt.o
 WASTE_HELLO_SOURCE := $(REPO_ROOT)/tests/coreutils-sysroot-hello.c
 WASTE_HELLO_OBJECT := $(COREUTILS_BUILD_DIR)/sysroot-hello.o
@@ -312,7 +312,7 @@ $(BUILD_DIR)/guest_posix.o: $(ENGINE_DIR)/guest_posix.c $(ENGINE_HEADERS)
 
 # ---- Compile freestanding library objects ----
 
-$(BUILD_DIR)/lib_shared_%.o: $(ENGINE_DIR)/lib/%.c
+$(BUILD_DIR)/lib_shared_%.o: ../libc/runtime/%.c
 	mkdir -p $(BUILD_DIR)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
@@ -348,6 +348,13 @@ $(WAST_WASM_TARGET): $(ENGINE_OBJS) $(RT_OBJS) $(WASM_LIB_SHARED_O) $(WASM_LIB_W
 # The builder emits the standalone module and every generated test fixture in
 # one transaction. Grouped targets ensure it runs only once when any output is
 # missing or older than its WAT, C helper, client, or builder source.
+.PHONY: libc-shared libc-shared-install
+libc-shared:
+	$(MAKE) -C ../libc
+
+libc-shared-install:
+	$(MAKE) -C ../libc install
+
 waste-libc: $(LIBC_OUTPUTS)
 
 $(LIBC_OUTPUTS) &: $(LIBC_SOURCES)
@@ -443,7 +450,8 @@ COREUTILS_REPORTS := $(COREUTILS_UTILITY_REPORT) $(COREUTILS_FALSE_REPORT) \
 	$(COREUTILS_DIRNAME_REPORT) $(COREUTILS_CAT_REPORT) $(COREUTILS_WC_REPORT) \
 	$(COREUTILS_LS_REPORT) $(COREUTILS_DATE_REPORT)
 
-$(COREUTILS_REPORTS): tools/audit-wasm-imports.py
+$(COREUTILS_REPORTS): tools/audit-wasm-imports.py tools/shared_libc.py tools/wasm_signatures.py \
+		../libc/waste-crt.c ../vfs/lib/libc.so.wasm
 
 build-coreutils: coreutils-provenance coreutils-utility-probe coreutils-false-probe \
 		coreutils-pwd-probe coreutils-echo-probe coreutils-printf-probe \
@@ -488,6 +496,7 @@ coreutils-install: build-coreutils coreutils-source-package
 		--review-import waste_kernel:dlopen_v1:function \
 		--review-import waste_kernel:dlsym_v1:function \
 		--review-import waste_kernel:dlclose_v1:function \
+		$(shell $(PYTHON) tools/shared_libc.py --review-imports $(foreach utility,true false pwd echo printf basename dirname cat wc ls date,$(COREUTILS_BUILD_DIR)/utility-probe/$(utility)-linked.wasm)) \
 		$(foreach utility,true false pwd echo printf basename dirname cat wc ls date,--component $(utility) --source $(COREUTILS_BUILD_DIR)/utility-probe/$(utility)-linked.wasm)
 coreutils-audit: $(COREUTILS_REPORTS)
 	$(PYTHON) -c 'import json; reports=[json.load(open(p)) for p in "$(COREUTILS_REPORTS)".split()]; assert all(p["status"] == "passed" for p in reports), "coreutils audit failed"'
@@ -511,7 +520,7 @@ coreutils-package-audit: build-coreutils coreutils-source-package $(COREUTILS_PA
 	bash tools/build.sh bash
 
 $(COREUTILS_UTILITY_REPORT): $(COREUTILS_UTILITY_TOOL) $(COREUTILS_RUNTIME_TOOL) \
-		$(COREUTILS_CONFIGURE_REPORT) $(LIBC_OUTPUT)
+		$(COREUTILS_CONFIGURE_REPORT) ../vfs/lib/libc.so.wasm
 	mkdir -p $(COREUTILS_UTILITY_DIR)
 	$(PYTHON) $(COREUTILS_UTILITY_TOOL) \
 		--repo-root $(abspath $(REPO_ROOT)) \
@@ -520,7 +529,7 @@ $(COREUTILS_UTILITY_REPORT): $(COREUTILS_UTILITY_TOOL) $(COREUTILS_RUNTIME_TOOL)
 		--output $@
 
 $(COREUTILS_FALSE_REPORT): $(COREUTILS_UTILITY_TOOL) $(COREUTILS_RUNTIME_TOOL) \
-		$(COREUTILS_CONFIGURE_REPORT) $(LIBC_OUTPUT)
+		$(COREUTILS_CONFIGURE_REPORT) ../vfs/lib/libc.so.wasm
 	mkdir -p $(COREUTILS_UTILITY_DIR)
 	$(PYTHON) $(COREUTILS_UTILITY_TOOL) \
 		--repo-root $(abspath $(REPO_ROOT)) \
@@ -529,7 +538,7 @@ $(COREUTILS_FALSE_REPORT): $(COREUTILS_UTILITY_TOOL) $(COREUTILS_RUNTIME_TOOL) \
 		--output $@
 
 $(COREUTILS_PWD_REPORT): $(COREUTILS_UTILITY_TOOL) $(COREUTILS_RUNTIME_TOOL) \
-		$(COREUTILS_CONFIGURE_REPORT) $(LIBC_OUTPUT)
+		$(COREUTILS_CONFIGURE_REPORT) ../vfs/lib/libc.so.wasm
 	mkdir -p $(COREUTILS_UTILITY_DIR)
 	$(PYTHON) $(COREUTILS_UTILITY_TOOL) \
 		--repo-root $(abspath $(REPO_ROOT)) \
@@ -539,7 +548,7 @@ $(COREUTILS_PWD_REPORT): $(COREUTILS_UTILITY_TOOL) $(COREUTILS_RUNTIME_TOOL) \
 
 define COREUTILS_PROBE_RULE
 $($(1)_REPORT): $$(COREUTILS_UTILITY_TOOL) $$(COREUTILS_RUNTIME_TOOL) \
-		$$(COREUTILS_CONFIGURE_REPORT) $$(LIBC_OUTPUT)
+		$$(COREUTILS_CONFIGURE_REPORT) ../vfs/lib/libc.so.wasm
 	mkdir -p $$(COREUTILS_UTILITY_DIR)
 	$$(PYTHON) $$(COREUTILS_UTILITY_TOOL) \
 		--repo-root $$(abspath $$(REPO_ROOT)) \

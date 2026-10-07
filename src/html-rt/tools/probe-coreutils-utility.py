@@ -9,6 +9,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from wasm_signatures import inspect
+
 
 MISSING_HEADER = re.compile(r"fatal error: ['\"]([^'\"]+)['\"] file not found")
 UNDEFINED_SYMBOL = re.compile(
@@ -106,14 +108,14 @@ def main() -> int:
                "V=1", "-j1", f"src/{args.utility}"]
     artifact = build / "src" / args.utility
     crt_object = coreutils_build / "sysroot" / "lib" / "waste-crt.o"
-    crt_source = root / "src/html-rt/lib/waste-crt.c"
+    crt_source = root / "src/libc/waste-crt.c"
     audit_path = output.parent / f"{args.utility}-import-audit.json"
     linked_artifact = output.parent / f"{args.utility}-linked.wasm"
     linked_audit_path = output.parent / f"{args.utility}-linked-import-audit.json"
-    link_flags = ("-Wl,--no-entry,--export-memory,--export-table,--export=_start,"
+    link_flags = ("-Wl,--no-entry,--import-memory,--import-table,--export=_start,"
                   "--export=__stack_pointer,--export=__heap_base,"
-                  "--allow-undefined,--gc-sections,"
-                  "--initial-memory=1048576,--max-memory=268435456,"
+                  "--allow-undefined,--gc-sections,--global-base=655360,--table-base=1024,"
+                  "--initial-memory=1048576,"
                   "-z,stack-size=524288")
     with log_path.open("w", encoding="utf-8") as log:
         if missing_generated:
@@ -216,7 +218,7 @@ def main() -> int:
         link_result = subprocess.run(
             ["python3", str(root / RUNTIME_BUILDER), "--repo-root", str(root),
              "--utility", str(artifact), "--name", args.utility,
-            "--libc", str(root / "build/html-rt/waste-libc/waste-libc.wasm"),
+            "--libc", str(root / "src/vfs/lib/libc.so.wasm"),
              "--output", str(linked_artifact)],
             cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             check=False,
@@ -228,7 +230,9 @@ def main() -> int:
                 ["python3", str(root / "src/html-rt/tools/audit-wasm-imports.py"),
                  str(artifact), "--json", str(audit_path),
                  *sum((["--allow", name] for name in
-                       WASTE_STARTUP_IMPORTS + WASTE_RUNTIME_IMPORTS), [])],
+                       WASTE_STARTUP_IMPORTS + WASTE_RUNTIME_IMPORTS
+                       + ("env:memory", "env:__indirect_function_table")
+                       + tuple("libc:" + name for name in inspect(root / "src/vfs/lib/libc.so.wasm")["exports"])), [])],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                 check=False,
             )

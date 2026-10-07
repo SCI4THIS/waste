@@ -1,13 +1,9 @@
-/* unistd.c — POSIX unistd stubs for the WASTE guest libc. */
+/* Browser interpreter POSIX stubs; guest wrappers live in src/libc. */
 
-#include "include/helper.h"
+#include "../../libc/include/helper.h"
 
 struct timespec { i64 tv_sec; long tv_nsec; };
 
-#ifndef WASTE_ENGINE
-__attribute__((import_module("waste_kernel"), import_name("startup_v1")))
-extern i32 waste_kernel_startup_v1(void);
-#endif
 
 extern i32 waste_kernel_open_v1(const char *path, i32 flags, i32 mode)
   __attribute__((import_module("waste_kernel"), import_name("open_v1")));
@@ -62,18 +58,8 @@ i32 fcntl(i32 fd, i32 cmd, ...) {
 /* Decode the engine-owned startup block for the guest libc entry shim.  The
  * returned pointers remain in this image's linear memory for its lifetime. */
 i32 __waste_startup_view(i32 *argc, char ***argv, i32 *envc, char ***envp) {
-#ifdef WASTE_ENGINE
   (void)argc; (void)argv; (void)envc; (void)envp;
   return -1;
-#else
-  i32 block = waste_kernel_startup_v1();
-  if (block < 0 || !argc || !argv || !envc || !envp) return -1;
-  *argc = *(i32 *)(unsigned long)(u32)block;
-  *argv = (char **)(unsigned long)*(u32 *)(unsigned long)((u32)block + 4);
-  *envc = *(i32 *)(unsigned long)((u32)block + 8);
-  *envp = (char **)(unsigned long)*(u32 *)(unsigned long)((u32)block + 12);
-  return 0;
-#endif
 }
 
 /* CRT bridge used by application-specific _start shims.  The callback is a
@@ -90,19 +76,8 @@ i32 __waste_startup_call(waste_main_entry entry) {
   return entry(argc, argv, envp);
 }
 
-#ifndef WASTE_ENGINE
-__attribute__((import_module("waste_kernel"), import_name("isatty_v1")))
-extern i32 waste_kernel_isatty_v1(i32 descriptor);
-#endif
 
-#ifdef WASTE_ENGINE
 i32 isatty(i32 fd){(void)fd;return 0;}
-#else
-i32 isatty(i32 fd){return waste_kernel_isatty_v1(fd);}
-__attribute__((import_module("env"), import_name("execve")))
-extern i32 waste_env_execve(const char *path, char *const *argv,
-                            char *const *envp);
-#endif
 
 static char tty_path[9]={'/','d','e','v','/','t','t','y',0};
 char *ttyname(i32 descriptor){return descriptor>=0&&descriptor<=2?tty_path:0;}
@@ -163,11 +138,7 @@ i32 sysconf(i32 name){if(name==30)return 65536;return 1024;} /* 30 = _SC_PAGESIZ
 i32 pathconf(const char*path,i32 name){(void)path;(void)name;return 255;}
 u32 confstr(i32 name,char*buffer,u32 capacity){(void)name;const char*value="/bin:/usr/bin";u32 needed=c_length(value)+1;if(buffer&&capacity){u32 n=needed<capacity?needed:capacity;bytes_copy(buffer,value,n);buffer[n-1]=0;}return needed;}
 
-#ifdef WASTE_ENGINE
 i32 execve(const char*p,char*const*a,char*const*e){(void)p;(void)a;(void)e;return unsupported();}
-#else
-i32 execve(const char*p,char*const*a,char*const*e){return env_result(waste_env_execve(p,a,e));}
-#endif
 i32 chown(const char*p,u32 u,u32 g){(void)p;(void)u;(void)g;return unsupported();}
 i32 lchmod(const char*p,u32 mode){(void)p;(void)mode;return unsupported();}
 i32 mkfifo(const char*p,u32 mode){(void)p;(void)mode;return unsupported();}
@@ -178,11 +149,7 @@ i32 linkat(i32 old_directory,const char*old_path,i32 new_directory,const char*ne
 i32 lchown(const char*p,u32 u,u32 g){return chown(p,u,g);}
 i32 fchown(i32 fd,u32 u,u32 g){(void)fd;(void)u;(void)g;return unsupported();}
 extern i32 waste_kernel_fchdir_v1(i32 fd) __attribute__((import_module("waste_kernel"), import_name("fchdir_v1")));
-#ifdef WASTE_ENGINE
 i32 fchdir(i32 fd){(void)fd;return unsupported();}
-#else
-i32 fchdir(i32 fd){return env_result(waste_kernel_fchdir_v1(fd));}
-#endif
 i32 fchmodat(i32 directory,const char*path,u32 mode,i32 flags){(void)directory;(void)path;(void)mode;(void)flags;return unsupported();}
 i32 utimensat(i32 directory,const char*path,const struct timespec*times,i32 flags){(void)directory;(void)path;(void)times;(void)flags;return unsupported();}
 i32 futimens(i32 fd,const struct timespec times[2]){(void)fd;(void)times;return unsupported();}

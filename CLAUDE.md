@@ -15,8 +15,9 @@ bootstrap/configure steps, or builds; all resulting files must stay under
 
 The OCaml reference interpreter in `submodules/wasm-spec/interpreter` was used
 as a language reference while implementing the WAT/WAST portions of the C
-engine. See `docs/ocaml-reference-build.md` for the minimal build/test
-instructions.
+engine. See
+[OCaml reference interpreter build](docs/techniques.md#ocaml-reference-interpreter-build)
+for the minimal build/test instructions.
 
 There are 3 categories of POSIX functionality:
 
@@ -49,7 +50,8 @@ This opens an interactive wizard for dependency checks, compilation, and test ex
 ### Build Output Locations
 
 ```
-build/html-rt/waste-libc/waste-libc.wasm        # Guest libc binary
+build/libc-shared/libc.so.wasm                # Production guest shared library
+build/html-rt/waste-libc/waste-libc.wasm        # Static test profile
 build/ocaml-interpreter/                        # Staged OCaml reference interpreter
 ```
 
@@ -73,7 +75,7 @@ sudo pacman -S --needed git bubblewrap base-devel binaryen libnewt
 ```
 
 OPAM/dune/menhir/OCaml are only required for `--ocaml-reference`; see
-`docs/ocaml-reference-build.md`.
+[OCaml reference interpreter build](docs/techniques.md#ocaml-reference-interpreter-build).
 
 **Key versions:**
 - Binaryen wasm-opt: 119 or newer
@@ -102,7 +104,7 @@ The engine (`src/engine/`) provides:
 - **WAST runner:** Command streaming, assertions, and WAT/WAST policy (`wast/`)
 - **POSIX stubs:** Browser-side POSIX host function dispatch via `browser_host_resolver` callback (`posix_stubs.c/h`)
 - **Browser API:** Exported WAST API functions, legacy per-module linking, browser streaming, yield/resume (`browser_api.c`)
-- **Freestanding library:** Portable string, math, allocation, formatting, and errno support shared by native and Wasm builds (`src/engine/lib/`)
+- **Freestanding library:** Portable string, math, allocation, formatting, and errno support shared by native and Wasm builds (`src/libc/runtime/`)
 - **Platform backends:** Native Linux x86_64 support in `src/cli-rt/lib/` and Wasm/browser support in `src/html-rt/lib/`
 
 ### POSIX Runtime Model
@@ -118,18 +120,19 @@ The dashboard remains self-contained; WebSocket broker is optional for delegated
 See `docs/architecture.md` for runtime ownership and browser/emulation/broker
 policy, and `docs/techniques.md` for continuation and non-local-jump techniques.
 
-### Guest libc: waste-libc
+### Guest libc: libc.so.wasm
 
-Split across `src/html-rt/lib/` in focused modules, this owns guest linear memory and provides:
+Built with `make -C src/libc install`, the PIC library in `/usr/lib/libc.so.wasm`
+shares the application's process memory and table. Sources in `src/libc/` provide:
 
-- Boundary-tag allocator exporting `malloc`, `calloc`, `realloc`, `free`, `sbrk`, `__errno_location` (`src/html-rt/lib/stdlib.wat`)
+- Boundary-tag allocator exporting `malloc`, `calloc`, `realloc`, `free`, `sbrk`, `__errno_location` (`allocator.c`; `stdlib.wat` remains the static test profile)
 - `memory.grow`-backed MORECORE for heap expansion
-- Memory-backed `FILE` streams and wasm32 variadic formatting (`lib/stdio.c`)
-- UTF-8 multibyte/wide-char conversion (`lib/wchar.c`)
-- C.UTF-8 locale (`lib/locale.c`), identity/passwd/group/service records (`lib/identity.c`)
-- String and conversion helpers (`lib/string.c`, `lib/stdlib.c`)
-- Regex and pattern matching (`lib/pattern.c`), resource-limit, time-formatting, terminal, and diagnostic helpers (`lib/misc.c`)
-- Shared declarations across libc modules (`lib/include/helper.h`)
+- Memory-backed `FILE` streams and wasm32 variadic formatting (`stdio.c`)
+- UTF-8 multibyte/wide-char conversion (`wchar.c`)
+- C.UTF-8 locale (`locale.c`), identity/passwd/group/service records (`identity.c`)
+- String and conversion helpers (`string.c`, `stdlib.c`)
+- Regex and pattern matching (`pattern.c`), resource-limit, time-formatting, terminal, and diagnostic helpers (`misc.c`)
+- Shared declarations across libc modules (`include/helper.h`)
 
 Guest libc delegates kernel operations to the C engine through its shared
 guest ABI and native/browser adapters. Dynamic loading, process/VFS behavior
@@ -138,7 +141,8 @@ and optional broker capabilities belong to C.
 Test fixture:
 ```sh
 ./start.sh --build-libc
-# Outputs: build/html-rt/waste-libc/waste-libc.wasm, build/html-rt/bash-runtime.wast
+# Outputs: build/libc-shared/libc.so.wasm and static test fixtures
+make -C src/libc install
 ```
 
 ### Shared-Library Libc Roadmap
@@ -174,24 +178,29 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 - `wasm/` — Binary reader/writer, LEB, encoder, decoder, loader, opcode metadata, and module
 - `op/` — Frame-based dispatch, opcode-family execution units, and validation
 - Engine root — Store, internal engine interface, instance lifetime, and instantiation
-- `lib/*.c` — Portable freestanding string, math, allocation, formatting, and errno support shared by native and Wasm
+- `lib/*.c` — Kernel, descriptor readiness, and VFS path semantics; portable C support is in `src/libc/runtime/`
 - `lib/include/` — Freestanding headers (stdio.h, stdlib.h, string.h, math.h, etc.) used via `-Ilib/include`
 - `Makefile` — Shared Flex/Bison generation rules
 
 ### Source: Browser/Wasm Runtime (`src/html-rt/`)
 - `browser_api.c` — Exported WAST API, legacy per-module linking, browser streaming, yield/resume
 - `posix_stubs.c/h` — POSIX host function dispatch tables and `browser_host_resolver`
-- `lib/stdlib.c`, `lib/stdio.c`, `lib/unistd.c` — Wasm platform backend and guest libc (guarded by `WASTE_ENGINE`)
-- `src/html-rt/lib/stdlib.wat` — WebAssembly guest libc core (memory, allocator, exports)
-- `lib/wchar.c` — UTF-8 multibyte/wide-char conversion
-- `lib/locale.c` — C.UTF-8 locale support
-- `lib/identity.c` — passwd/group/service records
-- `lib/string.c` — String and conversion helpers
-- `lib/pattern.c` — Regex and pattern matching
-- `lib/misc.c` — Resource-limit, time-formatting, terminal, and diagnostic helpers
-- `lib/include/helper.h` — Shared declarations across guest libc modules
-- `tools/build-bash-runtime.py` — Relinks Bash and libc binaries to shared `waste-runtime` module
-- `tools/build-waste-libc.py` — Builds libc Wasm binary and test fixtures
+- `lib/stdlib.c`, `lib/stdio.c`, `lib/unistd.c` — Wasm platform backend
+
+### Source: Guest Libc (`src/libc/`)
+- `Makefile` — Builds and explicitly installs the production PIC library
+- `allocator.c` — Production guest allocator
+- `src/libc/stdlib.wat` — WebAssembly guest libc core (memory, allocator, exports)
+- `wchar.c` — UTF-8 multibyte/wide-char conversion
+- `locale.c` — C.UTF-8 locale support
+- `identity.c` — passwd/group/service records
+- `string.c` — String and conversion helpers
+- `pattern.c` — Regex and pattern matching
+- `misc.c` — Resource-limit, time-formatting, terminal, and diagnostic helpers
+- `include/helper.h` — Shared declarations across guest libc modules
+- `runtime/` — Freestanding support compiled into the interpreter itself
+- `src/html-rt/tools/build-bash-runtime.py` — Generates Bash bootstrap loading installed libc
+- `src/html-rt/tools/build-waste-libc.py` — Builds the static test profile and fixtures
 
 ### Examples
 - `examples/bash.wat`, `bash-i.wat` — Compiled Bash binaries (for browser testing)
@@ -217,7 +226,8 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 **Verification:** C engine language changes use fixtures. The OCaml reference
 interpreter in `submodules/wasm-spec/interpreter` may be built via
 `./start.sh --ocaml-reference` to cross-check WAT/WAST semantics; see
-`docs/ocaml-reference-build.md`. Kernel/libc/application changes use
+[OCaml reference interpreter build](docs/techniques.md#ocaml-reference-interpreter-build).
+Kernel/libc/application changes use
 native/browser C parity, private sanitizer gates, compiled guest ABI checks
 and POSIX contract fixtures. See `docs/architecture.md` and
 `docs/techniques.md`.
@@ -318,23 +328,15 @@ If implementing broker-backed capabilities, design the protocol to be versioned,
 │   │   ├── engine_internal.h         # Internal engine interface
 │   │   ├── runtime_internal.h        # Internal runtime interface
 │   │   ├── Makefile                  # Flex/Bison generation rules
-│   │   └── lib/                      # Freestanding support library
-│   │       ├── freestanding_lib.c    # Portable freestanding library
-│   │       ├── freestanding_native.c # Native Linux x86_64 syscall backend
-│   │       └── include/              # Freestanding C headers
-│   │
-│   └── html-rt/                       # Browser packaging layer
-│       ├── lib/                       # Platform backend + guest libc
-│       │   ├── stdlib.c, stdio.c, unistd.c  # Wasm platform backend
-│       │   ├── stdlib.wat             # Wasm core (memory, allocator)
-│       │   ├── wchar.c               # UTF-8 multibyte/wide-char
-│       │   ├── locale.c              # C.UTF-8 locale
-│       │   ├── identity.c            # passwd/group/service records
-│       │   ├── string.c              # String/conversion helpers
-│       │   ├── pattern.c             # Regex and pattern matching
-│       │   ├── misc.c                # Resource, time, terminal, diag
-│       │   └── include/
-│       │       └── helper.h          # Shared guest libc declarations
+│   │   └── lib/                      # Kernel/path/readiness and private headers
+│   ├── libc/                         # Guest libc.so.wasm implementation
+│   │   ├── allocator.c              # PIC guest allocator
+│   │   ├── stdio.c, string.c, ...    # Guest libc APIs and wrappers
+│   │   ├── include/helper.h         # Private guest declarations
+│   │   └── runtime/                 # Interpreter's freestanding C support
+│   └── html-rt/                     # Browser packaging layer
+│       ├── lib/                     # Browser platform backend
+│       │   └── stdlib.c, stdio.c, unistd.c
 │       └── tools/                     # HTML generators & builders
 │           ├── build-bash-runtime.py
 │           └── build-waste-libc.py
