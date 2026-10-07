@@ -26,25 +26,29 @@ WASM_LDFLAGS := --no-entry --import-memory --import-table \
 	--global-base=327680 --table-base=1024
 
 .DELETE_ON_ERROR:
-.PHONY: all upload download install-upload install-download
-all: upload download
+.PHONY: all upload download ldd install-upload install-download install-ldd
+all: upload download ldd
 
 upload: $(BUILD_DIR)/upload/upload.wasm
 download: $(BUILD_DIR)/download/download.wasm
+ldd: $(BUILD_DIR)/ldd/ldd.wasm
 
 install-upload: upload
 install-download: download
+install-ldd: ldd
 
 # Keep inventory publication explicit and serialize concurrent installs.
 # Python is used only for the existing VFS audit/installation machinery.
-install-upload install-download:
+# ldd retains the former builder's explicit kernel fstat import review.
+install-upload install-download install-ldd:
 	@set -eu; \
 		utility="$(patsubst install-%,%,$@)"; \
 		artifact="$(BUILD_DIR)/$$utility/$$utility.wasm"; \
 		review_flags=$$($(PYTHON) "$(LIBC_REVIEW)" \
 			--provider "$(VFS_ROOT)/lib/libc.so.wasm" --review-imports "$$artifact"); \
 		flock "$(BUILD_DIR)/.vfs-install.lock" $(PYTHON) "$(VFS_TOOL)" install \
-			--root "$(VFS_ROOT)" --component "$$utility" --source "$$artifact" $$review_flags
+			--root "$(VFS_ROOT)" --component "$$utility" --source "$$artifact" \
+			$$review_flags $(if $(filter install-ldd,$@),--review-import env:fstat:function)
 
 $(CRT_OBJECT): $(CRT_SOURCE) $(AUX_DIR)/Makefile
 	mkdir -p "$(@D)"
@@ -61,8 +65,16 @@ $(BUILD_DIR)/download/download.o: $(AUX_DIR)/download/download.c $(AUX_DIR)/libc
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WASM_CFLAGS) \
 		-include "$(AUX_DIR)/libc-imports.h" -c "$<" -o "$@"
 
+$(BUILD_DIR)/ldd/ldd.o: $(AUX_DIR)/ldd/ldd.c $(AUX_DIR)/libc-imports.h $(AUX_DIR)/Makefile $(SDK_HEADERS)
+	mkdir -p "$(@D)"
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(WASM_CFLAGS) \
+		-include "$(AUX_DIR)/libc-imports.h" -c "$<" -o "$@"
+
 $(BUILD_DIR)/upload/upload.wasm: $(CRT_OBJECT) $(BUILD_DIR)/upload/upload.o
 	$(WASM_LD) $(LDFLAGS) $(WASM_LDFLAGS) -o "$@" $(foreach object,$^,"$(object)")
 
 $(BUILD_DIR)/download/download.wasm: $(CRT_OBJECT) $(BUILD_DIR)/download/download.o
+	$(WASM_LD) $(LDFLAGS) $(WASM_LDFLAGS) -o "$@" $(foreach object,$^,"$(object)")
+
+$(BUILD_DIR)/ldd/ldd.wasm: $(CRT_OBJECT) $(BUILD_DIR)/ldd/ldd.o
 	$(WASM_LD) $(LDFLAGS) $(WASM_LDFLAGS) -o "$@" $(foreach object,$^,"$(object)")

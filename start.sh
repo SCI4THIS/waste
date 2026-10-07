@@ -543,39 +543,15 @@ build_single_aux() {
         --component "$utility" --source "$rogue_out" || return 1
       printf 'Installed %s → %s\n' "$rogue_out" "$AUX_STAGING/rogue.wasm"
       ;;
-    ldd)
-      if ! run_logged_step "Build ldd dependency utility" \
-          "$AUX_LOG" python3 "$REPO_ROOT/src/html-rt/tools/build-ldd.py" \
-          --repo-root "$REPO_ROOT" --output "$REPO_ROOT/build/ldd"; then
-        show_message "Aux build failed" \
-          "Could not build ldd.\n\nLog: $AUX_LOG"
-        return 1
-      fi
-      local ldd_out="$REPO_ROOT/build/ldd/vfs/ldd"
-      if [[ ! -f "$ldd_out" ]]; then
-        show_message "Aux build failed" \
-          "Linked artifact not found: $ldd_out"
-        return 1
-      fi
-      local review_text
-      review_text=$(python3 "$REPO_ROOT/src/html-rt/tools/shared_libc.py" \
-        --review-imports "$ldd_out") || return 1
-      local -a libc_reviews
-      read -r -a libc_reviews <<< "$review_text"
-      python3 "$REPO_ROOT/src/html-rt/tools/vfs.py" install \
-        "${libc_reviews[@]}" --review-import env:fstat:function \
-        --component "$utility" --source "$ldd_out" || return 1
-      printf 'Installed %s → %s\n' "$ldd_out" "$AUX_STAGING/ldd.wasm"
-      ;;
-    upload|download)
+    ldd|upload|download)
       if ! run_logged_step "Build and install $utility utility" \
           "$AUX_LOG" make -C "$REPO_ROOT/src/aux" "install-$utility"; then
         show_message "Aux build failed" \
           "Could not build/install $utility.\n\nLog: $AUX_LOG"
         return 1
       fi
-      local ud_out="$REPO_ROOT/build/aux/${utility}/${utility}.wasm"
-      printf 'Installed %s → %s\n' "$ud_out" "$AUX_STAGING/usr/bin/$utility"
+      local aux_out="$REPO_ROOT/build/aux/${utility}/${utility}.wasm"
+      printf 'Installed %s → %s\n' "$aux_out" "$AUX_STAGING/usr/bin/$utility"
       ;;
     *)
       if ! run_logged_step "Build and audit coreutils $utility" \

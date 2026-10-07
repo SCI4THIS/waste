@@ -14,12 +14,28 @@ active plans rather than this document. The OCaml reference interpreter in
 `./start.sh --ocaml-reference` to cross-check Wasm/WAT/WAST language semantics;
 see [OCaml reference interpreter build](#ocaml-reference-interpreter-build).
 
+## Auxiliary Guest Utilities
+
+Authored `ldd` source lives in `src/aux/ldd/ldd.c`. Run `make -C src/aux ldd`
+to compile and link `build/aux/ldd/ldd.wasm` directly with Clang and `wasm-ld`,
+using the installed guest SDK and shared-libc import attributes. Run
+`make -C src/aux install-ldd` to build and install the audited snapshot into
+`src/vfs/usr/bin/ldd`; `start.sh` delegates to this target.
+Python is used by the existing import review and VFS installer only.
+`make -C src/aux` builds `ldd`, upload and download together. Compilation
+does not publish snapshots; use the corresponding `install-*` targets explicitly.
+
+`ldd` reads Wasm import sections and follows resolved library dependencies
+without executing the inspected modules. Check production dependency listings,
+malformed input and missing libraries with the `shared-dependencies` scenario
+in `tests/guest-session-check.py`.
+
 ## Browser File Transfer
 
 In the offline `bash.html` shell, `upload DEST` selects a host file and writes
 its bytes to the guest VFS; `download FILE` sends an existing guest file to the
 browser with its basename as the suggested filename. Both commands are installed
-under `/bin` and `/usr/bin`. Upload cancellation or a file-read failure returns
+under `/usr/bin`. Upload cancellation or a file-read failure returns
 nonzero. Download success means delivery to the browser download mechanism; the
 page cannot confirm the eventual host disk write or detect a cancelled Save dialog.
 

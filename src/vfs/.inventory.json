@@ -1384,13 +1384,13 @@
       "inode": 1035,
       "kind": 1,
       "mode": 493,
-      "mtime_nsec": 949033567,
-      "mtime_sec": 1791376286,
+      "mtime_nsec": 727487410,
+      "mtime_sec": 1791415055,
       "path": "/usr/bin/ldd",
       "role": "executable",
       "sha256": "2ba59c5443f4b6495db473c04e63a2e5f3df433d521a5ac9b526cd943b4eee79",
       "size": 5214,
-      "source": "build/ldd/vfs/ldd",
+      "source": "build/aux/ldd/ldd.wasm",
       "uid": 0
     },
     {
@@ -7896,7 +7896,7 @@
       "uid": 0
     }
   ],
-  "revision": "63767d83e05b1cec60e5713f6f75d8f289ad8b32",
+  "revision": "a19a8d4a04fce7f6717485189e5c91407c99ea93",
   "test_corpus": {
     "path": "/root/waste/tests/manifest.json",
     "selection_sha256": "f8a31826593d5bde17a84db771a2a5493270466cbaabcad7c81ce3854308f6ad",

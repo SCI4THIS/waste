@@ -15,13 +15,17 @@
 
 WASTE_LIBC_IMPORT(printf);
 WASTE_LIBC_IMPORT(fprintf);
+WASTE_LIBC_IMPORT(snprintf);
 WASTE_LIBC_IMPORT(strcmp);
+WASTE_LIBC_IMPORT(memcmp);
+WASTE_LIBC_IMPORT(memcpy);
 WASTE_LIBC_IMPORT(strlen);
 WASTE_LIBC_IMPORT(strrchr);
 WASTE_LIBC_IMPORT(malloc);
 WASTE_LIBC_IMPORT(free);
 WASTE_LIBC_IMPORT(open);
 WASTE_LIBC_IMPORT(close);
+WASTE_LIBC_IMPORT(access);
 
 /* read and fstat are supplied by the runtime, not the installed libc. */
 
