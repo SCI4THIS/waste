@@ -568,28 +568,14 @@ build_single_aux() {
       printf 'Installed %s → %s\n' "$ldd_out" "$AUX_STAGING/ldd.wasm"
       ;;
     upload|download)
-      if ! run_logged_step "Build upload/download utilities" \
-          "$AUX_LOG" python3 "$REPO_ROOT/src/html-rt/tools/build-upload-download.py" \
-          --repo-root "$REPO_ROOT" --output "$REPO_ROOT/build/upload-download"; then
+      if ! run_logged_step "Build and install $utility utility" \
+          "$AUX_LOG" make -C "$REPO_ROOT/src/aux" "install-$utility"; then
         show_message "Aux build failed" \
-          "Could not build upload/download.\n\nLog: $AUX_LOG"
+          "Could not build/install $utility.\n\nLog: $AUX_LOG"
         return 1
       fi
-      local ud_out="$REPO_ROOT/build/upload-download/vfs/${utility}"
-      if [[ ! -f "$ud_out" ]]; then
-        show_message "Aux build failed" \
-          "Linked artifact not found: $ud_out"
-        return 1
-      fi
-      local review_text
-      review_text=$(python3 "$REPO_ROOT/src/html-rt/tools/shared_libc.py" \
-        --review-imports "$ud_out") || return 1
-      local -a libc_reviews
-      read -r -a libc_reviews <<< "$review_text"
-      python3 "$REPO_ROOT/src/html-rt/tools/vfs.py" install \
-        "${libc_reviews[@]}" \
-        --component "$utility" --source "$ud_out" || return 1
-      printf 'Installed %s → %s\n' "$ud_out" "$AUX_STAGING/${utility}.wasm"
+      local ud_out="$REPO_ROOT/build/aux/${utility}/${utility}.wasm"
+      printf 'Installed %s → %s\n' "$ud_out" "$AUX_STAGING/usr/bin/$utility"
       ;;
     *)
       if ! run_logged_step "Build and audit coreutils $utility" \

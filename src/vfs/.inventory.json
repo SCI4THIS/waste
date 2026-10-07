@@ -1342,13 +1342,13 @@
       "inode": 1032,
       "kind": 1,
       "mode": 493,
-      "mtime_nsec": 427069391,
-      "mtime_sec": 1791376394,
+      "mtime_nsec": 439969790,
+      "mtime_sec": 1791413489,
       "path": "/usr/bin/download",
       "role": "executable",
       "sha256": "15cb0abfa95e7fb3bc78a06e1100efc8da770bf9f824c867b4d214ad3238406f",
       "size": 2433,
-      "source": "build/upload-download/vfs/download",
+      "source": "build/aux/download/download.wasm",
       "uid": 0
     },
     {
@@ -1468,13 +1468,13 @@
       "inode": 1041,
       "kind": 1,
       "mode": 493,
-      "mtime_nsec": 426571694,
-      "mtime_sec": 1791376394,
+      "mtime_nsec": 301969279,
+      "mtime_sec": 1791413489,
       "path": "/usr/bin/upload",
       "role": "executable",
       "sha256": "4f0e79d178795ff1ce36effc8a1bf8a6abeecbe5a7fe007fea842a4ff74c3b0e",
       "size": 1672,
-      "source": "build/upload-download/vfs/upload",
+      "source": "build/aux/upload/upload.wasm",
       "uid": 0
     },
     {
@@ -7896,7 +7896,7 @@
       "uid": 0
     }
   ],
-  "revision": "52f5451e5e18a8639c9fd5aa3b053c7f6759cbe4",
+  "revision": "63767d83e05b1cec60e5713f6f75d8f289ad8b32",
   "test_corpus": {
     "path": "/root/waste/tests/manifest.json",
     "selection_sha256": "f8a31826593d5bde17a84db771a2a5493270466cbaabcad7c81ce3854308f6ad",

@@ -12,9 +12,14 @@ __waste_crt_FILE *stdout;
 __waste_crt_FILE *stderr;
 
 /* Shared libc accessors; the static fixture profile may resolve them at link time. */
-extern __waste_crt_FILE *waste_stdin(void);
-extern __waste_crt_FILE *waste_stdout(void);
-extern __waste_crt_FILE *waste_stderr(void);
+#ifdef WASTE_SHARED_LIBC_IMPORTS
+#define WASTE_CRT_LIBC_IMPORT __attribute__((import_module("libc")))
+#else
+#define WASTE_CRT_LIBC_IMPORT
+#endif
+extern __waste_crt_FILE *waste_stdin(void) WASTE_CRT_LIBC_IMPORT;
+extern __waste_crt_FILE *waste_stdout(void) WASTE_CRT_LIBC_IMPORT;
+extern __waste_crt_FILE *waste_stderr(void) WASTE_CRT_LIBC_IMPORT;
 #ifdef WASTE_MAIN_TWO_ARGS
 typedef i32 (*waste_main_entry)(i32, char **);
 #else
@@ -26,7 +31,8 @@ extern i32 waste_kernel_startup_v1(void);
 __attribute__((import_module("env"), import_name("exit")))
 extern void waste_env_exit(i32 status);
 
-extern i32 fflush(void *stream);
+extern i32 fflush(void *stream) WASTE_CRT_LIBC_IMPORT;
+#undef WASTE_CRT_LIBC_IMPORT
 
 /* Linkers may provide this when constructors are present. */
 extern void __wasm_call_ctors(void) __attribute__((weak));

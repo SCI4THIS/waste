@@ -23,8 +23,16 @@ under `/bin` and `/usr/bin`. Upload cancellation or a file-read failure returns
 nonzero. Download success means delivery to the browser download mechanism; the
 page cannot confirm the eventual host disk write or detect a cancelled Save dialog.
 
-`src/html-rt/tools/build-upload-download.py` builds the guest utilities under
-`build/`; `start.sh` installs their snapshots through `vfs.py`. Frontend changes
+Authored transfer sources live in `src/aux/upload/upload.c` and
+`src/aux/download/download.c`. Run `make -C src/aux upload download` to build
+`build/aux/upload/upload.wasm` and `build/aux/download/download.wasm` with the
+installed guest SDK and shared libc. The Makefile invokes Clang and `wasm-ld`
+directly, using the mounted headers and explicit C import attributes for the
+`libc` namespace. Run `make -C src/aux install-upload install-download` to
+build and publish the snapshots through `vfs.py`, preserving the inventory and
+checking shared-libc import signatures. Installation targets serialize VFS
+publication with `flock`; `start.sh` delegates to these targets. Python is used
+for VFS installation, not compilation. Frontend changes
 are explicitly installed with `vfs.py install --component app --source
 src/html-rt/src` before packaging. The tarball contains `/root/waste/app`; do not
 duplicate transfer code in the HTML generator or stage binaries in frontend sources.

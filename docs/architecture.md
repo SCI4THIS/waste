@@ -20,6 +20,7 @@ belong in Git history or test result artifacts rather than this document.
 The current source boundaries are:
 
 ```text
+src/aux/       authored guest auxiliary commands and build targets
 src/engine/    platform-neutral parser, encoder, decoder, validator,
                instantiation, linker, runner, executor and guest POSIX ABI
 src/cli-rt/    native CLI/session drivers, mmap harness, platform library,
