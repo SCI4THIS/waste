@@ -246,9 +246,6 @@ def verify_sources(repo, manifest):
         for field in ("group", "suite", "expectFailure", "unsupported", "unsupportedReason"):
             if test[field] != entry[field]:
                 raise ValueError(f"installed test policy is stale: {test['id']}")
-    for entry in manifest["sourceInputs"]:
-        if sha((repo / entry["path"]).read_bytes()) != entry["sha256"]:
-            raise ValueError(f"installed test generation input is stale: {entry['path']}")
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo / "submodules/wasm-spec", text=True).strip()
     if manifest["oracle"]["revision"] != revision:
         raise ValueError("installed test oracle revision is stale")

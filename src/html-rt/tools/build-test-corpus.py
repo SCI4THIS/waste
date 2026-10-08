@@ -15,7 +15,6 @@ def main():
     parser.add_argument("--install", action="store_true")
     parser.add_argument("--audit", action="store_true", help="Also verify current source hashes/revision")
     parser.add_argument("--baseline", type=Path, help="Retained inventory: require identical identities, bytes and execution specs")
-    parser.add_argument("--review-selection", action="store_true", help="Explicitly accept a changed existing corpus selection")
     args = parser.parse_args()
     if args.audit:
         inventory = vfs.load(vfs.ROOT)
@@ -34,7 +33,7 @@ def main():
                         "--output-dir", str(payload)], check=True)
         manifest = test_distribution.prepare(vfs.REPO, stage, payload / "payload.json", args.baseline)
         if args.install:
-            vfs.install_tests(vfs.ROOT, stage, manifest, args.review_selection)
+            vfs.install_tests(vfs.ROOT, stage, manifest)
         else:
             print(f"Prepared {manifest['counts']['tests']} tests; use --install to publish")
 

@@ -169,7 +169,7 @@ make -C src/cli-rt guest-session-sanitize
 python3 tests/guest-session-check.py --native build/cli-rt/waste-session-sanitize
 ```
 
-The same JSON interaction contracts and installed files and inventory metadata drive native and
+The same JSON interaction contracts, current files and generated mount metadata drive native and
 compiled-browser engine sessions, and optionally the packaged production
 worker (`--page`). Inputs follow guest output/wait events with
 a delay; they are not preloaded. Checks compare exact transcripts and assertion
@@ -199,11 +199,11 @@ semantic markers, selected child PIDs, genuine wait boundaries and exit status,
 retaining raw transcripts rather than masking arbitrary differences.
 The native Bash case reads its bootstrap from the installed tree; browser
 bootstrap bytes are the identical installed launch snapshot. Use `--vfs-root`
-to select another installed directory. Empty directories and guest metadata
-come from `.inventory.json`, independently of host checkout timestamps.
+to select another directory. Files, empty directories, modes and timestamps come
+from its current contents; browser metadata is generated from the same tree.
 Native boundaries verify SELECT deadlines, fork return values/private-memory
 isolation/reaping, bounded wait timeout and non-destructive result output.
-Package checks compare individual file bytes and canonical inventory metadata.
+Package checks compare individual file bytes and generated mount metadata.
 `--scenario NAME` selects a focused interaction (linked-provider isolation and native
 boundary checks still run). Sanitizer runs enable
 ASan, UBSan and leak checks; environments tracing child processes may require
@@ -298,8 +298,8 @@ native `waste-test` executable (or `waste-test-sanitize` for a sanitized session
 The session retains an open installed-root directory and passes that descriptor
 to the companion, which reads and revalidates its files directly. Renaming or
 replacing the root pathname does not redirect the companion. External content
-edits are subject to inventory validation; the directory descriptor does not
-freeze bytes. The runtime binds the sibling expected-failure policy; guest
+edits are discovered on each companion load, with bounded, consistent reads;
+the directory descriptor does not freeze bytes. The runtime binds the sibling expected-failure policy; guest
 arguments cannot name host files. Reports return through a bounded, versioned
 host-I/O reply and the guest writes them to its own descriptors. Ctrl-C cancels
 and reaps the batch process group, returning 130 to Bash. Session-wide deadlines

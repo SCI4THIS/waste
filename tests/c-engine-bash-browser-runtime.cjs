@@ -11,12 +11,12 @@ const {readOfflinePackage} = require("./offline-html-package.cjs");
 const root = path.resolve(__dirname, "..");
 const vfsRoot = path.join(root, "src/vfs");
 const stagingDir = path.join(vfsRoot, "usr/bin");
-const {installedVfs, treeVfs, packageVfs, stageVfs} = require("./vfs-package.cjs");
+const {installedVfs, treeManifest, treeVfs, packageVfs, stageVfs} = require("./vfs-package.cjs");
 const frontendDir = path.join(root, "src/html-rt/src");
 const pagePath = process.argv.slice(2).find(arg => arg.endsWith(".html"));
 const archive = pagePath ? readOfflinePackage(pagePath) : null;
 const manifest = archive ? JSON.parse(archive.read("vfs-manifest.json"))
-  : JSON.parse(fs.readFileSync(path.join(vfsRoot, ".inventory.json")));
+  : treeManifest(vfsRoot);
 const entries = new Map(manifest.entries.map(e => [e.path, e]));
 function assetName(filename) {
   if (filename.startsWith(vfsRoot + path.sep)) return path.relative(vfsRoot, filename).replaceAll(path.sep, "/");

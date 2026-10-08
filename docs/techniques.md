@@ -21,14 +21,48 @@ to compile and link `build/aux/ldd/ldd.wasm` directly with Clang and `wasm-ld`,
 using the installed guest SDK and shared-libc import attributes. Run
 `make -C src/aux install-ldd` to build and install the audited snapshot into
 `src/vfs/usr/bin/ldd`; `start.sh` delegates to this target.
-Python is used by the existing import review and VFS installer only.
-`make -C src/aux` builds `ldd`, upload and download together. Compilation
+Python is used by the import signature check and VFS installer only.
+`make -C src/aux` builds `ldd`, upload, download and Rogue together. Compilation
 does not publish snapshots; use the corresponding `install-*` targets explicitly.
 
 `ldd` reads Wasm import sections and follows resolved library dependencies
 without executing the inspected modules. Check production dependency listings,
 malformed input and missing libraries with the `shared-dependencies` scenario
 in `tests/guest-session-check.py`.
+
+Rogue's package configuration, ncurses Boolean ABI profile, library import
+attributes and patches live in `src/aux/rogue`. Run `make -C src/aux rogue` to
+copy upstream inputs into `build/aux/rogue/src`, patch that staging copy and
+compile/link `build/aux/rogue/rogue.wasm` directly with Clang/`wasm-ld`.
+The build uses current installed headers and attaches `libc`/`libncurses`
+namespaces to C declarations; no Python build generator, temporary sysroot or
+post-link import rewrite is needed. `make -C src/aux install-rogue` checks
+library signatures and explicitly publishes `/usr/bin/rogue`; `start.sh`
+delegates to it. Check `rogue-fresh`, `rogue` and `shared-dependencies` in the
+production native/browser session harness. See
+[the Rogue build notes](../src/aux/rogue/README.md) for patch responsibilities.
+
+## Shared Guest Libc Build
+
+`make -C src/libc` compiles the production guest library directly with Clang
+and links `build/libc-shared/libc.so.wasm` with `wasm-ld --shared`. It uses
+installed SDK headers, PIC objects and the existing POSIX I/O profile. Objects
+and dependency files stay under `build/libc-shared/objects`; Make rebuilds
+changed inputs and supports parallel compilation. The linker can use the
+repository-staged toolchain when `wasm-ld` is absent from PATH.
+
+`make -C src/libc install` explicitly publishes the audited library through
+`vfs.py` to `/lib/libc.so.wasm` and its `/usr/lib` compatibility copy. The
+browser Makefile delegates its `libc-shared` and `libc-shared-install` targets
+to this Makefile. `start.sh --build-libc` builds the shared library there, then
+builds the separate static WAST fixture profile through `waste-libc`.
+
+`src/libc/sources.mk` is the ordered C helper list consumed by both Make and
+the Python fixture/provider tools. The shared library additionally compiles
+`allocator.c`; the static profile uses the allocator in `stdlib.wat`. Keep
+these profiles distinct when verifying behavior. Run
+`python3 tests/guest-session-check.py --scenario shared-libc --scenario shared-dependencies`
+to check the installed production library in both native and browser C builds.
 
 ## Browser File Transfer
 
@@ -45,7 +79,7 @@ Authored transfer sources live in `src/aux/upload/upload.c` and
 installed guest SDK and shared libc. The Makefile invokes Clang and `wasm-ld`
 directly, using the mounted headers and explicit C import attributes for the
 `libc` namespace. Run `make -C src/aux install-upload install-download` to
-build and publish the snapshots through `vfs.py`, preserving the inventory and
+build and publish the snapshots through `vfs.py`, preserving other files and
 checking shared-libc import signatures. Installation targets serialize VFS
 publication with `flock`; `start.sh` delegates to these targets. Python is used
 for VFS installation, not compilation. Frontend changes
@@ -737,11 +771,13 @@ build/cli-rt/waste-test --vfs-root=src/vfs --list
 build/cli-rt/waste-test --vfs-root=src/vfs --group=engine-regressions --json
 ```
 
-Installation verifies source and companion hashes, then publishes test snapshots,
-manifest and license. It rejects edited installed snapshots and unreviewed
-selection changes; use `build-test-corpus.py --install --review-selection` only
-after reviewing a deliberate selection change. Packaging consumes the installed
-inventory without rebuilding or discovering tests. Native `corpus-native` writes
+Installation verifies candidate test/companion consistency, then publishes test
+files, manifest and license. An explicit refresh replaces managed corpus files,
+including local edits; it needs no selection approval flag. Packaging discovers
+the current VFS tree without rebuilding tests or comparing them to sources.
+The explicit `vfs-tests-check` gate still checks corpus selection, test bytes and
+policy against authored/upstream inputs; unrelated source hashes are not gates.
+Native `corpus-native` writes
 `build/cli-rt/corpus-results.json` and does not refresh the distribution.
 
 Repeat `--group`, `--exclude` and `--exclude-group`, or select positional
@@ -946,14 +982,18 @@ sanitizer diagnostic cannot be mistaken for an assertion pass.
 
 ## Installed VFS Inputs
 
-Keep distribution bytes in `src/vfs` and metadata in its `.inventory.json`.
-Native adapters read declared files beneath an open directory, walking each
-component with `openat`/`O_NOFOLLOW`; browser adapters reuse the existing
-tarballjs file map. Never wrap this tree in a second custom archive. Both
-adapters submit the same inventory and separate file bytes to the shared
-bounded validator, which preserves exact ownership, inode identities and
-nanosecond mtimes and verifies the declared SHA-256 hashes before mounting.
-Missing empty host directories are represented by inventory entries.
+Use the current `src/vfs` tree as the filesystem definition. Native adapters
+enumerate directories and open children with `openat`/`O_NOFOLLOW`; browser
+packaging scans the same tree and the browser reuses the tarballjs file map.
+Reject unsafe paths, symlinks, special files, oversized inputs and inconsistent
+reads. Entry and byte bounds come from `src/config.h`. Derive inode IDs from
+sorted paths, use guest root ownership, and preserve current modes and
+nanosecond mtimes. Synthesize missing boot directories and WAT/WAST interpreter
+nodes. Generate browser metadata and content hashes into the package for bounded
+transport validation. Never require a checked-in inventory, source hashes or
+SDK refresh before accepting file changes, and never wrap this tree in a second
+custom archive. Build the page with `make -C src/html-rt bash-html` or
+`./start.sh --html-bash`; both package the tree without reinstalling guest files.
 
 Mount complete inputs into a fresh kernel. Guest writes modify private kernel
 files and cannot alter the installed tree or another test's filesystem. Native

@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 "use strict";
 const {config, withConfig} = require("./runtime-config.cjs");
-const {packageVfs, stageVfs} = require("./vfs-package.cjs");
+const {packageVfs, stageVfs, treeVfs} = require("./vfs-package.cjs");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const path = require("node:path");
 const {execFileSync} = require("node:child_process");
 const {readOfflinePackage} = require("./offline-html-package.cjs");
 (async () => {
@@ -40,6 +41,48 @@ const {readOfflinePackage} = require("./offline-html-package.cjs");
     exp.waste_wast_free(p);
     return result;
   }
+  // Current-tree discovery must reach the real browser engine, including edits
+  // and deletions with no inventory or SDK refresh.
+  const currentRoot = fs.mkdtempSync(path.join(scratch, "current-vfs-"));
+  try {
+    fs.mkdirSync(path.join(currentRoot, "data"));
+    const sample = path.join(currentRoot, "data/sample");
+    const currentProbe = `(module
+      (import "waste_kernel" "path_access_v1" (func $access (param i32 i32 i32 i32) (result i32)))
+      (import "waste_kernel" "path_stat_v1" (func $stat (param i32 i32 i32 i32) (result i32)))
+      (import "env" "open" (func $open (param i32 i32 i32) (result i32)))
+      (import "env" "read" (func $read (param i32 i32 i32) (result i32)))
+      (import "env" "close" (func $close (param i32) (result i32)))
+      (memory (export "__waste_memory") 1)
+      (func (export "__errno_location") (result i32) (i32.const 0))
+      (data (i32.const 32) "/data/sample\\00")
+      (func (export "access") (result i32)
+        (call $access (i32.const 32) (i32.const 12) (i32.const 0) (i32.const 0)))
+      (func (export "size") (result i32)
+        (drop (call $stat (i32.const 32) (i32.const 12) (i32.const 1) (i32.const 256)))
+        (i32.wrap_i64 (i64.load (i32.const 272))))
+      (func (export "first") (result i32) (local $fd i32)
+        (local.set $fd (call $open (i32.const 32) (i32.const 0) (i32.const 0)))
+        (if (i32.ne (call $read (local.get $fd) (i32.const 128) (i32.const 1)) (i32.const 1))
+          (then (drop (call $close (local.get $fd))) (return (i32.const -1))))
+        (drop (call $close (local.get $fd)))
+        (i32.load8_u (i32.const 128))))`;
+    for (const content of ["AB", "XYZ", null]) {
+      if (content === null) fs.unlinkSync(sample);
+      else fs.writeFileSync(sample, content);
+      stageVfs(exp, treeVfs(currentRoot));
+      const assertions = content === null
+        ? '(assert_return (invoke "access") (i32.const -2))'
+        : `(assert_return (invoke "access") (i32.const 0))
+           (assert_return (invoke "size") (i32.const ${content.length}))
+           (assert_return (invoke "first") (i32.const ${content.charCodeAt(0)}))`;
+      assert.equal(stage(Buffer.from(currentProbe + assertions), exp.waste_wast_run_script), 0);
+      const count = content === null ? 1 : 3;
+      assert.equal(exp.waste_wast_results_total(), count);
+      assert.equal(exp.waste_wast_results_passed(), count);
+    }
+    console.log("PASS browser current-tree mount: added file, changed size/bytes, deletion without metadata refresh");
+  } finally { fs.rmSync(currentRoot, {recursive:true, force:true}); }
   const vfs = packageVfs(page);
   const malformed = JSON.parse(vfs.inventory);
   malformed.entries[0].path = "/../escape";
@@ -49,7 +92,7 @@ const {readOfflinePackage} = require("./offline-html-package.cjs");
   const first = vfs.files[0];
   assert.notEqual(stage(Buffer.alloc(first.bytes.length), (p, n) =>
     exp.waste_wast_stage_vfs_file(first.index, p, n)), 0);
-  for (const [fixture, count] of [["tests/vfs-mounted-paths.wast", 8], ["tests/guest-sdk-mounted.wast", 12]]) {
+  for (const [fixture, count] of [["tests/vfs-mounted-paths.wast", 7], ["tests/guest-sdk-mounted.wast", 12]]) {
    const source = Buffer.from(fs.readFileSync(fixture));
    for (let i = 0; i < 2; i++) {
     stageVfs(exp, vfs);
@@ -127,6 +170,6 @@ const {readOfflinePackage} = require("./offline-html-package.cjs");
     failures.push(Buffer.from(message.subarray(0, message.indexOf(0))).toString());
   }
   assert.equal(exp.waste_wast_results_passed(), 1, failures.join("\n"));
-  console.log("PASS compiled browser corpus: all 296 paths open/read through EOF with exact lengths and endpoint bytes");
+  console.log(`PASS compiled browser corpus: all ${corpus.tests.length} paths open/read through EOF with exact lengths and endpoint bytes`);
   console.log("PASS compiled browser inventory/files: native-identical mounted path assertions, repeated fresh stores, malformed rejection");
 })().catch(e => { console.error(e); process.exitCode = 1; });

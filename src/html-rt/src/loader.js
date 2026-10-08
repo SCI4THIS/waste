@@ -32,7 +32,7 @@ async function loadJSON(filename) {
   return JSON.parse(text);
 }
 
-/* Reuse the tarballjs file map and the installed inventory. No second copy
+/* Reuse the tarballjs file map and freshly generated mount metadata. No second copy
  * of the guest tree is embedded in a custom filesystem bundle. */
 var installedVfsLoading = null;
 function loadInstalledVfs() {
@@ -105,7 +105,7 @@ function stagingDataPath(filename) {
   if (filename === "launch.wast") return g.staging_data_root + "bash-runtime.wast";
   if (filename === "payload.json") return g.staging_data_root + "tests/payload.json";
   if (filename === "waste-wast.wasm") return g.staging_data_root + filename;
-  if (filename === "vfs-manifest.json") return "../../vfs/.inventory.json";
+  if (filename === "vfs-manifest.json") return g.staging_data_root + "bash/vfs-manifest.json";
   if (filename === "browser-corpus-expected-failures.txt") return "../../../tests/" + filename;
   return filename;
 }

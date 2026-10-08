@@ -5,6 +5,40 @@
 #include <stdlib.h>
 #include <string.h>
 
+static void discovered_node_check(void) {
+    waste_vfs vfs = {0};
+    posix_path_metadata metadata = {0};
+    metadata.kind = POSIX_NODE_DIRECTORY;
+    metadata.mode = 0755;
+    metadata.inode = 1;
+    assert(waste_vfs_append(&vfs, "/missing-parent/file", &metadata, NULL, 0, 0));
+    assert(!vfs.count && !vfs.entries);
+    assert(!waste_vfs_append(&vfs, "/", &metadata, NULL, 0, 0));
+    uint8_t *bytes = malloc(1);
+    assert(bytes);
+    *bytes = 0xa5;
+    metadata.kind = POSIX_NODE_REGULAR;
+    metadata.size = 1;
+    // Duplicate inode, missing parent, unsafe path, size and node-kind failures
+    // leave the existing catalogue and the caller-owned buffer unchanged.
+    assert(waste_vfs_append(&vfs, "/sample", &metadata, bytes, 1, 0));
+    metadata.inode = 2;
+    assert(waste_vfs_append(&vfs, "/absent/sample", &metadata, bytes, 1, 0));
+    assert(waste_vfs_append(&vfs, "/../sample", &metadata, bytes, 1, 0));
+    assert(waste_vfs_append(&vfs, "/sample", &metadata, bytes, 0, 0));
+    assert(waste_vfs_append(&vfs, "/sample", &metadata, bytes, 1, 1));
+    metadata.kind = POSIX_NODE_DIRECTORY;
+    assert(waste_vfs_append(&vfs, "/sample", &metadata, bytes, 1, 0));
+    assert(vfs.count == 1 && !vfs.bytes && *bytes == 0xa5);
+    metadata.kind = POSIX_NODE_REGULAR;
+    assert(!waste_vfs_append(&vfs, "/sample", &metadata, bytes, 1, 0));
+    assert(vfs.count == 2 && vfs.bytes == 1 && vfs.entries[1].data == bytes);
+    metadata.inode = 3;
+    assert(waste_vfs_append(&vfs, "/sample", &metadata, NULL, 0, 0));
+    waste_vfs_free(&vfs);
+    puts("PASS discovered nodes: bounded validation, atomic failure and byte ownership");
+}
+
 static void capacity_check(void) {
     size_t capacity = ((size_t)WASTE_VFS_MAX_ENTRIES + 1) * 256 + 128, at = 0;
     char *json = malloc(capacity);
@@ -96,6 +130,7 @@ int main(int argc, char **argv) {
     waste_vfs_free(&vfs);
     posix_kernel_destroy(first); posix_kernel_destroy(second);
     capacity_check();
+    discovered_node_check();
     printf("PASS installed VFS: %u nodes, exact bytes/metadata, host preservation and kernel isolation\n", count);
     return 0;
 }

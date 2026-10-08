@@ -1,0 +1,47 @@
+--- a/main.c
++++ b/main.c
+@@ -238,8 +238,7 @@
+     getyx(curscr, y, x);
+     mvcur(y, x, oy, ox);
+     fflush(stdout);
+-    curscr->_cury = oy;
+-    curscr->_curx = ox;
++    wmove(curscr, oy, ox);
+ }
+ 
+ /*
+--- a/mdport.c
++++ b/mdport.c
+@@ -462,13 +462,6 @@
+         char slash = '\\';
+ #else
+     char slash = '/';
+-    struct passwd *pw;
+-    pw = getpwuid(getuid());
+-
+-    h = pw->pw_dir;
+-
+-    if (strcmp(h,"/") == 0)
+-        h = NULL;
+ #endif
+     homedir[0] = 0;
+ #ifdef _WIN32
+@@ -527,9 +520,6 @@
+     char *def = "C:\\COMMAND.COM";
+ #else
+     char *def = "/bin/sh";
+-    struct passwd *pw;
+-    pw = getpwuid(getuid());
+-    s = pw->pw_shell;
+ #endif
+     if ((s == NULL) || (*s == '\0'))
+         if ( (s = getenv("COMSPEC")) == NULL)
+@@ -607,7 +597,7 @@
+ md_getrealname(int uid)
+ {
+     static char uidstr[20];
+-#if !defined(_WIN32) && !defined(DJGPP)
++#if 0 /* no getpwuid in WASTE guest */
+     struct passwd *pp;
+ 
+ 	if ((pp = getpwuid(uid)) == NULL)

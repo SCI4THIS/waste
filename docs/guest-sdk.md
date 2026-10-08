@@ -1,6 +1,6 @@
 # Mounted guest C headers
 
-The SDK describes a verified, deliberately partial wasm32 guest ABI. Public
+The SDK describes a deliberately partial wasm32 guest ABI. Public
 declarations, provider signatures, compiler include closure and selected ABI
 probes are checked. This is not full ISO C/POSIX support or an implemented
 in-guest compiler; a provider can still be a documented compatibility stub.
@@ -26,39 +26,42 @@ preserves C11 `bool` while parsing ncurses declarations with the DSO's four-byte
 unavailable attributes without changing the DSO ABI. The manifest records both
 upstream and adapted hashes. `ncurses_cfg.h` stays private.
 
-`usr/share/waste/sdk.json` records target assumptions, file hashes, origins,
-compiler version, ncurses revision/configuration/DSO hashes and current limits.
-Its API inventory records every default declaration's type, headers, provider,
-Wasm signature or unavailable reason, capability limits and known stubs. It
-also records compiled-provider and implementation-source hashes.
-`.inventory.json` also declares every installed path and metadata value.
-The manually reviewed adapter signatures are hash-bound to the shared
-`src/engine/guest_posix.c` implementation, its private capability header and
-the browser wrapper. The historical `browser-env` provider label and
+`usr/share/waste/sdk.json` records informational target assumptions, header
+origins, compiler version and dependency configuration at installation time.
+Recorded hashes describe those inputs; they are not freshness requirements.
+The current files in `src/vfs` are authoritative. Edit or add a header/binary
+there and native mounting uses it on the next run; rebuild `bash.html` to include
+it in the browser package. No metadata refresh or import approval is required.
+
+Explicit provider checks discover current headers and compare actual Wasm
+signatures against current libraries and the adapter signatures in
+`sdk-api-policy.json`. Their API report is generated under `build/`, not stored
+in the mounted SDK as an approval ledger. Source changes do not require a new
+source hash. The historical `browser-env` provider label and
 `browser_adapter_review` policy key remain for compatibility; they do not
 imply a separate native guest ABI or establish full semantic conformance.
 
-After changing authored public headers, explicitly refresh the inventory:
+Check current public headers and providers with:
 
 ```sh
-make -C src/html-rt guest-sdk-install
 make -C src/html-rt guest-sdk-check
 ```
 
-Installation requires the reviewed Clang version, generated ncurses headers
-and compiled guest libc. The Make target builds libc first. SDK preparation
-runs the provider/signature gate before publication; a rejected refresh leaves
-the installed inventory untouched.
-Ordinary builds use the installed snapshots. To refresh a library and its
-matching headers together:
+Use `make -C src/html-rt guest-sdk-install` only when deliberately refreshing
+selected compiler and configured ncurses headers. It uses the available Clang,
+generated ncurses headers and compiled guest libc; the target builds libc first.
+SDK preparation runs the provider/signature check before atomic publication.
+A rejected candidate leaves existing files untouched; edited or additional
+files are not rejected for differing from recorded hashes. To refresh a library
+and its matching headers together:
 
 ```sh
 python3 src/html-rt/tools/build-ncurses.py --repo-root . --install
 ```
 
-The SDK installer validates the complete staged tree before atomic publication.
-It rejects edited upstream header/binary snapshots and unexpected paths. New
-SDK files use reproducible metadata; refreshes preserve existing inode IDs.
+The SDK installer preserves files outside its explicit copy list. Filesystem
+metadata comes from current files; inode IDs are derived from sorted paths.
+HTML packaging neither installs headers nor checks SDK provenance freshness.
 
 ## Build profiles and ABI
 
@@ -113,7 +116,7 @@ or new POSIX capabilities.
 
 `tests/guest-sdk-check.py` checks standalone headers, include orders, hermetic
 dependencies, ABI sizes/offsets, real Wasm variadic execution and negative
-host/private-header/provenance cases. Native installed-inventory sanitizer tests verify all
+host/private-header cases. Native directory-mount sanitizer tests verify all
 mounted bytes/metadata; `tests/guest-sdk-mounted.wast` checks public presence
 and private exclusion in both runtimes. `tests/c-engine-vfs-browser.cjs` also
 compiles with the installed-only sysroot and executes variadic, stat-buffer
@@ -123,21 +126,16 @@ providers, incompatible signatures and malformed signature inputs.
 
 ```sh
 python3 src/html-rt/tools/audit-guest-providers.py
-python3 src/html-rt/tools/audit-guest-providers.py --strict
 ```
 
-Both commands inspect declarations and compile an address-reference probe to
+The command inspects declarations and compiles an address-reference probe to
 compare actual Wasm signatures against installed libc.so.wasm/ncurses exports. Ncurses's
 imports must also match their providers. Browser-only signatures and binding
-precedence are explicitly reviewed in `sdk-api-policy.json`, pinned to the
-adapter source hash; changing that source requires another review. This is
+precedence are explicit in `sdk-api-policy.json`. This is
 signature/capability accounting, not semantic conformance proof.
 
-The strict command additionally rejects stale mounted metadata. Currently it
-accounts for 742 available functions, 154 unavailable functions and 31 globals,
-including six unavailable package globals. Nineteen package-only function names
-were removed from the default declarations. `guest-sdk-check` includes this
-strict gate. Refresh SDK metadata explicitly after provider changes, then
-rebuild corresponding-source bundles and browser packages. The three standard
-stream globals require CRT startup; other data addresses require normal link
+There is no strict metadata freshness gate. `guest-sdk-check` checks current
+header compilation, layouts and provider compatibility without comparing a
+stored report or source hashes. Rebuild browser packages after file changes.
+The three standard stream globals require CRT startup; other data addresses require normal link
 relocations, not wasm-ld's unresolved-data address-zero fallback.

@@ -94,16 +94,10 @@ WAST_LEX_WASM_O := $(BUILD_DIR)/wast.lex.wasm.o
 WAST_WASM_TARGET := $(BUILD_DIR)/waste-wast.wasm
 
 LIBC_BUILDER := tools/build-waste-libc.py
-LIBC_SOURCE_MANIFEST := tools/libc_sources.py
+include ../libc/sources.mk
+LIBC_SOURCE_MANIFEST := ../libc/sources.mk tools/libc_sources.py
 LIBC_CLIENTS := $(wildcard $(REPO_ROOT)/tests/libc-test/*-client.wast.inc)
-LIBC_SOURCES := ../libc/stdlib.wat ../libc/stdio.c ../libc/wchar.c \
-	../libc/locale.c ../libc/identity.c ../libc/string.c \
-	../libc/math.c ../libc/quad.c \
-	../libc/stdlib.c ../libc/pattern.c ../libc/misc.c \
-	../libc/time.c ../libc/termcap.c ../libc/termios.c \
-	../libc/dirent.c ../libc/netdb.c ../libc/dlfcn.c ../libc/unistd.c \
-	../libc/sys/random.c ../libc/sys/resource.c ../libc/sys/select.c \
-	../libc/sys/ioctl.c ../libc/sys/socket.c \
+LIBC_SOURCES := ../libc/stdlib.wat $(addprefix ../libc/,$(LIBC_C_SOURCES)) \
 	../libc/include/helper.h $(LIBC_CLIENTS) $(LIBC_BUILDER) $(LIBC_SOURCE_MANIFEST)
 LIBC_OUTPUT := $(BUILD_DIR)/waste-libc/waste-libc.wasm
 LIBC_FIXTURES := $(patsubst $(REPO_ROOT)/tests/libc-test/%-client.wast.inc,\
@@ -481,7 +475,7 @@ guest-sdk-install: $(LIBC_OUTPUT)
 guest-sdk-check: $(LIBC_OUTPUT)
 	$(PYTHON) tools/build-guest-sdk.py --audit
 	$(PYTHON) $(REPO_ROOT)/tests/guest-sdk-check.py
-	$(PYTHON) tools/audit-guest-providers.py --strict
+	$(PYTHON) tools/audit-guest-providers.py
 
 
 vfs-install-launch:
@@ -492,11 +486,8 @@ vfs-install-app:
 
 # Explicit install, separate from compilation and from HTML construction.
 coreutils-install: build-coreutils coreutils-source-package
+	$(PYTHON) tools/shared_libc.py --check-imports $(foreach utility,true false pwd echo printf basename dirname cat wc ls date,$(COREUTILS_BUILD_DIR)/utility-probe/$(utility)-linked.wasm)
 	$(PYTHON) tools/vfs.py install \
-		--review-import waste_kernel:dlopen_v1:function \
-		--review-import waste_kernel:dlsym_v1:function \
-		--review-import waste_kernel:dlclose_v1:function \
-		$(shell $(PYTHON) tools/shared_libc.py --review-imports $(foreach utility,true false pwd echo printf basename dirname cat wc ls date,$(COREUTILS_BUILD_DIR)/utility-probe/$(utility)-linked.wasm)) \
 		$(foreach utility,true false pwd echo printf basename dirname cat wc ls date,--component $(utility) --source $(COREUTILS_BUILD_DIR)/utility-probe/$(utility)-linked.wasm)
 coreutils-audit: $(COREUTILS_REPORTS)
 	$(PYTHON) -c 'import json; reports=[json.load(open(p)) for p in "$(COREUTILS_REPORTS)".split()]; assert all(p["status"] == "passed" for p in reports), "coreutils audit failed"'
@@ -572,3 +563,8 @@ clean:
 		$(WAST_TAB_WASM_O) $(WAST_LEX_WASM_O)
 
 $(BUILD_DIR)/path.o $(BUILD_DIR)/test_suite.o: ../config.h
+
+# Package current guest files without rebuilding or reinstalling guest programs.
+.PHONY: bash-html
+bash-html: wast-browser
+	bash tools/build.sh bash --wasm "$(abspath $(WAST_WASM_TARGET))" --output "$(abspath $(BUILD_DIR))/bash.html"

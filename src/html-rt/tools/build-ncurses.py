@@ -16,7 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from shared_libc import rewrite, review_flags
+from shared_libc import rewrite, check_imports
 
 
 # Ncurses source files needed for a minimal curses library.  These cover
@@ -490,10 +490,10 @@ def main() -> int:
     print(f"\nstaged: {vfs_stage / 'libncurses.so.wasm'}")
     print("VFS path: /usr/lib/libncurses.so.wasm")
     if args.install:
+        check_imports([lib_output], repo_root / "src/vfs/lib/libc.so.wasm")
         subprocess.run([sys.executable, str(repo_root / "src/html-rt/tools/build-guest-sdk.py"),
                         "--install", "--library",
-                        str(vfs_stage / "libncurses.so.wasm"),
-                        *review_flags([lib_output], repo_root / "src/vfs/lib/libc.so.wasm")], check=True)
+                        str(vfs_stage / "libncurses.so.wasm")], check=True)
     return 0
 
 

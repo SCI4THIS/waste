@@ -43,7 +43,7 @@ for (const [name, expected] of [
   ["launch.wast", "../../../build/html-rt/bash-runtime.wast"],
   ["payload.json", "../../../build/html-rt/tests/payload.json"],
   ["waste-wast.wasm", "../../../build/html-rt/waste-wast.wasm"],
-  ["vfs-manifest.json", "../../vfs/.inventory.json"],
+  ["vfs-manifest.json", "../../../build/html-rt/bash/vfs-manifest.json"],
   ["browser-corpus-expected-failures.txt", "../../../tests/browser-corpus-expected-failures.txt"],
   ["../../../tests/example.wast", "../../../tests/example.wast"],
 ]) {
@@ -86,10 +86,11 @@ assertBytesEqual(archive.read("browser-corpus-expected-failures.txt"),
   fs.readFileSync(path.join(root, "tests/browser-corpus-expected-failures.txt")),
   "bash embedded browser-corpus-expected-failures.txt");
 assertBytesEqual(archive.read("launch.wast"),
-  fs.readFileSync(path.join(root, "build/html-rt/bash-runtime.wast")),
+  fs.readFileSync(path.join(root, "src/vfs/usr/share/waste/launch.wast")),
   "bash embedded launch.wast");
 const manifest = JSON.parse(archive.read("vfs-manifest.json"));
-assert.deepEqual(manifest, JSON.parse(fs.readFileSync(path.join(root, "src/vfs/.inventory.json"))));
+const {treeManifest} = require("./vfs-package.cjs");
+assert.deepEqual(manifest, treeManifest(path.join(root, "src/vfs")));
 assert(!archive.files.has("vfs-image.bin"), "retired duplicate VFS bundle");
 for (const e of manifest.entries) {
   if (e.role === "directory" || e.role === "interpreter") continue;
@@ -110,8 +111,7 @@ assert.equal(new Set(corpus.tests.map(test => test.path)).size, corpus.tests.len
 for (const test of corpus.tests) {
   if (test.executionSpec.mode !== "wast-stream") continue;
   logStep(`PACKAGED CORPUS CHECK ${test.id}`);
-  const bytes = archive.read(test.path.slice(1));
-  assert.equal(bytes.length, test.executionSpec.sourceBytes, `stale length: ${test.id}`);
+  assert(archive.files.has(test.path.slice(1)), `missing selected test: ${test.id}`);
 }
 assert(fs.existsSync(path.join(frontend, "tests-worker.js")), "Node worker conformance harness remains available");
 

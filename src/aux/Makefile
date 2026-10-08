@@ -25,30 +25,52 @@ WASM_LDFLAGS := --no-entry --import-memory --import-table \
 	--experimental-pic --unresolved-symbols=import-dynamic \
 	--global-base=327680 --table-base=1024
 
+ROGUE_DIR := $(AUX_DIR)/rogue
+ROGUE_BUILD := $(BUILD_DIR)/rogue
+ROGUE_UPSTREAM := $(REPO_ROOT)/submodules/rogue
+ROGUE_SOURCES := armor.c chase.c command.c daemon.c daemons.c \
+	extern.c fight.c init.c io.c list.c mach_dep.c main.c mdport.c misc.c \
+	monsters.c move.c new_level.c options.c pack.c passages.c potions.c \
+	rings.c rip.c rooms.c save.c scrolls.c state.c sticks.c things.c vers.c \
+	weapons.c wizard.c xcrypt.c
+ROGUE_INPUTS := $(addprefix $(ROGUE_UPSTREAM)/,$(ROGUE_SOURCES) rogue.h extern.h score.h)
+ROGUE_PATCHES := $(ROGUE_DIR)/platform.patch $(ROGUE_DIR)/debug-dump.patch $(ROGUE_DIR)/rogue-waste.patch
+ROGUE_STAMP := $(ROGUE_BUILD)/src/.prepared
+ROGUE_OBJECTS := $(addprefix $(ROGUE_BUILD)/objects/,$(ROGUE_SOURCES:.c=.o))
+ROGUE_CFLAGS := -DHAVE_CONFIG_H -DWASTE_ROGUE_LEGACY_ABORT \
+	-include "$(ROGUE_DIR)/bool-fix.h" -include "$(ROGUE_DIR)/imports.h" \
+	-I"$(ROGUE_BUILD)/src" -Wno-unused-parameter -Wno-sign-compare \
+	-Wno-implicit-function-declaration -Wno-int-conversion -Wno-dangling-else \
+	-Wno-sometimes-uninitialized -Wno-parentheses
+
 .DELETE_ON_ERROR:
-.PHONY: all upload download ldd install-upload install-download install-ldd
-all: upload download ldd
+.PHONY: all upload download ldd rogue install-upload install-download install-ldd install-rogue
+all: upload download ldd rogue
 
 upload: $(BUILD_DIR)/upload/upload.wasm
 download: $(BUILD_DIR)/download/download.wasm
 ldd: $(BUILD_DIR)/ldd/ldd.wasm
+rogue: $(ROGUE_BUILD)/rogue.wasm
 
 install-upload: upload
 install-download: download
 install-ldd: ldd
+install-rogue: rogue
 
-# Keep inventory publication explicit and serialize concurrent installs.
+# Keep publication explicit and serialize concurrent installs.
 # Python is used only for the existing VFS audit/installation machinery.
-# ldd retains the former builder's explicit kernel fstat import review.
-install-upload install-download install-ldd:
+install-upload install-download install-ldd install-rogue:
 	@set -eu; \
 		utility="$(patsubst install-%,%,$@)"; \
 		artifact="$(BUILD_DIR)/$$utility/$$utility.wasm"; \
-		review_flags=$$($(PYTHON) "$(LIBC_REVIEW)" \
-			--provider "$(VFS_ROOT)/lib/libc.so.wasm" --review-imports "$$artifact"); \
+		$(PYTHON) "$(LIBC_REVIEW)" \
+			--provider "$(VFS_ROOT)/lib/libc.so.wasm" --check-imports "$$artifact"; \
+		if [ "$$utility" = rogue ]; then \
+			$(PYTHON) "$(LIBC_REVIEW)" --namespace libncurses \
+				--provider "$(VFS_ROOT)/lib/libncurses.so.wasm" --check-imports "$$artifact"; \
+		fi; \
 		flock "$(BUILD_DIR)/.vfs-install.lock" $(PYTHON) "$(VFS_TOOL)" install \
-			--root "$(VFS_ROOT)" --component "$$utility" --source "$$artifact" \
-			$$review_flags $(if $(filter install-ldd,$@),--review-import env:fstat:function)
+			--root "$(VFS_ROOT)" --component "$$utility" --source "$$artifact"
 
 $(CRT_OBJECT): $(CRT_SOURCE) $(AUX_DIR)/Makefile
 	mkdir -p "$(@D)"
@@ -78,3 +100,25 @@ $(BUILD_DIR)/download/download.wasm: $(CRT_OBJECT) $(BUILD_DIR)/download/downloa
 
 $(BUILD_DIR)/ldd/ldd.wasm: $(CRT_OBJECT) $(BUILD_DIR)/ldd/ldd.o
 	$(WASM_LD) $(LDFLAGS) $(WASM_LDFLAGS) -o "$@" $(foreach object,$^,"$(object)")
+
+# Upstream checkouts remain read-only. Re-copy originals before applying any
+# changed patch, and publish the stamp only after every patch succeeds.
+$(ROGUE_STAMP): $(ROGUE_INPUTS) $(ROGUE_PATCHES) $(ROGUE_DIR)/config.h $(AUX_DIR)/Makefile
+	mkdir -p "$(@D)"
+	rm -f "$@"
+	cp $(foreach source,$(ROGUE_INPUTS),"$(source)") "$(@D)/"
+	chmod u+w "$(@D)/"*.c "$(@D)/"*.h
+	cp "$(ROGUE_DIR)/config.h" "$(@D)/config.h"
+	$(foreach patch,$(ROGUE_PATCHES),patch --batch --forward --fuzz=0 -d "$(@D)" -p1 -i "$(patch)" &&) touch "$@"
+
+# Objects depend on the preparation stamp rather than submodule source paths:
+# all compilation and dependency output stays in build/aux/rogue.
+$(ROGUE_OBJECTS): $(ROGUE_BUILD)/objects/%.o: $(ROGUE_STAMP) $(ROGUE_DIR)/bool-fix.h $(ROGUE_DIR)/imports.h $(SDK_HEADERS)
+	mkdir -p "$(@D)"
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(WASM_CFLAGS) $(ROGUE_CFLAGS) \
+		-MMD -MP -c "$(ROGUE_BUILD)/src/$*.c" -o "$@"
+
+$(ROGUE_BUILD)/rogue.wasm: $(ROGUE_OBJECTS) $(CRT_OBJECT)
+	$(WASM_LD) $(LDFLAGS) $(WASM_LDFLAGS) -o "$@" $(foreach object,$^,"$(object)")
+
+-include $(ROGUE_OBJECTS:.o=.d)

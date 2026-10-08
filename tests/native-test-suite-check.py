@@ -5,7 +5,6 @@ import json
 import os
 from pathlib import Path
 import signal
-import hashlib
 import shutil
 import subprocess
 import sys
@@ -69,21 +68,14 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
         if vfs_root.exists():
             shutil.rmtree(vfs_root)
         vfs_root.mkdir()
-        entries = []
-        for inode, name in enumerate(paths, 1):
+        for name in paths:
             content = files.get(name, b"")
             directory = name in directories
-            entry = dict(path=name, role="directory" if directory else "file",
-                         kind=2 if directory else 1, mode=0o755 if directory else 0o644,
-                         uid=0, gid=0, size=len(content), inode=inode, mtime_sec=0, mtime_nsec=0)
             dest = vfs_root/name.lstrip("/")
             if directory:
                 dest.mkdir(exist_ok=True)
             else:
-                entry['sha256'] = hashlib.sha256(content).hexdigest()
                 dest.write_bytes(content)
-            entries.append(entry)
-        (vfs_root/'.inventory.json').write_text(json.dumps(dict(version=1, entries=entries)))
 
     def run(*args, expected=0, results=True):
         command = [str(RUNNER), "--vfs-root=" + str(vfs_root)]
@@ -359,10 +351,10 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
         install(extra_files={"/root/waste/tests/manifest.json": malformed})
         run(expected=2, results=False)
     install()
-    inventory_path = vfs_root/".inventory.json"
-    original = inventory_path.read_bytes()
-    run("--results=" + str(inventory_path), expected=2, results=False)
-    assert inventory_path.read_bytes() == original
+    manifest_path = vfs_root/"root/waste/tests/manifest.json"
+    original = manifest_path.read_bytes()
+    run("--results=" + str(manifest_path), expected=2, results=False)
+    assert manifest_path.read_bytes() == original
     install([entry("synthetic/nested.wast", (ROOT / "tests/guest-test-nested-capability.wast").read_bytes())])
     assert run()["tests"][0]["passed"] == 1
     install([entry("synthetic/i64-min.wast", (ROOT / "tests/test-suite-i64-min-literal.wast").read_bytes())])

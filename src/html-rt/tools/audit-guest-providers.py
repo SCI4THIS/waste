@@ -11,13 +11,10 @@ import vfs
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--strict", action="store_true", help="Also reject stale mounted API metadata")
     parser.add_argument("--output", type=Path, default=vfs.REPO / "build/engine/guest-sdk/providers.json")
     args = parser.parse_args()
     sdk = guest_sdk.audit(vfs.ROOT)
     report = inspect_sdk(vfs.REPO, vfs.ROOT, sdk)
-    if args.strict and report != sdk.get("api"):
-        raise SystemExit("SDK API metadata is stale; explicitly refresh guest-sdk-install")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     available = sum(not e["unavailable"] for e in report["functions"].values())

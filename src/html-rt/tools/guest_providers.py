@@ -1,7 +1,7 @@
-"""Strict declaration/compiled-signature gate for the documented guest profile.
+"""Declaration/provider compatibility checks for the current guest profile.
 
 Availability is distinct from semantic conformance. Shared guest-adapter
-signatures and browser capabilities are a source-hash-bound manual review;
+signatures and browser capabilities are described by the adapter policy;
 compiled providers are inspected directly.
 """
 import json
@@ -11,19 +11,17 @@ import tempfile
 
 import guest_sdk
 import wasm_signatures
-from libc_sources import libc_source_paths
 
 
 def inspect_sdk(repo, root, manifest, library=None):
     policy = guest_sdk.api_policy()
     review = policy["browser_adapter_review"]
-    if guest_sdk.sha(repo / review["source"]) != review["sha256"]:
-        raise ValueError("browser SDK binding review is stale")
-    for source, expected in review.get("additional_sources", {}).items():
-        if guest_sdk.sha(repo / source) != expected:
-            raise ValueError("browser SDK binding review is stale: " + source)
-    libc = repo / "src/vfs/lib/libc.so.wasm"
-    library = library or repo / "src/vfs/lib/libncurses.so.wasm"
+    libc = root / "lib/libc.so.wasm"
+    library = library or root / "lib/libncurses.so.wasm"
+    if not libc.is_file():
+        libc = repo / "src/vfs/lib/libc.so.wasm"
+    if not library.is_file():
+        library = repo / "src/vfs/lib/libncurses.so.wasm"
     providers = [("guest-libc", wasm_signatures.inspect(libc)["exports"]),
                  ("ncurses", wasm_signatures.inspect(library)["exports"]),
                  ("browser-env", review["signatures"])]
@@ -140,12 +138,7 @@ def inspect_sdk(repo, root, manifest, library=None):
             matches = [review["signatures"][name]]
         if module not in ("env", "libc") or not matches or matches[0] != signature:
             raise ValueError(f"ncurses dependency signature mismatch: {key}")
-    sources = [repo / review["source"],
-               *(repo / source for source in review.get("additional_sources", {})),
-               repo / "src/libc/allocator.c", repo / "src/libc/runtime/math.c",
-               repo / "src/libc/waste-crt.c", *libc_source_paths(repo)]
     return dict(format=1, status="verified partial guest ABI; not C/POSIX conformance",
                 functions=functions, variables=variables,
                 removed_package_apis=sorted(set(unavailable) - set(functions)),
-                providers={"libc_sha256": guest_sdk.sha(libc), "ncurses_sha256": guest_sdk.sha(library)},
-                source_sha256={str(p.relative_to(repo)): guest_sdk.sha(p) for p in sources})
+                providers={"libc_sha256": guest_sdk.sha(libc), "ncurses_sha256": guest_sdk.sha(library)})

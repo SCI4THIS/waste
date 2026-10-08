@@ -328,8 +328,6 @@ static int report_outside_tree(const char *root, const char *destination, const 
     if (!strncmp(resolved_parent, resolved_root, length) &&
         (!resolved_parent[length] || resolved_parent[length] == '/')) return 0;
     char input[8192];
-    snprintf(input, sizeof(input), "%s/.inventory.json", root);
-    if (same_file(destination, input)) return 0;
     for (uint32_t i = 0; i < vfs->count; i++) {
         snprintf(input, sizeof(input), "%s%s", root, vfs->entries[i].path);
         if (same_file(destination, input)) return 0;

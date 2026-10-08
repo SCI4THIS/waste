@@ -25,10 +25,10 @@ def main() -> None:
                         default=Path(__file__).resolve().parents[3])
     parser.add_argument("--wasm", type=Path, required=True,
                         help="Path to waste-wast.wasm (C engine)")
-    parser.add_argument("--launch", type=Path, required=True,
-                        help="Path to bash-runtime.wast (interactive mode)")
+    parser.add_argument("--launch", type=Path,
+                        help="Legacy option; bootstrap comes from the current VFS tree")
     parser.add_argument("--vfs-root", type=Path, default=None,
-                        help="Explicitly installed VFS distribution tree")
+                        help="Current VFS distribution tree")
     output = parser.add_mutually_exclusive_group(required=True)
     output.add_argument("--output", type=Path,
                         help="Self-contained HTML output using the authored frontend")
@@ -42,8 +42,6 @@ def main() -> None:
 
     if not args.wasm.is_file():
         raise SystemExit(f"C engine Wasm not found: {args.wasm}")
-    if not args.launch.is_file():
-        raise SystemExit(f"Bash launch script not found: {args.launch}")
     vfs_root = args.vfs_root or args.repo_root / "src/vfs"
     subprocess.run(["python3", str(Path(__file__).with_name("vfs.py")),
                     "audit", "--root", str(vfs_root)], check=True)
@@ -65,7 +63,10 @@ def main() -> None:
             shutil.copy2(src, dst)
 
         safe_copy(args.wasm, out_dir / "waste-wast.wasm")
-        safe_copy(args.launch, out_dir / "launch.wast")
+        safe_copy(vfs_root / "usr/share/waste/launch.wast", out_dir / "launch.wast")
+        subprocess.run(["python3", str(Path(__file__).with_name("vfs.py")),
+                        "manifest", "--root", str(vfs_root),
+                        "--output", str(out_dir / "vfs-manifest.json")], check=True)
         print(f"Generated bootstrap staging in {out_dir}; guest tree remains {vfs_root}")
 
     else:
@@ -74,7 +75,6 @@ def main() -> None:
             "--source-dir", str(args.repo_root / "src/html-rt/src"),
             "--vfs-root", str(vfs_root.resolve()),
             "--wasm", str(args.wasm.resolve()),
-            "--launch", str(args.launch.resolve()),
             "--output", str(args.output.resolve()),
         ], check=True)
 

@@ -949,10 +949,7 @@ $(BUILD_DIR)/native-corpus-expected-failures.txt: ../../tests/native-corpus-expe
 
 .PHONY: guest-test-install guest-test-check
 guest-test-install: guest-test-launcher
-	python3 ../html-rt/tools/vfs.py install --component waste-test --source $(BUILD_DIR)/waste-test.wasm \
-		--review-import waste_kernel:startup_v1:function --review-import waste_kernel:test_suite_v1:function \
-		--review-import waste_kernel:open_v1:function --review-import env:write:function \
-		--review-import env:close:function --review-import env:exit:function
+	python3 ../html-rt/tools/vfs.py install --component waste-test --source $(BUILD_DIR)/waste-test.wasm
 
 guest-test-check: guest-session
 	cd ../.. && python3 tests/guest-test-launcher-check.py --native $(abspath $(SESSION_TARGET)) \

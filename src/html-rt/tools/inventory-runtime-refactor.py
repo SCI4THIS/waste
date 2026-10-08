@@ -9,6 +9,7 @@ import datetime
 import hashlib
 import importlib.util
 import json
+import vfs as vfs_tool
 from pathlib import Path
 import re
 import subprocess
@@ -98,7 +99,7 @@ def collect(root: Path) -> dict:
         else:
             collisions.append(destination)
 
-    installed_vfs = json.loads((root / "src/vfs/.inventory.json").read_text()) if (root / "src/vfs/.inventory.json").is_file() else None
+    installed_vfs = vfs_tool.load(root / "src/vfs") if (root / "src/vfs").is_dir() else None
     headers = []
     for directory in ("src/engine", "src/cli-rt", "src/html-rt", "src/vfs/usr/include", "src/vfs/usr/lib/waste/cc/include"):
         for path in sorted((root / directory).rglob("*.h")):
@@ -233,7 +234,7 @@ def measure(root: Path, output: Path, report: dict, selection: str | None) -> No
                   ["node", "tests/c-engine-bash-browser-runtime.cjs",
                    "build/html-rt/bash.html", *args], 45)
                  for index, args in enumerate(BASH_SCENARIOS)]
-    vfs = json.loads((root / "src/vfs/.inventory.json").read_text())
+    vfs = vfs_tool.load(root / "src/vfs")
     date_mtime = next(e["mtime_sec"] for e in vfs["entries"] if e["path"] == "/usr/bin/date")
     root_mtime = next(e["mtime_sec"] for e in vfs["entries"] if e["path"] == "/")
     engine = root / "build/html-rt/waste-wast.wasm"

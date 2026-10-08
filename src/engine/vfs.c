@@ -127,8 +127,7 @@ invalid:
     return -1;
 }
 
-/* SHA-256 enforces the inventory content contract when native files are read
- * directly and when extracted browser files enter the engine. */
+/* SHA-256 verifies bytes against metadata generated for a browser snapshot. */
 static uint32_t rotate(uint32_t x, unsigned n) { return (x >> n) | (x << (32 - n)); }
 static void sha256(const uint8_t *bytes, size_t length, char output[65]) {
     static const uint32_t k[64] = {
@@ -173,6 +172,50 @@ static void sha256(const uint8_t *bytes, size_t length, char output[65]) {
     for (unsigned i = 0; i < 64; i++)
         output[i] = hex_digits[(h[i/8] >> (28u-(i%8u)*4u)) & 15u];
     output[64] = 0;
+}
+
+int waste_vfs_append(waste_vfs *vfs, const char *path, const posix_path_metadata *metadata,
+                     uint8_t *bytes, size_t length, int interpreter) {
+    if (!vfs || !path || !metadata || vfs->count >= WASTE_VFS_MAX_ENTRIES ||
+        vfs->bytes > WASTE_VFS_MAX_BYTES || length > WASTE_VFS_MAX_BYTES - vfs->bytes ||
+        metadata->size < 0 || (uint64_t)metadata->size != length ||
+        metadata->mode > 0777u || !metadata->inode || metadata->mtime_nsec < 0 ||
+        metadata->mtime_nsec >= 1000000000u ||
+        (metadata->kind != POSIX_NODE_REGULAR && metadata->kind != POSIX_NODE_DIRECTORY) ||
+        (interpreter && metadata->kind != POSIX_NODE_REGULAR) ||
+        ((!bytes || metadata->kind == POSIX_NODE_DIRECTORY || interpreter) && length)) return -1;
+    size_t n = 0;
+    while (n < POSIX_PATH_NODE_NAME_MAX && path[n]) n++;
+    if (n == POSIX_PATH_NODE_NAME_MAX || !canonical(path)) return -1;
+    if (!vfs->count) {
+        if (strcmp(path, "/") || metadata->kind != POSIX_NODE_DIRECTORY) return -1;
+    } else {
+        const char *slash = path;
+        for (const char *p = path + 1; *p; p++) if (*p == '/') slash = p;
+        size_t parent_length = slash == path ? 1u : (size_t)(slash - path);
+        int parent = 0;
+        for (uint32_t i = 0; i < vfs->count; i++) {
+            waste_vfs_entry *previous = &vfs->entries[i];
+            if (!strcmp(path, previous->path) || metadata->inode == previous->metadata.inode) return -1;
+            if (previous->metadata.kind == POSIX_NODE_DIRECTORY &&
+                strlen(previous->path) == parent_length &&
+                !memcmp(previous->path, path, parent_length)) parent = 1;
+        }
+        if (!parent) return -1;
+    }
+    if (!vfs->entries) {
+        vfs->entries = calloc(WASTE_VFS_MAX_ENTRIES, sizeof(*vfs->entries));
+        if (!vfs->entries) return -1;
+    }
+    waste_vfs_entry *entry = &vfs->entries[vfs->count++];
+    memcpy(entry->path, path, n + 1);
+    entry->metadata = *metadata;
+    entry->data = bytes;
+    entry->ready = 1;
+    entry->interpreter = interpreter;
+    if (metadata->kind == POSIX_NODE_REGULAR && !interpreter) sha256(bytes, length, entry->sha256);
+    vfs->bytes += length;
+    return 0;
 }
 
 static waste_vfs_entry *validated_file(waste_vfs *vfs, uint32_t index,

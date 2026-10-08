@@ -49,6 +49,7 @@ Generated files stay under `build/`:
 
 ```text
 build/engine/           shared generated parser sources, toolchain, and logs
+build/aux/              auxiliary guest binaries and staged Rogue sources
 build/cli-rt/           native executables, including waste-cli
 build/html-rt/          browser Wasm, bash.html, worker-test payloads, and libc fixtures
 build/ocaml-interpreter/  staged OCaml reference interpreter (optional)
@@ -70,37 +71,40 @@ page uses `index.html`, `app.js`, `worker.js`, and `style.css`, with shared
 `test-suite.js` for installed-corpus execution. Focused Node worker conformance
 uses a JSON payload and `tests-worker.js`; it has no HTML frontend. Both use
 `loader.js`; canonical terminal assets and notices live in `terminal/`. Guest
-distribution snapshots live in `src/vfs`:
-canonical commands in `usr/bin`, verified command copies in `bin`, and shared
-libraries in `lib` with compatible `usr/lib` copies. The host-side
-`.inventory.json` declares guest paths, ownership, modes, original mtimes,
-hashes, aliases, source inputs and Wasm contracts. Inventory timestamps and empty
-directories are authoritative even after a Git checkout changes host metadata.
+distribution files live in `src/vfs`: commands in `usr/bin` and `bin`, and shared
+libraries in `lib` and `usr/lib`. The current directory tree is authoritative;
+adding, editing or deleting files needs no inventory refresh or source approval.
+Mounting uses current host modes and mtimes, guest root ownership, and inode IDs
+derived from sorted paths. Missing `/bin`, `/root` and `/tmp` are synthesized,
+as are `/bin/wat` and `/bin/wast` interpreter nodes when absent.
 
 Guest public headers are authored in `src/vfs/usr/include`, with selected,
 licensed compiler-support snapshots in `usr/lib/waste/cc/include`. Sysroot and
 guest libc builds consume this same mounted tree without host header fallback.
 Private engine/native/libc headers stay beside their implementations; package
-compatibility shims remain separate named build profiles. The SDK records its
-audited function providers, signatures and unavailable capabilities; see
-`guest-sdk.md`.
+compatibility shims remain separate named build profiles. SDK origin metadata
+is informational; explicit checks inspect current declarations, provider
+signatures and unavailable capabilities. See `guest-sdk.md`.
 
-`src/html-rt/tools/vfs.py install` explicitly publishes validated snapshots;
-build tools compile under `build/` and support a separate `--install` step.
-Packaging reads the installed inventory and preserves its directory tree in
-standard tar. The browser's existing tarballjs extractor supplies file bytes;
-`src/cli-rt/native_vfs.c` reads declared files directly beneath an open host
-VFS directory. The shared engine validates inventory metadata and SHA-256
-content hashes before mounting a complete catalogue into a fresh kernel.
-Both the browser API and `waste-cli --vfs-root DIRECTORY FILE.wast` use this
-inventory/file mounting contract. No custom filesystem bundle is generated.
+`src/html-rt/tools/vfs.py install` is an explicit atomic copy/publish utility;
+build tools compile under `build/` and support a separate install step.
+Packaging discovers the current tree, preserves it in standard tar and generates
+`vfs-manifest.json` in the package. The browser's existing tarballjs extractor
+supplies file bytes; the shared engine checks generated transport metadata and
+hashes before mounting. `src/cli-rt/native_vfs.c` discovers and reads current files
+directly beneath an open host directory, building the same bounded catalogue.
+Both paths enforce canonical paths, regular files/directories, entry/byte limits
+and read consistency. Hashes verify a generated package's integrity; they do not
+compare edits against a stored approval ledger. Wasm validation occurs on load;
+explicit installers and ABI tests also validate their candidate modules.
+No custom filesystem bundle is generated.
 The native option
 establishes mount parity; the separate `waste-session` companion adds shared
 guest imports and bounded child-first fork/exec terminal sessions through the
 shared process driver. Both runtimes use the shared WAST child handler, retaining
 assertions across READ/SELECT/HOST_IO resumes and mapping failed child assertions to an
 exit status without stopping the parent shell. See `native-guest-session.md`.
-Host engine/worker assets and the host inventory are not guest VFS nodes.
+Host engine assets and generated transport metadata are not guest VFS nodes.
 
 `src/vfs/root/waste/tests` holds explicitly installed snapshots of the WebAssembly corpus
 and authored `tests/engine-regressions/*.wast`, with a mounted policy/provenance
@@ -490,9 +494,10 @@ not stored pathname nodes. Path metadata carries modification seconds and
 nanoseconds. Packaged files receive their source artifact's mtime from a
 separate manifest while tar headers remain normalized; runtime create,
 truncate, and write operations use the kernel's injected UTC epoch clock.
-Namespace nodes synthesized by the engine (`/`, `/bin`, `/usr`, `/usr/bin`,
-`/bin/wat`, and `/bin/wast`) receive the browser engine image's build mtime,
-which the launcher stages separately from guest package entries.
+For directory mounts, synthesized boot directories and interpreter nodes use
+epoch-zero mtimes; physical nodes retain current host metadata. The separate
+unmounted engine fallback can initialize namespace nodes from a staged build
+mtime. This fallback does not override metadata supplied by a mounted tree.
 The browser backend supplies that clock from `Date.now()`, while the engine
 retains no JavaScript dependency. Persistent storage, if enabled, is a mount
 backend rather than a replacement namespace in JavaScript. The terminal retains
@@ -570,7 +575,7 @@ focused C sources beside it compile with PIC and link as a `dylink.0` shared
 object. The library provides allocator state, stdio objects, errno storage,
 string and conversion helpers, locale and wide character support, identity
 databases, patterns, and terminal/environment wrappers. `/lib/libc.so.wasm`
-and `/usr/lib/libc.so.wasm` are inventory aliases, like the ncurses library.
+and `/usr/lib/libc.so.wasm` are compatibility copies, like the ncurses library.
 
 The Bash bootstrap owns the neutral `waste-runtime` memory, table and stack
 pointer, loads libc and initializes its allocator. Named `libc` imports resolve

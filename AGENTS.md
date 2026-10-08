@@ -22,6 +22,9 @@ during the port. Current staged work is tracked in the `docs/active-*.md`
 plans.
 Packaging tools are in `src/html-rt/tools/`; guest libc sources are in
 `src/libc/`. Build/install the shared guest library with `make -C src/libc install`.
+Auxiliary commands build through `src/aux/Makefile`; Rogue's package profile and
+patches live in `src/aux/rogue`. Use `make -C src/aux rogue` and `install-rogue`;
+stage upstream sources under `build/aux/rogue` and leave the submodule untouched.
 Portable support needed by the interpreter itself lives in `src/libc/runtime/`
 and is statically linked into each runtime; kernel semantics stay in `src/engine/`.
 Architecture notes are in `docs/`, and project probes
@@ -34,15 +37,17 @@ patches, generate files, bootstrap, configure, or build inside a submodule
 checkout. Copy or stage inputs under `build/` first, apply repository-owned
 patches to that staging copy, and direct every generated output into `build/`.
 See `docs/submodule-policy.md`.
-Guest distribution snapshots are explicitly installed into `src/vfs` using
-`src/html-rt/tools/vfs.py`; its `.inventory.json` is the mounted path/metadata
-contract. Compile under `build/`, then install; HTML packaging must not compile
-or discover guest binaries from the frontend source tree.
+The current `src/vfs` directory is the guest filesystem source of truth.
+Native mounting discovers its files directly; HTML packaging discovers the same
+tree and generates its transport metadata automatically. No stored inventory or
+source-hash approval is required for edits or additions. Compile under `build/`,
+then copy or explicitly install with `src/html-rt/tools/vfs.py`; HTML packaging
+must not compile guest binaries or reinstall snapshots over local edits.
 Authored guest public headers live in `src/vfs/usr/include`; compiler support
 snapshots live in `src/vfs/usr/lib/waste/cc/include`. Keep engine/native headers
-and libc `helper.h` private. After public-header edits, run the explicit
-`guest-sdk-install` and `guest-sdk-check` targets; see `docs/guest-sdk.md` for
-the audited SDK's provider/signature capability ledger and build profiles.
+and libc `helper.h` private. Use `guest-sdk-check` for explicit header/ABI/provider
+checks; `guest-sdk-install` refreshes selected dependency headers when requested.
+See `docs/guest-sdk.md` for informational SDK metadata and build profiles.
 Test files in `src/vfs/root/waste/tests` are installed distribution snapshots,
 not authored sources. They mount at `/root/waste/tests`. Refresh with
 `vfs-tests-install` and audit with `vfs-tests-check`; the single `bash.html`

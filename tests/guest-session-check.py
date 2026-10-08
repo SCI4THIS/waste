@@ -218,7 +218,8 @@ def main():
                 worker = json.loads(subprocess.check_output([
                     "node", "tests/guest-session-worker.cjs", args.page, contract], text=True))
                 assert worker["passed"] == result["passed"] and worker["exitStatus"] == code, worker
-                inventory = json.loads((Path(args.vfs_root)/".inventory.json").read_text())
+                inventory = json.loads(subprocess.check_output(["python3", "src/html-rt/tools/vfs.py",
+                    "manifest", "--root", args.vfs_root], text=True))
                 canonical = json.dumps(inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
                 assert worker["manifestSha256"] == hashlib.sha256(canonical).hexdigest(), worker
                 if scenario.get("comparison", "exact") == "exact":

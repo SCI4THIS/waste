@@ -300,19 +300,21 @@ build_waste_libc() {
     printf 'Output: %s\n\n' "$LIBC_OUTPUT"
   } >>"$LIBC_LOG"
 
-  if ! have_command python3 || ! have_command clang || ! wasm_ld_is_usable || ! have_command wasm-as ||
+  if ! have_command python3 || ! have_command make || ! have_command clang || ! wasm_ld_is_usable || ! have_command wasm-as ||
      ! have_command wasm-merge || ! have_command wasm-dis; then
-    printf 'error: Python 3, clang, wasm-as, wasm-merge, and wasm-dis are required\n' >>"$LIBC_LOG"
+    printf 'error: Python 3, make, clang, wasm-ld, wasm-as, wasm-merge, and wasm-dis are required\n' >>"$LIBC_LOG"
     if [[ "$quiet" != true ]]; then
-      show_message "Guest libc build failed" "Python 3, clang, and Binaryen are required.\n\nLog: $LIBC_LOG"
+      show_message "Guest libc build failed" "Python 3, make, clang, wasm-ld, and Binaryen are required.\n\nLog: $LIBC_LOG"
     fi
     return 1
   fi
-  if ! run_logged_step "Build guest libc and fixtures" "$LIBC_LOG" \
+  if ! run_logged_step "Build guest shared libc" "$LIBC_LOG" \
+      make -C "$REPO_ROOT/src/libc" || \
+      ! run_logged_step "Build static libc test fixtures" "$LIBC_LOG" \
       make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$HTML_BUILD" \
-      ENGINE_BUILD_DIR="$ENGINE_BUILD" libc-shared waste-libc; then
+      ENGINE_BUILD_DIR="$ENGINE_BUILD" waste-libc; then
     if [[ "$quiet" != true ]]; then
-      show_message "Guest libc build failed" "Could not build waste-libc.wasm.\n\nLog: $LIBC_LOG"
+      show_message "Guest libc build failed" "Could not build libc or its test fixtures.\n\nLog: $LIBC_LOG"
     fi
     return 1
   fi
@@ -486,12 +488,29 @@ aux_staged_path() {
 build_single_aux() {
   local utility="$1"
   if ! have_command clang || ! have_command make || ! have_command python3 ||
-      ! have_command wasm-as || ! have_command wasm-merge || ! have_command wasm-dis ||
       ! wasm_ld_is_usable; then
     show_message "Aux build" \
-      "clang, make, wasm-ld, wasm-as, wasm-merge, wasm-dis, and Python 3 are required."
+      "clang, make, wasm-ld, and Python 3 are required."
     return 1
   fi
+  case "$utility" in
+    rogue|ldd|upload|download)
+      if ! have_command flock; then
+        show_message "Aux build" "flock is required for auxiliary installation."
+        return 1
+      fi
+      if [[ "$utility" == rogue ]] && ! have_command patch; then
+        show_message "Aux build" "patch is required for the Rogue build."
+        return 1
+      fi
+      ;;
+    *)
+      if ! have_command wasm-as || ! have_command wasm-merge || ! have_command wasm-dis; then
+        show_message "Aux build" "wasm-as, wasm-merge, and wasm-dis are required for this package build."
+        return 1
+      fi
+      ;;
+  esac
   mkdir -p "$HTML_BUILD"
   : >"$AUX_LOG"
 
@@ -510,40 +529,13 @@ build_single_aux() {
           "Linked artifact not found: $ncurses_out"
         return 1
       fi
-      local review_text
-      review_text=$(python3 "$REPO_ROOT/src/html-rt/tools/shared_libc.py" \
-        --review-imports "$ncurses_out") || return 1
-      local -a libc_reviews
-      read -r -a libc_reviews <<< "$review_text"
+      python3 "$REPO_ROOT/src/html-rt/tools/shared_libc.py" \
+        --check-imports "$ncurses_out" || return 1
       python3 "$REPO_ROOT/src/html-rt/tools/build-guest-sdk.py" --install \
-        "${libc_reviews[@]}" --library "$ncurses_out" || return 1
+        --library "$ncurses_out" || return 1
       printf 'Installed %s → %s\n' "$ncurses_out" "$AUX_STAGING/libncurses.so.wasm"
       ;;
-    rogue)
-      if ! run_logged_step "Build rogue executable" \
-          "$AUX_LOG" python3 "$REPO_ROOT/src/html-rt/tools/build-rogue.py" \
-          --repo-root "$REPO_ROOT" --output "$REPO_ROOT/build/rogue"; then
-        show_message "Aux build failed" \
-          "Could not build rogue.\n\nLog: $AUX_LOG"
-        return 1
-      fi
-      local rogue_out="$REPO_ROOT/build/rogue/vfs/rogue"
-      if [[ ! -f "$rogue_out" ]]; then
-        show_message "Aux build failed" \
-          "Linked artifact not found: $rogue_out"
-        return 1
-      fi
-      local review_text
-      review_text=$(python3 "$REPO_ROOT/src/html-rt/tools/shared_libc.py" \
-        --review-imports "$rogue_out") || return 1
-      local -a libc_reviews
-      read -r -a libc_reviews <<< "$review_text"
-      python3 "$REPO_ROOT/src/html-rt/tools/vfs.py" install \
-        "${libc_reviews[@]}" \
-        --component "$utility" --source "$rogue_out" || return 1
-      printf 'Installed %s → %s\n' "$rogue_out" "$AUX_STAGING/rogue.wasm"
-      ;;
-    ldd|upload|download)
+    rogue|ldd|upload|download)
       if ! run_logged_step "Build and install $utility utility" \
           "$AUX_LOG" make -C "$REPO_ROOT/src/aux" "install-$utility"; then
         show_message "Aux build failed" \
@@ -568,16 +560,9 @@ build_single_aux() {
           "Linked artifact not found: $linked"
         return 1
       fi
-      local review_text
-      review_text=$(python3 "$REPO_ROOT/src/html-rt/tools/shared_libc.py" \
-        --review-imports "$linked") || return 1
-      local -a libc_reviews
-      read -r -a libc_reviews <<< "$review_text"
+      python3 "$REPO_ROOT/src/html-rt/tools/shared_libc.py" \
+        --check-imports "$linked" || return 1
       python3 "$REPO_ROOT/src/html-rt/tools/vfs.py" install \
-        "${libc_reviews[@]}" \
-        --review-import waste_kernel:dlopen_v1:function \
-        --review-import waste_kernel:dlsym_v1:function \
-        --review-import waste_kernel:dlclose_v1:function \
         --component "$utility" --source "$linked" || return 1
       printf 'Installed %s → %s\n' "$linked" "$AUX_STAGING/${utility}.wasm"
       ;;
@@ -632,18 +617,17 @@ aux_menu() {
 }
 
 generate_c_engine_bash_html() {
-  if ! have_command cc || ! have_command clang || ! have_command make ||
+  if ! have_command clang || ! have_command make ||
       ! have_command flex || ! have_command bison || ! have_command python3 ||
-      ! have_command wasm-as || ! have_command wasm-merge || ! have_command wasm-dis ||
+      ! have_command tar || ! have_command gzip ||
       ! wasm_ld_is_usable; then
     show_message "C-engine Bash" \
-      "cc, clang, make, flex, bison, wasm-ld, wasm-as, wasm-merge, wasm-dis, and Python 3 are required."
+      "clang, make, flex, bison, wasm-ld, tar, gzip, and Python 3 are required."
     return 1
   fi
-  if [[ ! -f "$REPO_ROOT/examples/bash.wat" || ! -f "$BASH_RUNTIME_BUILDER" ||
-        ! -f "$C_ENGINE_BASH_GENERATOR" ]]; then
+  if [[ ! -f "$C_ENGINE_BASH_GENERATOR" ]]; then
     show_message "C-engine Bash" \
-      "Bash source or a generation tool is missing."
+      "The Bash page generation tool is missing."
     return 1
   fi
 
@@ -657,7 +641,7 @@ generate_c_engine_bash_html() {
 
   if have_command whiptail && [[ -t 0 && -t 1 ]]; then
     whiptail --title "C-engine Bash" --infobox \
-      "Building the C engine and relinking Bash, then generating the static page...\n\nLog: $C_ENGINE_BASH_LOG" 9 84
+      "Building the C engine and packaging the current VFS tree...\n\nLog: $C_ENGINE_BASH_LOG" 9 84
   else
     printf 'Generating self-contained C-engine Bash page...\n'
   fi
@@ -672,59 +656,10 @@ generate_c_engine_bash_html() {
     return 1
   fi
 
-  if ! run_logged_step "Build and install shared guest libc" \
-      "$C_ENGINE_BASH_LOG" make -C "$REPO_ROOT/src/libc" install; then
+  if [[ ! -f "$REPO_ROOT/src/vfs/usr/share/waste/launch.wast" ||
+        ! -f "$REPO_ROOT/src/vfs/root/waste/app/app.js" ]]; then
     show_message "C-engine Bash failed" \
-      "Could not build and install libc.so.wasm.\n\nLog: $C_ENGINE_BASH_LOG"
-    return 1
-  fi
-
-  # Build the bash-runtime.wast (interactive mode for terminal I/O)
-  if ! run_logged_step "Relink the interactive Bash runtime" \
-      "$C_ENGINE_BASH_LOG" python3 "$BASH_RUNTIME_BUILDER" \
-      --repo-root "$REPO_ROOT" \
-      --interactive --output "$C_ENGINE_BASH_RUNTIME_WAST"; then
-    show_message "C-engine Bash failed" \
-      "Could not build the bash runtime.\n\nLog: $C_ENGINE_BASH_LOG"
-    return 1
-  fi
-
-  # Verify pre-built auxiliary Wasm files are present.
-  local aux_missing=()
-  for util_name in "${AUX_UTILITIES[@]}"; do
-    local staged
-    staged="$(aux_staged_path "$util_name")"
-    if [[ ! -f "$staged" ]]; then
-      aux_missing+=("$util_name")
-    fi
-  done
-  if ((${#aux_missing[@]} > 0)); then
-    show_message "C-engine Bash failed" \
-      "Pre-built auxiliary Wasm files missing: ${aux_missing[*]}\n\nRun ./start.sh --build-aux to build them."
-    return 1
-  fi
-
-  if ! run_logged_step "Build Coreutils corresponding-source package" \
-      "$C_ENGINE_BASH_LOG" make -C "$REPO_ROOT/src/html-rt" \
-      BUILD_DIR="$HTML_BUILD" coreutils-source-package; then
-    show_message "C-engine Bash source package failed" \
-      "Could not build the Coreutils corresponding-source archive.\n\nLog: $C_ENGINE_BASH_LOG"
-    return 1
-  fi
-
-  if ! run_logged_step "Install the generated Bash launch snapshot" \
-      "$C_ENGINE_BASH_LOG" python3 "$REPO_ROOT/src/html-rt/tools/vfs.py" \
-      install --component launch --source "$C_ENGINE_BASH_RUNTIME_WAST"; then
-    show_message "C-engine Bash install failed" \
-      "Could not install the launch snapshot into the shared VFS.\n\nLog: $C_ENGINE_BASH_LOG"
-    return 1
-  fi
-
-  if ! run_logged_step "Install the Bash webapp into the VFS" \
-      "$C_ENGINE_BASH_LOG" python3 "$REPO_ROOT/src/html-rt/tools/vfs.py" \
-      install --component app --source "$REPO_ROOT/src/html-rt/src"; then
-    show_message "C-engine Bash install failed" \
-      "Could not install the Bash webapp into /root/waste/app.\n\nLog: $C_ENGINE_BASH_LOG"
+      "Install a Bash launch script and webapp into src/vfs before packaging.\n\nUse the vfs-install-launch and vfs-install-app Make targets."
     return 1
   fi
 
@@ -733,7 +668,7 @@ generate_c_engine_bash_html() {
       "$C_ENGINE_BASH_LOG" python3 "$C_ENGINE_BASH_GENERATOR" \
       --repo-root "$REPO_ROOT" \
       --wasm "$C_ENGINE_WASM" \
-      --launch "$C_ENGINE_BASH_RUNTIME_WAST" \
+      --launch "$REPO_ROOT/src/vfs/usr/share/waste/launch.wast" \
       --output-dir "$C_ENGINE_STAGING_BASH"; then
     show_message "C-engine Bash staging failed" \
       "Could not copy staging data.\n\nLog: $C_ENGINE_BASH_LOG"
@@ -856,7 +791,7 @@ check_c_engine_bash() {
   fi
 
   local date_source_epoch date_source_time
-  date_source_epoch="$(python3 -c 'import json,sys; print(next(e["mtime_sec"] for e in json.load(open(sys.argv[1]))["entries"] if e["path"] == "/usr/bin/date"))' "$REPO_ROOT/src/vfs/.inventory.json")"
+  date_source_epoch="$(stat -c %Y "$REPO_ROOT/src/vfs/usr/bin/date")"
   date_source_time="$(date -u -d "@$date_source_epoch" '+%b %e %H:%M')"
   if ! run_logged_step "Run the C-engine Bash packaged-mtime test" \
       "$C_ENGINE_BASH_LOG" env \
@@ -868,17 +803,14 @@ check_c_engine_bash() {
     return 1
   fi
 
-  local engine_build_epoch engine_build_time
-  engine_build_epoch="$(python3 -c 'import json,sys; print(next(e["mtime_sec"] for e in json.load(open(sys.argv[1]))["entries"] if e["path"] == "/"))' "$REPO_ROOT/src/vfs/.inventory.json")"
-  engine_build_time="$(date -u -d "@$engine_build_epoch" '+%b %e %H:%M')"
-  if ! run_logged_step "Run the C-engine Bash virtual-node build-mtime test" \
+  if ! run_logged_step "Run the C-engine Bash virtual-interpreter test" \
       "$C_ENGINE_BASH_LOG" env \
-      WASTE_COREUTILS_LS_COMMAND='ls -ld / /bin /bin/wat /bin/wast' \
-      WASTE_COREUTILS_LS_EXPECT="$engine_build_time" \
-      WASTE_COREUTILS_LS_EXPECT_COUNT=4 \
+      WASTE_COREUTILS_LS_COMMAND='ls -ld /bin/wat /bin/wast' \
+      WASTE_COREUTILS_LS_EXPECT='Jan  1' \
+      WASTE_COREUTILS_LS_EXPECT_COUNT=2 \
       node "$C_ENGINE_BASH_BROWSER_TEST" --coreutils-ls --full-package; then
-    show_message "C-engine Bash virtual-node build-mtime test failed" \
-      "The root, bin, wat, or wast node did not preserve the installed VFS timestamp.\n\nLog: $C_ENGINE_BASH_LOG"
+    show_message "C-engine Bash virtual-interpreter test failed" \
+      "The generated interpreter nodes were not mounted.\n\nLog: $C_ENGINE_BASH_LOG"
     return 1
   fi
 
@@ -1054,7 +986,7 @@ main_menu() {
       ---     "── Engine ──────────────────────────────────" \
       cli-compile "Build engine with cli runtime" \
       cli-test    "Run the full test suite in the cli runtime" \
-      html-bash   "Build engine and example bash into static HTML" \
+      html-bash   "Build engine and package current VFS into static HTML" \
       html-check  "Run focused C-engine Bash worker checks" \
       aux         "Build auxiliary Wasm utilities" \
       -----   "────────────────────────────────────────────" \

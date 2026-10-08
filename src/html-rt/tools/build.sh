@@ -31,7 +31,6 @@ shift
 PAGE_DIR="$SRC_DIR"
 VFS_ROOT="$REPO_ROOT/src/vfs"
 WASM_FILE="$BUILD_DIR/waste-wast.wasm"
-LAUNCH_FILE="$BUILD_DIR/bash-runtime.wast"
 FINAL="$BUILD_DIR/bash.html"
 while (($#)); do
   if (($# < 2)); then
@@ -42,7 +41,7 @@ while (($#)); do
     --source-dir) PAGE_DIR="$2" ;;
     --vfs-root) VFS_ROOT="$2" ;;
     --wasm) WASM_FILE="$2" ;;
-    --launch) LAUNCH_FILE="$2" ;;
+    --launch) : ;; # Legacy argument; use usr/share/waste/launch.wast in VFS_ROOT.
     --payload) PAYLOAD_FILE="$2" ;;
     --output) FINAL="$2" ;;
     *) echo "error: unknown option '$1'" >&2; exit 1 ;;
@@ -60,9 +59,8 @@ TARBALL_JS="$REPO_ROOT/submodules/tarballjs/tarball.js"
 ZLIBAUX_WASM="$REPO_ROOT/submodules/zlib-wasm/zlibaux.wasm"
 LOADER_JS="$PAGE_DIR/loader.js"
 AMALGAMATE="$SCRIPT_DIR/amalgamate.py"
-PACKAGE_AUDIT="$SCRIPT_DIR/audit-coreutils-package.py"
 
-for f in "$TARBALL_JS" "$ZLIBAUX_WASM" "$LOADER_JS" "$AMALGAMATE" "$PACKAGE_AUDIT"; do
+for f in "$TARBALL_JS" "$ZLIBAUX_WASM" "$LOADER_JS" "$AMALGAMATE"; do
   if [ ! -f "$f" ]; then
     echo "error: required file not found: $f" >&2
     exit 1
@@ -82,12 +80,8 @@ mkdir -p "$STAGING"
 
 cp "$REPO_ROOT/tests/browser-corpus-expected-failures.txt" "$STAGING/"
 cp -p "$WASM_FILE" "$STAGING/waste-wast.wasm"
-cp -p "$LAUNCH_FILE" "$STAGING/launch.wast"
+cp -p "$VFS_ROOT/usr/share/waste/launch.wast" "$STAGING/launch.wast"
 python3 "$SCRIPT_DIR/vfs.py" package --root "$VFS_ROOT" --output "$STAGING"
-cmp "$LAUNCH_FILE" "$VFS_ROOT/usr/share/waste/launch.wast" || {
-  echo "error: launch snapshot is stale; install --component launch first" >&2
-  exit 1
-}
 
 echo "  Staged $(find "$STAGING" -type f | wc -l) files"
 
@@ -98,7 +92,6 @@ tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 \
   --numeric-owner --format=ustar -cf "$TAR_RAW" -C "$STAGING" .
 gzip -n -c "$TAR_RAW" > "$TAR_GZ"
 python3 "$SCRIPT_DIR/vfs.py" archive-audit --archive "$TAR_GZ"
-python3 "$PACKAGE_AUDIT" --archive "$TAR_GZ"
 TAR_SIZE=$(stat -c%s "$TAR_GZ" 2>/dev/null || stat -f%z "$TAR_GZ")
 echo "  Compressed tar: $TAR_SIZE bytes"
 

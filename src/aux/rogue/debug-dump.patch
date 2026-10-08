@@ -1,0 +1,189 @@
+--- a/command.c
++++ b/command.c
+@@ -14,7 +14,176 @@
+ #include <string.h>
+ #include <curses.h>
+ #include <ctype.h>
++#include <stdio.h>
+ #include "rogue.h"
++
++/*
++ * dump_game_state:
++ *	Write a comprehensive game state snapshot to /tmp/rogue.dump.
++ *	Bound to 'g' for debugging the wasm build.
++ */
++static void
++dump_game_state(void)
++{
++    FILE *fp;
++    int y, x, i;
++    THING *tp;
++    int monster_count, object_count;
++    static const char *hunger_names[] = {"normal", "hungry", "weak", "faint"};
++
++    fp = fopen("/tmp/rogue.dump", "w");
++    if (!fp) {
++	msg("dump: cannot open /tmp/rogue.dump");
++	return;
++    }
++
++    fprintf(fp, "=== ROGUE GAME STATE DUMP ===\n\n");
++
++    /* ---- Player ---- */
++    fprintf(fp, "--- Player ---\n");
++    fprintf(fp, "Position: (%d, %d)\n", hero.y, hero.x);
++    fprintf(fp, "Dungeon level: %d  (max visited: %d)\n", level, max_level);
++    fprintf(fp, "HP: %d/%d\n", pstats.s_hpt, pstats.s_maxhp);
++    fprintf(fp, "Strength: %u (max: %u)\n",
++	    pstats.s_str, max_stats.s_str);
++    fprintf(fp, "Armor class: %d\n", cur_armor ? cur_armor->o_arm
++	    + a_class[cur_armor->o_which] : pstats.s_arm);
++    fprintf(fp, "Experience: %d (level %d)\n",
++	    pstats.s_exp, pstats.s_lvl);
++    fprintf(fp, "Gold: %d\n", purse);
++    fprintf(fp, "Items in pack: %d\n", inpack);
++    fprintf(fp, "Hunger: %s (food_left=%d)\n",
++	    hungry_state >= 0 && hungry_state <= 3
++	    ? hunger_names[hungry_state] : "?", food_left);
++    fprintf(fp, "Has amulet: %s\n", amulet ? "yes" : "no");
++
++    /* Player flags */
++    fprintf(fp, "Flags:");
++    if (on(player, ISBLIND))  fprintf(fp, " BLIND");
++    if (on(player, ISHASTE))  fprintf(fp, " HASTE");
++    if (on(player, ISHELD))   fprintf(fp, " HELD");
++    if (on(player, ISHUH))    fprintf(fp, " CONFUSED");
++    if (on(player, ISLEVIT))  fprintf(fp, " LEVIT");
++    if (on(player, ISINVIS))  fprintf(fp, " INVIS");
++    if (on(player, ISREGEN))  fprintf(fp, " REGEN");
++    if (on(player, SEEMONST)) fprintf(fp, " SEEMONST");
++    if (on(player, ISFLY))    fprintf(fp, " FLY");
++    if (player.t_flags == 0)  fprintf(fp, " (none)");
++    fprintf(fp, " [0x%x]\n", player.t_flags);
++
++    /* Equipment */
++    fprintf(fp, "\n--- Equipment ---\n");
++    if (cur_weapon)
++	fprintf(fp, "Weapon: %s\n", inv_name(cur_weapon, FALSE));
++    else
++	fprintf(fp, "Weapon: (none)\n");
++    if (cur_armor)
++	fprintf(fp, "Armor: %s\n", inv_name(cur_armor, FALSE));
++    else
++	fprintf(fp, "Armor: (none)\n");
++    if (cur_ring[LEFT])
++	fprintf(fp, "Left ring: %s\n", inv_name(cur_ring[LEFT], FALSE));
++    else
++	fprintf(fp, "Left ring: (none)\n");
++    if (cur_ring[RIGHT])
++	fprintf(fp, "Right ring: %s\n", inv_name(cur_ring[RIGHT], FALSE));
++    else
++	fprintf(fp, "Right ring: (none)\n");
++
++    /* Inventory */
++    fprintf(fp, "\n--- Inventory ---\n");
++    for (tp = player.t_pack; tp != NULL; tp = next(tp))
++	fprintf(fp, "  %c) %s\n", tp->o_packch, inv_name(tp, FALSE));
++
++    /* ---- Rooms ---- */
++    fprintf(fp, "\n--- Rooms ---\n");
++    for (i = 0; i < MAXROOMS; i++) {
++	struct room *rp = &rooms[i];
++	fprintf(fp, "Room %d: pos=(%d,%d) size=(%d,%d) flags=0x%x",
++		i, rp->r_pos.y, rp->r_pos.x,
++		rp->r_max.y, rp->r_max.x, rp->r_flags);
++	if (rp->r_flags & ISDARK) fprintf(fp, " DARK");
++	if (rp->r_flags & ISGONE) fprintf(fp, " GONE");
++	if (rp->r_flags & ISMAZE) fprintf(fp, " MAZE");
++	if (rp->r_goldval > 0)
++	    fprintf(fp, " gold=%d@(%d,%d)", rp->r_goldval,
++		    rp->r_gold.y, rp->r_gold.x);
++	fprintf(fp, " exits=%d", rp->r_nexits);
++	for (int e = 0; e < rp->r_nexits; e++)
++	    fprintf(fp, " (%d,%d)", rp->r_exit[e].y, rp->r_exit[e].x);
++	fprintf(fp, "\n");
++    }
++    if (player.t_room)
++	fprintf(fp, "Player in room %d\n",
++		(int)(player.t_room - rooms));
++    fprintf(fp, "Stairs at: (%d, %d)\n", stairs.y, stairs.x);
++
++    /* ---- Monsters ---- */
++    fprintf(fp, "\n--- Monsters ---\n");
++    monster_count = 0;
++    for (tp = mlist; tp != NULL; tp = next(tp)) {
++	monster_count++;
++	fprintf(fp, "  %c %-16s pos=(%d,%d) hp=%d/%d lvl=%d flags=0x%x",
++		tp->t_type ? tp->t_type : '?',
++		(tp->t_type >= 'A' && tp->t_type <= 'Z')
++		    ? monsters[tp->t_type - 'A'].m_name : "???",
++		tp->t_pos.y, tp->t_pos.x,
++		tp->t_stats.s_hpt, tp->t_stats.s_maxhp,
++		tp->t_stats.s_lvl, tp->t_flags);
++	if (tp->t_disguise && tp->t_disguise != tp->t_type)
++	    fprintf(fp, " disguise='%c'", tp->t_disguise);
++	fprintf(fp, "\n");
++    }
++    fprintf(fp, "Total monsters: %d\n", monster_count);
++
++    /* ---- Level objects ---- */
++    fprintf(fp, "\n--- Level Objects ---\n");
++    object_count = 0;
++    for (tp = lvl_obj; tp != NULL; tp = next(tp)) {
++	object_count++;
++	fprintf(fp, "  '%c' at (%d,%d): %s\n",
++		tp->o_type, tp->o_pos.y, tp->o_pos.x,
++		inv_name(tp, FALSE));
++    }
++    fprintf(fp, "Total objects: %d\n", object_count);
++    fprintf(fp, "Traps on level: %d\n", ntraps);
++
++    /* ---- Screen buffer ---- */
++    fprintf(fp, "\n--- Screen (places[] map) ---\n");
++    /* Column header */
++    fprintf(fp, "    ");
++    for (x = 0; x < NUMCOLS; x++)
++	fprintf(fp, "%d", x % 10);
++    fprintf(fp, "\n");
++    for (y = 0; y < NUMLINES; y++) {
++	fprintf(fp, "%2d: ", y);
++	for (x = 0; x < NUMCOLS; x++) {
++	    char ch = chat(y, x);
++	    fprintf(fp, "%c", ch ? ch : ' ');
++	}
++	fprintf(fp, "\n");
++    }
++
++    /* ---- Flags overlay ---- */
++    fprintf(fp, "\n--- Flags overlay (hex nibble) ---\n");
++    for (y = 0; y < NUMLINES; y++) {
++	fprintf(fp, "%2d: ", y);
++	for (x = 0; x < NUMCOLS; x++) {
++	    unsigned char f = flat(y, x);
++	    fprintf(fp, "%c", f ? "0123456789abcdef"[f & 0xf] : '.');
++	}
++	fprintf(fp, "\n");
++    }
++
++    fprintf(fp, "\n--- State ---\n");
++    fprintf(fp, "running=%d  door_stop=%d  count=%d\n",
++	    running, door_stop, count);
++    fprintf(fp, "no_command=%d  no_move=%d\n", no_command, no_move);
++    fprintf(fp, "seed=%d\n", seed);
++
++    fclose(fp);
++    msg("game state dumped to /tmp/rogue.dump");
++}
+ 
+ /*
+  * command:
+@@ -363,6 +532,9 @@
+ 		    status();
+ 		    stat_msg = FALSE;
+ 		    after = FALSE;
++		when 'g':
++		    dump_game_state();
++		    after = FALSE;
+ 		otherwise:
+ 		    after = FALSE;
+ #ifdef MASTER

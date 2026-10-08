@@ -72,26 +72,26 @@ def rewrite(path, provider, output=None, kernel_functions=()):
     return rewritten
 
 
-def review_flags(paths, provider):
-    """Explicit install review for this migration's checked libc imports."""
+def check_imports(paths, provider, namespace="libc"):
+    """Check library imports against the current provider's function types."""
     exports = inspect(provider)["exports"]
-    names = set()
+    count = 0
     for path in paths:
         for identity, signature in inspect(path)["imports"].items():
             module, name = identity.split(":", 1)
-            if module == "libc":
+            if module == namespace:
                 if exports.get(name) != signature:
-                    raise ValueError(f"{path}: incompatible libc import {name}")
-                names.add(identity + ":function")
-    names.update(("env:memory:memory", "env:__indirect_function_table:table"))
-    return [argument for name in sorted(names) for argument in ("--review-import", name)]
+                    raise ValueError(f"{path}: incompatible {namespace} import {name}")
+                count += 1
+    return count
 
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--review-imports", nargs="+", type=Path, required=True)
+    parser.add_argument("--check-imports", nargs="+", type=Path, required=True)
     parser.add_argument("--provider", type=Path,
                         default=Path(__file__).resolve().parents[3] / "src/vfs/lib/libc.so.wasm")
+    parser.add_argument("--namespace", default="libc")
     args = parser.parse_args()
-    print(" ".join(review_flags(args.review_imports, args.provider)))
+    print(f"Verified {check_imports(args.check_imports, args.provider, args.namespace)} {args.namespace} imports")
