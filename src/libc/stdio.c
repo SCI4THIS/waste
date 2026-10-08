@@ -464,10 +464,10 @@ static i32 format_variadic(char *destination, u32 capacity, const char *format, 
       i32 negative = value < 0;
       u64 magnitude = negative ? (u64)(-(value + 1)) + 1 : (u64)value;
       format_unsigned(&output, magnitude, 10, 0, width, padding, negative);
-    } else if (conversion == 'u' || conversion == 'x' || conversion == 'X') {
+    } else if (conversion == 'u' || conversion == 'o' || conversion == 'x' || conversion == 'X') {
       u64 value = long_count > 1 ? va_arg(arguments, u64) :
         long_count ? (u64)va_arg(arguments, unsigned long) : (u64)va_arg(arguments, u32);
-      format_unsigned(&output, value, conversion == 'u' ? 10 : 16,
+      format_unsigned(&output, value, conversion == 'u' ? 10 : conversion == 'o' ? 8 : 16,
                       conversion == 'X', width, padding, 0);
     } else if (conversion == 'p') {
       format_byte(&output, '0'); format_byte(&output, 'x');

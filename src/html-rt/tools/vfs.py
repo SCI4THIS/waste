@@ -24,7 +24,7 @@ import test_distribution
 REPO = Path(__file__).resolve().parents[3]
 ROOT = REPO / "src/vfs"
 MANIFEST = ".inventory.json"  # Ignored legacy bookkeeping, never a guest node.
-COREUTILS = "true false pwd echo printf basename dirname cat wc ls date".split()
+COREUTILS = "true false pwd echo printf basename dirname cat chmod wc ls date".split()
 COMMANDS = COREUTILS + ["rogue", "ldd", "upload", "download", "waste-probe"]
 OPTIONAL_COMMANDS = ["waste-test"]
 BIN_COMMANDS = {"waste-probe", "waste-test"}

@@ -151,17 +151,17 @@ static size_t bounded_length(const char *text) {
     return length;
 }
 
-static int path_normalize(const posix_kernel *kernel, const uint8_t *path,
-                          size_t length, char *out) {
-    if (!kernel || !path || !out || length == 0 || length >= POSIX_PATH_MAX)
+static int path_normalize_from(const char *base, const uint8_t *path,
+                               size_t length, char *out) {
+    if (!base || !path || !out || length == 0 || length >= POSIX_PATH_MAX)
         return -POSIX_EINVAL;
-    size_t cwd_length = bounded_length(kernel->cwd);
+    size_t cwd_length = bounded_length(base);
     if (cwd_length == 0 || cwd_length >= POSIX_PATH_MAX) return -POSIX_EINVAL;
     char combined[POSIX_PATH_MAX * 2];
     size_t combined_length = 0;
     if (path[0] != '/') {
         if (cwd_length + 1 + length >= sizeof(combined)) return -POSIX_EINVAL;
-        memcpy(combined, kernel->cwd, cwd_length);
+        memcpy(combined, base, cwd_length);
         combined[cwd_length] = '/';
         combined_length = cwd_length + 1;
     }
@@ -201,6 +201,30 @@ static int path_normalize(const posix_kernel *kernel, const uint8_t *path,
     }
     out[out_length] = 0;
     return 0;
+}
+
+static int path_normalize(const posix_kernel *kernel, const uint8_t *path,
+                          size_t length, char *out) {
+    return kernel ? path_normalize_from(kernel->cwd, path, length, out) :
+        -POSIX_EINVAL;
+}
+
+static int path_normalize_at(const posix_kernel *kernel, int directory,
+                             const uint8_t *path, size_t length, char *out) {
+    if (!kernel) return -POSIX_EINVAL;
+    if (!path) return -POSIX_EFAULT;
+    if (!length) return -POSIX_ENOENT;
+    const char *base = kernel->cwd;
+    /* Absolute paths ignore dirfd; relative paths never change process cwd. */
+    if (path[0] != '/' && directory != POSIX_AT_FDCWD) {
+        if (!fd_valid(directory) || !kernel->fds[directory].ofd)
+            return -POSIX_EBADF;
+        const posix_ofd *ofd = kernel->fds[directory].ofd;
+        if (ofd->kind != POSIX_OFD_DIRECTORY || !ofd->directory.node)
+            return -POSIX_ENOTDIR;
+        base = ofd->directory.node->path;
+    }
+    return path_normalize_from(base, path, length, out);
 }
 
 static posix_kernel_path_node *path_find(posix_kernel *kernel,
@@ -428,24 +452,41 @@ int posix_kernel_path_set_mtime(posix_kernel *kernel, const uint8_t *path,
 
 int posix_kernel_path_chmod(posix_kernel *kernel, const uint8_t *path,
                             size_t length, uint32_t mode) {
+    return posix_kernel_fchmodat(kernel, POSIX_AT_FDCWD, path, length, mode, 0);
+}
+
+int posix_kernel_fchmodat(posix_kernel *kernel, int directory,
+                          const uint8_t *path, size_t length,
+                          uint32_t mode, int flags) {
     char normalized[POSIX_PATH_NODE_NAME_MAX];
     int depth = 0;
     if (!kernel) return -POSIX_EINVAL;
-    int result = path_normalize(kernel, path, length, normalized);
+    if (flags & ~POSIX_AT_SYMLINK_NOFOLLOW) return -POSIX_EINVAL;
+    int result = path_normalize_at(kernel, directory, path, length, normalized);
     if (result < 0) return result;
     posix_kernel_path_node *node = path_find(kernel, normalized);
     if (!node)
         return path_prefix_is_file(kernel, normalized) ?
             -POSIX_ENOTDIR : -POSIX_ENOENT;
+    if (node->metadata.kind == POSIX_NODE_SYMLINK &&
+        (flags & POSIX_AT_SYMLINK_NOFOLLOW)) return -POSIX_EOPNOTSUPP;
     while (node->metadata.kind == POSIX_NODE_SYMLINK &&
            node->link_target && depth++ < 8) {
-        result = path_normalize(kernel, (const uint8_t *)node->link_target,
-                                strlen(node->link_target), normalized);
+        char parent[POSIX_PATH_NODE_NAME_MAX];
+        memcpy(parent, node->path, strlen(node->path) + 1);
+        char *separator = parent + strlen(parent);
+        while (separator > parent && *separator != '/') separator--;
+        if (separator == parent) parent[1] = 0;
+        else *separator = 0;
+        result = path_normalize_from(parent, (const uint8_t *)node->link_target,
+                                     strlen(node->link_target), normalized);
         if (result < 0) return result;
         node = path_find(kernel, normalized);
         if (!node) return -POSIX_ENOENT;
     }
     if (node->metadata.kind == POSIX_NODE_SYMLINK) return -POSIX_ELOOP;
+    if (path[length - 1] == '/' && node->metadata.kind != POSIX_NODE_DIRECTORY)
+        return -POSIX_ENOTDIR;
     node->metadata.mode = mode & 07777u;
     return 0;
 }
@@ -476,6 +517,17 @@ int posix_kernel_path_stat(posix_kernel *kernel, const uint8_t *path,
     if (node->metadata.kind == POSIX_NODE_REGULAR && node->file)
         metadata->size = (int64_t)node->file->data_capacity;
     return 0;
+}
+
+int posix_kernel_fstatat(posix_kernel *kernel, int directory,
+                         const uint8_t *path, size_t length, int flags,
+                         posix_path_metadata *metadata) {
+    if (flags & ~POSIX_AT_SYMLINK_NOFOLLOW) return -POSIX_EINVAL;
+    char normalized[POSIX_PATH_NODE_NAME_MAX];
+    int result = path_normalize_at(kernel, directory, path, length, normalized);
+    if (result < 0) return result;
+    return posix_kernel_path_stat(kernel, (const uint8_t *)normalized,
+        strlen(normalized), !(flags & POSIX_AT_SYMLINK_NOFOLLOW), metadata);
 }
 
 int posix_kernel_path_access(posix_kernel *kernel, const uint8_t *path,
@@ -1283,7 +1335,9 @@ int posix_kernel_open(posix_kernel *kernel, const uint8_t *path, size_t length,
                       int flags, int mode) {
     if (!kernel || !path || length == 0) return -POSIX_EINVAL;
     if (flags & ~(POSIX_O_WRONLY | POSIX_O_RDWR | POSIX_O_CREAT | POSIX_O_EXCL |
-                  POSIX_O_TRUNC | POSIX_O_APPEND)) return -POSIX_EINVAL;
+                  POSIX_O_TRUNC | POSIX_O_APPEND | POSIX_O_NONBLOCK |
+                  POSIX_O_DIRECTORY | POSIX_O_NOCTTY | POSIX_O_NOFOLLOW |
+                  POSIX_O_CLOEXEC)) return -POSIX_EINVAL;
     if ((flags & POSIX_O_WRONLY) && (flags & POSIX_O_RDWR))
         return -POSIX_EINVAL;
     char normalized[POSIX_PATH_NODE_NAME_MAX];
@@ -1292,6 +1346,8 @@ int posix_kernel_open(posix_kernel *kernel, const uint8_t *path, size_t length,
     posix_kernel_path_node *node = path_find(kernel, normalized);
     if (node && (flags & POSIX_O_CREAT) && (flags & POSIX_O_EXCL))
         return -POSIX_EEXIST;
+    if (node && node->metadata.kind == POSIX_NODE_SYMLINK &&
+        (flags & POSIX_O_NOFOLLOW)) return -POSIX_ELOOP;
     int link_depth = 0;
     while (node && node->metadata.kind == POSIX_NODE_SYMLINK &&
            node->link_target && link_depth++ < 8) {
@@ -1301,6 +1357,9 @@ int posix_kernel_open(posix_kernel *kernel, const uint8_t *path, size_t length,
         node = path_find(kernel, normalized);
     }
     if (node && node->metadata.kind == POSIX_NODE_SYMLINK) return -POSIX_ELOOP;
+    if ((flags & POSIX_O_DIRECTORY) &&
+        (!node || node->metadata.kind != POSIX_NODE_DIRECTORY))
+        return node ? -POSIX_ENOTDIR : -POSIX_ENOENT;
     if (!node) {
         if (path_prefix_is_file(kernel, normalized)) return -POSIX_ENOTDIR;
         if (!(flags & POSIX_O_CREAT)) return -POSIX_ENOENT;
@@ -1323,6 +1382,7 @@ int posix_kernel_open(posix_kernel *kernel, const uint8_t *path, size_t length,
         directory->directory.node = node;
         directory->directory.index = 0;
         kernel->fds[directory_fd].ofd = directory;
+        kernel->fds[directory_fd].cloexec = !!(flags & POSIX_O_CLOEXEC);
         return directory_fd;
     }
     if (node->metadata.kind != POSIX_NODE_REGULAR) return -POSIX_ENOENT;
@@ -1345,8 +1405,17 @@ int posix_kernel_open(posix_kernel *kernel, const uint8_t *path, size_t length,
         metadata_set_now(kernel, &node->metadata);
     }
     kernel->fds[fd].ofd = ofd;
-    kernel->fds[fd].cloexec = 0;
+    kernel->fds[fd].cloexec = !!(flags & POSIX_O_CLOEXEC);
     return fd;
+}
+
+int posix_kernel_openat(posix_kernel *kernel, int directory,
+                        const uint8_t *path, size_t length, int flags, int mode) {
+    char normalized[POSIX_PATH_NODE_NAME_MAX];
+    int result = path_normalize_at(kernel, directory, path, length, normalized);
+    if (result < 0) return result;
+    return posix_kernel_open(kernel, (const uint8_t *)normalized,
+                             strlen(normalized), flags, mode);
 }
 
 static int shm_internal_name(const uint8_t *name, size_t length,

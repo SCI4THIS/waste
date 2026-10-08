@@ -35,6 +35,10 @@
     },
     {
       "after": "bash-5.2# ",
+      "text": "ldd /usr/bin/chmod; printf '__DEPS_chmod_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
       "text": "ldd /usr/bin/wc; printf '__DEPS_wc_%s__\\n' \"$?\"\n"
     },
     {
@@ -102,13 +106,14 @@
     "__DEPS_freestanding_0__\r\n",
     "__DEPS_malformed_1__\r\n",
     "__DEPS_missing_1__\r\n",
-    "missing => not found (1 imports)"
+    "missing => not found (1 imports)",
+    "__DEPS_chmod_0__\r\n"
   ],
   "outputCounts": {
-    "libc => /usr/lib/libc.so.wasm": 16
+    "libc => /usr/lib/libc.so.wasm": 17
   },
   "assertions": 7,
   "exitStatus": 0,
-  "processes": 19,
-  "execs": 19
+  "processes": 20,
+  "execs": 20
 }

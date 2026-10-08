@@ -1,0 +1,125 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "files": [
+    {
+      "path": "/tmp/chmod-setup.wast",
+      "source": "tests/guest-session-chmod-setup.wast",
+      "mode": 493
+    }
+  ],
+  "events": [
+    {
+      "after": "bash-5.2# ",
+      "text": "/bin/wast /tmp/chmod-setup.wast; printf '__CHMOD_SETUP_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "printf 'PAYLOAD\\n' > /tmp/chmod-tree/file; printf 'NESTED\\n' > /tmp/chmod-tree/nested/leaf; /usr/bin/chmod -v 600 /tmp/chmod-tree/file; printf '__CHMOD_NUMERIC_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/usr/bin/ls -l /tmp/chmod-tree/file; printf '__CHMOD_LS600_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/usr/bin/chmod -v u+x,g+r /tmp/chmod-tree/file; printf '__CHMOD_SYMBOLIC_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/usr/bin/ls -l /tmp/chmod-tree/file; printf '__CHMOD_LS740_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/usr/bin/chmod --reference=/tmp/chmod-tree/file /tmp/chmod-tree/nested/leaf; printf '__CHMOD_REFERENCE_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/usr/bin/ls -l /tmp/chmod-tree/nested/leaf; printf '__CHMOD_REF740_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "umask 027; /usr/bin/chmod -v =rwx /tmp/chmod-tree/file; printf '__CHMOD_UMASK_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/usr/bin/ls -l /tmp/chmod-tree/file; printf '__CHMOD_LS750_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/usr/bin/chmod 640 /tmp/chmod-tree/nested/leaf; printf '__CHMOD_LEAF_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/usr/bin/chmod -R -v a=rX /tmp/chmod-tree; printf '__CHMOD_RECURSIVE_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/usr/bin/ls -ld /tmp/chmod-tree /tmp/chmod-tree/nested; /usr/bin/ls -l /tmp/chmod-tree/file /tmp/chmod-tree/nested/leaf; printf '__CHMOD_RECURSIVE_LS_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/usr/bin/chmod 600 /tmp/chmod-definitely-missing; printf '__CHMOD_MISSING_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/usr/bin/chmod invalid /tmp/chmod-tree/file; printf '__CHMOD_INVALID_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/usr/bin/chmod -v 4600 /tmp/chmod-tree/file; printf '__CHMOD_SPECIAL_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/usr/bin/ls -l /tmp/chmod-tree/file; printf '__CHMOD_LSSPECIAL_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "/usr/bin/cat /tmp/chmod-tree/file; pwd; printf '__CHMOD_RECOVER_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "bash-5.2# ",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__CHMOD_SETUP_0__\r\n",
+    "__CHMOD_NUMERIC_0__\r\n",
+    "__CHMOD_LS600_0__\r\n",
+    "__CHMOD_SYMBOLIC_0__\r\n",
+    "__CHMOD_LS740_0__\r\n",
+    "__CHMOD_REFERENCE_0__\r\n",
+    "__CHMOD_REF740_0__\r\n",
+    "__CHMOD_UMASK_0__\r\n",
+    "__CHMOD_LS750_0__\r\n",
+    "__CHMOD_RECURSIVE_0__\r\n",
+    "__CHMOD_RECURSIVE_LS_0__\r\n",
+    "__CHMOD_MISSING_1__\r\n",
+    "__CHMOD_INVALID_1__\r\n",
+    "__CHMOD_SPECIAL_0__\r\n",
+    "__CHMOD_LSSPECIAL_0__\r\n",
+    "__CHMOD_RECOVER_0__\r\n",
+    "-rw------- 1 root",
+    "-rwxr----- 1 root",
+    "-rwxr-x--- 1 root",
+    "dr-xr-xr-x 2 root",
+    "-r-xr-xr-x 1 root",
+    "-r--r--r-- 1 root",
+    "-rwS------ 1 root",
+    "PAYLOAD\r\n/root\r\n",
+    "__CHMOD_LEAF_0__\r\n",
+    "changed from 0644 (rw-r--r--) to 0600 (rw-------)",
+    "changed from 0600 (rw-------) to 0740 (rwxr-----)",
+    "changed from 0555 (r-xr-xr-x) to 4600 (rwS------)"
+  ],
+  "assertions": 8,
+  "exitStatus": 0,
+  "processes": 18,
+  "execs": 18,
+  "outputCounts": {
+    "-rwxr----- 1 root": 2,
+    "dr-xr-xr-x 2 root": 2,
+    "-r--r--r-- 1 root": 1
+  },
+  "clockRealtimeNs": 1700000000000000000,
+  "clockMonotonicNs": 42000000000
+}

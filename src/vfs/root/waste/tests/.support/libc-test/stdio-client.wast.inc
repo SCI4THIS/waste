@@ -16,6 +16,8 @@
   (data (i32.const 180080) "value=%d\00")
   (data (i32.const 180096) "value=17\00")
   (data (i32.const 180112) "one\0aTwo")
+  (data (i32.const 180128) "%04o %s %o\00")
+  (data (i32.const 180144) "0600 hello 0\00")
 
   (func $equal (param $left i32) (param $right i32) (result i32)
     (local $a i32) (local $b i32)
@@ -57,6 +59,16 @@
     local.get $file call $file_length i32.const 8 i32.eq
     local.get $data i32.const 180096 call $equal i32.and)
 
+  ;; chmod's verbose report mixes octal mode arguments with strings. Verify
+  ;; padding, zero, and consumption of the argument following each %o.
+  (func (export "octal-formatting") (result i32)
+    i32.const 181100 i32.const 384 i32.store
+    i32.const 181104 i32.const 180000 i32.store
+    i32.const 181108 i32.const 0 i32.store
+    i32.const 181000 i32.const 64 i32.const 180128 i32.const 181100 call $snprintf
+    i32.const 12 i32.eq
+    i32.const 181000 i32.const 180144 call $equal i32.and)
+
   (func (export "memory-file-input") (result i32)
     (local $file i32)
     i32.const 220000 call $allocator_init drop
@@ -65,5 +77,6 @@
     i32.const 181000 i32.load
     i32.const 0x0a656e6f i32.eq))
 (assert_return (invoke $stdio_tests "formatting") (i32.const 1))
+(assert_return (invoke $stdio_tests "octal-formatting") (i32.const 1))
 (assert_return (invoke $stdio_tests "stdout-buffer") (i32.const 1))
 (assert_return (invoke $stdio_tests "memory-file-input") (i32.const 1))

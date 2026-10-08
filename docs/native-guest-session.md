@@ -175,12 +175,16 @@ worker (`--page`). Inputs follow guest output/wait events with
 a delay; they are not preloaded. Checks compare exact transcripts and assertion
 counts for fragmented Bash commands, a subsequent prompt, mounted-file `read`,
 binary NUL/`0xff` input, EOF, file round-trip and errno. Additional contracts
-cover all eleven installed Coreutils programs, pipelines/redirection,
+cover the installed Coreutils programs, pipelines/redirection,
 external/builtin/stdout heredocs, long-path/repeated/quoted/fragmented heredocs,
 closed-descriptor redirection cleanup, missing-command/malformed-WAT recovery,
 dynamic ncurses loading and two Rogue children followed by fragmented input.
 The separate `rogue-fresh` contract launches Rogue without first running `ldd`,
 so a direct dynamic-library failure is distinguishable from session poisoning.
+The `chmod` contract checks numeric/symbolic modes, `umask`, `--reference`,
+recursive `a=rX`, special bits and failure statuses. It verifies the resulting
+`ls` permission fields and octal verbose reports, then continues using Bash.
+Run it with `--scenario chmod --page build/html-rt/bash.html`.
 The handler contract additionally checks valid WAT, direct/shebang launches,
 repeated WAST, definitions/registration/module assertions, two READ pauses in
 one assertion, a resumed expected trap, SELECT readiness, a resumed mismatch

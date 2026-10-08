@@ -1,9 +1,9 @@
 # WASTE cross-configuration answers.  Keep each answer paired with a reason
-# and a verification command in configure-coreutils.py.
+# explaining the guest ABI assumption.
 #
 # The source checkout does not contain generated configure output.  This file
 # is consumed only after a local, reproducible bootstrap has produced it in
-# build/html-rt/coreutils/source; it never changes the coreutils submodule.
+# build/aux/coreutils/source; it never changes the coreutils submodule.
 
 # The wrapper targets wasm32 and cannot execute target probes on the host.
 ac_cv_prog_cc_cross=yes
@@ -11,7 +11,7 @@ ac_cv_c_cross=yes
 # WebAssembly linear memory is little-endian by specification.
 ac_cv_c_bigendian=no
 # The current WASTE socket ABI uses 32-bit lengths; validate this declaration
-# when the complete sys/socket.h surface is added in Stage 8E.
+# against the public sys/socket.h declaration.
 gl_cv_socklen_t_equiv=int
 # The guest libc supplies the stdio_ext entry points; configure must not
 # select the host-struct fallback implementation of gnulib/fpending.c.

@@ -31,6 +31,21 @@ i32 open(const char *path, i32 flags, ...) {
   }
   return env_result(waste_kernel_open_v1(path, flags, mode));
 }
+extern i32 waste_kernel_openat_v1(i32 directory, const char *path,
+                                   u32 length, i32 flags, i32 mode)
+  __attribute__((import_module("waste_kernel"), import_name("openat_v1")));
+i32 openat(i32 directory, const char *path, i32 flags, ...) {
+  if (!path) { *__errno_location() = 14; return -1; }
+  i32 mode = 0;
+  if (flags & 0100) {
+    __builtin_va_list ap;
+    __builtin_va_start(ap, flags);
+    mode = __builtin_va_arg(ap, i32);
+    __builtin_va_end(ap);
+  }
+  return env_result(waste_kernel_openat_v1(
+      directory, path, c_length(path), flags, mode));
+}
 i32 close(i32 descriptor) { return env_result(waste_env_close(descriptor)); }
 i32 chdir(const char *path) { return env_result(waste_kernel_chdir(path)); }
 char *getcwd(char *buffer, u32 capacity) {
@@ -162,7 +177,14 @@ i32 lchown(const char*p,u32 u,u32 g){return chown(p,u,g);}
 i32 fchown(i32 fd,u32 u,u32 g){(void)fd;(void)u;(void)g;return unsupported();}
 extern i32 waste_kernel_fchdir_v1(i32 fd) __attribute__((import_module("waste_kernel"), import_name("fchdir_v1")));
 i32 fchdir(i32 fd){return env_result(waste_kernel_fchdir_v1(fd));}
-i32 fchmodat(i32 directory,const char*path,u32 mode,i32 flags){(void)directory;(void)path;(void)mode;(void)flags;return unsupported();}
+extern i32 waste_kernel_fchmodat_v1(i32 directory, const char *path,
+                                    u32 length, u32 mode, i32 flags)
+  __attribute__((import_module("waste_kernel"), import_name("fchmodat_v1")));
+i32 fchmodat(i32 directory, const char *path, u32 mode, i32 flags) {
+  if (!path) { *__errno_location() = 14; return -1; }
+  return env_result(waste_kernel_fchmodat_v1(
+      directory, path, c_length(path), mode, flags));
+}
 i32 utimensat(i32 directory,const char*path,const struct timespec*times,i32 flags){(void)directory;(void)path;(void)times;(void)flags;return unsupported();}
 i32 futimens(i32 fd,const struct timespec times[2]){(void)fd;(void)times;return unsupported();}
 i32 posix_fadvise(i32 fd, i32 offset, i32 length, i32 advice) {
@@ -180,10 +202,6 @@ i32 readlink(const char *path, char *buffer, u32 capacity) {
 __attribute__((import_module("waste_kernel"), import_name("path_access_v1")))
 extern i32 waste_kernel_path_access_v1(const char *path, u32 length,
                                         i32 mode, i32 flags);
-__attribute__((import_module("waste_kernel"), import_name("path_stat_v1")))
-extern i32 waste_kernel_path_stat_v1(const char *path, u32 length,
-                                      i32 follow, waste_path_metadata *metadata);
-
 static i32 path_result(i32 result) {
   if (result < 0) { *__errno_location() = -result; return -1; }
   return 0;
@@ -211,10 +229,14 @@ i32 faccessat(i32 directory, const char *path, i32 mode, i32 flags) {
       path, c_length(path), mode, flags));
 }
 
-static i32 stat_query(const char *path, waste_stat *output, i32 follow) {
+extern i32 waste_kernel_fstatat_v1(i32 directory, const char *path,
+                                    u32 length, i32 flags, waste_path_metadata *metadata)
+  __attribute__((import_module("waste_kernel"), import_name("fstatat_v1")));
+static i32 stat_query_at(i32 directory, const char *path,
+                         waste_stat *output, i32 flags) {
   if (!path || !output) { *__errno_location() = 14; return -1; }
   waste_path_metadata metadata;
-  i32 result = waste_kernel_path_stat_v1(path, c_length(path), follow, &metadata);
+  i32 result = waste_kernel_fstatat_v1(directory, path, c_length(path), flags, &metadata);
   if (result < 0) { *__errno_location() = -result; return -1; }
   bytes_zero(output, sizeof(*output));
   output->st_ino = metadata.inode;
@@ -234,9 +256,8 @@ static i32 stat_query(const char *path, waste_stat *output, i32 follow) {
   return 0;
 }
 
-i32 stat(const char *path, waste_stat *output) { return stat_query(path, output, 1); }
-i32 lstat(const char *path, waste_stat *output) { return stat_query(path, output, 0); }
+i32 stat(const char *path, waste_stat *output) { return stat_query_at(-100, path, output, 0); }
+i32 lstat(const char *path, waste_stat *output) { return stat_query_at(-100, path, output, 0x100); }
 i32 fstatat(i32 directory, const char *path, waste_stat *output, i32 flags) {
-  (void)directory;
-  return stat_query(path, output, !(flags & 0x100));
+  return stat_query_at(directory, path, output, flags);
 }

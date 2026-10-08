@@ -1,5 +1,4 @@
 diff --git a/gnulib/lib/fpending.c b/gnulib/lib/fpending.c
-index 0000000..0000000 100644
 --- a/gnulib/lib/fpending.c
 +++ b/gnulib/lib/fpending.c
 @@ -55,4 +55,7 @@ __fpending (FILE *fp)
@@ -12,7 +11,6 @@ index 0000000..0000000 100644
  # error "Please port gnulib fpending.c to your platform!"
 
 diff --git a/gnulib/lib/mountlist.c b/gnulib/lib/mountlist.c
-index 0000000..0000000 100644
 --- a/gnulib/lib/mountlist.c
 +++ b/gnulib/lib/mountlist.c
 @@ -1245,5 +1245,5 @@ read_file_system_list (bool need_fs_type)
@@ -24,7 +22,6 @@ index 0000000..0000000 100644
  #endif
 
 diff --git a/gnulib/lib/spawni.c b/gnulib/lib/spawni.c
-index 0000000..0000000 100644
 --- a/gnulib/lib/spawni.c
 +++ b/gnulib/lib/spawni.c
 @@ -24,3 +24,15 @@
@@ -50,7 +47,6 @@ index 0000000..0000000 100644
 +#endif /* WASTE_WASM */
 
 diff --git a/src/ls.c b/src/ls.c
-index 0000000..0000000 100644
 --- a/src/ls.c
 +++ b/src/ls.c
 @@ -50,7 +50,9 @@

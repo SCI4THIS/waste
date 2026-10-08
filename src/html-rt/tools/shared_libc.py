@@ -89,9 +89,15 @@ def check_imports(paths, provider, namespace="libc"):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check-imports", nargs="+", type=Path, required=True)
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--check-imports", nargs="+", type=Path)
+    action.add_argument("--rewrite", type=Path)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--provider", type=Path,
                         default=Path(__file__).resolve().parents[3] / "src/vfs/lib/libc.so.wasm")
     parser.add_argument("--namespace", default="libc")
     args = parser.parse_args()
-    print(f"Verified {check_imports(args.check_imports, args.provider, args.namespace)} {args.namespace} imports")
+    if args.rewrite:
+        print(f"Assigned {rewrite(args.rewrite, args.provider, args.output)} shared libc imports")
+    else:
+        print(f"Verified {check_imports(args.check_imports, args.provider, args.namespace)} {args.namespace} imports")

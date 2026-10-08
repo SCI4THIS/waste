@@ -147,11 +147,11 @@ def main():
     parser.add_argument("--native", default="build/cli-rt/waste-session")
     parser.add_argument("--vfs-root", default="src/vfs")
     parser.add_argument("--wasm", default="build/html-rt/waste-wast.wasm")
-    parser.add_argument("--scenario", action="append", choices=("shared-dependencies", "shared-libc", "io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "matrix", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"))
+    parser.add_argument("--scenario", action="append", choices=("shared-dependencies", "shared-libc", "io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "matrix", "chmod", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"))
     parser.add_argument("--page", help="Also check identical scenarios through the packaged production worker")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="guest-session-", dir="build/engine") as temporary:
-        for name in args.scenario or ("shared-dependencies", "shared-libc", "io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "matrix", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"):
+        for name in args.scenario or ("shared-dependencies", "shared-libc", "io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "matrix", "chmod", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"):
             contract = f"tests/guest-session-{name}.json"
             scenario = json.loads(Path(contract).read_text())
             # Bash exercises the default mounted bootstrap, not a host copy.

@@ -223,8 +223,8 @@
     {
       "path": "/root/waste/tests/.support/libc-test/stdio-client.wast.inc",
       "role": "test-support",
-      "sha256": "185083f9920593600c895c05d2d4fa1fb89003de9dbbb4431f694d4b754fe00d",
-      "size": 3044,
+      "sha256": "2807d814fcaaab280ce6922b3019e7d060ec6eecd219d2b1074dcbcce2e33fcd",
+      "size": 3704,
       "source": "tests/libc-test/stdio-client.wast.inc"
     },
     {
@@ -2155,8 +2155,8 @@
     {
       "path": "/root/waste/tests/engine-regressions/path-vfs.wast",
       "role": "test-input",
-      "sha256": "b539aaa9492eec16ad8bff8cbfb4eac615da85d121fa029712f77977d4365085",
-      "size": 10037,
+      "sha256": "b741aa30ca1f644b309eaeb1e0ec0a43bc5e6eb2fba9e14e94a99f31d65d1f05",
+      "size": 13769,
       "source": "tests/engine-regressions/path-vfs.wast"
     },
     {
@@ -2232,99 +2232,99 @@
     {
       "path": "/root/waste/tests/libc-test/accounts.wast",
       "role": "test-input",
-      "sha256": "4d860f7fabdb071d470df851f26c66caf0977625acd7915878115bd8ce0049e3",
-      "size": 557266,
+      "sha256": "22a5a9a0488322374fd8c559373731ab26748aa16c7b7bd85b1aaa10c31876ce",
+      "size": 561949,
       "source": "build/html-rt/waste-libc/tests/accounts.wast"
     },
     {
       "path": "/root/waste/tests/libc-test/allocator.wast",
       "role": "test-input",
-      "sha256": "63809215d69430e5b44438c5e5d8e5c836d6042e4e22a8fa2cfb22e4d441e9dd",
-      "size": 557635,
+      "sha256": "0c4e7329e4ed783b669e77711e041a57736357a0302d0c7b224a80d68dc6928a",
+      "size": 562318,
       "source": "build/html-rt/waste-libc/tests/allocator.wast"
     },
     {
       "path": "/root/waste/tests/libc-test/entropy-messages.wast",
       "role": "test-input",
-      "sha256": "39260d5a4841540755613f09572ff8ff37910a8043b66eb39afdf8d3b444f77e",
-      "size": 555464,
+      "sha256": "19e03cba0df17dddb5e6a8a32af3741b744587b512ffc0e5d327264e78552f21",
+      "size": 560147,
       "source": "build/html-rt/waste-libc/tests/entropy-messages.wast"
     },
     {
       "path": "/root/waste/tests/libc-test/environment-boundaries.wast",
       "role": "test-input",
-      "sha256": "88165dfdf31d3f1a5c6805b2c603a4249a4c1dc5f57bdccf9cbd9687232b3230",
-      "size": 560990,
+      "sha256": "a905150a0196dd2b1e4bcbaf337dc85b6b94f146ca64758bfa774081dc071f38",
+      "size": 565673,
       "source": "build/html-rt/waste-libc/tests/environment-boundaries.wast"
     },
     {
       "path": "/root/waste/tests/libc-test/locale-wide.wast",
       "role": "test-input",
-      "sha256": "47b8080d33a68d04a450159bbed65cb79aeca8102e47f47f382992ad58322c9f",
-      "size": 557425,
+      "sha256": "4cdf2823b71e4eef6da0a7fa6725b0d3fa1571c6be977d829f04edb311118f95",
+      "size": 562108,
       "source": "build/html-rt/waste-libc/tests/locale-wide.wast"
     },
     {
       "path": "/root/waste/tests/libc-test/matching-sort.wast",
       "role": "test-input",
-      "sha256": "cc58d56e0b2188c3d6ed83791f3b36a7ed855a4186b31648a4826a98f88d23a7",
-      "size": 555895,
+      "sha256": "2361b45fbe6df4be846829bb13ea58e272995127f5c3bd4b7d14c50c2d10a891",
+      "size": 560578,
       "source": "build/html-rt/waste-libc/tests/matching-sort.wast"
     },
     {
       "path": "/root/waste/tests/libc-test/memory-conversion.wast",
       "role": "test-input",
-      "sha256": "4dfb04d70fc89c328e67ea3688fa8c5de5350adebbdedc33e44e0e867aaa0620",
-      "size": 560291,
+      "sha256": "16e31d34d1f1e896bd9968bab7d6039b6d3b40099d99a39c2c8ba37f5891c31f",
+      "size": 564974,
       "source": "build/html-rt/waste-libc/tests/memory-conversion.wast"
     },
     {
       "path": "/root/waste/tests/libc-test/path-runtime.wast",
       "role": "test-input",
-      "sha256": "0fbe8caf21374e69dcd6f97ece960d5cd65c46bc31b841bc2414ed915b6bfb48",
-      "size": 554931,
+      "sha256": "cda2e5a3357509c98e723fa5ec2075cb7c98a00b3f30b58545a9518935e61119",
+      "size": 559614,
       "source": "build/html-rt/waste-libc/tests/path-runtime.wast"
     },
     {
       "path": "/root/waste/tests/libc-test/select-abi.wast",
       "role": "test-input",
-      "sha256": "7d46d6637bc4a56b8b1368d9a1408f9a7e2f074a4678bc454eb3486a02dfec30",
-      "size": 555710,
+      "sha256": "a8ea957cacadb08efb25854589f1940a55aab6455cff4bcfb092b1fd2499ba03",
+      "size": 560393,
       "source": "build/html-rt/waste-libc/tests/select-abi.wast"
     },
     {
       "path": "/root/waste/tests/libc-test/select-runtime.wast",
       "role": "test-input",
-      "sha256": "f8d6ac795c228cd80c3f355cd5b23c339cfc9b07ca973db0e87d1882f4676177",
-      "size": 555803,
+      "sha256": "d01e8d9fdf78d3a3b712147c64b4c18a8822f9db451b1549cd491ec27c9dd6dd",
+      "size": 560486,
       "source": "build/html-rt/waste-libc/tests/select-runtime.wast"
     },
     {
       "path": "/root/waste/tests/libc-test/stat-abi.wast",
       "role": "test-input",
-      "sha256": "e5fb47f3a2010ccf248b96ddf9aa7806e3fe9ca9f5474110221d1838883bc967",
-      "size": 555432,
+      "sha256": "7ad41276c7e6897cac495a252608af1469442fa97f64536e7795912a1e2e6725",
+      "size": 560115,
       "source": "build/html-rt/waste-libc/tests/stat-abi.wast"
     },
     {
       "path": "/root/waste/tests/libc-test/stdio.wast",
       "role": "test-input",
-      "sha256": "d894b7c3c15129c1a939aac7bfb09ea960f0cb2af42a825ffdefc556cf06fc8a",
-      "size": 557231,
+      "sha256": "71dff9ad0a4b03a35ac3a8958fe0143bd418a4299778c77295b39fb6f0aaf2c1",
+      "size": 562574,
       "source": "build/html-rt/waste-libc/tests/stdio.wast"
     },
     {
       "path": "/root/waste/tests/libc-test/terminal.wast",
       "role": "test-input",
-      "sha256": "b428c0368f99fef978407b802b5fac426815f13657bf087f98021d90e9f4cead",
-      "size": 555947,
+      "sha256": "5fd13edd06275d97bca4688f459b9f8b3a1dcec838053f9065d0602ff4790874",
+      "size": 560630,
       "source": "build/html-rt/waste-libc/tests/terminal.wast"
     },
     {
       "path": "/root/waste/tests/libc-test/time-resource.wast",
       "role": "test-input",
-      "sha256": "5e59ee93162f7a1f1030952ac30e9a30cee9f35eebc95a4d3235a189d562adef",
-      "size": 557352,
+      "sha256": "f2c3d4db58afc11fdcae4ad0792e79d1a105792dfb5c82f194dfcf77065b97d0",
+      "size": 562035,
       "source": "build/html-rt/waste-libc/tests/time-resource.wast"
     },
     {
@@ -2450,8 +2450,8 @@
     {
       "hostOnly": false,
       "path": "tests/libc-test/stdio-client.wast.inc",
-      "sha256": "185083f9920593600c895c05d2d4fa1fb89003de9dbbb4431f694d4b754fe00d",
-      "size": 3044
+      "sha256": "2807d814fcaaab280ce6922b3019e7d060ec6eecd219d2b1074dcbcce2e33fcd",
+      "size": 3704
     },
     {
       "hostOnly": false,
@@ -2474,14 +2474,14 @@
     {
       "hostOnly": true,
       "path": "build/html-rt/waste-libc/waste-libc.wasm",
-      "sha256": "b3f894545b09ddfedc2a45723bca937ace6220a4cb9725e59b0bc9449d5ae514",
-      "size": 48159
+      "sha256": "901e59a251c4139aeb84eae47dd5f4f95c7aa61e9d67b9427a9593a716ea61be",
+      "size": 48616
     },
     {
       "hostOnly": true,
       "path": "src/vfs/usr/share/waste/sdk.json",
-      "sha256": "0429872fd9fdcbcb02c579e023262ea7c897ba8014ee00823605b37c62af1959",
-      "size": 525127
+      "sha256": "08fac2c154369baaf6d06a2535458494fee9a90eced435b100a6b78005803426",
+      "size": 33765
     },
     {
       "hostOnly": true,
@@ -2498,8 +2498,8 @@
     {
       "hostOnly": true,
       "path": "src/libc/stdio.c",
-      "sha256": "636da495b9ecefa264f5401b429dc9bd50acdfeb9804f4c38555734840f80ef2",
-      "size": 25419
+      "sha256": "fe0b1427aa1ff697ab782e0e98d8e79001305c34bb019d7f7fa314cf443b4654",
+      "size": 25464
     },
     {
       "hostOnly": true,
@@ -2576,8 +2576,8 @@
     {
       "hostOnly": true,
       "path": "src/libc/dirent.c",
-      "sha256": "395e625e434dca5120a4a70c5cc922ecc52dfb7feadb235a9c2753b6f24713b3",
-      "size": 1829
+      "sha256": "77743675981763f8eb1563f04b127d781a6f81e3b793d8ca57786fd7dbe4a650",
+      "size": 2177
     },
     {
       "hostOnly": true,
@@ -2594,8 +2594,8 @@
     {
       "hostOnly": true,
       "path": "src/libc/unistd.c",
-      "sha256": "e4f3421186addf33ca217cce25fcd7a38543b99518c295437687dd8338c6e0c2",
-      "size": 10844
+      "sha256": "64b82095e2aab676a8be9bfd9a88fec0cebd578d088c254edff8953e6ede05f7",
+      "size": 11808
     },
     {
       "hostOnly": true,
@@ -10383,7 +10383,7 @@
         "assertionCount": 0,
         "file": "libc-test/accounts.wast",
         "mode": "wast-stream",
-        "sourceBytes": 557266,
+        "sourceBytes": 561949,
         "sourcePath": "build/html-rt/waste-libc/tests/accounts.wast"
       },
       "expectFailure": false,
@@ -10396,10 +10396,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "build/html-rt/waste-libc/tests/accounts.wast",
-        "sha256": "4d860f7fabdb071d470df851f26c66caf0977625acd7915878115bd8ce0049e3",
-        "size": 557266
+        "sha256": "22a5a9a0488322374fd8c559373731ab26748aa16c7b7bd85b1aaa10c31876ce",
+        "size": 561949
       },
-      "spec_sha256": "c091a0ab615b57cfd940613d87c959fa8a80b9ab4882494574e5356c5338d83f",
+      "spec_sha256": "ed4dfa65bb5638d847b4c09d7430c68fa505ff48471068d1323b7f14769a5ca8",
       "suite": "libc-test",
       "unsupported": false,
       "unsupportedReason": null
@@ -10410,7 +10410,7 @@
         "assertionCount": 0,
         "file": "libc-test/allocator.wast",
         "mode": "wast-stream",
-        "sourceBytes": 557635,
+        "sourceBytes": 562318,
         "sourcePath": "build/html-rt/waste-libc/tests/allocator.wast"
       },
       "expectFailure": false,
@@ -10423,10 +10423,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "build/html-rt/waste-libc/tests/allocator.wast",
-        "sha256": "63809215d69430e5b44438c5e5d8e5c836d6042e4e22a8fa2cfb22e4d441e9dd",
-        "size": 557635
+        "sha256": "0c4e7329e4ed783b669e77711e041a57736357a0302d0c7b224a80d68dc6928a",
+        "size": 562318
       },
-      "spec_sha256": "beccf97c4621e683703efe752cd85afff952d21fe1cb005917762f1a75973e29",
+      "spec_sha256": "ab2552854353acb6af26d0f4359eb01b16247c8842a179bc6ed6887bf9ed5043",
       "suite": "libc-test",
       "unsupported": false,
       "unsupportedReason": null
@@ -10437,7 +10437,7 @@
         "assertionCount": 0,
         "file": "libc-test/entropy-messages.wast",
         "mode": "wast-stream",
-        "sourceBytes": 555464,
+        "sourceBytes": 560147,
         "sourcePath": "build/html-rt/waste-libc/tests/entropy-messages.wast"
       },
       "expectFailure": false,
@@ -10450,10 +10450,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "build/html-rt/waste-libc/tests/entropy-messages.wast",
-        "sha256": "39260d5a4841540755613f09572ff8ff37910a8043b66eb39afdf8d3b444f77e",
-        "size": 555464
+        "sha256": "19e03cba0df17dddb5e6a8a32af3741b744587b512ffc0e5d327264e78552f21",
+        "size": 560147
       },
-      "spec_sha256": "881f4575f3fbdf7d304db64d3ca0df26771aef911002c40b114b632ddd268de6",
+      "spec_sha256": "712185a8f0927c2ad90e218b9486b2abb947663c659ccc6b27acdb701706af3e",
       "suite": "libc-test",
       "unsupported": false,
       "unsupportedReason": null
@@ -10464,7 +10464,7 @@
         "assertionCount": 0,
         "file": "libc-test/environment-boundaries.wast",
         "mode": "wast-stream",
-        "sourceBytes": 560990,
+        "sourceBytes": 565673,
         "sourcePath": "build/html-rt/waste-libc/tests/environment-boundaries.wast"
       },
       "expectFailure": false,
@@ -10477,10 +10477,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "build/html-rt/waste-libc/tests/environment-boundaries.wast",
-        "sha256": "88165dfdf31d3f1a5c6805b2c603a4249a4c1dc5f57bdccf9cbd9687232b3230",
-        "size": 560990
+        "sha256": "a905150a0196dd2b1e4bcbaf337dc85b6b94f146ca64758bfa774081dc071f38",
+        "size": 565673
       },
-      "spec_sha256": "6b2fd8e46cc29f933fd550bc665aed3f615a63f358b6aac7da879e3aa4bbd8d4",
+      "spec_sha256": "d30e25163b2c90a2e8aa7bd9d7a94bade7c6a2ae9ef79dc3813d89cc658b0bb0",
       "suite": "libc-test",
       "unsupported": false,
       "unsupportedReason": null
@@ -10491,7 +10491,7 @@
         "assertionCount": 0,
         "file": "libc-test/locale-wide.wast",
         "mode": "wast-stream",
-        "sourceBytes": 557425,
+        "sourceBytes": 562108,
         "sourcePath": "build/html-rt/waste-libc/tests/locale-wide.wast"
       },
       "expectFailure": false,
@@ -10504,10 +10504,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "build/html-rt/waste-libc/tests/locale-wide.wast",
-        "sha256": "47b8080d33a68d04a450159bbed65cb79aeca8102e47f47f382992ad58322c9f",
-        "size": 557425
+        "sha256": "4cdf2823b71e4eef6da0a7fa6725b0d3fa1571c6be977d829f04edb311118f95",
+        "size": 562108
       },
-      "spec_sha256": "f16619a1b4f3361fd779db69f9e6d0b4f888f09cd0c199b43b5616c8b3976f87",
+      "spec_sha256": "9b6dbfbc51b29289d1b3b894b645e4e430f8db6bf3a91da5da657fe436d9c63f",
       "suite": "libc-test",
       "unsupported": false,
       "unsupportedReason": null
@@ -10518,7 +10518,7 @@
         "assertionCount": 0,
         "file": "libc-test/matching-sort.wast",
         "mode": "wast-stream",
-        "sourceBytes": 555895,
+        "sourceBytes": 560578,
         "sourcePath": "build/html-rt/waste-libc/tests/matching-sort.wast"
       },
       "expectFailure": false,
@@ -10531,10 +10531,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "build/html-rt/waste-libc/tests/matching-sort.wast",
-        "sha256": "cc58d56e0b2188c3d6ed83791f3b36a7ed855a4186b31648a4826a98f88d23a7",
-        "size": 555895
+        "sha256": "2361b45fbe6df4be846829bb13ea58e272995127f5c3bd4b7d14c50c2d10a891",
+        "size": 560578
       },
-      "spec_sha256": "c6f7c16ab8856acc8e33d322f5681be18ea105bd44411e0a654c0651ec3f4127",
+      "spec_sha256": "88d5658dc17c19cfe544f938b9ba1d7fe823ec5201338fed43e8b794dd7e3f0f",
       "suite": "libc-test",
       "unsupported": false,
       "unsupportedReason": null
@@ -10545,7 +10545,7 @@
         "assertionCount": 0,
         "file": "libc-test/memory-conversion.wast",
         "mode": "wast-stream",
-        "sourceBytes": 560291,
+        "sourceBytes": 564974,
         "sourcePath": "build/html-rt/waste-libc/tests/memory-conversion.wast"
       },
       "expectFailure": false,
@@ -10558,10 +10558,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "build/html-rt/waste-libc/tests/memory-conversion.wast",
-        "sha256": "4dfb04d70fc89c328e67ea3688fa8c5de5350adebbdedc33e44e0e867aaa0620",
-        "size": 560291
+        "sha256": "16e31d34d1f1e896bd9968bab7d6039b6d3b40099d99a39c2c8ba37f5891c31f",
+        "size": 564974
       },
-      "spec_sha256": "b67ce1aae77d387754f67183516b11f7f3f1fab20f47cfe23440c0e72eec86a8",
+      "spec_sha256": "5e0c53d3daeff0b7335f3530c109b781de503cf71ac704d3542e82ec2a8139fd",
       "suite": "libc-test",
       "unsupported": false,
       "unsupportedReason": null
@@ -10572,7 +10572,7 @@
         "assertionCount": 0,
         "file": "libc-test/path-runtime.wast",
         "mode": "wast-stream",
-        "sourceBytes": 554931,
+        "sourceBytes": 559614,
         "sourcePath": "build/html-rt/waste-libc/tests/path-runtime.wast"
       },
       "expectFailure": false,
@@ -10585,10 +10585,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "build/html-rt/waste-libc/tests/path-runtime.wast",
-        "sha256": "0fbe8caf21374e69dcd6f97ece960d5cd65c46bc31b841bc2414ed915b6bfb48",
-        "size": 554931
+        "sha256": "cda2e5a3357509c98e723fa5ec2075cb7c98a00b3f30b58545a9518935e61119",
+        "size": 559614
       },
-      "spec_sha256": "c6f4940058f5ebbdf7d0f1ac7e62d1b42474a2c4604d017125604a637e236327",
+      "spec_sha256": "91b041a9b7a55b137ef28e43f746fbfef7651c30fa6537f0cf0d9264b7859a12",
       "suite": "libc-test",
       "unsupported": false,
       "unsupportedReason": null
@@ -10599,7 +10599,7 @@
         "assertionCount": 0,
         "file": "libc-test/select-abi.wast",
         "mode": "wast-stream",
-        "sourceBytes": 555710,
+        "sourceBytes": 560393,
         "sourcePath": "build/html-rt/waste-libc/tests/select-abi.wast"
       },
       "expectFailure": false,
@@ -10612,10 +10612,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "build/html-rt/waste-libc/tests/select-abi.wast",
-        "sha256": "7d46d6637bc4a56b8b1368d9a1408f9a7e2f074a4678bc454eb3486a02dfec30",
-        "size": 555710
+        "sha256": "a8ea957cacadb08efb25854589f1940a55aab6455cff4bcfb092b1fd2499ba03",
+        "size": 560393
       },
-      "spec_sha256": "ac67e1184f9e12cd7640980b813729733991c6fd867756f85d0fe9312bbfb58c",
+      "spec_sha256": "ac0766861b4376b7d2db6022f83cecf82514bc30ede31f1ba9aee20787c9de11",
       "suite": "libc-test",
       "unsupported": false,
       "unsupportedReason": null
@@ -10626,7 +10626,7 @@
         "assertionCount": 0,
         "file": "libc-test/select-runtime.wast",
         "mode": "wast-stream",
-        "sourceBytes": 555803,
+        "sourceBytes": 560486,
         "sourcePath": "build/html-rt/waste-libc/tests/select-runtime.wast"
       },
       "expectFailure": false,
@@ -10639,10 +10639,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "build/html-rt/waste-libc/tests/select-runtime.wast",
-        "sha256": "f8d6ac795c228cd80c3f355cd5b23c339cfc9b07ca973db0e87d1882f4676177",
-        "size": 555803
+        "sha256": "d01e8d9fdf78d3a3b712147c64b4c18a8822f9db451b1549cd491ec27c9dd6dd",
+        "size": 560486
       },
-      "spec_sha256": "403fdf9667963c63996b1b4328ea4489402f3f881845ded31e0787d67a59bd40",
+      "spec_sha256": "c5f41d022fd3ed6269c45a789d8056d24790070a9a936506eae04d9cf4957868",
       "suite": "libc-test",
       "unsupported": false,
       "unsupportedReason": null
@@ -10653,7 +10653,7 @@
         "assertionCount": 0,
         "file": "libc-test/stat-abi.wast",
         "mode": "wast-stream",
-        "sourceBytes": 555432,
+        "sourceBytes": 560115,
         "sourcePath": "build/html-rt/waste-libc/tests/stat-abi.wast"
       },
       "expectFailure": false,
@@ -10666,10 +10666,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "build/html-rt/waste-libc/tests/stat-abi.wast",
-        "sha256": "e5fb47f3a2010ccf248b96ddf9aa7806e3fe9ca9f5474110221d1838883bc967",
-        "size": 555432
+        "sha256": "7ad41276c7e6897cac495a252608af1469442fa97f64536e7795912a1e2e6725",
+        "size": 560115
       },
-      "spec_sha256": "7178dcdbedaab8324ed71effcb296800527ea61354b612ad5656b1ab42d3b2c9",
+      "spec_sha256": "2c181e652a943295bfa53a54153d17ce1cb050c87dd3253a9a6e080788e1d66d",
       "suite": "libc-test",
       "unsupported": false,
       "unsupportedReason": null
@@ -10680,7 +10680,7 @@
         "assertionCount": 0,
         "file": "libc-test/stdio.wast",
         "mode": "wast-stream",
-        "sourceBytes": 557231,
+        "sourceBytes": 562574,
         "sourcePath": "build/html-rt/waste-libc/tests/stdio.wast"
       },
       "expectFailure": false,
@@ -10693,10 +10693,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "build/html-rt/waste-libc/tests/stdio.wast",
-        "sha256": "d894b7c3c15129c1a939aac7bfb09ea960f0cb2af42a825ffdefc556cf06fc8a",
-        "size": 557231
+        "sha256": "71dff9ad0a4b03a35ac3a8958fe0143bd418a4299778c77295b39fb6f0aaf2c1",
+        "size": 562574
       },
-      "spec_sha256": "a7dfde6be00d9016f7c3ca6c8955b1443200f5506d0765c8847a69d143c4538b",
+      "spec_sha256": "0b2bd80960c799c4681a6946965a0696a1405aa915b42a8b959fc53747f1f756",
       "suite": "libc-test",
       "unsupported": false,
       "unsupportedReason": null
@@ -10707,7 +10707,7 @@
         "assertionCount": 0,
         "file": "libc-test/terminal.wast",
         "mode": "wast-stream",
-        "sourceBytes": 555947,
+        "sourceBytes": 560630,
         "sourcePath": "build/html-rt/waste-libc/tests/terminal.wast"
       },
       "expectFailure": false,
@@ -10720,10 +10720,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "build/html-rt/waste-libc/tests/terminal.wast",
-        "sha256": "b428c0368f99fef978407b802b5fac426815f13657bf087f98021d90e9f4cead",
-        "size": 555947
+        "sha256": "5fd13edd06275d97bca4688f459b9f8b3a1dcec838053f9065d0602ff4790874",
+        "size": 560630
       },
-      "spec_sha256": "fd6cbc7f2b86780bc1282351b9251e6f3c3bb908ee48a6fef850cd3153fcac96",
+      "spec_sha256": "dec7ee362817ea9bd67cb80a1b330c6d9c800095c7fbb54a5b7006c11b9cc51e",
       "suite": "libc-test",
       "unsupported": false,
       "unsupportedReason": null
@@ -10734,7 +10734,7 @@
         "assertionCount": 0,
         "file": "libc-test/time-resource.wast",
         "mode": "wast-stream",
-        "sourceBytes": 557352,
+        "sourceBytes": 562035,
         "sourcePath": "build/html-rt/waste-libc/tests/time-resource.wast"
       },
       "expectFailure": false,
@@ -10747,10 +10747,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "build/html-rt/waste-libc/tests/time-resource.wast",
-        "sha256": "5e59ee93162f7a1f1030952ac30e9a30cee9f35eebc95a4d3235a189d562adef",
-        "size": 557352
+        "sha256": "f2c3d4db58afc11fdcae4ad0792e79d1a105792dfb5c82f194dfcf77065b97d0",
+        "size": 562035
       },
-      "spec_sha256": "8ed2e2c91f5ba744c5cceecb13c3a21eb7364fee7fa4b95742883100b4cf0ff8",
+      "spec_sha256": "e2c00a6202a448216bfd8e3241d34858ed77a572fb9396f6cde16ec6ac8edf50",
       "suite": "libc-test",
       "unsupported": false,
       "unsupportedReason": null
@@ -10950,7 +10950,7 @@
         "assertionCount": 0,
         "file": "engine-regressions/path-vfs.wast",
         "mode": "wast-stream",
-        "sourceBytes": 10037,
+        "sourceBytes": 13769,
         "sourcePath": "tests/engine-regressions/path-vfs.wast"
       },
       "expectFailure": false,
@@ -10963,10 +10963,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "tests/engine-regressions/path-vfs.wast",
-        "sha256": "b539aaa9492eec16ad8bff8cbfb4eac615da85d121fa029712f77977d4365085",
-        "size": 10037
+        "sha256": "b741aa30ca1f644b309eaeb1e0ec0a43bc5e6eb2fba9e14e94a99f31d65d1f05",
+        "size": 13769
       },
-      "spec_sha256": "24c4628da48bf56ab86784f802c074680728611dbc878a102e73b5cdba637a00",
+      "spec_sha256": "3c12c92a18f88813778b6737b6824792f7c7793ef4f6ece7e82d25d2619dd5e9",
       "suite": "engine-regressions",
       "unsupported": false,
       "unsupportedReason": null

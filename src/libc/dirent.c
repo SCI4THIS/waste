@@ -14,14 +14,27 @@ struct waste_dir {
   struct dirent entry;
 };
 
-DIR *opendir(const char *path) {
-  i32 descriptor = open(path, 0, 0);
-  if (descriptor < -1) { *__errno_location() = -descriptor; return 0; }
-  if (descriptor < 0) return 0;
+extern i32 fstat(i32 descriptor, waste_stat *metadata)
+  __attribute__((import_module("env"), import_name("fstat")));
+
+DIR *fdopendir(i32 descriptor) {
+  waste_stat metadata;
+  if (fstat(descriptor, &metadata) < 0) return 0;
+  if ((metadata.st_mode & 0170000u) != 0040000u) {
+    *__errno_location() = 20; return 0;
+  }
   DIR *directory = malloc((u32)sizeof(DIR));
-  if (!directory) { close(descriptor); *__errno_location() = 12; return 0; }
+  if (!directory) { *__errno_location() = 12; return 0; }
   directory->descriptor = descriptor;
   directory->entry.d_off = 0;
+  return directory;
+}
+
+DIR *opendir(const char *path) {
+  i32 descriptor = open(path, 0200000 | 02000000, 0);
+  if (descriptor < 0) return 0;
+  DIR *directory = fdopendir(descriptor);
+  if (!directory) close(descriptor);
   return directory;
 }
 

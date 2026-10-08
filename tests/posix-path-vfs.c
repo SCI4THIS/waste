@@ -153,6 +153,24 @@ int main(void) {
      * run through the real guest ABI. Empty/overlong spans stay C checks. */
     CHECK(posix_kernel_path_stat(first, (const uint8_t *)"", 0, 1, &actual) == -POSIX_EINVAL);
 
+    /* A relative link target is relative to its containing directory, even
+     * when the caller's cwd differs. NOFOLLOW must not chmod the target. */
+    CHECK(posix_kernel_path_add_symlink(first, "/data/relative", &symlink,
+                                       "readme") == 0);
+    CHECK(posix_kernel_path_set_cwd(first, "/") == 0);
+    CHECK(posix_kernel_path_chmod(first, (const uint8_t *)"/data/relative",
+                                  14, 0600) == 0);
+    CHECK(posix_kernel_fchmodat(first, POSIX_AT_FDCWD,
+                                (const uint8_t *)"/data/relative", 14,
+                                0777, POSIX_AT_SYMLINK_NOFOLLOW) == -POSIX_EOPNOTSUPP);
+    CHECK(posix_kernel_path_stat(first, (const uint8_t *)"/data/readme", 12,
+                                 1, &actual) == 0 && actual.mode == 0600);
+    CHECK(posix_kernel_fchmodat(first, POSIX_AT_FDCWD,
+                                (const uint8_t *)"/data/readme/", 13,
+                                0777, 0) == -POSIX_ENOTDIR);
+    CHECK(posix_kernel_path_stat(first, (const uint8_t *)"/data/readme", 12,
+                                 1, &actual) == 0 && actual.mode == 0600);
+
     CHECK(posix_kernel_path_stat(second, (const uint8_t *)"/bin/tool", 9, 1, &actual) == -POSIX_ENOENT);
     CHECK(posix_kernel_path_add(second, "/bin/tool", &regular) == 0);
     CHECK(posix_kernel_path_stat(first, (const uint8_t *)"/bin/tool", 9, 1, &actual) == 0);

@@ -2076,6 +2076,44 @@ static exec_status guest_posix_execve(void *data, const wasm_value *args,
     return EXEC_YIELD;
 }
 
+static exec_status guest_posix_openat_v1(
+        void *data, const wasm_value *args, int arg_count,
+        wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    if (arg_count != 5) return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    uint32_t length = (uint32_t)args[2].i32;
+    uint8_t path[POSIX_PATH_MAX];
+    if (length >= sizeof(path))
+        return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    if (!caller || !caller->memory || exec_memory_read(
+            caller->memory, (uint32_t)args[1].i32, path, length, error) != EXEC_OK)
+        return guest_posix_result(-POSIX_EFAULT, results, result_count);
+    native_store *store = (native_store *)data;
+    int result = store->kernel ? posix_kernel_openat(
+        store->kernel, args[0].i32, path, length, args[3].i32,
+        args[4].i32) : -POSIX_ENOSYS;
+    return guest_posix_result(result, results, result_count);
+}
+
+static exec_status guest_posix_fchmodat_v1(
+        void *data, const wasm_value *args, int arg_count,
+        wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    if (arg_count != 5) return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    uint32_t length = (uint32_t)args[2].i32;
+    uint8_t path[POSIX_PATH_MAX];
+    if (length >= sizeof(path))
+        return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    if (!caller || !caller->memory || exec_memory_read(
+            caller->memory, (uint32_t)args[1].i32, path, length, error) != EXEC_OK)
+        return guest_posix_result(-POSIX_EFAULT, results, result_count);
+    native_store *store = (native_store *)data;
+    int result = store->kernel ? posix_kernel_fchmodat(
+        store->kernel, args[0].i32, path, length, (uint32_t)args[3].i32,
+        args[4].i32) : -POSIX_ENOSYS;
+    return guest_posix_result(result, results, result_count);
+}
+
 static exec_status guest_posix_path_access_v1(
         void *data, const wasm_value *args, int arg_count,
         wasm_value *results, int *result_count, exec_error *error,
@@ -2126,6 +2164,34 @@ static exec_status guest_posix_path_stat_v1(
             result = -POSIX_EFAULT;
     }
     free(path);
+    return guest_posix_result(result, results, result_count);
+}
+
+static exec_status guest_posix_fstatat_v1(
+        void *data, const wasm_value *args, int arg_count,
+        wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    if (arg_count != 5) return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    uint32_t length = (uint32_t)args[2].i32;
+    uint8_t path[POSIX_PATH_MAX], bytes[POSIX_PATH_METADATA_BYTES];
+    if (length >= sizeof(path))
+        return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    if (!caller || !caller->memory || exec_memory_read(
+            caller->memory, (uint32_t)args[1].i32, path, length, error) != EXEC_OK ||
+        exec_memory_read(caller->memory, (uint32_t)args[4].i32,
+                         bytes, sizeof(bytes), error) != EXEC_OK)
+        return guest_posix_result(-POSIX_EFAULT, results, result_count);
+    native_store *store = (native_store *)data;
+    posix_path_metadata metadata;
+    int result = store->kernel ? posix_kernel_fstatat(
+        store->kernel, args[0].i32, path, length, args[3].i32,
+        &metadata) : -POSIX_ENOSYS;
+    if (!result) {
+        posix_path_metadata_encode(bytes, &metadata);
+        if (exec_memory_write(caller->memory, (uint32_t)args[4].i32,
+                              bytes, sizeof(bytes), error) != EXEC_OK)
+            result = -POSIX_EFAULT;
+    }
     return guest_posix_result(result, results, result_count);
 }
 
@@ -2777,6 +2843,8 @@ static exec_host_func guest_posix_function(const char *module,
     if (strcmp(module, "waste_kernel") == 0) {
         if (strcmp(name, "startup_v1") == 0) return guest_posix_startup_v1;
         if (strcmp(name, "open_v1") == 0) return guest_posix_open;
+        if (strcmp(name, "openat_v1") == 0) return guest_posix_openat_v1;
+        if (strcmp(name, "fstatat_v1") == 0) return guest_posix_fstatat_v1;
         if (strcmp(name, "realtime_v1") == 0) return guest_posix_realtime_v1;
         if (strcmp(name, "select_v1") == 0) return guest_posix_select;
         if (strcmp(name, "pselect_v1") == 0) return guest_posix_pselect;
@@ -2794,6 +2862,7 @@ static exec_host_func guest_posix_function(const char *module,
         if (strcmp(name, "lseek") == 0) return guest_posix_lseek;
         if (strcmp(name, "readlink_v1") == 0) return guest_posix_readlink;
         if (strcmp(name, "fchdir_v1") == 0) return guest_posix_fchdir;
+        if (strcmp(name, "fchmodat_v1") == 0) return guest_posix_fchmodat_v1;
         if (strcmp(name, "fcntl_v1") == 0) return guest_posix_fcntl;
         if (strcmp(name, "fcntl_varargs_v1") == 0)
             return guest_posix_fcntl_varargs;

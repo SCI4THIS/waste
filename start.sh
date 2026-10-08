@@ -472,7 +472,7 @@ generate_c_engine_tests() {
 
 # ── Auxiliary utility build helpers ──────────────────────────────────────
 
-AUX_UTILITIES=(true false pwd echo printf basename dirname cat wc ls date rogue libncurses ldd upload download)
+AUX_UTILITIES=(true false pwd echo printf basename dirname cat chmod wc ls date rogue libncurses ldd upload download)
 AUX_STAGING="$REPO_ROOT/src/vfs"
 AUX_LOG="$LOG_DIR/aux-build.log"
 
@@ -493,20 +493,27 @@ build_single_aux() {
       "clang, make, wasm-ld, and Python 3 are required."
     return 1
   fi
+  if [[ "$utility" != libncurses ]] && ! have_command flock; then
+    show_message "Aux build" "flock is required for auxiliary installation."
+    return 1
+  fi
   case "$utility" in
-    rogue|ldd|upload|download)
-      if ! have_command flock; then
-        show_message "Aux build" "flock is required for auxiliary installation."
+    libncurses)
+      if ! have_command wasm-as || ! have_command wasm-merge || ! have_command wasm-dis; then
+        show_message "Aux build" "wasm-as, wasm-merge, and wasm-dis are required for ncurses."
         return 1
       fi
-      if [[ "$utility" == rogue ]] && ! have_command patch; then
+      ;;
+    rogue)
+      if ! have_command patch; then
         show_message "Aux build" "patch is required for the Rogue build."
         return 1
       fi
       ;;
+    ldd|upload|download) ;;
     *)
-      if ! have_command wasm-as || ! have_command wasm-merge || ! have_command wasm-dis; then
-        show_message "Aux build" "wasm-as, wasm-merge, and wasm-dis are required for this package build."
+      if ! have_command patch || ! have_command wasm-opt; then
+        show_message "Aux build" "patch and wasm-opt are required for Coreutils."
         return 1
       fi
       ;;
@@ -535,7 +542,7 @@ build_single_aux() {
         --library "$ncurses_out" || return 1
       printf 'Installed %s → %s\n' "$ncurses_out" "$AUX_STAGING/libncurses.so.wasm"
       ;;
-    rogue|ldd|upload|download)
+    *)
       if ! run_logged_step "Build and install $utility utility" \
           "$AUX_LOG" make -C "$REPO_ROOT/src/aux" "install-$utility"; then
         show_message "Aux build failed" \
@@ -544,27 +551,6 @@ build_single_aux() {
       fi
       local aux_out="$REPO_ROOT/build/aux/${utility}/${utility}.wasm"
       printf 'Installed %s → %s\n' "$aux_out" "$AUX_STAGING/usr/bin/$utility"
-      ;;
-    *)
-      if ! run_logged_step "Build and audit coreutils $utility" \
-          "$AUX_LOG" make -C "$REPO_ROOT/src/html-rt" \
-          BUILD_DIR="$HTML_BUILD" "coreutils-${utility}-probe"; then
-        show_message "Aux build failed" \
-          "Could not build coreutils $utility.\n\nLog: $AUX_LOG"
-        return 1
-      fi
-      local report_dir="$REPO_ROOT/build/coreutils/utility-probe"
-      local linked="$report_dir/${utility}-linked.wasm"
-      if [[ ! -f "$linked" ]]; then
-        show_message "Aux build failed" \
-          "Linked artifact not found: $linked"
-        return 1
-      fi
-      python3 "$REPO_ROOT/src/html-rt/tools/shared_libc.py" \
-        --check-imports "$linked" || return 1
-      python3 "$REPO_ROOT/src/html-rt/tools/vfs.py" install \
-        --component "$utility" --source "$linked" || return 1
-      printf 'Installed %s → %s\n' "$linked" "$AUX_STAGING/${utility}.wasm"
       ;;
   esac
 }

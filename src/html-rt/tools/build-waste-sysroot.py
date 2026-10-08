@@ -10,10 +10,8 @@ import shutil
 import guest_sdk
 
 
-def write_wrapper(path, repo_root, profile=False):
+def write_wrapper(path, repo_root):
     toolchain = repo_root / "build/engine/toolchain/usr"
-    extra = ('  -DWASTE_LEGACY_DECLARATIONS -I "$sysroot/profiles/coreutils/include" '
-             '-include "$sysroot/profiles/coreutils/include/waste-gnulib-compat.h" \\\n') if profile else ""
     path.write_text(
         '#!/bin/sh\nset -eu\n'
         'wrapper_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
@@ -26,7 +24,7 @@ def write_wrapper(path, repo_root, profile=False):
         '  -DWASTE_WASM -fno-stack-protector -fdata-sections -ffunction-sections \\\n'
         '  -nostdinc -nostdlib -isystem "$sysroot/include" \\\n'
         '  -isystem "$sysroot/lib/waste/cc/include" \\\n'
-        + extra + '  -Wl,--no-entry "$@"\n', encoding="utf-8")
+        '  -Wl,--no-entry "$@"\n', encoding="utf-8")
     path.chmod(0o755)
 
 
@@ -41,24 +39,21 @@ def build(repo_root, output):
     for source, destination in (
         (root / "usr/include", output / "include"),
         (root / "usr/lib/waste/cc/include", output / "lib/waste/cc/include"),
-        (repo_root / "src/html-rt/profiles/coreutils/include", output / "profiles/coreutils/include"),
     ):
         if destination.exists():
             shutil.rmtree(destination)
         shutil.copytree(source, destination)
-    profile = output / "profiles/coreutils/include"
-    for name in ("obstack", "unistr"):
-        source = repo_root / f"build/coreutils/source/gnulib/lib/{name}.in.h"
-        if source.is_file():
-            shutil.copyfile(source, profile / f"{name}.h")
+    # Remove the retired package-specific profile from older generated sysroots.
+    if (output / "profiles").exists():
+        shutil.rmtree(output / "profiles")
+    (output / "bin/waste-coreutils-clang").unlink(missing_ok=True)
     crt = repo_root / "src/libc/waste-crt.c"
     shutil.copyfile(crt, output / "lib/waste-crt.c")
     (output / "bin").mkdir(exist_ok=True)
     write_wrapper(output / "bin/waste-wasm-clang", repo_root)
-    write_wrapper(output / "bin/waste-coreutils-clang", repo_root, profile=True)
     (output / "manifest.json").write_text(json.dumps(dict(
         format=2, sdk=sdk, sdk_sha256=guest_sdk.sha(root / "usr/share/waste/sdk.json"),
-        profiles=["default", "coreutils (gnulib/SELinux compatibility declarations; not guest libc)"],
+        profiles=["default"],
         crt=dict(source="src/libc/waste-crt.c", sha256=guest_sdk.sha(crt)),
     ), indent=2, sort_keys=True) + "\n")
 

@@ -25,6 +25,13 @@ Packaging tools are in `src/html-rt/tools/`; guest libc sources are in
 Auxiliary commands build through `src/aux/Makefile`; Rogue's package profile and
 patches live in `src/aux/rogue`. Use `make -C src/aux rogue` and `install-rogue`;
 stage upstream sources under `build/aux/rogue` and leave the submodule untouched.
+When adding or migrating an auxiliary binary, read and apply the
+[add-aux-binary skill](skills/add-aux-binary/SKILL.md).
+Coreutils commands use per-command `src/aux/NAME/sources.mk` files and shared
+`src/aux/coreutils` staging, private headers and Make rules. Build with
+`make -C src/aux NAME`, install with `install-NAME`; generated outputs live
+under `build/aux`. Generate release corresponding source explicitly with
+`make -C src/aux coreutils-source-package`.
 Portable support needed by the interpreter itself lives in `src/libc/runtime/`
 and is statically linked into each runtime; kernel semantics stay in `src/engine/`.
 Architecture notes are in `docs/`, and project probes

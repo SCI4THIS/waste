@@ -101,7 +101,7 @@ def collect(root: Path) -> dict:
 
     installed_vfs = vfs_tool.load(root / "src/vfs") if (root / "src/vfs").is_dir() else None
     headers = []
-    for directory in ("src/engine", "src/cli-rt", "src/html-rt", "src/vfs/usr/include", "src/vfs/usr/lib/waste/cc/include"):
+    for directory in ("src/engine", "src/cli-rt", "src/html-rt", "src/aux", "src/vfs/usr/include", "src/vfs/usr/lib/waste/cc/include"):
         for path in sorted((root / directory).rglob("*.h")):
             relative = path.relative_to(root).as_posix()
             if "/build/" in relative:
@@ -110,7 +110,7 @@ def collect(root: Path) -> dict:
             decision = "mounted-guest-sdk" if public else "retain-private"
             if relative.startswith("src/vfs/usr/lib/waste/cc/include/"):
                 decision = "mounted-compiler-support"
-            elif relative.startswith("src/html-rt/profiles/"):
+            elif relative.startswith("src/aux/coreutils/include/"):
                 decision = "optional-package-profile"
             if path.name in ("helper.h", "waste-gnulib-compat.h") and public:
                 decision = "split-private-or-build-profile"
@@ -209,9 +209,9 @@ def collect(root: Path) -> dict:
             "package_files": [{**fingerprint(root, root / source),
                 "guest_path": guest, "destination": "src/vfs" + guest,
                 "guest_mode": "0o644"} for source, guest in (
-                ("build/coreutils/provenance.json",
+                ("build/aux/coreutils/coreutils-provenance.json",
                  "/usr/share/waste/coreutils-provenance.json"),
-                ("build/coreutils/coreutils-source-package.json",
+                ("build/aux/coreutils/coreutils-source-package.json",
                  "/usr/share/waste/coreutils-source-package.json"),
                 ("submodules/coreutils/COPYING",
                  "/usr/share/licenses/coreutils/COPYING"))],

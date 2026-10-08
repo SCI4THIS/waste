@@ -108,6 +108,11 @@ typedef struct {
 #define POSIX_O_EXCL  128
 #define POSIX_O_TRUNC 512
 #define POSIX_O_APPEND 1024
+#define POSIX_O_NONBLOCK 04000
+#define POSIX_O_DIRECTORY 0200000
+#define POSIX_O_NOCTTY 0400000
+#define POSIX_O_NOFOLLOW 01000000
+#define POSIX_O_CLOEXEC 02000000
 
 #define POSIX_WAIT_BLOCKED 0
 #define POSIX_WAIT_READY   1
@@ -375,6 +380,8 @@ int posix_kernel_pipe(posix_kernel *kernel, int fds[2]);
 int posix_kernel_close(posix_kernel *kernel, int fd);
 int posix_kernel_open(posix_kernel *kernel, const uint8_t *path, size_t length,
                       int flags, int mode);
+int posix_kernel_openat(posix_kernel *kernel, int directory,
+                        const uint8_t *path, size_t length, int flags, int mode);
 int posix_kernel_shm_open(posix_kernel *kernel, const uint8_t *name,
                           size_t length, int flags, int mode);
 int posix_kernel_shm_unlink(posix_kernel *kernel, const uint8_t *name,

@@ -43,7 +43,7 @@
 
 int open(const char *, int, ...);
 int creat(const char *, unsigned int) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
-int openat(int, const char *, int, ...) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
+int openat(int, const char *, int, ...);
 int linkat(int, const char *, int, const char *, int);
 int fcntl(int, int, ...);
 int fchmodat(int, const char *, unsigned int, int);

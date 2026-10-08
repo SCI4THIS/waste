@@ -320,6 +320,14 @@
             127
           ]
         },
+        "umask": {
+          "params": [
+            127
+          ],
+          "results": [
+            127
+          ]
+        },
         "unlink": {
           "params": [
             127
@@ -411,7 +419,7 @@
         "reason": "Package-owned gnulib API; not provided by WASTE guest libc"
       },
       {
-        "names": "__freadahead __freading __fwriting clock creat difftime exp fchownat fdopendir freopen fscanf futimesat getchar inet_addr inet_aton inet_ntop inet_pton iswalpha iswblank iswcntrl iswdigit iswspace link log nanosleep openat pause posix_spawn posix_spawn_file_actions_addclose posix_spawn_file_actions_adddup2 posix_spawn_file_actions_addopen posix_spawn_file_actions_destroy posix_spawn_file_actions_init posix_spawnattr_destroy posix_spawnattr_getflags posix_spawnattr_getsigdefault posix_spawnattr_getsigmask posix_spawnattr_init posix_spawnattr_setflags posix_spawnattr_setsigdefault posix_spawnattr_setsigmask posix_spawnp pow pthread_cond_broadcast pthread_cond_destroy pthread_cond_init pthread_cond_signal pthread_cond_wait pthread_create pthread_getspecific pthread_join pthread_key_create pthread_key_delete pthread_mutex_timedlock pthread_mutexattr_destroy pthread_mutexattr_init pthread_mutexattr_settype pthread_once pthread_rwlock_destroy pthread_rwlock_init pthread_rwlock_rdlock pthread_rwlock_unlock pthread_rwlock_wrlock pthread_rwlockattr_destroy pthread_rwlockattr_init pthread_rwlockattr_setkind_np pthread_self pthread_setspecific pthread_sigmask putenv readlinkat renameat rewinddir sched_get_priority_max sched_get_priority_min sched_yield strtoul symlink symlinkat tdelete tdestroy tfind tsearch twalk unlinkat utime vfork vfscanf wait wcscat",
+        "names": "__freadahead __freading __fwriting clock creat difftime exp fchownat freopen fscanf futimesat getchar inet_addr inet_aton inet_ntop inet_pton iswalpha iswblank iswcntrl iswdigit iswspace link log nanosleep pause posix_spawn posix_spawn_file_actions_addclose posix_spawn_file_actions_adddup2 posix_spawn_file_actions_addopen posix_spawn_file_actions_destroy posix_spawn_file_actions_init posix_spawnattr_destroy posix_spawnattr_getflags posix_spawnattr_getsigdefault posix_spawnattr_getsigmask posix_spawnattr_init posix_spawnattr_setflags posix_spawnattr_setsigdefault posix_spawnattr_setsigmask posix_spawnp pow pthread_cond_broadcast pthread_cond_destroy pthread_cond_init pthread_cond_signal pthread_cond_wait pthread_create pthread_getspecific pthread_join pthread_key_create pthread_key_delete pthread_mutex_timedlock pthread_mutexattr_destroy pthread_mutexattr_init pthread_mutexattr_settype pthread_once pthread_rwlock_destroy pthread_rwlock_init pthread_rwlock_rdlock pthread_rwlock_unlock pthread_rwlock_wrlock pthread_rwlockattr_destroy pthread_rwlockattr_init pthread_rwlockattr_setkind_np pthread_self pthread_setspecific pthread_sigmask putenv readlinkat renameat rewinddir sched_get_priority_max sched_get_priority_min sched_yield strtoul symlink symlinkat tdelete tdestroy tfind tsearch twalk unlinkat utime vfork vfscanf wait wcscat",
         "reason": "No WASTE runtime provider; declaration only, not a supported guest capability"
       },
       {
@@ -485,7 +493,7 @@
       "origin": "repository:src/vfs/usr/include/dirent.h",
       "path": "/usr/include/dirent.h",
       "role": "sdk-public",
-      "sha256": "3030314eb2d52f36ab49077223a540c96d96de41d5243a24a06314d9b03ecc0e"
+      "sha256": "0e52ed97a5c868cd81772cfe2888d01a75c41711454fb3f3112bdb825a4889e9"
     },
     {
       "origin": "repository:src/vfs/usr/include/dlfcn.h",
@@ -515,7 +523,7 @@
       "origin": "repository:src/vfs/usr/include/fcntl.h",
       "path": "/usr/include/fcntl.h",
       "role": "sdk-public",
-      "sha256": "02ca94b69769975ea634b3be211d1206ec6fa5a9893214bf07d9d34b3312cfa4"
+      "sha256": "7da50f5c95fa6037ff845017413c72bbb871621a8725a4941501d553ab3e9249"
     },
     {
       "origin": "repository:src/vfs/usr/include/fnmatch.h",
@@ -691,7 +699,7 @@
       "origin": "repository:src/vfs/usr/include/sys/stat.h",
       "path": "/usr/include/sys/stat.h",
       "role": "sdk-public",
-      "sha256": "d55571a714107e84e4d009e6865c6ce953368f17164682eb16c734f8b5b0ea46"
+      "sha256": "f58b4d4e977b429b654f1f0b5b5cd71387b385af47148665a2cf2f74ece7f6d6"
     },
     {
       "origin": "repository:src/vfs/usr/include/sys/time.h",
@@ -991,7 +999,7 @@
     "syscall.h",
     "ncurses_cfg.h"
   ],
-  "scope": "Informational SDK description; current VFS files are authoritative.",
-  "status": "target assumptions and header origins; compatibility is tested explicitly",
+  "scope": "Target assumptions and header origins; not full ISO C/POSIX conformance.",
+  "status": "guest ABI checked at generation; current compatibility is tested explicitly",
   "target": "wasm32-unknown-unknown"
 }

@@ -1,0 +1,26 @@
+git add tests/c-engine-bash-browser-runtime.cjs
+git add tests/engine-regressions/path-vfs.wast
+git add tests/guest-session-check.py
+git add tests/guest-session-matrix.json
+git add tests/guest-session-shared-dependencies.json
+git add tests/libc-test/stdio-client.wast.inc
+git add tests/posix-path-vfs.c
+
+git add git.status
+git add skills/
+git add src/aux/basename/
+git add src/aux/cat/
+git add src/aux/chmod/
+git add src/aux/coreutils/
+git add src/aux/date/
+git add src/aux/dirname/
+git add src/aux/echo/
+git add src/aux/false/
+git add src/aux/ls/
+git add src/aux/printf/
+git add src/aux/pwd/
+git add src/aux/true/
+git add src/aux/wc/
+git add src/vfs/usr/bin/chmod
+git add tests/guest-session-chmod-setup.wast
+git add tests/guest-session-chmod.json

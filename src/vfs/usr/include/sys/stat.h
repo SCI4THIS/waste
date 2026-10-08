@@ -90,6 +90,7 @@ int lstat(const char *, struct stat *);
 int fstat(int, struct stat *);
 int fstatat(int, const char *, struct stat *, int);
 int chmod(const char *, unsigned int);
+mode_t umask(mode_t);
 int lchmod(const char *, unsigned int);
 int fchmod(int, unsigned int);
 int fchmodat(int, const char *, unsigned int, int);

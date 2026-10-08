@@ -19,6 +19,9 @@
 #define POSIX_ESPIPE   29
 #define POSIX_ENOSYS  38
 #define POSIX_ENOSPC  28
+#define POSIX_EOPNOTSUPP 95
+#define POSIX_AT_FDCWD (-100)
+#define POSIX_AT_SYMLINK_NOFOLLOW 0x100
 
 #define POSIX_PATH_MAX 4096
 /* This is a bounded in-engine inode table, not a package manifest limit.
@@ -147,9 +150,15 @@ int posix_kernel_path_set_mtime(struct posix_kernel *kernel,
                                 int64_t seconds, int64_t nanoseconds);
 int posix_kernel_path_chmod(struct posix_kernel *kernel, const uint8_t *path,
                             size_t length, uint32_t mode);
+int posix_kernel_fchmodat(struct posix_kernel *kernel, int directory,
+                          const uint8_t *path, size_t length,
+                          uint32_t mode, int flags);
 int posix_kernel_path_stat(struct posix_kernel *kernel, const uint8_t *path,
                            size_t length, int follow,
                            posix_path_metadata *metadata);
+int posix_kernel_fstatat(struct posix_kernel *kernel, int directory,
+                         const uint8_t *path, size_t length, int flags,
+                         posix_path_metadata *metadata);
 int posix_kernel_path_access(struct posix_kernel *kernel, const uint8_t *path,
                              size_t length, int mode, int flags);
 /* Copy one resolved executable regular file into an owned snapshot. The

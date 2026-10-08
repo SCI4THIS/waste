@@ -122,3 +122,5 @@ $(ROGUE_BUILD)/rogue.wasm: $(ROGUE_OBJECTS) $(CRT_OBJECT)
 	$(WASM_LD) $(LDFLAGS) $(WASM_LDFLAGS) -o "$@" $(foreach object,$^,"$(object)")
 
 -include $(ROGUE_OBJECTS:.o=.d)
+
+include $(AUX_DIR)/coreutils/coreutils.mk

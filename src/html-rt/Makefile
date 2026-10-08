@@ -104,65 +104,23 @@ LIBC_FIXTURES := $(patsubst $(REPO_ROOT)/tests/libc-test/%-client.wast.inc,\
 	$(BUILD_DIR)/waste-libc/tests/%.wast,$(LIBC_CLIENTS))
 LIBC_OUTPUTS := $(LIBC_OUTPUT) $(LIBC_FIXTURES)
 
-COREUTILS_STAGER := tools/stage-coreutils.py
-COREUTILS_BUILD_DIR ?= $(REPO_ROOT)/build/coreutils
-COREUTILS_PATCH := $(REPO_ROOT)/submodules/coreutils-waste.patch
-COREUTILS_STAGE_STAMP := $(COREUTILS_BUILD_DIR)/source/.waste-stage-stamp
 WASTE_SYSROOT_TOOL := tools/build-waste-sysroot.py
-WASTE_SYSROOT_DIR := $(COREUTILS_BUILD_DIR)/sysroot
+WASTE_SYSROOT_DIR := $(REPO_ROOT)/build/engine/guest-sdk/sysroot
 WASTE_SYSROOT_CC := $(WASTE_SYSROOT_DIR)/bin/waste-wasm-clang
 WASTE_SYSROOT_HEADERS := $(shell find $(REPO_ROOT)/src/vfs/usr/include \
-	$(REPO_ROOT)/src/vfs/usr/lib/waste/cc/include \
-	$(REPO_ROOT)/src/html-rt/profiles/coreutils/include -type f -name '*.h' -print) \
+	$(REPO_ROOT)/src/vfs/usr/lib/waste/cc/include -type f -name '*.h' -print) \
 	$(REPO_ROOT)/src/vfs/usr/share/waste/sdk.json tools/guest_sdk.py \
 	tools/guest_providers.py tools/wasm_signatures.py tools/sdk-api-policy.json
 LIBC_SOURCES += $(WASTE_SYSROOT_HEADERS)
-COREUTILS_CONFIGURE_TOOL := tools/configure-coreutils.py
-COREUTILS_CONFIGURE_DIR := $(COREUTILS_BUILD_DIR)/configure
-COREUTILS_CONFIGURE_REPORT := $(COREUTILS_CONFIGURE_DIR)/configure-report.json
-COREUTILS_CONFIGURE_SCRIPT := $(COREUTILS_BUILD_DIR)/source/configure
-COREUTILS_UTILITY_TOOL := tools/probe-coreutils-utility.py
-COREUTILS_RUNTIME_TOOL := tools/build-coreutils-runtime.py
-COREUTILS_PACKAGE_AUDIT := tools/audit-coreutils-package.py
-COREUTILS_SOURCE_PACKAGER := tools/package-coreutils-source.py
-COREUTILS_SOURCE_ARCHIVE := $(COREUTILS_BUILD_DIR)/coreutils-corresponding-source.tar.gz
-COREUTILS_SOURCE_MAPPING := $(COREUTILS_BUILD_DIR)/coreutils-source-package.json
-COREUTILS_SOURCE_STAMP := $(COREUTILS_BUILD_DIR)/.source-package-stamp
-COREUTILS_SOURCE_INPUTS := $(shell find $(REPO_ROOT)/src/engine $(REPO_ROOT)/src/libc $(REPO_ROOT)/src/html-rt \
-	$(REPO_ROOT)/src/vfs/usr/include $(REPO_ROOT)/src/vfs/usr/lib/waste/cc/include \
-	$(REPO_ROOT)/src/vfs/usr/share/licenses/clang \
-	-type f ! -name '*.wasm' ! -name '*.pyc' ! -path '*/__pycache__/*' -print)
-COREUTILS_SOURCE_INPUTS += $(REPO_ROOT)/src/config.h $(REPO_ROOT)/src/vfs/usr/share/waste/sdk.json
-COREUTILS_UTILITY_DIR := $(COREUTILS_BUILD_DIR)/utility-probe
-COREUTILS_UTILITY_REPORT := $(COREUTILS_UTILITY_DIR)/true-report.json
-COREUTILS_FALSE_REPORT := $(COREUTILS_UTILITY_DIR)/false-report.json
-COREUTILS_PWD_REPORT := $(COREUTILS_UTILITY_DIR)/pwd-report.json
-COREUTILS_ECHO_REPORT := $(COREUTILS_UTILITY_DIR)/echo-report.json
-COREUTILS_PRINTF_REPORT := $(COREUTILS_UTILITY_DIR)/printf-report.json
-COREUTILS_BASENAME_REPORT := $(COREUTILS_UTILITY_DIR)/basename-report.json
-COREUTILS_DIRNAME_REPORT := $(COREUTILS_UTILITY_DIR)/dirname-report.json
-COREUTILS_CAT_REPORT := $(COREUTILS_UTILITY_DIR)/cat-report.json
-COREUTILS_WC_REPORT := $(COREUTILS_UTILITY_DIR)/wc-report.json
-COREUTILS_LS_REPORT := $(COREUTILS_UTILITY_DIR)/ls-report.json
-COREUTILS_DATE_REPORT := $(COREUTILS_UTILITY_DIR)/date-report.json
-COREUTILS_BOOTSTRAP := $(REPO_ROOT)/submodules/bootstrap-coreutils.sh
 WASTE_CRT_SOURCE := ../libc/waste-crt.c
-WASTE_CRT_OBJECT := $(COREUTILS_BUILD_DIR)/waste-crt.o
+WASTE_CRT_OBJECT := $(REPO_ROOT)/build/engine/guest-sdk/waste-crt.o
 WASTE_HELLO_SOURCE := $(REPO_ROOT)/tests/coreutils-sysroot-hello.c
-WASTE_HELLO_OBJECT := $(COREUTILS_BUILD_DIR)/sysroot-hello.o
-WASTE_HELLO_WASM := $(COREUTILS_BUILD_DIR)/sysroot-hello.wasm
-WASTE_HELLO_WAT := $(COREUTILS_BUILD_DIR)/sysroot-hello.wat
-WASTE_HELLO_AUDIT := $(COREUTILS_BUILD_DIR)/sysroot-hello.audit.json
+WASTE_HELLO_OBJECT := $(REPO_ROOT)/build/engine/guest-sdk/sysroot-hello.o
+WASTE_HELLO_WASM := $(REPO_ROOT)/build/engine/guest-sdk/sysroot-hello.wasm
+WASTE_HELLO_WAT := $(REPO_ROOT)/build/engine/guest-sdk/sysroot-hello.wat
+WASTE_HELLO_AUDIT := $(REPO_ROOT)/build/engine/guest-sdk/sysroot-hello.audit.json
 
-.PHONY: wast-browser waste-libc coreutils-patch-status \
-	coreutils-provenance coreutils-sysroot \
-coreutils-crt-fixture coreutils-configure-probe coreutils-utility-probe \
-	coreutils-true-probe coreutils-false-probe coreutils-pwd-probe \
-	coreutils-echo-probe coreutils-printf-probe coreutils-basename-probe \
-	coreutils-dirname-probe coreutils-cat-probe coreutils-wc-probe coreutils-ls-probe \
-	build-coreutils coreutils-wasm coreutils-audit \
-	coreutils-package-audit coreutils-source-package \
-	gen clean
+.PHONY: wast-browser waste-libc gen clean coreutils-sysroot coreutils-crt-fixture
 
 # ---- Parser generation (delegate to engine) ----
 
@@ -354,26 +312,12 @@ waste-libc: $(LIBC_OUTPUTS)
 $(LIBC_OUTPUTS) &: $(LIBC_SOURCES)
 	$(PYTHON) $(LIBC_BUILDER) --repo-root $(abspath $(REPO_ROOT))
 
-# Stage 8A: inspect and stage the pinned coreutils source. The stager applies
-# the repository-owned patch only in the submodule, copies the patched source
-# into build/, and restores the submodule before it exits.
-coreutils-patch-status:
-	$(PYTHON) $(COREUTILS_STAGER) --repo-root $(abspath $(REPO_ROOT)) --action status
-
-coreutils-provenance:
-	$(PYTHON) $(COREUTILS_STAGER) --repo-root $(abspath $(REPO_ROOT)) \
-		--action provenance --output $(COREUTILS_BUILD_DIR)/provenance.json
-
-coreutils-stage: $(COREUTILS_STAGE_STAMP)
-
-$(COREUTILS_STAGE_STAMP): $(COREUTILS_STAGER) $(COREUTILS_PATCH)
-	$(PYTHON) $(COREUTILS_STAGER) --repo-root $(abspath $(REPO_ROOT)) \
-		--action stage --output $(COREUTILS_BUILD_DIR)
-	touch $@
-
-$(COREUTILS_CONFIGURE_SCRIPT): $(COREUTILS_STAGE_STAMP) $(COREUTILS_BOOTSTRAP)
-	WASTE_COREUTILS_BUILD_DIR=$(abspath $(COREUTILS_BUILD_DIR)) \
-		$(COREUTILS_BOOTSTRAP) --no-install
+# Guest package ownership lives in src/aux; keep aggregate compatibility targets.
+AUX_BUILD_DIR ?= $(REPO_ROOT)/build/aux
+.PHONY: coreutils-stage build-coreutils coreutils-wasm coreutils-install coreutils-source-package
+coreutils-stage build-coreutils coreutils-wasm coreutils-install coreutils-source-package:
+	$(MAKE) -C ../aux BUILD_DIR="$(abspath $(AUX_BUILD_DIR))" \
+		$(if $(filter coreutils-stage coreutils-source-package,$@),$@,$(if $(filter coreutils-install,$@),install-coreutils,coreutils))
 
 # Stage 8D: generate the freestanding target sysroot and build the startup
 # fixture through its compiler wrapper.  All outputs remain under build/.
@@ -381,16 +325,16 @@ coreutils-sysroot: $(WASTE_SYSROOT_DIR)/manifest.json
 
 $(WASTE_SYSROOT_DIR)/manifest.json: $(WASTE_SYSROOT_TOOL) $(WASTE_CRT_SOURCE) \
 		$(WASTE_SYSROOT_HEADERS)
-	mkdir -p $(COREUTILS_BUILD_DIR)
+	mkdir -p $(dir $(WASTE_CRT_OBJECT))
 	$(PYTHON) $(WASTE_SYSROOT_TOOL) --repo-root $(abspath $(REPO_ROOT)) \
 		--output $(abspath $(WASTE_SYSROOT_DIR))
 
 $(WASTE_CRT_OBJECT): $(WASTE_SYSROOT_DIR)/manifest.json $(WASTE_CRT_SOURCE)
-	mkdir -p $(COREUTILS_BUILD_DIR)
+	mkdir -p $(dir $(WASTE_CRT_OBJECT))
 	$(WASTE_SYSROOT_CC) -c $(WASTE_CRT_SOURCE) -o $@
 
 $(WASTE_HELLO_OBJECT): $(WASTE_SYSROOT_DIR)/manifest.json $(WASTE_HELLO_SOURCE)
-	mkdir -p $(COREUTILS_BUILD_DIR)
+	mkdir -p $(dir $(WASTE_CRT_OBJECT))
 	$(WASTE_SYSROOT_CC) -c $(WASTE_HELLO_SOURCE) -o $@
 
 $(WASTE_HELLO_WASM): $(WASTE_CRT_OBJECT) $(WASTE_HELLO_OBJECT)
@@ -409,54 +353,7 @@ $(WASTE_HELLO_AUDIT): $(WASTE_HELLO_WASM)
 coreutils-crt-fixture: $(WASTE_HELLO_AUDIT) $(WASTE_HELLO_WAT)
 	$(PYTHON) -c 'import json; p=json.load(open("$(WASTE_HELLO_AUDIT)")); assert p["ok"] and not p["unknown"] and not p["asyncifySymbols"]'
 
-coreutils-configure-probe: $(COREUTILS_CONFIGURE_REPORT)
-
-$(COREUTILS_CONFIGURE_REPORT): $(COREUTILS_CONFIGURE_TOOL) \
-		tools/coreutils-waste.config.site $(WASTE_SYSROOT_DIR)/manifest.json \
-		$(COREUTILS_CONFIGURE_SCRIPT)
-	$(PYTHON) $(COREUTILS_CONFIGURE_TOOL) \
-		--repo-root $(abspath $(REPO_ROOT)) \
-		--source $(abspath $(COREUTILS_BUILD_DIR)/source) \
-		--sysroot $(abspath $(WASTE_SYSROOT_DIR)) \
-		--output $(abspath $(COREUTILS_CONFIGURE_DIR))
-
-# Compile the first deliberately small upstream utility. A missing guest
-# header is an expected, machine-readable handoff to Stage 8E; an unexpected
-# compiler or linker failure remains a failed target.
-coreutils-utility-probe: $(COREUTILS_UTILITY_REPORT)
-coreutils-true-probe: $(COREUTILS_UTILITY_REPORT)
-coreutils-false-probe: $(COREUTILS_FALSE_REPORT)
-coreutils-pwd-probe: $(COREUTILS_PWD_REPORT)
-coreutils-echo-probe: $(COREUTILS_ECHO_REPORT)
-coreutils-printf-probe: $(COREUTILS_PRINTF_REPORT)
-coreutils-basename-probe: $(COREUTILS_BASENAME_REPORT)
-coreutils-dirname-probe: $(COREUTILS_DIRNAME_REPORT)
-coreutils-cat-probe: $(COREUTILS_CAT_REPORT)
-coreutils-wc-probe: $(COREUTILS_WC_REPORT)
-coreutils-ls-probe: $(COREUTILS_LS_REPORT)
-coreutils-date-probe: $(COREUTILS_DATE_REPORT)
-
-# Public Stage 8F entry point. All staged sources, sysroot files, configure
-# output, objects, reports, and linked utilities live below build/coreutils.
-COREUTILS_REPORTS := $(COREUTILS_UTILITY_REPORT) $(COREUTILS_FALSE_REPORT) \
-	$(COREUTILS_PWD_REPORT) $(COREUTILS_ECHO_REPORT) \
-	$(COREUTILS_PRINTF_REPORT) $(COREUTILS_BASENAME_REPORT) \
-	$(COREUTILS_DIRNAME_REPORT) $(COREUTILS_CAT_REPORT) $(COREUTILS_WC_REPORT) \
-	$(COREUTILS_LS_REPORT) $(COREUTILS_DATE_REPORT)
-
-$(COREUTILS_REPORTS): tools/audit-wasm-imports.py tools/shared_libc.py tools/wasm_signatures.py \
-		../libc/waste-crt.c ../vfs/lib/libc.so.wasm
-
-build-coreutils: coreutils-provenance coreutils-utility-probe coreutils-false-probe \
-		coreutils-pwd-probe coreutils-echo-probe coreutils-printf-probe \
-		coreutils-basename-probe coreutils-dirname-probe coreutils-cat-probe \
-		coreutils-wc-probe coreutils-ls-probe coreutils-date-probe
-	$(PYTHON) -c 'import json; reports=[json.load(open(p)) for p in "$(COREUTILS_REPORTS)".split()]; assert all(p["status"] == "passed" for p in reports), "coreutils utility gate failed: " + "; ".join(p["utility"] + ": " + "; ".join(p["blockers"]) for p in reports if p["status"] != "passed")'
-
-# Stable names for the sectioned build entry points documented in Stage 8H.
-coreutils-wasm: build-coreutils
-
-.PHONY: vfs-audit vfs-install-launch vfs-install-app coreutils-install vfs-tests-install vfs-tests-check
+.PHONY: vfs-audit vfs-install-launch vfs-install-app vfs-tests-install vfs-tests-check
 vfs-tests-install: waste-libc wast-browser
 	$(PYTHON) tools/build-test-corpus.py --install
 
@@ -483,79 +380,6 @@ vfs-install-launch:
 
 vfs-install-app:
 	$(PYTHON) tools/vfs.py install --component app --source $(REPO_ROOT)/src/html-rt/src
-
-# Explicit install, separate from compilation and from HTML construction.
-coreutils-install: build-coreutils coreutils-source-package
-	$(PYTHON) tools/shared_libc.py --check-imports $(foreach utility,true false pwd echo printf basename dirname cat wc ls date,$(COREUTILS_BUILD_DIR)/utility-probe/$(utility)-linked.wasm)
-	$(PYTHON) tools/vfs.py install \
-		$(foreach utility,true false pwd echo printf basename dirname cat wc ls date,--component $(utility) --source $(COREUTILS_BUILD_DIR)/utility-probe/$(utility)-linked.wasm)
-coreutils-audit: $(COREUTILS_REPORTS)
-	$(PYTHON) -c 'import json; reports=[json.load(open(p)) for p in "$(COREUTILS_REPORTS)".split()]; assert all(p["status"] == "passed" for p in reports), "coreutils audit failed"'
-
-coreutils-source-package: $(COREUTILS_SOURCE_STAMP)
-
-$(COREUTILS_SOURCE_STAMP): $(COREUTILS_SOURCE_PACKAGER) $(COREUTILS_CONFIGURE_SCRIPT) \
-		$(COREUTILS_BUILD_DIR)/provenance.json \
-		$(COREUTILS_PATCH) $(REPO_ROOT)/start.sh \
-		$(REPO_ROOT)/docs/coreutils-source-distribution.md \
-		$(COREUTILS_SOURCE_INPUTS)
-	$(PYTHON) $(COREUTILS_SOURCE_PACKAGER) \
-		--repo-root $(abspath $(REPO_ROOT)) \
-		--source $(abspath $(COREUTILS_BUILD_DIR)/source) \
-		--provenance $(abspath $(COREUTILS_BUILD_DIR)/provenance.json) \
-		--output $(abspath $(COREUTILS_SOURCE_ARCHIVE)) \
-		--mapping $(abspath $(COREUTILS_SOURCE_MAPPING))
-	touch $@
-
-coreutils-package-audit: build-coreutils coreutils-source-package $(COREUTILS_PACKAGE_AUDIT)
-	bash tools/build.sh bash
-
-$(COREUTILS_UTILITY_REPORT): $(COREUTILS_UTILITY_TOOL) $(COREUTILS_RUNTIME_TOOL) \
-		$(COREUTILS_CONFIGURE_REPORT) ../vfs/lib/libc.so.wasm
-	mkdir -p $(COREUTILS_UTILITY_DIR)
-	$(PYTHON) $(COREUTILS_UTILITY_TOOL) \
-		--repo-root $(abspath $(REPO_ROOT)) \
-		--build $(abspath $(COREUTILS_CONFIGURE_DIR)) \
-		--utility true \
-		--output $@
-
-$(COREUTILS_FALSE_REPORT): $(COREUTILS_UTILITY_TOOL) $(COREUTILS_RUNTIME_TOOL) \
-		$(COREUTILS_CONFIGURE_REPORT) ../vfs/lib/libc.so.wasm
-	mkdir -p $(COREUTILS_UTILITY_DIR)
-	$(PYTHON) $(COREUTILS_UTILITY_TOOL) \
-		--repo-root $(abspath $(REPO_ROOT)) \
-		--build $(abspath $(COREUTILS_CONFIGURE_DIR)) \
-		--utility false \
-		--output $@
-
-$(COREUTILS_PWD_REPORT): $(COREUTILS_UTILITY_TOOL) $(COREUTILS_RUNTIME_TOOL) \
-		$(COREUTILS_CONFIGURE_REPORT) ../vfs/lib/libc.so.wasm
-	mkdir -p $(COREUTILS_UTILITY_DIR)
-	$(PYTHON) $(COREUTILS_UTILITY_TOOL) \
-		--repo-root $(abspath $(REPO_ROOT)) \
-		--build $(abspath $(COREUTILS_CONFIGURE_DIR)) \
-		--utility pwd \
-		--output $@
-
-define COREUTILS_PROBE_RULE
-$($(1)_REPORT): $$(COREUTILS_UTILITY_TOOL) $$(COREUTILS_RUNTIME_TOOL) \
-		$$(COREUTILS_CONFIGURE_REPORT) ../vfs/lib/libc.so.wasm
-	mkdir -p $$(COREUTILS_UTILITY_DIR)
-	$$(PYTHON) $$(COREUTILS_UTILITY_TOOL) \
-		--repo-root $$(abspath $$(REPO_ROOT)) \
-		--build $$(abspath $$(COREUTILS_CONFIGURE_DIR)) \
-		--utility $(2) \
-		--output $$@
-endef
-
-$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_ECHO,echo))
-$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_PRINTF,printf))
-$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_BASENAME,basename))
-$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_DIRNAME,dirname))
-$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_CAT,cat))
-$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_WC,wc))
-$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_LS,ls))
-$(eval $(call COREUTILS_PROBE_RULE,COREUTILS_DATE,date))
 
 clean:
 	rm -f $(WAST_WASM_TARGET) $(ENGINE_OBJS) $(RT_OBJS) \

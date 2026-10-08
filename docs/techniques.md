@@ -607,52 +607,50 @@ prompt.
 
 ## Coreutils Cross-Build and Distribution
 
-Keep every submodule read-only. Repository changes belong in
-`submodules/coreutils-waste.patch`; copy source into `build/coreutils/`, apply
-the patch to that staged copy, and generate `configure` there with
-`submodules/bootstrap-coreutils.sh`. Configure output, the target sysroot,
-object files, linked images, reports, and corresponding-source artifacts are
-generated outputs and must remain below `build/`. The existing staging helper
-still temporarily applies the patch to the submodule and must be refactored
-before use under this policy; see [the submodule policy](submodule-policy.md).
-
-Build utilities against the WASTE sysroot and guest libc, with the application
-and libc sharing one process memory. Keep configure answers explicit and
-machine-readable. Each accepted utility needs a report that records its source
-objects, relink inputs, final image, import audit, and blockers. Reject unknown
-imports and every Asyncify/unwind/rewind symbol; do not make a utility pass by
-silently expanding a JavaScript import surface.
-
-Use the stable build layers:
+Coreutils commands build through `src/aux/Makefile`. Each command directory
+records its upstream objects in `sources.mk`; shared staging, configuration,
+private compatibility headers and linking rules live in `src/aux/coreutils`.
+The repository patch is `src/aux/coreutils/coreutils-waste.patch`.
+Stage the read-only upstream checkout, including Gnulib, under
+`build/aux/coreutils/source` before patching or bootstrapping. Configure and
+compile under `build/aux/coreutils/configure`. Public headers come directly
+from the mounted SDK; package-private gnulib/SELinux headers stay in the aux
+profile. No build step writes into a submodule. See
+[the submodule policy](submodule-policy.md).
 
 ```sh
-make -C src/html-rt BUILD_DIR=../../build/html-rt coreutils-wasm
-make -C src/html-rt BUILD_DIR=../../build/html-rt coreutils-audit
-make -C src/html-rt BUILD_DIR=../../build/html-rt coreutils-package-audit
+make -C src/aux -j4 coreutils       # build all selected commands
+make -C src/aux cat                # build one command
+make -C src/aux install-cat        # explicitly install /usr/bin/cat
+make -C src/aux install-coreutils  # explicitly install all selected commands
+make -C src/aux coreutils-source-package
 ./start.sh --html-bash
 ```
 
-Install accepted utility images as extensionless `/bin/NAME` and
-`/usr/bin/NAME` VFS files. Install `/bin/wat` and `/bin/wast` as engine-owned
-handlers, and retain license, provenance, interpreter, and source-package
-metadata under `/usr/share`. The offline tar uses normalized ordering,
-ownership, and header timestamps for reproducibility; a separate manifest
-carries source mtimes into guest `stat`, while engine-created namespace nodes
-receive the engine image build timestamp.
+One upstream Make invocation owns shared generators, objects and archives.
+A separate archive copy removes gnulib implementations that conflict with the
+guest ABI; final utility links can run concurrently. Images are written to
+`build/aux/NAME/NAME.wasm`. Binaryen strips debug data, then the shared
+`shared_libc.py` helper routes exact matching function signatures to `libc`.
+Memory/table and kernel imports remain runtime bindings. Installation checks
+actual provider signatures and serializes VFS publication; it does not require
+stored source hashes or package approval reports. Generic SDK, ABI and VFS
+Python helpers remain shared infrastructure.
 
-GPL distribution is a build gate, not a release note added afterward. The
-corresponding-source bundle must identify the pinned source commit, managed
-patch, generated configure tree, sysroot/runtime sources, build instructions,
-notices, and every shipped utility. Audit the package-to-source mapping and
-publish its digest with the artifact. See
-[coreutils-source-distribution.md](coreutils-source-distribution.md) for the
-release procedure.
+Install commands as extensionless `/usr/bin/NAME` files; `/bin` resolves to
+`/usr/bin`. Keep the engine-owned `wat` and `wast` handlers. Packaging reads the
+current VFS tree, with normalized archive headers and separately recorded guest
+mtimes. Build/install actions are explicit so packaging preserves local edits.
 
-Retain both focused utility tests and one aggregate browser matrix. Focused
-tests locate an ABI or utility regression; the aggregate test proves that all
-accepted utilities plus `wat` and `wast` execute sequentially in one Bash
-lifetime with correct statuses, representative output, a later prompt, and a
-clean exit from the same self-contained `file://` package.
+Generate corresponding source explicitly for releases and publish it beside
+the browser artifact. The bundle records the actual staged source, build
+inputs, source revision and utility digests. See
+[coreutils-source-distribution.md](coreutils-source-distribution.md).
+
+Retain focused utility tests and an aggregate session matrix across native and
+packaged browser workers. The matrix verifies all selected commands plus `wat`
+and `wast` sequentially in one Bash lifetime, including statuses, output,
+redirection, a later prompt and clean exit. It does not need a browser GUI.
 
 ## Fast Native Testing
 

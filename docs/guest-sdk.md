@@ -71,9 +71,9 @@ directory or implicit Clang resource path is permitted. Compiler predefined
 types/limits, builtin `va_list`, attributes, and `push_macro`/`pop_macro` remain
 explicit requirements for a future compatible parser/compiler.
 
-`waste-coreutils-clang` adds the separate gnulib/SELinux compatibility profile
-from `src/html-rt/profiles/coreutils/include`, including pinned generated
-gnulib templates. Those package-only declarations are not mounted public APIs.
+`src/aux/coreutils/cc.sh` adds the separate gnulib/SELinux compatibility
+profile from `src/aux/coreutils/include`, plus Gnulib templates staged under
+`build/aux/coreutils/include`. Those package-only declarations are not mounted public APIs.
 The normal `waste-wasm-clang` wrapper does not force-include them. Implementation
 builds may still use their own generated/private configuration headers.
 Gnulib locale-object layouts and UTF-32 helpers live only in that profile;
@@ -139,3 +139,18 @@ header compilation, layouts and provider compatibility without comparing a
 stored report or source hashes. Rebuild browser packages after file changes.
 The three standard stream globals require CRT startup; other data addresses require normal link
 relocations, not wasm-ld's unresolved-data address-zero fallback.
+
+## Guest permission changes
+
+GNU Coreutils `chmod` is built with `make -C src/aux chmod` and installed with
+`make -C src/aux install-chmod`. Shared libc delegates `openat`, `fstatat` and
+`fchmodat` through versioned kernel imports. Directory-relative paths use the
+open directory without changing process cwd; absolute paths ignore dirfd.
+`fdopendir` takes ownership of a directory descriptor only on success.
+`umask` controls file creation and GNU chmod's omitted-who symbolic modes.
+Numeric and symbolic permissions, special bits, `--reference` and recursive
+traversal update the engine-owned guest namespace for the current session.
+They do not change host/source permissions or persist into the packaged page.
+`AT_SYMLINK_NOFOLLOW` works for ordinary files; changing symlink permissions
+returns `EOPNOTSUPP`. `fchmod`, ownership changes and full POSIX pathname
+conformance remain outside this supported subset.

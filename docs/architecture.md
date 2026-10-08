@@ -82,7 +82,10 @@ Guest public headers are authored in `src/vfs/usr/include`, with selected,
 licensed compiler-support snapshots in `usr/lib/waste/cc/include`. Sysroot and
 guest libc builds consume this same mounted tree without host header fallback.
 Private engine/native/libc headers stay beside their implementations; package
-compatibility shims remain separate named build profiles. SDK origin metadata
+compatibility shims remain separate named build profiles. Coreutils owns its
+private headers and shared Make rules in `src/aux/coreutils`; per-command
+aux directories select upstream objects, and generated source and binaries
+live under `build/aux`. SDK origin metadata
 is informational; explicit checks inspect current declarations, provider
 signatures and unavailable capabilities. See `guest-sdk.md`.
 
