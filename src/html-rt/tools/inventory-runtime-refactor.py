@@ -19,7 +19,7 @@ import time
 FRONTEND = Path("src/html-rt/src")
 LEGACY_PATHS = (
     "src/html-rt/src/bash", "src/html-rt/src/tests",
-    "src/html-rt/src/shared", "src/libc/include",
+    "src/html-rt/src/shared", "src/aux/libc/include",
     "src/engine/lib/include", "src/engine/include", "lib/include/",
     "../shared/", "SRC_DIR", "PAGE_DIR", "HEADER_ROOT",
     '"bash"', '"shared"', '"tests"',
@@ -52,7 +52,7 @@ def frontend_destination(relative: Path) -> tuple[str, str]:
     if name == "waste-wast.wasm":
         return "build/html-rt/waste-wast.wasm", "host-engine"
     if name == "launch.wast":
-        return "build/html-rt/bash-runtime.wast", "runtime-bootstrap"
+        return "src/aux/bash/launch.wast", "runtime-bootstrap"
     if name == "payload.json":
         return "build/html-rt/tests/payload.json", "generated-test-payload"
     if name == "tarball.js":
@@ -124,7 +124,8 @@ def collect(root: Path) -> dict:
     module_spec.loader.exec_module(generator)
     roots = (("submodules/wasm-spec/test", "wasm-spec", ""),
              ("tests/diy-posix-test", "diy-posix-test", "diy-posix-test"),
-             ("build/html-rt/waste-libc/tests", "libc-test", "libc-test"))
+             ("src/aux/libc/tests", "aux", "aux/libc"),
+             ("src/system-tests/libc", "system", "system/libc"))
     payload_path = root / "build/html-rt/tests/payload.json"
     payload = json.loads(payload_path.read_text())["tests"] if payload_path.is_file() else []
     packaged = {test["path"]: test for test in payload}
@@ -146,7 +147,7 @@ def collect(root: Path) -> dict:
                            "packaged_spec": spec,
                            "spec_sha256": hashlib.sha256(json.dumps(
                                spec, sort_keys=True).encode()).hexdigest(),
-                           "destination": "src/vfs/root/waste/tests/" + entry["relative"]})
+                           "destination": "src/vfs/root/test/" + entry["relative"]})
 
     consumers = []
     files = subprocess.run(["rg", "--files", "src", "tests", "docs",
@@ -201,8 +202,8 @@ def collect(root: Path) -> dict:
                         "native": native_imports, "browser": browser_imports,
                         "browser_only": sorted(set(browser_imports) - set(native_imports))},
             "bootstrap": [fingerprint(root, root / name) for name in (
-                "examples/bash.wat", "build/html-rt/bash-runtime.wast",
-                "build/html-rt/waste-wast.wasm", "build/cli-rt/waste-cli")],
+                "src/vfs/usr/bin/bash", "src/aux/bash/launch.wast",
+                "build/html-rt/waste-wast.wasm", "build/cli-rt/wast")],
             "build_rules": [fingerprint(root, root / name) for name in (
                 "start.sh", "src/engine/Makefile", "src/cli-rt/Makefile",
                 "src/html-rt/Makefile", "src/html-rt/tools/build.sh")],
@@ -216,7 +217,7 @@ def collect(root: Path) -> dict:
                 ("submodules/coreutils/COPYING",
                  "/usr/share/licenses/coreutils/COPYING"))],
             "test_support": [fingerprint(root, path) for directory in (
-                "tests/diy-posix-test", "tests/libc-test")
+                "tests/diy-posix-test", "src/aux/libc/tests", "src/system-tests")
                 for path in sorted((root / directory).rglob("*"))
                 if path.is_file() and path.suffix != ".wast"],
             "installed_vfs": installed_vfs,
@@ -228,7 +229,7 @@ def measure(root: Path, output: Path, report: dict, selection: str | None) -> No
     results_dir.mkdir(parents=True, exist_ok=True)
     runs = report.get("runs", []) if selection else []
     commands = [("native-core-" + Path(test["source"]).stem,
-                 [str(root / "build/cli-rt/waste-cli"), test["source"]], 60)
+                 [str(root / "build/cli-rt/wast"), "--json", test["source"]], 60)
                 for test in report["corpus"] if test["group"] == "core"]
     commands += [("bash-" + str(index),
                   ["node", "tests/c-engine-bash-browser-runtime.cjs",

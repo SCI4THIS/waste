@@ -1,6 +1,6 @@
 ---
 name: add-aux-binary
-description: Add or migrate a guest Wasm command into src/aux, with build and install Make targets, start.sh integration, and native/browser verification.
+description: Add or migrate a guest Wasm command into src/aux, with build, install and test Make targets, package-owned WAST tests and start.sh integration.
 ---
 
 # Add an aux binary
@@ -27,19 +27,26 @@ Create `src/aux/NAME/` containing the repository-owned inputs for the command:
 
 Put shared package support beside the commands that use it, as Coreutils does.
 Keep private compatibility headers in the package. Public guest declarations
-belong in `src/vfs/usr/include`; guest libc implementations belong in `src/libc`.
+belong in `src/vfs/usr/include`; guest libc implementations belong in `src/aux/libc`.
 Shared kernel semantics belong in `src/engine` and platform adapters in their
 runtime directories.
 
-## Two required Make targets
+## Three required Make targets
 
-Expose both targets through `src/aux/Makefile`, directly or via an included
+Expose all three targets through `src/aux/Makefile`, directly or via an included
 package Makefile:
 
 | Target | Required behavior |
 | --- | --- |
 | `NAME` | Build `build/aux/NAME/NAME.wasm`, without installing it. |
 | `install-NAME` | Depend on `NAME`, check its library imports, then explicitly install the executable at `src/vfs/usr/bin/NAME`. |
+| `test-NAME` | Run the package’s authored `.wast` tests through `/bin/wast --verbose` inside Bash. Return nonzero when any assertion fails. |
+
+Shared-library packages use `build/aux/NAME/NAME.so.wasm` instead. Install
+libraries with mode 0644 at their explicit `/lib` and `/usr/lib` paths, rather
+than creating a command under `/usr/bin`; follow `src/aux/libc/libc.mk` or
+`src/aux/libncurses/libncurses.mk`. libc additionally owns its private
+interpreter support, shared guest CRT and shared-import tools.
 
 Declare the command targets phony and make the build target depend on a real
 artifact. Track relevant sources, private/public headers, patches, shared
@@ -53,7 +60,7 @@ without host-header fallback. The binary needs the `_start` entrypoint; choose
 the CRT variant matching its `main` signature. Reuse shared guest libc instead
 of embedding another libc implementation. Attach library namespaces through
 `libc-imports.h` or package-local typed declarations, and check imports against
-the actual provider with `shared_libc.py --check-imports`.
+the actual provider with `src/aux/libc/tools/shared_libc.py --check-imports`.
 
 Preserve an upstream package's established ABI/linking profile when migrating
 it. In particular, Coreutils links raw imports consistently before the shared
@@ -77,7 +84,7 @@ current VFS tree and must not build or reinstall the command.
 - **Wizard:** Add `NAME` to `AUX_UTILITIES` in `start.sh`. The aux menu and
   build-all loop use this array. Keep `build_single_aux` delegating to
   `make -C src/aux install-NAME`. Update its prerequisite case: an ordinary
-  Clang command belongs with `ldd|upload|download`, rather than falling into the
+  Clang package belongs with `libc|ldd|upload|download`, rather than falling into the
   Coreutils-specific `patch`/`wasm-opt` branch. Add package-specific prerequisites
   when needed. Adjust `aux_staged_path` and the displayed output path if the
   destination differs from the ordinary command convention.
@@ -86,22 +93,45 @@ current VFS tree and must not build or reinstall the command.
   Remove obsolete scripts and profiles only after finding and updating their
   callers and preserving any shared functionality still in use.
 - **Documentation and tests:** Update package instructions and relevant runtime
-  scenarios. Keep authored fixtures under `tests`; refresh installed test
-  snapshots explicitly when changing a mounted fixture.
+  scenarios. Keep all package-specific test sources and instructions under
+  `src/aux/NAME/`; refresh installed snapshots explicitly when changing them.
+
+## Package tests
+
+Keep functional test logic entirely in authored `.wast` files under
+`src/aux/NAME/tests/`. Store package-specific test instructions and supporting
+inputs beside those files. Load the installed binary or library; do not generate
+an embedded copy of libc or substitute host implementations. For a command,
+invoke `/usr/bin/NAME` explicitly so a Bash builtin cannot mask it.
+
+Use `src/aux/libc/tests` and `test-libc` as the shared-library pattern. Tests
+import Bash’s `waste-runtime` process memory/table and the loaded `libc` provider.
+Make `test-NAME` depend on `install-NAME` and `aux-test-runner`; include
+`src/aux/test.mk` for that runner prerequisite.
+The common `src/aux/run-wast-tests.sh` stages authored files into `/tmp` and feeds
+commands to the installed Bash through `build/cli-rt/wasm`, using explicit
+`--stage-file GUEST MODE HOST` arguments; it carries no assertion logic. `WASM_RUNNER` can
+select `build/cli-rt/wasm-sanitize`. Save generated results under `build/`.
+
+`/bin/wast --verbose FILE` reports `.` for a passing result and `F` for a failure,
+then prints totals and the first failure. Exit status is zero only on success.
+Reports use guest stdout, so shell redirection, pipelines and `download` work.
+Publish snapshots with `vfs-tests-install`, then run the same authored tests in
+`bash.html` at `/root/test/aux/NAME/FILE.wast`.
+
+Tests of interactions between packages, the kernel, runtimes, or the compiler
+SDK belong under `src/system-tests/`, with system test instructions and inputs
+there. Do not make a package test own a copied SDK/sysroot or a generated libc
+fixture profile. Preserve necessary compiler/declaration boundary checks as
+system checks; runtime assertions belong in WAST.
 
 ## Verify the result
 
-Build `NAME`, build it again to check caching, and run `install-NAME`. Confirm
-the installed file matches the built artifact and has executable permissions.
-Run representative success and failure cases in native Bash and the packaged
-browser worker/page, including arguments, output and exit status. Invoke
-`/usr/bin/NAME` explicitly so a Bash builtin cannot mask the binary. Use
-`ldd /usr/bin/NAME` when checking shared-library dependencies.
-
-Reuse relevant guest-session scenarios and native sanitizer checks. Rebuild
-`bash.html` for browser checks; use existing worker checks or manual offline
-page testing, without requiring a GUI browser launch for every change. Save
-verification logs under `build/engine/logs/`. Run `bash -n start.sh`, bytecode
-checks for changed Python helpers, and `git diff --check`. Verify submodule
-contents were not changed by staging/building. Report which targets, callers,
-installation paths and runtime checks were completed.
+Build `NAME`, repeat to check caching, run `install-NAME` and `test-NAME`.
+Confirm the installed artifact matches the build, with mode 0755 for commands
+or 0644 for shared libraries. Rebuild `bash.html` and run the same WAST tests
+through its Bash shell/worker; a GUI launch is not required for every change.
+Use existing native sanitizer and system checks when shared semantics change.
+Keep verification logs under `build/engine/logs/`. Run `bash -n start.sh`,
+bytecode checks for changed Python helpers, and `git diff --check`; verify that
+submodule contents stayed unchanged. Report the completed targets and checks.

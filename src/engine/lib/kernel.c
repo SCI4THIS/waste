@@ -19,6 +19,7 @@ static posix_ofd *ofd_alloc(posix_ofd_kind kind) {
     if (!ofd) return NULL;
     ofd->kind = kind;
     ofd->ref_count = 1;
+    ofd->input_handle = ofd->output_handle = -1;
     return ofd;
 }
 
@@ -36,6 +37,7 @@ static void ofd_release(posix_ofd *ofd) {
     if (!ofd || --ofd->ref_count > 0) return;
     switch (ofd->kind) {
     case POSIX_OFD_TERMINAL:
+    case POSIX_OFD_STREAM:
         free(ofd->terminal.input);
         break;
     case POSIX_OFD_REGULAR:
@@ -613,6 +615,68 @@ int posix_kernel_path_read_snapshot(posix_kernel *kernel,
 
 /* --- Lifecycle --- */
 
+/* Attach stdio without replacing the kernel or its mounted filesystem. */
+int posix_kernel_attach_terminal(posix_kernel *k) {
+    if (!k) return -POSIX_EINVAL;
+    if (k->fds[0].ofd || k->fds[1].ofd || k->fds[2].ofd) return -POSIX_EBUSY;
+    posix_ofd *tty = ofd_alloc(POSIX_OFD_TERMINAL);
+    if (!tty) return -POSIX_ENOMEM;
+    tty->terminal.input = malloc(POSIX_TERMINAL_INPUT_CAPACITY);
+    if (!tty->terminal.input) { free(tty); return -POSIX_ENOMEM; }
+    tty->terminal.input_length = 0;
+    tty->terminal.input_capacity = POSIX_TERMINAL_INPUT_CAPACITY;
+    tty->terminal.eof = 0;
+    /* Preserve the byte-queue contract used by existing native probes.
+     * Interactive libc will select canonical/echo mode through
+     * tcsetattr; keeping creation raw makes the kernel useful before a
+     * process has installed its terminal policy. */
+    tty->terminal.termios.iflag = 0;
+    tty->terminal.termios.lflag = 0;
+    tty->terminal.termios.cc[POSIX_TERMIOS_VINTR] = 3;
+    tty->terminal.termios.cc[POSIX_TERMIOS_VEOF] = 4;
+    tty->terminal.termios.cc[POSIX_TERMIOS_VERASE] = 127;
+    tty->terminal.termios.cc[POSIX_TERMIOS_VKILL] = 21;
+    tty->terminal.termios.cc[POSIX_TERMIOS_VMIN] = 1;
+    tty->terminal.termios.cc[POSIX_TERMIOS_VTIME] = 0;
+    tty->terminal.winsize.rows = 24;
+    tty->terminal.winsize.columns = 80;
+    tty->terminal.foreground_pgid = 1;
+    /* fds 0, 1, 2 share the same terminal OFD */
+    tty->ref_count = 3;
+    k->fds[0].ofd = tty;
+    k->fds[1].ofd = tty;
+    k->fds[2].ofd = tty;
+    return 0;
+}
+
+int posix_kernel_attach_stream(posix_kernel *k, int fd, int terminal,
+                                int input_handle, int output_handle,
+                                uint32_t mode) {
+    if (!k || !fd_valid(fd) || (input_handle < 0 && output_handle < 0))
+        return -POSIX_EINVAL;
+    if (k->fds[fd].ofd) return -POSIX_EBUSY;
+    posix_ofd *ofd = ofd_alloc(terminal ? POSIX_OFD_TERMINAL : POSIX_OFD_STREAM);
+    if (!ofd) return -POSIX_ENOMEM;
+    ofd->input_handle = input_handle;
+    ofd->output_handle = output_handle;
+    ofd->stream_mode = mode;
+    if (input_handle >= 0) {
+        ofd->terminal.input = malloc(POSIX_TERMINAL_INPUT_CAPACITY);
+        if (!ofd->terminal.input) { free(ofd); return -POSIX_ENOMEM; }
+        ofd->terminal.input_capacity = POSIX_TERMINAL_INPUT_CAPACITY;
+    }
+    ofd->terminal.termios.cc[POSIX_TERMIOS_VINTR] = 3;
+    ofd->terminal.termios.cc[POSIX_TERMIOS_VEOF] = 4;
+    ofd->terminal.termios.cc[POSIX_TERMIOS_VERASE] = 127;
+    ofd->terminal.termios.cc[POSIX_TERMIOS_VKILL] = 21;
+    ofd->terminal.termios.cc[POSIX_TERMIOS_VMIN] = 1;
+    ofd->terminal.winsize.rows = 24;
+    ofd->terminal.winsize.columns = 80;
+    ofd->terminal.foreground_pgid = 1;
+    k->fds[fd].ofd = ofd;
+    return 0;
+}
+
 posix_kernel *posix_kernel_create(int interactive) {
     posix_kernel *k = calloc(1, sizeof(posix_kernel));
     if (!k) return NULL;
@@ -636,34 +700,9 @@ posix_kernel *posix_kernel_create(int interactive) {
         return NULL;
     }
 
-    if (interactive) {
-        posix_ofd *tty = ofd_alloc(POSIX_OFD_TERMINAL);
-        if (!tty) { posix_shm_namespace_release(k->shm_namespace); free(k); return NULL; }
-        tty->terminal.input = malloc(POSIX_TERMINAL_INPUT_CAPACITY);
-        if (!tty->terminal.input) { free(tty); posix_shm_namespace_release(k->shm_namespace); free(k); return NULL; }
-        tty->terminal.input_length = 0;
-        tty->terminal.input_capacity = POSIX_TERMINAL_INPUT_CAPACITY;
-        tty->terminal.eof = 0;
-        /* Preserve the byte-queue contract used by existing native probes.
-         * Interactive libc will select canonical/echo mode through
-         * tcsetattr; keeping creation raw makes the kernel useful before a
-         * process has installed its terminal policy. */
-        tty->terminal.termios.iflag = 0;
-        tty->terminal.termios.lflag = 0;
-        tty->terminal.termios.cc[POSIX_TERMIOS_VINTR] = 3;
-        tty->terminal.termios.cc[POSIX_TERMIOS_VEOF] = 4;
-        tty->terminal.termios.cc[POSIX_TERMIOS_VERASE] = 127;
-        tty->terminal.termios.cc[POSIX_TERMIOS_VKILL] = 21;
-        tty->terminal.termios.cc[POSIX_TERMIOS_VMIN] = 1;
-        tty->terminal.termios.cc[POSIX_TERMIOS_VTIME] = 0;
-        tty->terminal.winsize.rows = 24;
-        tty->terminal.winsize.columns = 80;
-        tty->terminal.foreground_pgid = 1;
-        /* fds 0, 1, 2 share the same terminal OFD */
-        tty->ref_count = 3;
-        k->fds[0].ofd = tty;
-        k->fds[1].ofd = tty;
-        k->fds[2].ofd = tty;
+    if (interactive && posix_kernel_attach_terminal(k)) {
+        posix_kernel_destroy(k);
+        return NULL;
     }
     k->process_group_id = 1;
     return k;
@@ -699,6 +738,7 @@ posix_kernel *posix_kernel_clone(const posix_kernel *source) {
     for (int fd = 0; fd < POSIX_KERNEL_FD_MAX; fd++) {
         const posix_ofd *source_ofd = source->fds[fd].ofd;
         if (!source_ofd) continue;
+        clone->fds[fd].cloexec = source->fds[fd].cloexec;
         posix_ofd *shared = (posix_ofd *)source_ofd;
         if (shared->kind == POSIX_OFD_REGULAR) {
             ptrdiff_t index = shared->regular.node - source->path_nodes;
@@ -891,6 +931,13 @@ int posix_kernel_signal_raise(posix_kernel *kernel, int signal) {
     if (!kernel || !signal_valid(signal)) return -POSIX_EINVAL;
     if (kernel->signal_disposition[signal] == POSIX_SIGNAL_IGNORE)
         return 0;
+    /* Default notifications do not interrupt a syscall or terminate a process.
+     * Stop/continue scheduling is not implemented. */
+    if (kernel->signal_disposition[signal] == POSIX_SIGNAL_DEFAULT) {
+        if (signal == 17 || signal == 18 || signal == 23 || signal == POSIX_SIGWINCH)
+            return 0;
+        if (signal >= 19 && signal <= 22) return -POSIX_ENOSYS;
+    }
     signal_bit_set(&kernel->pending_signals, signal);
     return 0;
 }
@@ -1023,6 +1070,41 @@ static void route_terminal_signals(posix_kernel *kernel) {
     }
 }
 
+int posix_kernel_signal_interrupt(posix_kernel *kernel) {
+    if (!kernel) return 0;
+    route_terminal_signals(kernel);
+    int signal = first_unmasked_pending(kernel);
+    if (!signal) return 0;
+    signal_bit_clear(&kernel->pending_signals, signal);
+    kernel->delivered_signal = signal;
+    posix_kernel_cancel_wait(kernel);
+    return -POSIX_EINTR;
+}
+
+int posix_kernel_signal_default_pending(posix_kernel *kernel) {
+    if (!kernel) return 0;
+    route_terminal_signals(kernel);
+    for (int signal = 1; signal <= POSIX_SIGNAL_MAX; signal++)
+        if (signal_bit_test(&kernel->pending_signals, signal) &&
+            !signal_bit_test(&kernel->signal_mask, signal) &&
+            kernel->signal_disposition[signal] == POSIX_SIGNAL_DEFAULT)
+            return signal;
+    return 0;
+}
+
+void posix_kernel_signal_exec(posix_kernel *kernel) {
+    for (int signal = 1; signal <= POSIX_SIGNAL_MAX; signal++) {
+        if (kernel->signal_disposition[signal] != POSIX_SIGNAL_HANDLER) continue;
+        kernel->signal_disposition[signal] = POSIX_SIGNAL_DEFAULT;
+        kernel->signal_handlers[signal] = POSIX_SIG_DFL;
+        memset(&kernel->signal_action_masks[signal], 0, sizeof(posix_sigset));
+        kernel->signal_action_flags[signal] = 0;
+        if (signal == 17 || signal == 18 || signal == 23 || signal == POSIX_SIGWINCH)
+            signal_bit_clear(&kernel->pending_signals, signal);
+    }
+    kernel->delivered_signal = 0;
+}
+
 void posix_kernel_cancel_wait(posix_kernel *kernel) {
     if (!kernel) return;
     if (kernel->wait.has_signal_mask)
@@ -1103,6 +1185,12 @@ int posix_kernel_query_readiness(posix_kernel *kernel, int fd) {
 
     int mask = 0;
     switch (ofd->kind) {
+    case POSIX_OFD_STREAM:
+        if (ofd->input_handle >= 0 &&
+            (ofd->terminal.input_length || ofd->terminal.eof)) mask |= POSIX_POLL_IN;
+        if (ofd->terminal.eof) mask |= POSIX_POLL_HUP;
+        if (ofd->output_handle >= 0) mask |= POSIX_POLL_OUT;
+        break;
     case POSIX_OFD_TERMINAL:
         if (ofd->terminal.eof || ofd->terminal.input_length > 0) {
             int readable = !(ofd->terminal.termios.lflag & POSIX_TERMIOS_LFLAG_ICANON);
@@ -1115,7 +1203,8 @@ int posix_kernel_query_readiness(posix_kernel *kernel, int fd) {
         }
         if (ofd->terminal.eof)
             mask |= POSIX_POLL_HUP;
-        mask |= POSIX_POLL_OUT; /* terminal output is always ready */
+        if (!ofd->stream_mode || ofd->output_handle >= 0)
+            mask |= POSIX_POLL_OUT; /* terminal output is always ready */
         break;
     case POSIX_OFD_PIPE_READ:
         if (ofd->pipe->length > 0)
@@ -1147,13 +1236,21 @@ int posix_kernel_query_readiness(posix_kernel *kernel, int fd) {
 
 int posix_kernel_terminal_enqueue(posix_kernel *kernel, int fd,
                                   const uint8_t *data, int length) {
+    return posix_kernel_terminal_enqueue_echo(kernel, fd, data, length, NULL, NULL);
+}
+
+int posix_kernel_terminal_enqueue_echo(posix_kernel *kernel, int fd,
+    const uint8_t *data, int length, posix_terminal_echo_fn echo, void *context) {
     if (!kernel || !fd_valid(fd)) return -POSIX_EINVAL;
     if (!data || length < 0) return -POSIX_EINVAL;
     posix_ofd *ofd = kernel->fds[fd].ofd;
     if (!ofd) return -POSIX_EBADF;
-    if (ofd->kind != POSIX_OFD_TERMINAL) return -POSIX_EINVAL;
+    if (ofd->kind != POSIX_OFD_TERMINAL && ofd->kind != POSIX_OFD_STREAM)
+        return -POSIX_EINVAL;
+    if (ofd->stream_mode && ofd->input_handle < 0) return -POSIX_EBADF;
 
     int avail = ofd->terminal.input_capacity - ofd->terminal.input_length;
+    int echoing = echo && (ofd->terminal.termios.lflag & POSIX_TERMIOS_LFLAG_ECHO);
     for (int i = 0; i < length && avail > 0; i++) {
         uint8_t byte = data[i];
         if ((ofd->terminal.termios.lflag & POSIX_TERMIOS_LFLAG_ISIG) &&
@@ -1164,6 +1261,7 @@ int posix_kernel_terminal_enqueue(posix_kernel *kernel, int fd,
             else
                 signal_bit_set(&ofd->terminal.pending_signals, 2);
             avail = ofd->terminal.input_capacity;
+            if (echoing) echo(context, fd, (const uint8_t *)"^C\n", 3);
             continue;
         }
         if (ofd->terminal.termios.lflag & POSIX_TERMIOS_LFLAG_ICANON) {
@@ -1171,15 +1269,19 @@ int posix_kernel_terminal_enqueue(posix_kernel *kernel, int fd,
                 byte = '\n';
             if (byte == ofd->terminal.termios.cc[POSIX_TERMIOS_VERASE] || byte == 8) {
                 if (ofd->terminal.input_length > 0 &&
-                    ofd->terminal.input[ofd->terminal.input_length - 1] != '\n')
+                    ofd->terminal.input[ofd->terminal.input_length - 1] != '\n') {
                     ofd->terminal.input_length--;
+                    if (echoing) echo(context, fd, (const uint8_t *)"\b \b", 3);
+                }
                 avail = ofd->terminal.input_capacity - ofd->terminal.input_length;
                 continue;
             }
             if (byte == ofd->terminal.termios.cc[POSIX_TERMIOS_VKILL]) {
                 while (ofd->terminal.input_length > 0 &&
-                       ofd->terminal.input[ofd->terminal.input_length - 1] != '\n')
+                       ofd->terminal.input[ofd->terminal.input_length - 1] != '\n') {
                     ofd->terminal.input_length--;
+                    if (echoing) echo(context, fd, (const uint8_t *)"\b \b", 3);
+                }
                 avail = ofd->terminal.input_capacity - ofd->terminal.input_length;
                 continue;
             }
@@ -1191,6 +1293,7 @@ int posix_kernel_terminal_enqueue(posix_kernel *kernel, int fd,
             }
         }
         ofd->terminal.input[ofd->terminal.input_length++] = byte;
+        if (echoing) echo(context, fd, &byte, 1);
         avail--;
     }
     return 0;
@@ -1200,7 +1303,8 @@ int posix_kernel_terminal_signal_eof(posix_kernel *kernel, int fd) {
     if (!kernel || !fd_valid(fd)) return -POSIX_EINVAL;
     posix_ofd *ofd = kernel->fds[fd].ofd;
     if (!ofd) return -POSIX_EBADF;
-    if (ofd->kind != POSIX_OFD_TERMINAL) return -POSIX_EINVAL;
+    if (ofd->kind != POSIX_OFD_TERMINAL && ofd->kind != POSIX_OFD_STREAM)
+        return -POSIX_EINVAL;
     ofd->terminal.eof = 1;
     return 0;
 }
@@ -1681,13 +1785,32 @@ int posix_kernel_read(posix_kernel *kernel, int fd, void *buf, int count) {
     if (!ofd) return -POSIX_EBADF;
 
     switch (ofd->kind) {
+    case POSIX_OFD_STREAM: {
+        if (ofd->input_handle < 0) return -POSIX_EBADF;
+        int n = ofd->terminal.input_length;
+        if (!n) {
+            if (ofd->terminal.eof) return 0;
+            if (posix_kernel_signal_interrupt(kernel)) return -POSIX_EINTR;
+            posix_kernel_wait_read(kernel, fd);
+            return -POSIX_EAGAIN;
+        }
+        if (n > count) n = count;
+        memcpy(buf, ofd->terminal.input, (size_t)n);
+        ofd->terminal.input_length -= n;
+        memmove(ofd->terminal.input, ofd->terminal.input + n,
+                (size_t)ofd->terminal.input_length);
+        posix_kernel_cancel_wait(kernel);
+        return n;
+    }
     case POSIX_OFD_TERMINAL: {
+        if (ofd->stream_mode && ofd->input_handle < 0) return -POSIX_EBADF;
         if (ofd->terminal.input_length == 0) {
             if (ofd->terminal.eof) return 0;
             if (!(ofd->terminal.termios.lflag & POSIX_TERMIOS_LFLAG_ICANON) &&
                 ofd->terminal.termios.cc[POSIX_TERMIOS_VMIN] == 0 &&
                 ofd->terminal.termios.cc[POSIX_TERMIOS_VTIME] == 0)
                 return 0;
+            if (posix_kernel_signal_interrupt(kernel)) return -POSIX_EINTR;
             terminal_wait_with_timeout(kernel, fd,
                 ofd->terminal.termios.cc[POSIX_TERMIOS_VTIME]);
             if (!(ofd->terminal.termios.lflag & POSIX_TERMIOS_LFLAG_ICANON) &&
@@ -1705,6 +1828,7 @@ int posix_kernel_read(posix_kernel *kernel, int fd, void *buf, int count) {
                    ofd->terminal.input[available] != '\n') available++;
             if (available < ofd->terminal.input_length) available++;
             else if (!ofd->terminal.eof) {
+                if (posix_kernel_signal_interrupt(kernel)) return -POSIX_EINTR;
                 posix_kernel_wait_read(kernel, fd);
                 return -POSIX_EAGAIN;
             }
@@ -1712,6 +1836,7 @@ int posix_kernel_read(posix_kernel *kernel, int fd, void *buf, int count) {
             uint8_t vmin = ofd->terminal.termios.cc[POSIX_TERMIOS_VMIN];
             uint8_t vtime = ofd->terminal.termios.cc[POSIX_TERMIOS_VTIME];
             if (vmin > 0 && available < vmin && !ofd->terminal.eof) {
+                if (posix_kernel_signal_interrupt(kernel)) return -POSIX_EINTR;
                 terminal_wait_with_timeout(kernel, fd, vtime);
                 if (kernel->wait.has_deadline && kernel->clock_now &&
                     kernel->clock_now(kernel->clock_data) >= kernel->wait.deadline_ns) {
@@ -1736,6 +1861,7 @@ int posix_kernel_read(posix_kernel *kernel, int fd, void *buf, int count) {
         posix_pipe *p = ofd->pipe;
         if (p->length == 0) {
             if (p->writers == 0) return 0;
+            if (posix_kernel_signal_interrupt(kernel)) return -POSIX_EINTR;
             posix_kernel_wait_read(kernel, fd);
             return -POSIX_EAGAIN;
         }
@@ -1888,7 +2014,10 @@ int posix_kernel_write(posix_kernel *kernel, int fd,
     if (!ofd) return -POSIX_EBADF;
 
     switch (ofd->kind) {
+    case POSIX_OFD_STREAM:
+        return ofd->output_handle >= 0 ? count : -POSIX_EBADF;
     case POSIX_OFD_TERMINAL:
+        if (ofd->stream_mode && ofd->output_handle < 0) return -POSIX_EBADF;
         /* Terminal output always succeeds (browser consumes it). */
         return count;
     case POSIX_OFD_PIPE_WRITE: {

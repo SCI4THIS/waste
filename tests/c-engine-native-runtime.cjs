@@ -2,12 +2,11 @@
 const {config, withConfig} = require("./runtime-config.cjs");
 
 /* Native-side corpus runner: feeds every wast-stream fixture in the shared
- * payload.json through build/cli-rt/waste-wast and classifies the result into
+ * payload.json through build/cli-rt/wast and classifies the result into
  * the same {pass, fail, xfail, xpass} record contract the browser runtime
- * emits.  Native lacks the browser's POSIX stub resolver, so a
- * native-specific expected-failures baseline (tests/native-corpus-expected-failures.txt)
- * covers the libc-test / diy-posix / posix-dependent fixtures that only run
- * under the browser worker. */
+ * emits. The native-specific expected-failures baseline (tests/native-corpus-expected-failures.txt)
+ * records runtime-specific outcomes; installed native batches normally use
+ * wast --suite without this Node compatibility driver. */
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -48,7 +47,6 @@ const GROUP_TIMEOUT_MS = {
   "core/multi-memory": config.SUITE_TIMEOUT_DEFAULT_MS,
   "core/exceptions": config.SUITE_TIMEOUT_DEFAULT_MS,
   "core/relaxed-simd": config.SUITE_TIMEOUT_DEFAULT_MS,
-  "libc-test": config.SUITE_TIMEOUT_DEFAULT_MS,
   "diy-posix-test": config.SUITE_TIMEOUT_DEFAULT_MS,
   "custom/custom": config.SUITE_TIMEOUT_DEFAULT_MS,
   "custom/name": config.SUITE_TIMEOUT_DEFAULT_MS,
@@ -65,7 +63,7 @@ const jobsFlag = flagArgs.find(arg => arg.startsWith("--jobs="));
 const jobs = Math.max(1, jobsFlag ? Number(jobsFlag.slice("--jobs=".length)) : 1);
 const runnerFlag = flagArgs.find(arg => arg.startsWith("--runner="));
 const runnerPath = runnerFlag ? runnerFlag.slice("--runner=".length)
-                               : path.join(root, "build/cli-rt/waste-cli");
+                               : path.join(root, "build/cli-rt/wast");
 
 const expectedFailuresPath = path.join(root, "tests/native-corpus-expected-failures.txt");
 const expectedFailures = new Set();
@@ -78,7 +76,7 @@ if (fs.existsSync(expectedFailuresPath)) {
 
 const payload = JSON.parse(fs.readFileSync(payloadPath, "utf8"));
 
-/* Persistent server-mode child: each pool slot keeps one `waste-cli --server`
+/* Persistent server-mode child: each pool slot keeps one `wast --server`
  * child alive and feeds it WAST paths over stdin.  The child emits each
  * test's JSON on stdout followed by a "###END###\n" sentinel; stderr gets
  * its own sentinel so parent can delimit per-test error output without

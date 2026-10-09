@@ -22,6 +22,9 @@ typedef struct {
     unsigned retained_start;
     wast_handler_result result;
     void *result_data;
+    unsigned total, passed;
+    int verbose;
+    char first_failure[256];
 } wast_process_handler;
 
 void wast_process_handler_init(wast_process_handler *, native_store *,

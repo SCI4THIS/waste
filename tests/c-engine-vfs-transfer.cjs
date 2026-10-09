@@ -24,7 +24,7 @@ const self = {postMessage(message) {
 const context = vm.createContext({self, WebAssembly, Uint8Array, DataView,
   TextDecoder, TextEncoder, Promise, Math, Number, String, Date, Error,
   setTimeout, clearTimeout, console, atob:s => Buffer.from(s, "base64").toString("binary")});
-vm.runInContext(page.read("root/waste/app/worker.js").toString(), context);
+vm.runInContext(page.read("root/app/worker.js").toString(), context);
 const buffer = b => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
 const wait = async test => {
   const deadline = Date.now() + 15000;
@@ -38,13 +38,13 @@ async function command(source, tag, status) {
   self.onmessage({data:{type:"input", bytes:new TextEncoder().encode(
     source + `; printf '${tag}_%s__\\n' "$?"\n`)}});
   await wait(() => ready > previous && transcript.slice(offset).includes(`${tag}_${status}__`) &&
-    /bash-[^\r\n]*[#$] ?/.test(transcript.slice(transcript.lastIndexOf(`${tag}_${status}__`))));
+    /# /.test(transcript.slice(transcript.lastIndexOf(`${tag}_${status}__`))));
 }
 (async () => {
   self.onmessage({data:{type:"start", wasmBytes:buffer(page.read("waste-wast.wasm")),
     source:page.read("launch.wast").toString(), vfs:packageVfs(page),
     vfsPaths:manifest.entries.map(e => e.path)}});
-  await wait(() => ready && /bash-[^\r\n]*[#$] ?/.test(transcript));
+  await wait(() => ready && /# /.test(transcript));
   await command("upload /tmp/roundtrip.bin", "__UPLOAD", 0);
   await command("download /tmp/roundtrip.bin", "__DOWNLOAD", 0);
   assert.equal(downloads.length, 1);

@@ -1,19 +1,34 @@
-# Native guest sessions (Stage 6A process-driver slice)
+# Private native guest-session harness
 
-`waste-session` executes the actual installed guest runtime, libc and Bash
+For file-based application startup, use `build/cli-rt/wasm` or
+`build/cli-rt/wat` after `make -C src/cli-rt applications-native`.
+They share `native_runtime.c` with the session companion and make deadlines,
+traces and JSON opt-in. This document describes the retained compatibility
+harness and its deterministic controls. `build/cli-rt/wast` now runs complete
+WAST streams and standalone libc tests through the same native adapter.
+Public applications inherit actual stdio types/directions and use real host TTY
+dimensions with mode restoration. The session and standalone WAST contexts keep
+their modeled terminal for deterministic fixtures. Caught READ/SELECT/pselect
+signals and compiled table callbacks are shared engine behavior; READ honors
+SA_RESTART. Public native applications route host interruption into the guest
+foreground group and return guest signal status while restoring the host TTY.
+
+`private/guest-session` executes the actual installed guest runtime, libc and Bash
 through the shared C engine. It does not substitute host Bash or native
-utilities. The existing freestanding `waste-cli FILE.wast` conformance runner
-and its result format are unchanged.
+utilities. Public `wast` preserves the conformance JSON format with `--json`;
+the session harness retains scripted controls and launcher compatibility checks.
 
 From the repository root:
 
 ```sh
 make -C src/cli-rt guest-session
-build/cli-rt/waste-session --vfs-root src/vfs
+build/cli-rt/private/guest-session --vfs-root src/vfs
 ```
 
 The default source is mounted `/usr/share/waste/launch.wast`, initial cwd is
-`/root`, and the terminal is 80 columns by 24 rows. `--script HOST.wast` selects
+`/root`, and the terminal is 80 columns by 24 rows. The authored launcher
+executes mounted `/usr/bin/bash --norc -i` with the `# ` prompt; build and
+install it with `make -C src/aux install-bash`. `--script HOST.wast` selects
 an explicit host staging input instead; guest `open`/`read`/`write` still use
 only the mounted kernel. `--columns N` and `--rows N` configure initial size.
 Use `--help` for the complete flag contract.
@@ -100,7 +115,7 @@ EOF, accept coalesced records and reject malformed child delivery without
 reporting a child exit. Browser probes reject eight invalid export values,
 check same-instance fresh-store recovery, and reject 35 invalid/overflow worker
 messages while testing pre-start delivery. These fixtures are authored host
-regressions, not additions to the installed `/root/waste/tests` corpus. Evidence is under
+regressions, not additions to the installed `/root/test` corpus. Evidence is under
 `build/engine/refactor-stage6a2-terminal`.
 
 `--timeout-ms N` defaults to 30,000 ms from startup and bounds interpreted
@@ -134,7 +149,7 @@ The kernel/store still owns wait/reaping and process memory. Nested child-first
 fork remains unsupported; this is not a concurrent process/thread scheduler.
 Both runtimes use `src/engine/wast/handler.{c,h}` for WAST child command streams,
 including definitions/instances, registration, module assertions and invocation
-assertions. READ/SELECT/HOST_IO yields retain the exact assertion and its selected
+assertions. READ/SELECT/HOST_IO/PUMP yields retain the exact assertion and its selected
 engine until completion; resumed returns, expected traps and result mismatches
 are checked once, not replaced by an unconditional successful `main` result.
 Completed child command modules are released before provider-clone reaping,
@@ -158,7 +173,7 @@ returns unavailable in native and isolated batch stores.
 The loader preserves the returned start status even when an import did not
 set `error.status`; disposing a yielded partial instance is not success.
 This is not a batch conformance runner: unsupported
-WAST command kinds fail visibly; use `waste-cli` for the full language corpus.
+WAST command kinds fail visibly; use `wast` for the full language corpus.
 
 ## Shared boundary regression
 
@@ -166,7 +181,7 @@ WAST command kinds fail visibly; use `waste-cli` for the full language corpus.
 make -C src/html-rt wast-browser
 python3 tests/guest-session-check.py --page build/html-rt/bash.html
 make -C src/cli-rt guest-session-sanitize
-python3 tests/guest-session-check.py --native build/cli-rt/waste-session-sanitize
+python3 tests/guest-session-check.py --native build/cli-rt/private/guest-session-sanitize
 ```
 
 The same JSON interaction contracts, current files and generated mount metadata drive native and
@@ -202,7 +217,10 @@ Deterministic scenarios compare exact transcripts; Rogue compares documented
 semantic markers, selected child PIDs, genuine wait boundaries and exit status,
 retaining raw transcripts rather than masking arbitrary differences.
 The native Bash case reads its bootstrap from the installed tree; browser
-bootstrap bytes are the identical installed launch snapshot. Use `--vfs-root`
+bootstrap bytes are the identical installed launch snapshot, and the executable
+is read from the same mounted tree. `--scenario bash` verifies the source-built
+Bash version; `--scenario bash-invalid` replaces the installed binary with
+invalid contents and verifies startup fails with status 127. Use `--vfs-root`
 to select another directory. Files, empty directories, modes and timestamps come
 from its current contents; browser metadata is generated from the same tree.
 Native boundaries verify SELECT deadlines, fork return values/private-memory
@@ -217,7 +235,7 @@ The Bash file-input regression required a typed `pop_scope` cleanup adapter
 at table slot 145, following the existing cleanup-adapter scheme. It fixes the
 historical C function-pointer cast without loosening engine type checks.
 The host-side regression fixtures are not additional installed dashboard
-suites, so the frozen `/root/waste/tests/manifest.json` corpus remains unchanged.
+suites, so the frozen `/root/test/manifest.json` corpus remains unchanged.
 
 The formerly trapping `/tmp/session-heredoc.txt` command is retained verbatim
 in `guest-session-heredoc-long.json`, now a positive acceptance contract.
@@ -290,7 +308,7 @@ teardown with no false child exit. Browser checks reject false expected-trap
 and `assert_invalid` passes, then run a fresh store in the same Wasm instance.
 The worker checks runnable and blocked limits, preserving earlier successful
 assertions rather than labeling interruption as either success or invalidity.
-These host-side fixtures do not alter the frozen installed `/root/waste/tests` corpus.
+These host-side fixtures do not alter the frozen installed `/root/test` corpus.
 Evidence is under `build/engine/refactor-stage6a2-control`.
 The final combined gate passes eighteen native interruptions with leak checks,
 twelve browser-export interruptions plus same-instance recovery, and four
@@ -298,7 +316,7 @@ production-worker limit cases. The eleven existing shared interaction contracts
 also pass against the final native, browser-export and packaged-worker bytes.
 
 The installed `/bin/waste-test` command delegates isolated batches to the sibling
-native `waste-test` executable (or `waste-test-sanitize` for a sanitized session).
+native `private/test-suite` helper (or `test-suite-sanitize` for a sanitized session).
 The session retains an open installed-root directory and passes that descriptor
 to the companion, which reads and revalidates its files directly. Renaming or
 replacing the root pathname does not redirect the companion. External content

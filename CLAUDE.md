@@ -42,7 +42,7 @@ This opens an interactive wizard for dependency checks, compilation, and test ex
 ```sh
 ./start.sh --check              # Inspect dependencies and submodule state
 ./start.sh --install-deps       # Install missing system packages
-./start.sh --build-libc         # Build waste-libc.wasm and its tests
+./start.sh --build-libc         # Build production libc.so.wasm
 ./start.sh --generate-bash-html # Generate self-contained WASTE Bash page
 ./start.sh --ocaml-reference    # Stage and run the OCaml spec-test interpreter
 ```
@@ -50,8 +50,7 @@ This opens an interactive wizard for dependency checks, compilation, and test ex
 ### Build Output Locations
 
 ```
-build/libc-shared/libc.so.wasm                # Production guest shared library
-build/html-rt/waste-libc/waste-libc.wasm        # Static test profile
+build/aux/libc/libc.so.wasm                # Production guest shared library
 build/ocaml-interpreter/                        # Staged OCaml reference interpreter
 ```
 
@@ -104,7 +103,7 @@ The engine (`src/engine/`) provides:
 - **WAST runner:** Command streaming, assertions, and WAT/WAST policy (`wast/`)
 - **POSIX stubs:** Browser-side POSIX host function dispatch via `browser_host_resolver` callback (`posix_stubs.c/h`)
 - **Browser API:** Exported WAST API functions, legacy per-module linking, browser streaming, yield/resume (`browser_api.c`)
-- **Freestanding library:** Portable string, math, allocation, formatting, and errno support shared by native and Wasm builds (`src/libc/runtime/`)
+- **Freestanding library:** Portable string, math, allocation, formatting, and errno support shared by native and Wasm builds (`src/aux/libc/runtime/`)
 - **Platform backends:** Native Linux x86_64 support in `src/cli-rt/lib/` and Wasm/browser support in `src/html-rt/lib/`
 
 ### POSIX Runtime Model
@@ -122,10 +121,10 @@ policy, and `docs/techniques.md` for continuation and non-local-jump techniques.
 
 ### Guest libc: libc.so.wasm
 
-Built with `make -C src/libc install`, the PIC library in `/usr/lib/libc.so.wasm`
-shares the application's process memory and table. Sources in `src/libc/` provide:
+Built with `make -C src/aux install-libc`, the PIC library in `/usr/lib/libc.so.wasm`
+shares the application's process memory and table. Sources in `src/aux/libc/` provide:
 
-- Boundary-tag allocator exporting `malloc`, `calloc`, `realloc`, `free`, `sbrk`, `__errno_location` (`allocator.c`; `stdlib.wat` remains the static test profile)
+- Boundary-tag allocator exporting `malloc`, `calloc`, `realloc`, `free`, `sbrk`, `__errno_location` (`allocator.c`)
 - `memory.grow`-backed MORECORE for heap expansion
 - Memory-backed `FILE` streams and wasm32 variadic formatting (`stdio.c`)
 - UTF-8 multibyte/wide-char conversion (`wchar.c`)
@@ -141,8 +140,10 @@ and optional broker capabilities belong to C.
 Test fixture:
 ```sh
 ./start.sh --build-libc
-# Outputs: build/libc-shared/libc.so.wasm and static test fixtures
-make -C src/libc install
+# Output: build/aux/libc/libc.so.wasm
+make -C src/aux install-libc
+make -C src/aux test-libc
+make -C src/system-tests test-libc
 ```
 
 ### Shared-Library Libc Roadmap
@@ -178,7 +179,7 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 - `wasm/` — Binary reader/writer, LEB, encoder, decoder, loader, opcode metadata, and module
 - `op/` — Frame-based dispatch, opcode-family execution units, and validation
 - Engine root — Store, internal engine interface, instance lifetime, and instantiation
-- `lib/*.c` — Kernel, descriptor readiness, and VFS path semantics; portable C support is in `src/libc/runtime/`
+- `lib/*.c` — Kernel, descriptor readiness, and VFS path semantics; portable C support is in `src/aux/libc/runtime/`
 - `lib/include/` — Freestanding headers (stdio.h, stdlib.h, string.h, math.h, etc.) used via `-Ilib/include`
 - `Makefile` — Shared Flex/Bison generation rules
 
@@ -187,10 +188,9 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 - `posix_stubs.c/h` — POSIX host function dispatch tables and `browser_host_resolver`
 - `lib/stdlib.c`, `lib/stdio.c`, `lib/unistd.c` — Wasm platform backend
 
-### Source: Guest Libc (`src/libc/`)
+### Source: Guest Libc (`src/aux/libc/`)
 - `Makefile` — Builds and explicitly installs the production PIC library
 - `allocator.c` — Production guest allocator
-- `src/libc/stdlib.wat` — WebAssembly guest libc core (memory, allocator, exports)
 - `wchar.c` — UTF-8 multibyte/wide-char conversion
 - `locale.c` — C.UTF-8 locale support
 - `identity.c` — passwd/group/service records
@@ -199,16 +199,17 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 - `misc.c` — Resource-limit, time-formatting, terminal, and diagnostic helpers
 - `include/helper.h` — Shared declarations across guest libc modules
 - `runtime/` — Freestanding support compiled into the interpreter itself
-- `src/html-rt/tools/build-bash-runtime.py` — Generates Bash bootstrap loading installed libc
-- `src/html-rt/tools/build-waste-libc.py` — Builds the static test profile and fixtures
+- `src/aux/bash/launch.wast` — Launches installed `/usr/bin/bash` through `execve`
+- `tools/shared_libc.py` — Shared import/signature helper
+- `tests/*.wast` — Package tests executed with `/bin/wast --verbose` inside Bash
 
 ### Examples
-- `examples/bash.wat`, `bash-i.wat` — Compiled Bash binaries (for browser testing)
+- `src/aux/bash/bash.mk` — Builds Bash from the read-only upstream submodule
 
 ### Tests
 - `tests/diy-posix-test/*.wast` — POSIX regression probes (process control, signals, VFS, clock)
-- `tests/libc-test/*.wast.inc` — libc test clients
-- `tests/libc-test/allocator-native.cjs` — Native allocator check
+- `src/aux/NAME/tests/*.wast` — Package runtime assertions (`make -C src/aux test-NAME`)
+- `src/system-tests/` — System interaction WAST and compiler SDK probes
 - `tests/tail-call-smoke.wast` — Minimal Bash smoke test
 
 ### Build & Configuration
@@ -329,28 +330,24 @@ If implementing broker-backed capabilities, design the protocol to be versioned,
 │   │   ├── runtime_internal.h        # Internal runtime interface
 │   │   ├── Makefile                  # Flex/Bison generation rules
 │   │   └── lib/                      # Kernel/path/readiness and private headers
-│   ├── libc/                         # Guest libc.so.wasm implementation
-│   │   ├── allocator.c              # PIC guest allocator
-│   │   ├── stdio.c, string.c, ...    # Guest libc APIs and wrappers
-│   │   ├── include/helper.h         # Private guest declarations
-│   │   └── runtime/                 # Interpreter's freestanding C support
+│   ├── aux/                          # Guest commands and package libraries
+│   │   └── libc/                     # Guest libc.so.wasm implementation
+│   │       ├── allocator.c          # PIC guest allocator
+│   │       ├── stdio.c, string.c, ... # Guest libc APIs and wrappers
+│   │       ├── include/helper.h     # Private guest declarations
+│   │       ├── runtime/             # Interpreter's freestanding C support
+│   │       └── tools/               # Shared-import helper
+│   ├── system-tests/                # System interaction WAST and SDK probes
 │   └── html-rt/                     # Browser packaging layer
 │       ├── lib/                     # Browser platform backend
 │       │   └── stdlib.c, stdio.c, unistd.c
-│       └── tools/                     # HTML generators & builders
-│           ├── build-bash-runtime.py
-│           └── build-waste-libc.py
-│
-├── examples/                          # Example Wasm binaries
-│   ├── bash.wat                       # Compiled Bash (interactive)
-│   └── bash-i.wat                     # Compiled Bash (non-interactive)
+│       └── tools/                    # HTML packaging, SDK and corpus tools
 │
 ├── tests/                             # Test suites
 │   ├── c-engine-*.wast                # Engine regression fixtures
 │   ├── c-engine-*.wat                 # Engine test modules
 │   ├── c-engine-i32-smoke.c           # Sanitizer smoke test source
 │   ├── diy-posix-test/                # POSIX regression probes
-│   ├── libc-test/                     # libc regression probes
 │   └── tail-call-smoke.wast           # Bash tail-call smoke test
 │
 ├── docs/                              # Architecture & planning

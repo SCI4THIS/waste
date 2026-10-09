@@ -36,7 +36,7 @@ def include_flags(root):
             "-isystem", str(root / "usr/lib/waste/cc/include")]
 
 
-def prepare(repo, output, library=None):
+def prepare(repo, output, library=None, ncurses_build=None):
     """Produce an explicit SDK install input using reviewed upstream sources."""
     version = subprocess.check_output(["clang", "-dumpversion"], text=True).strip()
     resource = Path(subprocess.check_output(["clang", "-print-resource-dir"], text=True).strip()) / "include"
@@ -82,7 +82,7 @@ def prepare(repo, output, library=None):
                 pending.append(child)
     license_source = Path("/usr/share/licenses/clang/LICENSE")
     copy(license_source, "/usr/share/licenses/clang/LICENSE", "notice", "clang:" + version)
-    ncurses = repo / "build/ncurses/build/include"
+    ncurses = (ncurses_build or repo / "build/aux/libncurses/build") / "include"
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo / "submodules/ncurses", text=True).strip()
     for name in ("curses.h", "term.h", "unctrl.h", "ncurses_dll.h"):
         path = "waste/ncurses/curses.h" if name == "curses.h" else name

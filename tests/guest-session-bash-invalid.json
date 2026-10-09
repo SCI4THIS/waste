@@ -1,0 +1,12 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "files": [
+    {"path": "/usr/bin/bash", "source": "src/aux/bash/README.md", "mode": 493}
+  ],
+  "events": [],
+  "output": "",
+  "assertions": 1,
+  "exitStatus": 127,
+  "processes": 0,
+  "execs": 0
+}

@@ -25,10 +25,20 @@ def main():
     by_id = {t["id"]: t for t in manifest["tests"]}
     for test in peer:
         snapshot = by_id[test["relative"]]
-        assert test["path"].read_bytes() == vfs.local(vfs.ROOT, snapshot["path"]).read_bytes()
+        expected_path = corpus.TEST_ROOT + "/" + test["mountRelative"]
+        assert snapshot["path"] == expected_path
+        assert test["path"].read_bytes() == vfs.local(vfs.ROOT, expected_path).read_bytes()
         for key in ("suite", "group", "expectFailure", "unsupported"):
             assert test[key] == snapshot[key]
     read = lambda path: vfs.local(vfs.ROOT, path).read_bytes()
+
+    def copy_vfs(destination):
+        shutil.copytree(vfs.ROOT, destination, symlinks=True)
+        for path, target in vfs.BLESSED_SYMLINKS.items():
+            link = destination / path.lstrip("/")
+            link.unlink()
+            link.symlink_to((REPO / target).resolve())
+
     for mutation in (
         lambda m: m["tests"].append(copy.deepcopy(m["tests"][0])),
         lambda m: m["tests"].pop(),
@@ -47,8 +57,9 @@ def main():
             raise AssertionError("invalid corpus metadata accepted")
     with tempfile.TemporaryDirectory(prefix="corpus-check-", dir=REPO / "build/engine") as temporary:
         root = Path(temporary) / "vfs"
-        shutil.copytree(vfs.ROOT, root)
-        sample = root / manifest["tests"][0]["path"].lstrip("/")
+        copy_vfs(root)
+        sample_path = next(e["path"] for e in manifest["files"] if e["role"] == "test-runner")
+        sample = root / sample_path.lstrip("/")
         original = sample.read_bytes()
         sample.write_bytes(b"edited installed test")
         # Explicit fixture installation may replace an edited snapshot.
@@ -60,7 +71,7 @@ def main():
         invalid["files"][0]["sha256"] = "0" * 64
         # Write candidate metadata only into the owned scratch tree, not VFS.
         source = Path(temporary) / "source"
-        shutil.copytree(vfs.ROOT, source)
+        copy_vfs(source)
         (source / corpus.MANIFEST.lstrip("/")).write_bytes(corpus.encoded(invalid))
         try:
             vfs.install_tests(root, source, invalid)

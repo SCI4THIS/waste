@@ -19,7 +19,14 @@ exec_status exec_execution_check(exec_execution_control *control,
     if (!control) return EXEC_OK;
     if (!control->stopped && control->poll)
         control->stopped = control->poll(control->context);
-    if (!control->stopped) return EXEC_OK;
+    if (!control->stopped) {
+        int signal = control->signal_poll ? control->signal_poll(control->signal_context) : 0;
+        if (!signal) return EXEC_OK;
+        exec_fail(error, EXEC_ERROR_EXIT, "process terminated by signal");
+        error->signal = signal;
+        error->exit_code = 128 + signal;
+        return EXEC_ERROR_EXIT;
+    }
     return exec_fail(error, EXEC_ERROR_INTERRUPTED,
         control->stopped == EXEC_STOP_TIMEOUT ? "execution deadline exceeded" :
                                                "execution cancelled");
@@ -316,11 +323,32 @@ static exec_status save_jump_frame(waste_exec_context *ctx,
                                    uint32_t environment) {
     waste_exec_engine *eng = ctx->engine;
     exec_jump_snapshot *snapshot = (void *)0;
-    for (uint32_t i = 0; i < eng->jump_snapshot_count; i++)
-        if (eng->jump_snapshots[i].environment == environment) {
-            snapshot = &eng->jump_snapshots[i];
+    /* Buffers are copied by Bash while nested activations temporarily reuse
+     * their address. Keep each live activation's snapshot and put an opaque
+     * token in guest memory so restoring a buffer restores its identity. */
+    uint8_t token_bytes[4];
+    if (!eng->memory || exec_memory_read(eng->memory, environment, token_bytes,
+                                        sizeof(token_bytes), ctx->error) != EXEC_OK)
+        return exec_fail(ctx->error, EXEC_ERROR_TRAP, "invalid setjmp buffer");
+    if (eng->next_jump_token == UINT32_MAX)
+        return exec_fail(ctx->error, EXEC_ERROR_TRAP, "setjmp token exhausted");
+    for (uint32_t i = 0; i < eng->jump_snapshot_count; i++) {
+        exec_jump_snapshot *saved = &eng->jump_snapshots[i];
+        if (saved->valid && saved->environment == environment &&
+            saved->depth == ctx->depth &&
+            saved->frame_generation == ctx->frame_generation &&
+            saved->func_idx == ctx->function_index) {
+            snapshot = saved;
             break;
         }
+    }
+    if (!snapshot) {
+        for (uint32_t i = 0; i < eng->jump_snapshot_count; i++)
+            if (!eng->jump_snapshots[i].valid) {
+                snapshot = &eng->jump_snapshots[i];
+                break;
+            }
+    }
     if (!snapshot) {
         if (eng->jump_snapshot_count == eng->jump_snapshot_capacity) {
             uint32_t capacity = eng->jump_snapshot_capacity ?
@@ -348,6 +376,25 @@ static exec_status save_jump_frame(waste_exec_context *ctx,
         memcpy(snapshot->locals, ctx->locals,
                (size_t)ctx->local_count * sizeof(*ctx->locals));
     }
+    snapshot->valid = 0;
+    snapshot->token = ++eng->next_jump_token;
+    for (unsigned i = 0; i < sizeof(token_bytes); i++)
+        token_bytes[i] = (uint8_t)(snapshot->token >> (8u * i));
+    exec_status written = exec_memory_write(eng->memory, environment, token_bytes,
+                                             sizeof(token_bytes), ctx->error);
+    if (written != EXEC_OK) return written;
+    snapshot->stack_pointer_global = UINT32_MAX;
+    for (uint32_t i = 0; i < eng->export_count; i++) {
+        exec_export *export = &eng->exports[i];
+        if (export->kind == 3 && !strcmp(export->name, "__stack_pointer") &&
+            export->index < eng->global_count &&
+            eng->globals[export->index]->mutable_ &&
+            eng->globals[export->index]->value.type == WASM_VALTYPE_I32) {
+            snapshot->stack_pointer_global = export->index;
+            snapshot->stack_pointer = eng->globals[export->index]->value;
+            break;
+        }
+    }
     snapshot->valid = 1;
     snapshot->environment = environment;
     snapshot->depth = ctx->depth;
@@ -372,7 +419,7 @@ static int restore_jump_frame(waste_exec_context *ctx) {
     for (uint32_t i = 0; i < eng->jump_snapshot_count; i++) {
         exec_jump_snapshot *snapshot = &eng->jump_snapshots[i];
         if (!snapshot->valid ||
-            snapshot->environment != err->jump_environment ||
+            snapshot->token != err->jump_environment ||
             snapshot->depth != ctx->depth ||
             snapshot->frame_generation != ctx->frame_generation ||
             snapshot->func_idx != ctx->function_index)
@@ -390,6 +437,9 @@ static int restore_jump_frame(waste_exec_context *ctx) {
         if (ctx->local_count)
             memcpy(ctx->locals, snapshot->locals,
                    (size_t)ctx->local_count * sizeof(*ctx->locals));
+        if (snapshot->stack_pointer_global < eng->global_count)
+            eng->globals[snapshot->stack_pointer_global]->value =
+                snapshot->stack_pointer;
         int32_t value = err->jump_value ? err->jump_value : 1;
         memset(err, 0, sizeof(*err));
         if (!stack_push(ctx->operand_stack, i32_value((uint32_t)value))) {
@@ -488,6 +538,12 @@ static exec_status exec_invoke_managed(waste_exec_engine *eng,
     eng->active_call_depth = depth + 1;
     status = exec_invoke_frame(eng, func_idx, args, arg_count, results,
                                result_count, err, depth);
+    if (status == EXEC_YIELD && eng->execution_control &&
+        eng->execution_control->synchronous_callbacks) {
+        eng->yield_frames[depth].valid = 0;
+        status = exec_fail(err, EXEC_ERROR_UNSUPPORTED,
+                           "blocking operations in signal handlers are unsupported");
+    }
     eng->active_call_depth = depth;
     return status;
 }
@@ -899,7 +955,10 @@ int execute_op_call_indirect(waste_exec_context *ctx, const exec_instr *instr) {
     exec_table_element slot = table->elements[(size_t)element];
     if (!slot.owner)
         return exec_fail(ctx->error, EXEC_ERROR_TRAP, "uninitialized element");
-    waste_exec_engine *teng = slot.owner;
+    /* Imported tables also contain references defined by other modules in
+     * the process graph. A fork must enter the child-owned instance even
+     * when the table's owner still records the canonical parent instance. */
+    waste_exec_engine *teng = exec_clone_resolve(eng, slot.owner);
     uint32_t target = slot.func_idx;
     if (target >= teng->import_func_count + teng->func_count)
         return exec_fail(ctx->error, EXEC_ERROR_TRAP, "call_indirect target out of range");
@@ -1367,11 +1426,18 @@ tail_entry:
                 args[1].type != WASM_VALTYPE_I32)
                 return exec_fail(err, EXEC_ERROR_TRAP,
                                  "siglongjmp arguments missing");
+            uint8_t token_bytes[4];
+            if (!eng->memory || exec_memory_read(eng->memory, (uint32_t)args[0].i32,
+                    token_bytes, sizeof(token_bytes), err) != EXEC_OK)
+                return exec_fail(err, EXEC_ERROR_TRAP, "invalid longjmp buffer");
+            uint32_t token = 0;
+            for (unsigned i = 0; i < sizeof(token_bytes); i++)
+                token |= (uint32_t)token_bytes[i] << (8u * i);
             if (err) {
                 memset(err, 0, sizeof(*err));
                 err->status = EXEC_ERROR_LONGJMP;
                 err->jump_owner = eng;
-                err->jump_environment = (uint32_t)args[0].i32;
+                err->jump_environment = token;
                 err->jump_value = args[1].i32 ? args[1].i32 : 1;
             }
             return EXEC_ERROR_LONGJMP;
@@ -1479,7 +1545,7 @@ tail_entry:
         exec_execution_control *control = eng->execution_control;
         if (control && control->stopped)
             return exec_execution_check(control, err);
-        if (control && control->poll) {
+        if (control && (control->poll || control->signal_poll)) {
             if (!control->remaining) {
                 control->remaining = 4095;
                 exec_status stop = exec_execution_check(control, err);

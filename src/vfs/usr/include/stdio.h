@@ -50,7 +50,7 @@ int fileno(FILE *);
 size_t __freadahead(FILE *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 int __freading(FILE *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 int __fwriting(FILE *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
-void __fpurge(FILE *) WASTE_UNAVAILABLE("Browser overrides __fpurge with an i32-returning no-op");
+void __fpurge(FILE *);
 void __fseterr(FILE *);
 FILE *fopen(const char *, const char *);
 FILE *fdopen(int, const char *);

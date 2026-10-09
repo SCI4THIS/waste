@@ -1,9 +1,10 @@
-/* Native batch execution of the installed /root/waste/tests distribution. Host process
+/* Native batch execution of the installed /root/test distribution. Host process
  * isolation, clocks, signals and report files belong to this adapter. */
 #define _XOPEN_SOURCE 700
 #define _POSIX_C_SOURCE 200809L
 #include "test_suite.h"
 #include "native_wast.h"
+#include "native_runtime.h"
 #include "native_vfs.h"
 #include "lib/include/kernel.h"
 #include <errno.h>
@@ -122,9 +123,9 @@ static unsigned positive_ms(const char *value) {
 }
 
 static unsigned group_budget(const char *group) {
-    if (!strcmp(group, "core")) return SUITE_TIMEOUT_CORE_MS;
-    if (!strcmp(group, "core/simd") || !strcmp(group, "core/bulk-memory") ||
-        !strcmp(group, "core/memory64")) return SUITE_TIMEOUT_HEAVY_MS;
+    if (!strcmp(group, "wasm-spec/core")) return SUITE_TIMEOUT_CORE_MS;
+    if (!strcmp(group, "wasm-spec/core/simd") || !strcmp(group, "wasm-spec/core/bulk-memory") ||
+        !strcmp(group, "wasm-spec/core/memory64")) return SUITE_TIMEOUT_HEAVY_MS;
     return SUITE_TIMEOUT_DEFAULT_MS;
 }
 
@@ -175,7 +176,7 @@ static int stage_assets(native_store *store, const waste_suite_test *test) {
     return 1;
 }
 
-static int start_test(test_record *record, const waste_vfs *vfs) {
+static int start_test(test_record *record, const waste_vfs *vfs, const char *root) {
     record->report = tmpfile();
     record->diagnostic = tmpfile();
     int pipe_fd[2];
@@ -194,23 +195,30 @@ static int start_test(test_record *record, const waste_vfs *vfs) {
         if (dup2(fileno(record->report), STDOUT_FILENO) < 0 ||
             dup2(fileno(record->diagnostic), STDERR_FILENO) < 0 ||
             setrlimit(RLIMIT_FSIZE, &limit)) _exit(2);
-        native_store store;
-        if (!mount_store(&store, vfs)) {
+        native_runtime_options runtime_options = {.columns = NATIVE_TERMINAL_COLUMNS,
+            .rows = NATIVE_TERMINAL_ROWS, .control_fd = -1, .raw_output = 1,
+            .diagnostic_output = 1, .empty_descriptors = 1, .disable_test_suite = 1};
+        native_runtime *runtime = native_runtime_create_vfs(root, vfs, &runtime_options);
+        native_store *store = native_runtime_store(runtime);
+        if (native_runtime_failed(runtime)) {
             snprintf(receipt.error, sizeof(receipt.error), "cannot mount isolated test filesystem");
-        } else if (!stage_assets(&store, record->test)) {
+        } else if (!stage_assets(store, record->test)) {
             snprintf(receipt.error, sizeof(receipt.error), "cannot stage mounted companion files");
         } else {
             size_t source_length;
-            uint8_t *source = read_guest(store.kernel, record->test->path, &source_length);
+            uint8_t *source = read_guest(store->kernel, record->test->path, &source_length);
             if (!source) snprintf(receipt.error, sizeof(receipt.error),
                                    "cannot read mounted WAST: %.200s", record->test->identity);
             else {
-                code = native_wast_run(&store, record->test->file, (const char *)source,
-                                       source_length, &receipt.counts);
+                native_wast_options options = {.json = 1, .output = stdout,
+                    .mode = (!strcmp(record->test->group, "aux/libc") ||
+                             !strcmp(record->test->group, "system/libc")) ? NATIVE_WAST_AUTO : NATIVE_WAST_LANGUAGE};
+                code = native_runtime_wast(runtime, record->test->file, (const char *)source,
+                                          source_length, &receipt.counts, &options);
                 free(source);
             }
         }
-        native_store_free(&store);
+        if (native_runtime_finish(runtime, NULL)) code = 2;
         if (fflush(stdout) || fflush(stderr)) code = 2;
         ssize_t written;
         do { written = write(pipe_fd[1], &receipt, sizeof(receipt)); } while (written < 0 && errno == EINTR);
@@ -291,7 +299,7 @@ static void report_record(FILE *out, const test_record *record) {
 }
 
 static void usage(void) {
-    printf("usage: waste-test --vfs-root=DIRECTORY [OPTIONS] [IDENTITY ...]\n"
+    printf("usage: wast --suite --vfs-root=DIRECTORY [OPTIONS] [IDENTITY ...]\n"
          "  --manifest=" WASTE_SUITE_MANIFEST "   mounted format-1 manifest\n"
          "  --list                           enumerate selected tests, including skips\n"
          "  --group=NAME --exclude=FILE --exclude-group=NAME (repeatable)\n"
@@ -392,7 +400,8 @@ int main(int argc, char **argv) {
     if (native_vfs_load(root_path, &vfs, error, sizeof(error)) ||
         !mount_store(&catalogue, &vfs) ||
         !(manifest = read_guest(catalogue.kernel, manifest_path, &manifest_length))) {
-        fprintf(stderr, "cannot load tree or mounted manifest: %s (%s)\n", root_path, manifest_path);
+        fprintf(stderr, "cannot load tree or mounted manifest: %s (%s): %s\n",
+                root_path, manifest_path, error);
         goto cleanup;
     }
     if (waste_suite_decode((const char *)manifest, manifest_length, &suite, error, sizeof(error))) {
@@ -424,7 +433,13 @@ int main(int argc, char **argv) {
                 ms = positive_ms(colon + 1);
         }
         record->budget = (uint64_t)ms * 1000000u;
-        if (test->skip_reason[0]) { record->status = "SKIP"; record->finished = 1; }
+        /* Browser metadata still marks library tests as requiring its Bash
+         * context. Native WAST now supplies that context without a shell.
+         * Other unsupported/prerequisite-dependent entries retain their skips. */
+        int standalone_libc = (!strcmp(test->group, "aux/libc") || !strcmp(test->group, "system/libc")) &&
+            !strcmp(test->mode, "wast-stream") &&
+            !strcmp(test->skip_reason, "Requires Bash process context; run /bin/wast --verbose");
+        if (test->skip_reason[0] && !standalone_libc) { record->status = "SKIP"; record->finished = 1; }
     }
     if (!record_count) { fprintf(stderr, "no requested native tests found\n"); goto cleanup; }
     if (list) {
@@ -462,7 +477,7 @@ int main(int argc, char **argv) {
         while (next < record_count && active < jobs && !interrupted) {
             test_record *record = &records[next++];
             if (record->finished) continue;
-            if (!start_test(record, &vfs)) {
+            if (!start_test(record, &vfs, root_path)) {
                 record->status = "FAIL";
                 record->finished = 1;
                 snprintf(record->receipt.error, sizeof(record->receipt.error), "cannot start isolated test process");

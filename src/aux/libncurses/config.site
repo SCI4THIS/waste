@@ -1,0 +1,48 @@
+# Cross-compilation answers for ncurses on wasm32-waste.
+ac_cv_prog_cc_cross=yes
+ac_cv_c_cross=yes
+ac_cv_c_bigendian=no
+# The guest libc provides termios via waste_kernel host functions.
+cf_cv_have_tcgetattr=yes
+# Disable package signal/process hooks in this cross-build profile.
+ac_cv_func_sigaction=no
+ac_cv_func_sigvec=no
+ac_cv_func_sigprocmask=no
+# The library does not own guest process control.
+ac_cv_func_vfork=no
+ac_cv_func_fork=no
+ac_cv_func_gettimeofday=yes
+ac_cv_func_poll=no
+ac_cv_func_select=yes
+# No locale beyond C.UTF-8.
+ac_cv_func_setlocale=yes
+# Avoid mmap for this terminal library.
+ac_cv_func_mmap=no
+# Do not select unsupported guest link-creation APIs.
+ac_cv_func_link=no
+ac_cv_func_symlink=no
+ac_cv_func_readlink=yes
+# No shared library dlsym.
+ac_cv_func_dlsym=no
+# No regex in guest libc for now — ncurses doesn't strictly need it.
+ac_cv_func_regcomp=no
+# Use the supported select-based timing path.
+ac_cv_func_nanosleep=no
+cf_cv_func_nanosleep=no
+# No BSD tty interfaces.
+ac_cv_header_sys_ioctl_h=yes
+# Sizes.
+ac_cv_sizeof_signed_char=1
+ac_cv_type_sigaction=no
+cf_cv_typeof_chtype=int
+cf_cv_typeof_mmask_t=int
+cf_cv_1UL="1UL"
+cf_cv_type_of_bool=unsigned
+cf_cv_header_stdbool_h=1
+cf_cv_builtin_bool=1
+# Prefer the existing setenv compatibility wrapper; putenv is unavailable.
+ac_cv_func_putenv=no
+ac_cv_func_setenv=yes
+# WASTE does not yet provide the search(3) tree API.  Ncurses has an
+# allocation-free fallback when this configure result is false.
+ac_cv_func_tsearch=no

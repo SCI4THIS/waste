@@ -704,7 +704,7 @@ int main(void) {
     check(native_store_set_active_process(&store, 1) == 0,
           "restore parent after group signal");
     check(native_store_wait_process(&store, group_child, 0, &status) == group_child &&
-          status == ((128 + 15) << 8),
+          status == 15,
           "group signal status is reapable");
 
     {

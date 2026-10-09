@@ -1,4 +1,4 @@
-/* Browser interpreter stdio stubs. Guest FILE/printf lives in src/libc. */
+/* Browser interpreter stdio stubs. Guest FILE/printf lives in src/aux/libc. */
 
 /* ---- Engine build: no-op stubs ---- */
 #include <stdio.h>

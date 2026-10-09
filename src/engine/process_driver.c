@@ -1,5 +1,7 @@
 #include "process_driver.h"
 #include "runtime_internal.h"
+#include "instantiate.h"
+#include "../config.h"
 #include "lib/include/kernel.h"
 #include <stdlib.h>
 #include <string.h>
@@ -319,6 +321,334 @@ static exec_status process_prepare_exec_provider_continuations(
     return EXEC_OK;
 }
 
+/* Shared by initial startup and exec replacement. Runtime initializers are
+ * ordinary calls and must complete before entering the program CRT. A failed
+ * or yielding initializer never becomes a successful startup. */
+static exec_status process_initialize_image(native_process_driver *driver,
+    native_store *store, native_process_image *image, exec_error *error) {
+    if (image->runtime_initialized) return EXEC_OK;
+    uint32_t heap_base = EXEC_PAGE_SIZE;
+    exec_global *heap_global = NULL;
+    exec_error lookup_error = {0};
+    if (exec_find_export_global(image->engine, "__heap_base", &heap_global,
+            &lookup_error) == EXEC_OK && heap_global &&
+        heap_global->value.type == WASM_VALTYPE_I32 &&
+        heap_global->value.i32 > (int32_t)heap_base)
+        heap_base = (uint32_t)heap_global->value.i32;
+    /* Keep argv/environment above the module's heap, including after growth. */
+    uint64_t end = ((uint64_t)image->startup_ptr + image->startup_size + 15u) & ~15ull;
+    if (end > UINT32_MAX)
+        return exec_fail(error, EXEC_ERROR_TRAP, "process startup heap overflow");
+    if (end > heap_base) heap_base = (uint32_t)end;
+    char event[128];
+    snprintf(event, sizeof(event), "image-heap-base-%u", heap_base);
+    process_driver_trace(driver, event);
+    const char *names[] = {"waste_allocator_init", "waste_environ_set", "waste_stdio_init"};
+    const char *events[] = {"image-alloc-ok", "image-env-ok", "image-stdio-ok"};
+    uint32_t values[] = {heap_base,
+        image->startup_ptr + 44u + (image->argc + 1u) * sizeof(uint32_t),
+        PROCESS_STDIO_BUFFER_BYTES};
+    for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        uint32_t function;
+        memset(&lookup_error, 0, sizeof(lookup_error));
+        waste_exec_engine *provider = process_image_runtime_export(
+            store, image->engine, names[i], &function, &lookup_error);
+        if (!provider) continue; /* Freestanding executables need no libc. */
+        uint32_t type_index;
+        if (exec_get_func_type_index(provider, function, &type_index, error) != EXEC_OK ||
+            type_index >= provider->type_count)
+            return exec_fail(error, EXEC_ERROR_FORMAT, "invalid process runtime initializer");
+        const exec_func_type *type = &provider->types[type_index];
+        if (type->param_count != 1 || type->params[0] != WASM_VALTYPE_I32 ||
+            type->result_count != (i == 1 ? 0 : 1) ||
+            (i != 1 && type->results[0] != WASM_VALTYPE_I32))
+            return exec_fail(error, EXEC_ERROR_FORMAT, "incompatible process runtime initializer");
+        wasm_value argument = {.type = WASM_VALTYPE_I32, .i32 = (int32_t)values[i]};
+        wasm_value result = {0};
+        int count = 0;
+        /* Initialization is a synchronous transaction, like DSO loading.
+         * Keep deadlines active but defer event-loop pump checkpoints. */
+        uint64_t quantum = store->execution_control.pump_quantum_ns;
+        store->execution_control.pump_quantum_ns = 0;
+        exec_status status = exec_invoke(provider, function, &argument, 1,
+                                         &result, &count, error);
+        store->execution_control.pump_quantum_ns = quantum;
+        if (status != EXEC_OK) {
+            snprintf(event, sizeof(event), "image-init-failed-%.70s", names[i]);
+            process_driver_trace(driver, event);
+            if (status == EXEC_YIELD)
+                return exec_fail(error, EXEC_ERROR_UNSUPPORTED,
+                                 "process runtime initializer cannot yield");
+            return status;
+        }
+        if (i != 1 && (count != 1 || result.type != WASM_VALTYPE_I32 || !result.i32))
+            return exec_fail(error, EXEC_ERROR_TRAP, "process runtime initialization failed");
+        process_driver_trace(driver, events[i]);
+    }
+    image->runtime_initialized = 1;
+    return EXEC_OK;
+}
+
+/* A store-owned provider holds the initial process resources. Executable and
+ * DSO imports borrow them, and fork clones them through the ordinary provider
+ * graph. No WAT/WAST bootstrap, guest code or platform allocation is involved. */
+static waste_exec_engine *process_create_resources(uint32_t pages, uint32_t table_entries, exec_error *error) {
+    waste_exec_engine *engine = calloc(1, sizeof(*engine));
+    if (!engine) {
+        exec_fail(error, EXEC_ERROR_TRAP, "cannot allocate initial process resources");
+        return NULL;
+    }
+    engine->static_ref_count = malloc(sizeof(*engine->static_ref_count));
+    if (engine->static_ref_count) *engine->static_ref_count = 1;
+    engine->exports = calloc(4, sizeof(*engine->exports));
+    if (!engine->static_ref_count || !engine->exports) goto failed;
+    engine->memory_count = 1;
+    engine->memory = engine->memories[0] = &engine->owned_memories[0];
+    engine->owns_memories[0] = 1;
+    if (wasm_instance_allocate_memory(engine->memory,
+            pages, EXEC_MEM32_MAX_PAGES, 0, error) != EXEC_OK)
+        goto failed;
+    engine->table_count = 1;
+    engine->tables[0] = &engine->owned_tables[0];
+    if (wasm_instance_allocate_table(engine->tables[0], engine, WASM_VALTYPE_FUNCREF,
+            table_entries, UINT32_MAX, 0, error) != EXEC_OK)
+        goto failed;
+    engine->global_count = 1;
+    engine->globals[0] = &engine->owned_globals[0];
+    wasm_value stack = {.type = WASM_VALTYPE_I32,
+        .i32 = (int32_t)(pages * EXEC_PAGE_SIZE)};
+    wasm_instance_initialize_global(engine->globals[0], engine,
+                                    WASM_VALTYPE_I32, 1, &stack);
+    const char *names[] = {"memory", "__indirect_function_table", "table", "__stack_pointer"};
+    const uint8_t kinds[] = {2, 1, 1, 3};
+    engine->export_count = 4;
+    for (unsigned i = 0; i < 4; i++) {
+        snprintf(engine->exports[i].name, sizeof(engine->exports[i].name), "%s", names[i]);
+        engine->exports[i].kind = kinds[i];
+    }
+    return engine;
+failed:
+    exec_free(engine);
+    if (!error->message[0]) exec_fail(error, EXEC_ERROR_TRAP, "cannot allocate process resources");
+    return NULL;
+}
+
+static int process_copy_vector(char **destination, const char *const *source,
+                              uint32_t count, size_t *total) {
+    for (uint32_t i = 0; i < count; i++) {
+        if (!source[i]) return 0;
+        size_t length = 0;
+        while (length < NATIVE_EXEC_BYTES_MAX - *total && source[i][length]) length++;
+        if (length == NATIVE_EXEC_BYTES_MAX - *total) return 0;
+        destination[i] = malloc(length + 1);
+        if (!destination[i]) return 0;
+        memcpy(destination[i], source[i], length + 1);
+        *total += length + 1;
+    }
+    return 1;
+}
+
+static void process_reset_initial_store(native_store *store, posix_kernel *original) {
+    /* The fresh-store precondition makes every instantiated provider and call
+     * binding below transaction-owned. Release them before restoring the root. */
+    for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
+        if (!store->processes[i].used) continue;
+        native_process_capsule_destroy(&store->processes[i].capsule);
+        posix_kernel_destroy(store->processes[i].kernel);
+        if (i) memset(&store->processes[i], 0, sizeof(store->processes[i]));
+    }
+    for (int i = store->module_count; i > 0; i--) exec_free(store->modules[i - 1].engine);
+    for (int i = store->orphan_count; i > 0; i--) exec_free(store->orphan_engines[i - 1]);
+    free(store->modules);
+    free(store->orphan_engines);
+    store->modules = NULL;
+    store->orphan_engines = NULL;
+    store->module_count = store->module_capacity = store->orphan_count = store->orphan_capacity = 0;
+    while (store->call_blocks) {
+        native_call_block *block = store->call_blocks;
+        store->call_blocks = block->next;
+        free(block->calls);
+        free(block->got_globals);
+        free(block);
+    }
+    memset(&store->library_load_ctx, 0, sizeof(store->library_load_ctx));
+    native_exec_request_destroy(&store->exec_request);
+    for (uint32_t i = 0; i < store->shared_file_page_count; i++) {
+        exec_memory_page_release(store->shared_file_pages[i].page);
+        posix_kernel_file_release(store->shared_file_pages[i].file_object);
+    }
+    free(store->shared_file_pages);
+    store->shared_file_pages = NULL;
+    store->shared_file_page_count = store->shared_file_page_capacity = 0;
+    free(store->host_io.data);
+    memset(&store->host_io, 0, sizeof(store->host_io));
+    store->kernel = store->processes[0].kernel = original;
+    store->process_count = 1;
+    store->active_pid = 1;
+    store->next_pid = 2;
+    store->fork_child_resume = store->fork_parent_resume = 0;
+    store->fork_child_pid = store->fork_parent_pid = 0;
+    store->last_wait_pid = store->last_wait_status = 0;
+    store->processes[0].zombie = store->processes[0].exit_status = 0;
+    native_process_capsule_init(&store->processes[0].capsule);
+}
+
+/* Standalone WAST production context: no executable or authored launcher.
+ * The resource provider and DSO belong to the fresh store, just as at exec. */
+exec_status native_process_driver_prepare_runtime(native_process_driver *driver,
+    native_store *store, uint32_t pages, uint32_t table_entries, exec_error *error) {
+    native_process_capsule *capsule = store ? native_store_active_capsule(store) : NULL;
+    if (!driver || !driver->initialized || !capsule || !store->kernel ||
+        store->module_count || store->orphan_count || store->process_count != 1 ||
+        capsule->engine || capsule->image || capsule->loaded_library_count ||
+        pages > GUEST_TEST_MAX_MEMORY_BYTES / EXEC_PAGE_SIZE ||
+        table_entries > GUEST_TEST_MAX_MEMORY_BYTES / sizeof(exec_table_element))
+        return exec_fail(error, EXEC_ERROR_FORMAT, "runtime context requires a fresh bounded store");
+    int original_terminal = store->kernel_terminal;
+    posix_kernel *original = store->kernel;
+    posix_kernel *candidate = posix_kernel_clone(original);
+    if (!candidate) return exec_fail(error, EXEC_ERROR_TRAP, "cannot clone runtime context kernel");
+    store->kernel = store->processes[0].kernel = candidate;
+    if (!store->kernel_terminal) {
+        if (posix_kernel_attach_terminal(candidate)) {
+            process_reset_initial_store(store, original);
+            return exec_fail(error, EXEC_ERROR_TRAP, "cannot attach runtime terminal descriptors");
+        }
+        store->kernel_terminal = 1;
+    }
+    waste_exec_engine *resources = process_create_resources(
+        pages > PROCESS_INITIAL_MEMORY_PAGES ? pages : PROCESS_INITIAL_MEMORY_PAGES,
+        table_entries > PROCESS_INITIAL_TABLE_ENTRIES ? table_entries : PROCESS_INITIAL_TABLE_ENTRIES, error);
+    exec_status status = resources ? EXEC_OK : EXEC_ERROR_TRAP;
+    if (resources && !native_store_add(store, resources, NULL, NULL)) {
+        exec_free(resources);
+        resources = NULL;
+        status = exec_fail(error, EXEC_ERROR_TRAP, "cannot retain runtime resources");
+    }
+    if (status == EXEC_OK) {
+        snprintf(store->modules[0].registered, sizeof(store->modules[0].registered), "waste-runtime");
+        capsule->engine = resources;
+    }
+    if (status == EXEC_OK && native_process_capsule_bind_memory(capsule))
+        status = exec_fail(error, EXEC_ERROR_TRAP, "cannot bind runtime context memory");
+    if (status == EXEC_OK && native_store_load_library(store, "/usr/lib/libc.so.wasm", error))
+        status = error->status == EXEC_OK ? EXEC_ERROR_FORMAT : error->status;
+    native_process_image image = {0};
+    native_exec_request request = {0};
+    image.engine = resources;
+    image.pid = 1;
+    snprintf(image.cwd, sizeof(image.cwd), "/root");
+    if (status == EXEC_OK)
+        status = native_process_image_startup_block(&image, &request, store, error);
+    if (status == EXEC_OK) status = process_initialize_image(driver, store, &image, error);
+    if (status == EXEC_OK) {
+        posix_kernel_destroy(original);
+        memset(error, 0, sizeof(*error));
+        return EXEC_OK;
+    }
+    process_reset_initial_store(store, original);
+    store->kernel_terminal = original_terminal;
+    return status;
+}
+
+exec_status native_process_driver_start(native_process_driver *driver,
+    native_store *store, const char *path, const char *const *argv,
+    uint32_t argc, const char *const *envp, uint32_t envc, exec_error *error) {
+    return native_process_driver_start_with_options(driver, store, path, argv,
+        argc, envp, envc, NULL, error);
+}
+
+exec_status native_process_driver_start_with_options(native_process_driver *driver,
+    native_store *store, const char *path, const char *const *argv,
+    uint32_t argc, const char *const *envp, uint32_t envc,
+    const native_process_start_options *options, exec_error *error) {
+    if (!driver || !driver->initialized || !store || !error || !path ||
+        argc >= NATIVE_EXEC_ARG_MAX || envc >= NATIVE_EXEC_ENV_MAX ||
+        (argc && !argv) || (envc && !envp))
+        return exec_fail(error, EXEC_ERROR_TRAP, "invalid initial process request");
+    native_process_capsule *capsule = native_store_active_capsule(store);
+    if (!store->kernel || store->active_pid != 1 || store->process_count != 1 ||
+        !capsule || capsule->engine || capsule->image || store->module_count ||
+        store->orphan_count || store->call_blocks || store->exec_request.active ||
+        store->shared_file_page_count || store->host_io.kind != NATIVE_HOST_IO_NONE ||
+        capsule->file_mapping_count || capsule->handler.kind != NATIVE_PROCESS_HANDLER_NONE ||
+        capsule->state != NATIVE_PROCESS_RUNNABLE || store->processes[0].pid != 1 ||
+        capsule->pending_transition != NATIVE_PROCESS_TRANSITION_NONE ||
+        driver->active_engine || driver->fork_active)
+        return exec_fail(error, EXEC_ERROR_TRAP, "initial startup requires a fresh process store");
+    size_t path_length = 0;
+    while (path_length < NATIVE_EXEC_PATH_MAX && path[path_length]) path_length++;
+    if (!path_length || path_length == NATIVE_EXEC_PATH_MAX)
+        return exec_fail(error, EXEC_ERROR_FORMAT, "invalid initial executable path");
+    native_exec_request request;
+    native_exec_request_init(&request);
+    memcpy(request.path, path, path_length + 1);
+    request.argc = argc;
+    request.envc = envc;
+    request.pid = 1;
+    request.active = 1;
+    if (options) {
+        if ((unsigned)options->format > NATIVE_EXEC_FORMAT_WAT ||
+            (options->entry && (!options->entry[0] ||
+                strlen(options->entry) >= sizeof(request.entry))))
+            return exec_fail(error, EXEC_ERROR_FORMAT, "invalid initial process options");
+        request.format = (uint8_t)options->format;
+        request.readable_input = options->readable_input != 0;
+        if (options->entry)
+            snprintf(request.entry, sizeof(request.entry), "%s", options->entry);
+    }
+    size_t total = 0;
+    if (!process_copy_vector(request.argv, argv, argc, &total) ||
+        !process_copy_vector(request.envp, envp, envc, &total)) {
+        native_exec_request_destroy(&request);
+        return exec_fail(error, EXEC_ERROR_TRAP, "cannot copy initial process arguments");
+    }
+    /* Constructors and close-on-exec operate on a candidate kernel. Retain the
+     * caller's mounted kernel and descriptors until startup has fully passed. */
+    posix_kernel *original = store->kernel;
+    posix_kernel *candidate = posix_kernel_clone(original);
+    if (!candidate) {
+        native_exec_request_destroy(&request);
+        return exec_fail(error, EXEC_ERROR_TRAP, "cannot clone initial process kernel");
+    }
+    store->kernel = store->processes[0].kernel = candidate;
+    native_process_image *image = NULL;
+    waste_exec_engine *resources = process_create_resources(PROCESS_INITIAL_MEMORY_PAGES, PROCESS_INITIAL_TABLE_ENTRIES, error);
+    exec_status status = resources ? EXEC_OK : EXEC_ERROR_TRAP;
+    if (resources && !native_store_add(store, resources, NULL, NULL)) {
+        exec_free(resources);
+        resources = NULL;
+        status = exec_fail(error, EXEC_ERROR_TRAP, "cannot retain process resources");
+    }
+    if (status == EXEC_OK) {
+        snprintf(store->modules[0].registered, sizeof(store->modules[0].registered),
+                 "%s", "waste-runtime");
+        capsule->engine = resources;
+        if (native_process_capsule_bind_memory(capsule) ||
+            native_store_prepare_process_exec(store, &request))
+            status = exec_fail(error, EXEC_ERROR_TRAP, "cannot prepare initial process");
+    }
+    if (status == EXEC_OK)
+        status = native_store_instantiate_executable(store, &request, &image, error);
+    if (status == EXEC_OK && native_store_commit_process_image(store, image))
+        status = exec_fail(error, EXEC_ERROR_TRAP, "cannot commit initial process image");
+    if (status == EXEC_OK) status = process_initialize_image(driver, store, image, error);
+    native_exec_request_destroy(&request);
+    if (status == EXEC_YIELD)
+        status = exec_fail(error, EXEC_ERROR_UNSUPPORTED, "initial process startup cannot yield");
+    if (status == EXEC_OK) {
+        driver->image_active = 1;
+        driver->active_engine = image->engine;
+        driver->active_func_idx = image->entry_func;
+        process_driver_select(driver, store, image->engine, image->entry_func, NULL, 0);
+        posix_kernel_destroy(original);
+        return EXEC_OK;
+    }
+    if (image && capsule->image != image) native_process_image_release(image);
+    process_reset_initial_store(store, original);
+    return status;
+}
+
 /* Drive an invocation through internal process transitions.  A fork yield is
  * handled entirely inside this per-session engine driver: the parent evaluator
  * and store are captured, the child continuation runs with fork returning zero, and a
@@ -358,9 +688,10 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
     exec_status status = EXEC_OK;
     for (;;) {
         exec_status stop = exec_execution_check(&store->execution_control, error);
-        if (stop != EXEC_OK) return stop;
+        if (stop != EXEC_OK && stop != EXEC_ERROR_EXIT) return stop;
+        status = stop;
         capsule = native_store_active_capsule(store);
-        if (capsule && capsule->handler.kind != NATIVE_PROCESS_HANDLER_NONE) {
+        if (status != EXEC_ERROR_EXIT && capsule && capsule->handler.kind != NATIVE_PROCESS_HANDLER_NONE) {
             status = native_store_run_process_handler_step(
                 store, driver->handler_step);
             stop = exec_execution_check(&store->execution_control, error);
@@ -532,7 +863,13 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
                 if (restored != EXEC_OK) return restored;
                 /* Leave the old evaluator suspended. Its next import retry
                  * consumes this one-shot errno and returns from execve. */
-                store->exec_request.failure_errno = POSIX_ENOEXEC;
+                /* These mounted interpreter commands are valid entrypoints;
+                 * their arguments failed preflight. ENOEXEC would make Bash
+                 * reinterpret their empty synthetic nodes as shell scripts. */
+                store->exec_request.failure_errno =
+                    strcmp(store->exec_request.path, "/bin/wat") == 0 ||
+                    strcmp(store->exec_request.path, "/bin/wast") == 0 ?
+                        POSIX_EINVAL : POSIX_ENOEXEC;
                 native_store_abort_process_exec(store);
                 continue;
             }
@@ -549,6 +886,9 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
                     return restored;
                 }
             }
+            capsule = native_store_active_capsule(store);
+            int replaces_parent_image = !driver->fork_active && capsule &&
+                capsule->image && capsule->image->engine == driver->parent_engine;
             if (native_store_commit_process_image(store, image) != 0) {
                 exec_status restored = process_finish_exec_provider_continuations(
                     saved_providers, saved_provider_count, 1, error);
@@ -565,139 +905,14 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
                 store->exec_request.failure_errno = POSIX_ENOMEM;
                 continue;
             }
+            if (replaces_parent_image) driver->parent_engine = NULL;
             (void)process_finish_exec_provider_continuations(
                 saved_providers, saved_provider_count, 0, error);
             native_exec_request_destroy(&store->exec_request);
             process_discard_exec_provider_continuations(store, image->engine);
             driver->execs++;
-            /* Run guest libc bootstrap on the new image when the
-             * standard init exports are present.  This mirrors the
-             * WAST-level init sequence the launcher performs for Bash. */
-            {
-                uint32_t init_func;
-                waste_exec_engine *init_engine;
-                wasm_value init_args[4];
-                int init_result_count = 0;
-                exec_error init_error;
-                uint32_t heap_base = 65536;
-                exec_global *heap_global = NULL;
-                memset(&init_error, 0, sizeof(init_error));
-                if (exec_find_export_global(image->engine, "__heap_base",
-                                            &heap_global,
-                                            &init_error) == EXEC_OK
-                    && heap_global
-                    && heap_global->value.type == WASM_VALTYPE_I32
-                    && heap_global->value.i32 > (int32_t)heap_base) {
-                    heap_base = (uint32_t)heap_global->value.i32;
-                }
-                /* The exec startup block is materialized at the top of the
-                 * image's initial linear memory.  Starting malloc at the
-                 * module's __heap_base would let a growing heap overwrite
-                 * argv, envp, and the startup metadata before memory.grow is
-                 * needed.  Place the process heap immediately after that
-                 * immutable block instead. */
-                if (image->startup_size) {
-                    uint64_t startup_end = (uint64_t)image->startup_ptr +
-                                           image->startup_size;
-                    uint64_t aligned_end = (startup_end + 15u) & ~15u;
-                    if (aligned_end <= UINT32_MAX &&
-                        aligned_end > heap_base)
-                        heap_base = (uint32_t)aligned_end;
-                }
-                {
-                    char heap_event[128];
-                    snprintf(heap_event, sizeof(heap_event),
-                             "image-heap-base-%u", heap_base);
-                    process_driver_trace(driver, heap_event);
-                }
-                memset(&init_error, 0, sizeof(init_error));
-                init_engine = process_image_runtime_export(
-                    store, image->engine, "waste_allocator_init",
-                    &init_func, &init_error);
-                if (init_engine) {
-                    init_args[0].type = WASM_VALTYPE_I32;
-                    init_args[0].i32 = (int32_t)heap_base;
-                    exec_status init_st = exec_invoke(init_engine, init_func,
-                                      init_args, 1, NULL,
-                                      &init_result_count, &init_error);
-                    if (init_st != EXEC_OK) {
-                        char ev[128];
-                        snprintf(ev, sizeof(ev), "image-alloc-FAIL-s%d-%.80s",
-                                 init_st, init_error.message);
-                        process_driver_trace(driver, ev);
-                    }
-                }
-                process_driver_trace(driver, "image-alloc-ok");
-                memset(&init_error, 0, sizeof(init_error));
-                init_engine = process_image_runtime_export(
-                    store, image->engine, "waste_environ_set",
-                    &init_func, &init_error);
-                if (init_engine) {
-                    init_args[0].type = WASM_VALTYPE_I32;
-                    init_args[0].i32 = (int32_t)(image->startup_ptr + 44u +
-                        (image->argc + 1u) * sizeof(uint32_t));
-                    exec_status init_st = exec_invoke(init_engine, init_func,
-                                      init_args, 1, NULL,
-                                      &init_result_count, &init_error);
-                    if (init_st != EXEC_OK) {
-                        char ev[128];
-                        snprintf(ev, sizeof(ev), "image-env-FAIL-s%d-%.80s",
-                                 init_st, init_error.message);
-                        process_driver_trace(driver, ev);
-                    } else {
-                        process_driver_trace(driver, "image-env-ok");
-                    }
-                } else {
-                    process_driver_trace(driver, "image-env-missing");
-                }
-                memset(&init_error, 0, sizeof(init_error));
-                init_engine = process_image_runtime_export(
-                    store, image->engine, "waste_stdio_init",
-                    &init_func, &init_error);
-                if (init_engine) {
-                    init_args[0].type = WASM_VALTYPE_I32;
-                    init_args[0].i32 = 4096;
-                    exec_status init_st = exec_invoke(init_engine, init_func,
-                                      init_args, 1, NULL,
-                                      &init_result_count, &init_error);
-                    if (init_st != EXEC_OK) {
-                        char ev[128];
-                        snprintf(ev, sizeof(ev), "image-stdio-FAIL-s%d-%.80s",
-                                 init_st, init_error.message);
-                        process_driver_trace(driver, ev);
-                    }
-                }
-                process_driver_trace(driver, "image-stdio-ok");
-                memset(&init_error, 0, sizeof(init_error));
-                /* Only an image that owns its stdin/stdout/stderr pointer
-                 * slots may request them to be populated.  A dynamically
-                 * linked image uses waste_stdin/out/err from the resident
-                 * libc and must not write FILE pointers to addresses 0,1,2. */
-                init_engine = exec_find_export(
-                    image->engine, "waste_stdio_bind", &init_func,
-                    &init_error) == EXEC_OK ? image->engine : NULL;
-                if (init_engine) {
-                    init_args[0].type = WASM_VALTYPE_I32;
-                    init_args[0].i32 = 0;
-                    init_args[1].type = WASM_VALTYPE_I32;
-                    init_args[1].i32 = 1;
-                    init_args[2].type = WASM_VALTYPE_I32;
-                    init_args[2].i32 = 2;
-                    exec_status init_st = exec_invoke(init_engine, init_func,
-                                      init_args, 3, NULL,
-                                      &init_result_count, &init_error);
-                    if (init_st != EXEC_OK) {
-                        char ev[128];
-                        snprintf(ev, sizeof(ev), "image-bind-FAIL-s%d-%.80s",
-                                 init_st, init_error.message);
-                        process_driver_trace(driver, ev);
-                    } else {
-                        process_driver_trace(driver, "image-bind-ok");
-                    }
-                } else {
-                    process_driver_trace(driver, "image-bind-missing");
-                }
-            }
+            status = process_initialize_image(driver, store, image, error);
+            if (status != EXEC_OK) return status;
             active_engine = image->engine;
             active_func_idx = image->entry_func;
             image_active = 1;
@@ -736,9 +951,7 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
                 error->exit_code = 127;
             }
             if (error->signal)
-                (void)native_store_signal_process(
-                    store, native_store_getpid(store),
-                    error->signal);
+                (void)native_store_terminate_process(store, error->signal);
             else
                 (void)native_store_exit_process(store,
                                                 error->exit_code);
@@ -783,9 +996,13 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
                 parent_capsule->root_args : driver->parent_args;
             arg_count = parent_capsule && parent_capsule->engine ?
                 parent_capsule->root_arg_count : driver->parent_arg_count;
-            image_active = 0;
-            driver->image_active = 0;
+            image_active = parent_capsule && parent_capsule->image != NULL;
+            driver->image_active = image_active;
             driver->parent_restored = 0;
+            /* Each child has its own exit transition. An earlier exec child
+             * must not suppress closing a later builtin-only child's pipe
+             * descriptors before the parent reads command substitution. */
+            child_exit_recorded = 0;
             handler_wake_recorded = 0;
             driver->active_engine = active_engine;
             driver->active_func_idx = active_func_idx;

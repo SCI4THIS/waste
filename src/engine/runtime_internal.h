@@ -127,6 +127,9 @@ typedef struct exec_control {
 typedef struct exec_jump_snapshot {
     uint8_t valid;
     uint32_t environment;
+    uint32_t token;
+    uint32_t stack_pointer_global;
+    wasm_value stack_pointer;
     uint32_t depth;
     uint32_t func_idx;
     uint32_t pc;
@@ -255,6 +258,7 @@ struct waste_exec_engine {
     exec_jump_snapshot *jump_snapshots;
     uint32_t jump_snapshot_count;
     uint32_t jump_snapshot_capacity;
+    uint32_t next_jump_token; /* Monotonic across continuation restoration. */
     exec_yield_frame yield_frames[EXEC_MAX_CALL_DEPTH];
     /* Per-depth call arg storage and shared result/tail buffers reduce
      * per-frame C stack usage to allow deep managed call chains without

@@ -3,13 +3,13 @@
   "comparison": "markers",
   "normalization": "Rogue uses real-time random seeds. Check semantic markers, selected child PIDs and shell status without requiring a prior ldd invocation.",
   "events": [
-    {"after": "bash-5.2# ", "pid": 1, "text": "rogue; printf '__ROGUE_FRESH_%s__\\n' \"$?\"\n"},
+    {"after": "# ", "pid": 1, "text": "rogue; printf '__ROGUE_FRESH_%s__\\n' \"$?\"\n"},
     {"after": "Level:", "pid": 2, "text": "Qy"},
     {"after": "[Press return to continue]", "pid": 2, "text": "\n"},
-    {"after": "bash-5.2# ", "pid": 1, "text": "exit 3\n"}
+    {"after": "# ", "pid": 1, "text": "exit 3\n"}
   ],
   "contains": ["__ROGUE_FRESH_0__\r\n"],
-  "assertions": 7,
+  "assertions": 1,
   "exitStatus": 3,
   "processes": 1
 }

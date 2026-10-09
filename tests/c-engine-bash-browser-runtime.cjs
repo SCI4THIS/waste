@@ -151,15 +151,16 @@ const matrixSteps = matrixCommands.flatMap(({tag, command}) => [
 
 /* Keep the acceptance probe tied to the pathname/process imports in the Bash
  * artifact. */
-const bashWat = fs.readFileSync(path.join(root, "examples/bash.wat"), "utf8");
+const bashImports = WebAssembly.Module.imports(new WebAssembly.Module(
+  readAsset(path.join(vfsRoot, "usr/bin/bash"))));
 for (const name of ["stat", "lstat", "fstat", "eaccess", "faccessat", "fork"]) {
-  if (!bashWat.includes(`\"env\" \"${name}\"`)) {
-    throw new Error(`Bash import inventory lost env.${name}`);
+  if (!bashImports.some(entry => entry.kind === "function" && entry.name === name)) {
+    throw new Error(`Installed Bash import inventory lost ${name}`);
   }
 }
 
 /* Load worker source, wasm, and launch script from staging files */
-const workerSrc = archive ? archive.read("root/waste/app/worker.js").toString("utf8")
+const workerSrc = archive ? archive.read("root/app/worker.js").toString("utf8")
   : withConfig(fs.readFileSync(path.join(frontendDir, "worker.js"), "utf8"));
 
 const wasmPath = path.join(root, "build/html-rt/waste-wast.wasm");
@@ -215,7 +216,7 @@ const mountedVfs = fullPackageProbe || sharedLibraryProbe;
 const vfs = mountedVfs ? archive ? packageVfs(archive) : treeVfs(vfsRoot) : null;
 const fullPackageFiles = [];
 const sharedLibraryFiles = [];
-const launchPath = path.join(root, "build/html-rt/bash-runtime.wast");
+const launchPath = path.join(vfsRoot, "usr/share/waste/launch.wast");
 const launchSource = archive ? archive.read("launch.wast").toString("utf8")
   : fs.readFileSync(launchPath, "utf8");
 
@@ -419,7 +420,7 @@ const self = {
       }
       if (readlineArrowProbe && !readlineArrowSequenceSent &&
           /(?:\r?\n|\r)__C_ENGINE_ARROW_HISTORY__\r?\n/.test(output) &&
-          /bash-[^\r\n]*[#$] ?/.test(message.text)) {
+          /# /.test(message.text)) {
         readlineArrowSequenceSent = true;
         readlineArrowOutputOffset = output.length;
         setTimeout(() => self.onmessage({data: {
@@ -502,7 +503,7 @@ const self = {
             /-[rwx-]{9}[^\r\n]* \/lib\/libncurses\.so\.wasm(?:\r?\n|$)/.test(output)) {
           sharedLayoutSeen = true;
         }
-        const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
+        const messageHasPrompt = /# /.test(message.text);
         if (sharedEnvironmentSeen && sharedLayoutSeen && messageHasPrompt &&
             !lddRequested) {
           lddRequested = true;
@@ -648,7 +649,7 @@ const self = {
         /* The probe exits before it can print its success marker.  Ask Bash
          * for `$?` at the next prompt, then prove that the shell remains
          * usable after observing the nonzero status. */
-        const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
+        const messageHasPrompt = /# /.test(message.text);
         if (commandSent && messageHasPrompt && !exitProbeStatusRequested) {
           exitProbeStatusRequested = true;
           setTimeout(() => self.onmessage({data: {type: "input",
@@ -714,7 +715,7 @@ const self = {
           exitSent = true;
         }
       } else if (coreutilsMatrixProbe) {
-        const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
+        const messageHasPrompt = /# /.test(message.text);
         if (commandSent && messageHasPrompt && matrixStep < matrixSteps.length) {
           const command = matrixSteps[matrixStep++];
           if (command === "exit\n") exitSent = true;
@@ -722,7 +723,7 @@ const self = {
             bytes: Array.from(new TextEncoder().encode(command))}}), 10);
         }
       } else if (pipelineProbe) {
-        const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
+        const messageHasPrompt = /# /.test(message.text);
         const pipelineCommands = [
           "echo __PIPELINE_PIPE_BEGIN__; ls /bin | wc -l; echo __PIPELINE_PIPE_END__\n",
           "ls -1 /bin > /tmp/pipeline-list.txt; printf '__PIPELINE_REDIRECT_STATUS_%s__\\n' \"$?\"\n",
@@ -753,7 +754,7 @@ const self = {
                  coreutilsEchoProbe || coreutilsBasenameProbe ||
                  coreutilsPrintfProbe || coreutilsDirnameProbe || coreutilsCatProbe ||
                  coreutilsWcProbe || coreutilsLsProbe) {
-        const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
+        const messageHasPrompt = /# /.test(message.text);
         const statusRequested = coreutilsTrueProbe ? coreutilsTrueStatusRequested :
           coreutilsFalseProbe ? coreutilsFalseStatusRequested :
           coreutilsPwdProbe ? coreutilsPwdStatusRequested :
@@ -860,7 +861,7 @@ const self = {
             bytes: Array.from(new TextEncoder().encode("exit\n"))}}), 10);
         }
       } else if (wastRepeatProbe) {
-        const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
+        const messageHasPrompt = /# /.test(message.text);
         if (commandSent && messageHasPrompt) {
           const commands = [
             "printf '__C_ENGINE_WAT_REPEAT_1_%s__\\n' \"$?\"\n",
@@ -886,7 +887,7 @@ const self = {
           }
         }
       } else if (runTextProbe) {
-        const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
+        const messageHasPrompt = /# /.test(message.text);
         if (commandSent && messageHasPrompt && !watStatusRequested) {
           watStatusRequested = true;
           setTimeout(() => self.onmessage({data: {type: "input",
@@ -903,7 +904,7 @@ const self = {
             ))}}), 10);
         }
       }
-      const messageHasPrompt = /bash-[^\r\n]*[#$] ?/.test(message.text);
+      const messageHasPrompt = /# /.test(message.text);
       if (!promptSeen && messageHasPrompt) {
         promptSeen = true;
         setTimeout(() => {
@@ -1102,6 +1103,10 @@ self.onmessage({data: {
   vfsPaths: mountedVfs ? manifest.entries.map(e => e.path) : [],
   probeBytes: asArrayBuffer(probeBytes),
   vfsFiles: [...(mountedVfs ? [] : [{
+    path: "/usr/bin/bash",
+    bytes: asArrayBuffer(readAsset(path.join(vfsRoot, "usr/bin/bash"))),
+    mode: 0o755,
+  }, {
     path: "/usr/lib/libc.so.wasm",
     bytes: asArrayBuffer(readAsset(path.join(vfsRoot, "usr/lib/libc.so.wasm"))),
     mode: 0o644,
@@ -1296,7 +1301,7 @@ Promise.race([completion, timeout]).then(result => {
         !output.includes("cannot create temp file for here-document") && result.ok
     : heredocBuiltinProbe
       ? promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&
-        /bash-[^\r\n]*[#$] printf[^\r\n]*\r?\n(?:\x1b\[\?2004l\r)?Hello world!\r?\n/.test(output) &&
+        /# printf[^\r\n]*\r?\n(?:\x1b\[\?2004l\r)?Hello world!\r?\n/.test(output) &&
         !output.includes("cannot create temp file for here-document") && result.ok
     : heredocStdoutProbe
       ? promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&

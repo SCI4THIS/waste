@@ -48,7 +48,6 @@ const GROUP_TIMEOUT_MS = {
   "core/multi-memory": config.SUITE_TIMEOUT_DEFAULT_MS,
   "core/exceptions": config.SUITE_TIMEOUT_DEFAULT_MS,
   "core/relaxed-simd": config.SUITE_TIMEOUT_DEFAULT_MS,
-  "libc-test": config.SUITE_TIMEOUT_DEFAULT_MS,
   "diy-posix-test": config.SUITE_TIMEOUT_DEFAULT_MS,
   "custom/custom": config.SUITE_TIMEOUT_DEFAULT_MS,
   "custom/name": config.SUITE_TIMEOUT_DEFAULT_MS,

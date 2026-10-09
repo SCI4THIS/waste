@@ -64,7 +64,7 @@ async function createWorker(filename) {
     URL.revokeObjectURL(url);
     return worker;
   }
-  if (filename === "worker.js") filename = "root/waste/app/worker.js";
+  if (filename === "worker.js") filename = "root/app/worker.js";
   var src = await g.tar_hash[filename].text();
   var url = URL.createObjectURL(new Blob([src], {type: "text/javascript"}));
   var w = new Worker(url);
@@ -75,15 +75,15 @@ async function createWorker(filename) {
 /* Production frontend files live in the compressed installed VFS. */
 async function loadWebappFiles() {
   const style = document.createElement("style");
-  style.textContent = await loadText("root/waste/app/style.css");
+  style.textContent = await loadText("root/app/style.css");
   document.head.appendChild(style);
   for (const filename of [
-    "root/waste/app/terminal/model.js",
-    "root/waste/app/terminal/glf.js",
-    "root/waste/app/terminal/renderer.js",
-    "root/waste/app/terminal/render-test.js",
-    "root/waste/app/test-suite.js",
-    "root/waste/app/app.js",
+    "root/app/terminal/model.js",
+    "root/app/terminal/glf.js",
+    "root/app/terminal/renderer.js",
+    "root/app/terminal/render-test.js",
+    "root/app/test-suite.js",
+    "root/app/app.js",
   ]) {
     const source = await loadText(filename);
     const url = URL.createObjectURL(new Blob([source], {type: "text/javascript"}));
@@ -102,7 +102,7 @@ async function loadWebappFiles() {
 }
 
 function stagingDataPath(filename) {
-  if (filename === "launch.wast") return g.staging_data_root + "bash-runtime.wast";
+  if (filename === "launch.wast") return g.staging_data_root + "bash/launch.wast";
   if (filename === "payload.json") return g.staging_data_root + "tests/payload.json";
   if (filename === "waste-wast.wasm") return g.staging_data_root + filename;
   if (filename === "vfs-manifest.json") return g.staging_data_root + "bash/vfs-manifest.json";

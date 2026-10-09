@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src/html-rt/tools"))
 from runtime_config import read_config
 CONFIG = read_config()
-RUNNER = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "build/cli-rt/waste-test").resolve()
+RUNNER = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "build/cli-rt/private/test-suite").resolve()
 
 
 def deep_json():
@@ -26,7 +26,7 @@ def deep_json():
 
 
 def entry(identity, source, **changes):
-    test = dict(id=identity, group=identity.rsplit("/", 1)[0], path="/root/waste/tests/" + identity,
+    test = dict(id=identity, group=identity.rsplit("/", 1)[0], path="/root/test/" + identity,
                 executionSpec=dict(mode="wast-stream", file=identity), assets=[],
                 unsupported=False, expectFailure=False, unsupportedReason=None)
     test.update(changes)
@@ -55,10 +55,10 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
         manifest = dict(format=1, tests=[copy.deepcopy(t) for t, _ in items])
         if transform:
             transform(manifest)
-        files = {"/root/waste/tests/manifest.json": json.dumps(manifest).encode()}
+        files = {"/root/test/manifest.json": json.dumps(manifest).encode()}
         files.update({t["path"]: source for t, source in items if source is not None})
         files.update(extra_files or {})
-        directories = {"/", "/root", "/tmp", "/root/waste", "/root/waste/tests"}
+        directories = {"/", "/root", "/tmp", "/root/waste", "/root/test"}
         for name in files:
             parent = str(Path(name).parent)
             while parent != "/":
@@ -114,7 +114,7 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
     install()
     filtered = run("--group=synthetic", "--exclude=fail.wast", "--exclude-group=compat")
     assert len(filtered["tests"]) == 5 and filtered["summary"]["pass"] == 5
-    assert len(run("/root/waste/tests/synthetic/pass.wast")["tests"]) == 1
+    assert len(run("/root/test/synthetic/pass.wast")["tests"]) == 1
     run("--group=missing", expected=2, results=False)
     run("--jobs=NaN", expected=2, results=False)
     run("--timeout-ms=0", expected=2, results=False)
@@ -293,7 +293,9 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
         destination.write_text(json.dumps(saved, indent=2) + "\n")
     install([entry("synthetic/table-copy-fill.wast",
                    (ROOT / "tests/test-suite-table-copy-fill.wast").read_bytes())])
-    table_bulk = run()
+    # System-libc allocation poisoning fills the large parser scratch objects
+    # for each of these 611 assertions; use an explicit instrumentation budget.
+    table_bulk = run("--timeout-ms=15000")
     detail = table_bulk["tests"][0]["nativeReport"]
     assert detail["completed"] and detail["setup"]["passed"] == detail["setup"]["total"] == 7
     assert detail["passed"] == detail["total"] == 611
@@ -314,7 +316,7 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
         ("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqr", True),
         ("\ufeff", True)]
 
-    support = "/root/waste/tests/.support/test-suite/file.bin"
+    support = "/root/test/.support/test-suite/file.bin"
     companion = entry("synthetic/companion.wast", (ROOT / "tests/test-suite-companion.wast").read_bytes(),
                       assets=[dict(kind="vfs-file", path=support, mountPath="/companion", mode=0o644)])
     install([companion], extra_files={support: b"tail"})
@@ -329,8 +331,8 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
     for transform in [
         lambda m: m.update(format=2),
         lambda m: m.update(tests=m["tests"] * 2),
-        lambda m: m["tests"][0].update(path="/root/waste/tests/../escape.wast"),
-        lambda m: m["tests"][0].update(id="../escape.wast", path="/root/waste/tests/../escape.wast"),
+        lambda m: m["tests"][0].update(path="/root/test/../escape.wast"),
+        lambda m: m["tests"][0].update(id="../escape.wast", path="/root/test/../escape.wast"),
         lambda m: m["tests"][0].update(unsupported="false"),
         lambda m: m["tests"][0].update(id="bad\0name"),
         lambda m: m["tests"][0].update(group="other"),
@@ -348,10 +350,10 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
                       b'{"format":1,"extra":"\\u12zz","tests":[]}',
                       b'{"format":1,"format":1,"tests":[]}',
                       b'{"format":01,"tests":[]}', b'{"format":1,"tests":[,]}'):
-        install(extra_files={"/root/waste/tests/manifest.json": malformed})
+        install(extra_files={"/root/test/manifest.json": malformed})
         run(expected=2, results=False)
     install()
-    manifest_path = vfs_root/"root/waste/tests/manifest.json"
+    manifest_path = vfs_root/"root/test/manifest.json"
     original = manifest_path.read_bytes()
     run("--results=" + str(manifest_path), expected=2, results=False)
     assert manifest_path.read_bytes() == original

@@ -18,11 +18,10 @@ CLI_BUILD="$REPO_ROOT/build/cli-rt"
 HTML_BUILD="$REPO_ROOT/build/html-rt"
 LOG_DIR="$ENGINE_BUILD/logs"
 UPDATE_LOG="$LOG_DIR/update.log"
-BASH_RUNTIME_BUILDER="$REPO_ROOT/src/html-rt/tools/build-bash-runtime.py"
-LIBC_OUTPUT="$HTML_BUILD/waste-libc/waste-libc.wasm"
+LIBC_OUTPUT="$REPO_ROOT/build/aux/libc/libc.so.wasm"
 LIBC_LOG="$LOG_DIR/libc-build.log"
 TEST_LOG="$LOG_DIR/test.log"
-C_ENGINE_RUNNER="$CLI_BUILD/waste-cli"
+C_ENGINE_RUNNER="$CLI_BUILD/wast"
 C_ENGINE_WASM="$HTML_BUILD/waste-wast.wasm"
 C_ENGINE_GENERATOR="$REPO_ROOT/src/html-rt/tools/generate-c-engine-tests.py"
 C_ENGINE_BUILD_LOG="$LOG_DIR/c-engine-build.log"
@@ -35,7 +34,6 @@ C_ENGINE_BROWSER_TEST="$REPO_ROOT/tests/c-engine-browser-runtime.cjs"
 C_ENGINE_BASH_GENERATOR="$REPO_ROOT/src/html-rt/tools/generate-c-engine-bash-html.py"
 C_ENGINE_BASH_BROWSER_TEST="$REPO_ROOT/tests/c-engine-bash-browser-runtime.cjs"
 C_ENGINE_TERMINAL_MODEL_TEST="$REPO_ROOT/tests/c-engine-terminal-model.cjs"
-C_ENGINE_BASH_RUNTIME_WAST="$HTML_BUILD/bash-runtime.wast"
 C_ENGINE_BASH_HTML="$HTML_BUILD/bash.html"
 C_ENGINE_BASH_LOG="$LOG_DIR/c-engine-bash.log"
 C_ENGINE_BUILD_SH="$REPO_ROOT/src/html-rt/tools/build.sh"
@@ -68,7 +66,7 @@ Engine (C):
                    and install to repo
 
 Legacy / advanced:
-  --build-libc     build libc.so.wasm and the static libc test profile
+  --build-libc     build the production libc.so.wasm
   --c-engine-tests build C engine and run relaxed-SIMD spec tests
   --c-engine-bash-html
                    alias for --html-bash
@@ -296,32 +294,28 @@ build_waste_libc() {
   {
     printf 'WASTE guest libc build\n'
     printf 'Started: %s\n' "$(date --iso-8601=seconds)"
-    printf 'Source: %s\n' "$REPO_ROOT/src/libc"
+    printf 'Source: %s\n' "$REPO_ROOT/src/aux/libc"
     printf 'Output: %s\n\n' "$LIBC_OUTPUT"
   } >>"$LIBC_LOG"
 
-  if ! have_command python3 || ! have_command make || ! have_command clang || ! wasm_ld_is_usable || ! have_command wasm-as ||
-     ! have_command wasm-merge || ! have_command wasm-dis; then
-    printf 'error: Python 3, make, clang, wasm-ld, wasm-as, wasm-merge, and wasm-dis are required\n' >>"$LIBC_LOG"
+  if ! have_command make || ! have_command clang || ! wasm_ld_is_usable; then
+    printf 'error: make, clang and wasm-ld are required\n' >>"$LIBC_LOG"
     if [[ "$quiet" != true ]]; then
-      show_message "Guest libc build failed" "Python 3, make, clang, wasm-ld, and Binaryen are required.\n\nLog: $LIBC_LOG"
+      show_message "Guest libc build failed" "make, clang and wasm-ld are required.\n\nLog: $LIBC_LOG"
     fi
     return 1
   fi
   if ! run_logged_step "Build guest shared libc" "$LIBC_LOG" \
-      make -C "$REPO_ROOT/src/libc" || \
-      ! run_logged_step "Build static libc test fixtures" "$LIBC_LOG" \
-      make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$HTML_BUILD" \
-      ENGINE_BUILD_DIR="$ENGINE_BUILD" waste-libc; then
+      make -C "$REPO_ROOT/src/aux" libc; then
     if [[ "$quiet" != true ]]; then
-      show_message "Guest libc build failed" "Could not build libc or its test fixtures.\n\nLog: $LIBC_LOG"
+      show_message "Guest libc build failed" "Could not build libc.\n\nLog: $LIBC_LOG"
     fi
     return 1
   fi
   printf 'Completed: %s\n' "$(date --iso-8601=seconds)" >>"$LIBC_LOG"
   if [[ "$quiet" != true ]]; then
     show_message "Guest libc build complete" \
-      "The PIC shared library and static test fixtures were generated.\n\nShared library: $REPO_ROOT/build/libc-shared/libc.so.wasm\nTest profile: $LIBC_OUTPUT\nLog: $LIBC_LOG"
+      "The PIC shared library was built.\n\nShared library: $LIBC_OUTPUT\nLog: $LIBC_LOG"
   fi
 }
 
@@ -354,14 +348,14 @@ compile_cli_engine() {
   if ! run_logged_step "Build native C engine" "$C_ENGINE_BUILD_LOG" \
       make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$CLI_BUILD" \
       ENGINE_BUILD_DIR="$ENGINE_BUILD" \
-      wast-native; then
+      applications-native; then
     show_message "CLI engine compile failed" \
       "The build failed.\n\nLog: $C_ENGINE_BUILD_LOG"
     return 1
   fi
   printf 'Completed: %s\n' "$(date --iso-8601=seconds)" >>"$C_ENGINE_BUILD_LOG"
   show_message "CLI engine compile" \
-    "The native WAST runner was built successfully.\n\nOutput: $C_ENGINE_RUNNER\nLog: $C_ENGINE_BUILD_LOG"
+    "The native wat, wasm and wast commands were built successfully.\n\nOutput: $C_ENGINE_RUNNER\nLog: $C_ENGINE_BUILD_LOG"
 }
 
 run_cli_tests() {
@@ -392,7 +386,7 @@ run_cli_tests() {
   if ! run_logged_step "Build native C engine" "$TEST_LOG" \
       make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$CLI_BUILD" \
       ENGINE_BUILD_DIR="$ENGINE_BUILD" \
-      wast-native; then
+      applications-native; then
     show_message "CLI test suite failed" \
       "The engine build failed.\n\nLog: $TEST_LOG"
     return 1
@@ -452,7 +446,7 @@ generate_c_engine_tests() {
   run_logged_step "Build native C engine" "$TEST_LOG" \
     make -C "$REPO_ROOT/src/cli-rt" \
     BUILD_DIR="$CLI_BUILD" ENGINE_BUILD_DIR="$ENGINE_BUILD" \
-    wast-native || return 1
+    applications-native || return 1
   run_logged_step "Build browser C engine" "$TEST_LOG" \
     make -C "$REPO_ROOT/src/html-rt" \
     BUILD_DIR="$HTML_BUILD" ENGINE_BUILD_DIR="$ENGINE_BUILD" \
@@ -472,7 +466,7 @@ generate_c_engine_tests() {
 
 # ── Auxiliary utility build helpers ──────────────────────────────────────
 
-AUX_UTILITIES=(true false pwd echo printf basename dirname cat chmod wc ls date rogue libncurses ldd upload download)
+AUX_UTILITIES=(libc true false pwd echo printf basename dirname cat chmod wc ls date bash rogue libncurses ldd upload download)
 AUX_STAGING="$REPO_ROOT/src/vfs"
 AUX_LOG="$LOG_DIR/aux-build.log"
 
@@ -480,6 +474,7 @@ AUX_LOG="$LOG_DIR/aux-build.log"
 aux_staged_path() {
   local utility="$1"
   case "$utility" in
+    libc)       printf '%s' "$AUX_STAGING/lib/libc.so.wasm" ;;
     libncurses) printf '%s' "$AUX_STAGING/lib/libncurses.so.wasm" ;;
     *)          printf '%s' "$AUX_STAGING/usr/bin/${utility}" ;;
   esac
@@ -493,14 +488,20 @@ build_single_aux() {
       "clang, make, wasm-ld, and Python 3 are required."
     return 1
   fi
-  if [[ "$utility" != libncurses ]] && ! have_command flock; then
+  if ! have_command flock; then
     show_message "Aux build" "flock is required for auxiliary installation."
     return 1
   fi
   case "$utility" in
     libncurses)
-      if ! have_command wasm-as || ! have_command wasm-merge || ! have_command wasm-dis; then
-        show_message "Aux build" "wasm-as, wasm-merge, and wasm-dis are required for ncurses."
+      if ! have_command cc || ! have_command tic || ! have_command infocmp; then
+        show_message "Aux build" "A host C compiler (cc), tic, and infocmp are required for ncurses generators."
+        return 1
+      fi
+      ;;
+    bash)
+      if ! have_command cc || ! have_command patch; then
+        show_message "Aux build" "A host C compiler (cc) and patch are required for Bash generators and staging."
         return 1
       fi
       ;;
@@ -510,7 +511,7 @@ build_single_aux() {
         return 1
       fi
       ;;
-    ldd|upload|download) ;;
+    libc|ldd|upload|download) ;;
     *)
       if ! have_command patch || ! have_command wasm-opt; then
         show_message "Aux build" "patch and wasm-opt are required for Coreutils."
@@ -521,38 +522,17 @@ build_single_aux() {
   mkdir -p "$HTML_BUILD"
   : >"$AUX_LOG"
 
-  case "$utility" in
-    libncurses)
-      if ! run_logged_step "Build ncurses shared library" \
-          "$AUX_LOG" python3 "$REPO_ROOT/src/html-rt/tools/build-ncurses.py" \
-          --repo-root "$REPO_ROOT" --output "$REPO_ROOT/build/ncurses"; then
-        show_message "Aux build failed" \
-          "Could not build libncurses.\n\nLog: $AUX_LOG"
-        return 1
-      fi
-      local ncurses_out="$REPO_ROOT/build/ncurses/vfs/libncurses.so.wasm"
-      if [[ ! -f "$ncurses_out" ]]; then
-        show_message "Aux build failed" \
-          "Linked artifact not found: $ncurses_out"
-        return 1
-      fi
-      python3 "$REPO_ROOT/src/html-rt/tools/shared_libc.py" \
-        --check-imports "$ncurses_out" || return 1
-      python3 "$REPO_ROOT/src/html-rt/tools/build-guest-sdk.py" --install \
-        --library "$ncurses_out" || return 1
-      printf 'Installed %s → %s\n' "$ncurses_out" "$AUX_STAGING/libncurses.so.wasm"
-      ;;
-    *)
-      if ! run_logged_step "Build and install $utility utility" \
-          "$AUX_LOG" make -C "$REPO_ROOT/src/aux" "install-$utility"; then
-        show_message "Aux build failed" \
-          "Could not build/install $utility.\n\nLog: $AUX_LOG"
-        return 1
-      fi
-      local aux_out="$REPO_ROOT/build/aux/${utility}/${utility}.wasm"
-      printf 'Installed %s → %s\n' "$aux_out" "$AUX_STAGING/usr/bin/$utility"
-      ;;
-  esac
+  if ! run_logged_step "Build and install $utility" \
+      "$AUX_LOG" make -C "$REPO_ROOT/src/aux" "install-$utility"; then
+    show_message "Aux build failed" \
+      "Could not build/install $utility.\n\nLog: $AUX_LOG"
+    return 1
+  fi
+  local aux_out="$REPO_ROOT/build/aux/${utility}/${utility}.wasm"
+  if [[ "$utility" == libc || "$utility" == libncurses ]]; then
+    aux_out="$REPO_ROOT/build/aux/${utility}/${utility}.so.wasm"
+  fi
+  printf 'Installed %s → %s\n' "$aux_out" "$(aux_staged_path "$utility")"
 }
 
 build_all_aux() {
@@ -643,9 +623,10 @@ generate_c_engine_bash_html() {
   fi
 
   if [[ ! -f "$REPO_ROOT/src/vfs/usr/share/waste/launch.wast" ||
-        ! -f "$REPO_ROOT/src/vfs/root/waste/app/app.js" ]]; then
+        ! -f "$REPO_ROOT/src/vfs/usr/bin/bash" ||
+        ! -f "$REPO_ROOT/src/vfs/root/app/app.js" ]]; then
     show_message "C-engine Bash failed" \
-      "Install a Bash launch script and webapp into src/vfs before packaging.\n\nUse the vfs-install-launch and vfs-install-app Make targets."
+      "Install a Bash launch script and webapp into src/vfs before packaging.\n\nUse make -C src/aux install-bash and the vfs-install-app Make target."
     return 1
   fi
 
@@ -654,7 +635,6 @@ generate_c_engine_bash_html() {
       "$C_ENGINE_BASH_LOG" python3 "$C_ENGINE_BASH_GENERATOR" \
       --repo-root "$REPO_ROOT" \
       --wasm "$C_ENGINE_WASM" \
-      --launch "$REPO_ROOT/src/vfs/usr/share/waste/launch.wast" \
       --output-dir "$C_ENGINE_STAGING_BASH"; then
     show_message "C-engine Bash staging failed" \
       "Could not copy staging data.\n\nLog: $C_ENGINE_BASH_LOG"
@@ -834,7 +814,7 @@ generate_c_engine_core_tests() {
   run_logged_step "Build native C engine" "$TEST_LOG" \
     make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$CLI_BUILD" \
     ENGINE_BUILD_DIR="$ENGINE_BUILD" \
-    wast-native || return 1
+    applications-native || return 1
   run_logged_step "Build browser C engine" "$TEST_LOG" \
     make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$HTML_BUILD" \
     ENGINE_BUILD_DIR="$ENGINE_BUILD" \
@@ -849,7 +829,7 @@ generate_c_engine_core_tests() {
 
 run_test_group() {
   local group="$1"
-  if [[ "$group" != c-engine && "$group" != c-engine-core ]] && ! have_command node; then
+  if [[ "$group" == all ]] && ! have_command node; then
     show_message "Runtime tests" "Node.js is required to run the runtime test suites."
     return 1
   fi
@@ -870,7 +850,7 @@ run_test_group() {
 
   local status=0
   if [[ "$group" == libc || "$group" == all ]]; then
-    run_logged_step "Build guest libc and fixtures" "$TEST_LOG" \
+    run_logged_step "Build guest libc" "$TEST_LOG" \
       build_waste_libc true || status=1
   fi
   if ((status != 0)); then
@@ -887,11 +867,11 @@ run_test_group() {
       generate_c_engine_core_tests || status=1
       ;;
     libc)
-      run_logged_test "allocator (native)" node "$REPO_ROOT/tests/libc-test/allocator-native.cjs" || status=1
+      run_logged_test "libc WAST tests in Bash" make -C "$REPO_ROOT/src/cli-rt" libc-native || status=1
       ;;
     all)
       generate_c_engine_tests || status=1
-      run_logged_test "allocator (native)" node "$REPO_ROOT/tests/libc-test/allocator-native.cjs" || status=1
+      run_logged_test "libc WAST tests in Bash" make -C "$REPO_ROOT/src/cli-rt" libc-native || status=1
       ;;
     *) return 2 ;;
   esac

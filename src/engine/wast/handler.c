@@ -1,6 +1,7 @@
 #include "wast/handler.h"
 #include "wast/runner.h"
 #include "runtime_internal.h"
+#include "guest_posix.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,6 +28,9 @@ void wast_process_handler_reset(void *opaque) {
     handler->module_start = handler->store ? handler->store->module_count : 0;
     handler->orphan_start = handler->store ? handler->store->orphan_count : 0;
     handler->retained_start = handler->retained_count;
+    handler->total = handler->passed = 0;
+    handler->verbose = 0;
+    handler->first_failure[0] = '\0';
 }
 
 void wast_process_handler_destroy(wast_process_handler *handler) {
@@ -42,6 +46,16 @@ void wast_process_handler_destroy(wast_process_handler *handler) {
 static void handler_result(wast_process_handler *handler, int passed,
                             const char *name, const char *message) {
     if (!passed) handler->failed = 1;
+    handler->total++;
+    if (passed) handler->passed++;
+    if (!passed && !handler->first_failure[0])
+        snprintf(handler->first_failure, sizeof(handler->first_failure), "%.63s: %.189s",
+                 name ? name : "(assertion)", message ? message : "failed");
+    if (handler->verbose) {
+        const uint8_t mark = passed ? '.' : 'F';
+        if (guest_posix_write_bytes(handler->store, 1, &mark, 1) != 1)
+            handler->failed = 1;
+    }
     if (handler->result)
         handler->result(handler->result_data, passed, name, message);
 }
@@ -94,11 +108,12 @@ static exec_status handler_invoke(void *opaque, waste_exec_engine *engine,
     }
     if (status == EXEC_YIELD && error->yield_reason != EXEC_YIELD_READ &&
         error->yield_reason != EXEC_YIELD_SELECT &&
+        error->yield_reason != EXEC_YIELD_PUMP &&
         error->yield_reason != EXEC_YIELD_HOST_IO) {
         handler->stopped = 1;
         handler->exit_code = 126;
         return exec_fail(error, EXEC_ERROR_UNSUPPORTED,
-                         "WAST handler supports READ/SELECT/HOST_IO, not nested process transitions");
+                         "WAST handler supports READ/SELECT/HOST_IO/PUMP, not nested process transitions");
     }
     return status;
 }
@@ -230,6 +245,8 @@ exec_status wast_process_handler_step(const uint8_t *source, size_t size,
     if (!handler || !handler->store || !source || !size || !next_offset || !next_line)
         return EXEC_ERROR_FORMAT;
     if (!handler->stream_active) {
+        native_process_capsule *capsule = native_store_active_capsule(handler->store);
+        handler->verbose = capsule && capsule->handler.verbose;
         wast_stream_init(&handler->stream, (const char *)source, size);
         handler->stream_active = 1;
     }
@@ -263,5 +280,16 @@ exec_status wast_process_handler_step(const uint8_t *source, size_t size,
     native_process_capsule *capsule = native_store_active_capsule(handler->store);
     if (!capsule) return EXEC_ERROR_FORMAT;
     capsule->handler.exit_code = handler->exit_code ? handler->exit_code : handler->failed ? 1 : 0;
+    if (handler->verbose) {
+        char report[384];
+        int count = snprintf(report, sizeof(report), "\nWAST: %u PASS, %u FAIL, %u total\n%s%s",
+            handler->passed, handler->total - handler->passed, handler->total,
+            handler->first_failure[0] ? handler->first_failure : "",
+            handler->first_failure[0] ? "\n" : "");
+        if (count < 0 || (size_t)count >= sizeof(report) ||
+            guest_posix_write_bytes(handler->store, 1, (const uint8_t *)report,
+                                    (uint32_t)count) != count)
+            capsule->handler.exit_code = 1;
+    }
     return EXEC_ERROR_EXIT;
 }

@@ -11,7 +11,7 @@
 
 typedef struct waste_dir DIR;
 struct dirent {
-  /* Match the prebuilt Bash/Emscripten wasm32 ABI.  These two fields remain
+  /* Follow the public WASTE wasm32 directory-entry ABI.  These two fields remain
      64-bit even though C long and ordinary guest pointers are 32-bit. */
   unsigned long long d_ino;
   signed long long d_off;
@@ -21,7 +21,7 @@ struct dirent {
 };
 
 _Static_assert(__builtin_offsetof(struct dirent, d_name) == 19,
-               "wasm32 dirent d_name offset must match Bash");
+               "wasm32 dirent d_name offset must match the guest ABI");
 
 #define DT_UNKNOWN 0
 #define DT_FIFO 1

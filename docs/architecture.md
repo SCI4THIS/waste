@@ -15,17 +15,26 @@ This document records durable system boundaries and ownership rules.
 practices.  Dated pass counts, resolved failure lists, and build-history notes
 belong in Git history or test result artifacts rather than this document.
 
+Native `wat` and `wasm` launch applications directly; `wast` runs complete
+specification scripts and standalone package tests. Applications inherit host
+stdio through bounded native capabilities, with engine-owned foreground
+signals and terminal processing. Private companions retain scripted session
+controls and isolated batch scheduling; public builds produce `wat`, `wasm`
+and `wast`.
+
 ## Repository and Artifact Layout
 
 The current source boundaries are:
 
 ```text
-src/aux/       authored guest auxiliary commands and build targets
+src/aux/       guest auxiliary commands, package libraries and build targets
 src/engine/    platform-neutral parser, encoder, decoder, validator,
                instantiation, linker, runner, executor and guest POSIX ABI
 src/cli-rt/    native CLI/session drivers, mmap harness, platform library,
                and Makefile
-src/libc/      guest libc.so.wasm sources and portable interpreter support
+src/aux/libc/  guest libc.so.wasm, guest CRT, private interpreter support,
+               package WAST tests, shared-import tools and Make rules
+src/system-tests/  system interaction WAST and compiler SDK probes
 src/html-rt/   browser API, browser POSIX adapter, HTML tools,
                and Wasm Makefile
 ```
@@ -49,9 +58,9 @@ Generated files stay under `build/`:
 
 ```text
 build/engine/           shared generated parser sources, toolchain, and logs
-build/aux/              auxiliary guest binaries and staged Rogue sources
-build/cli-rt/           native executables, including waste-cli
-build/html-rt/          browser Wasm, bash.html, worker-test payloads, and libc fixtures
+build/aux/              auxiliary guest binaries, staged sources and configuration
+build/cli-rt/           native wat/wasm/wast and private test companions
+build/html-rt/          browser Wasm, bash.html and worker-test payloads
 build/ocaml-interpreter/  staged OCaml reference interpreter (optional)
 ```
 
@@ -62,9 +71,17 @@ including test-runner output, belong under `build/`; see
 [the submodule policy](submodule-policy.md) for existing helpers that still
 need this refactor.
 
-`examples/bash.wat` is the compiled Bash input.  Guest-libc sources are under
-`src/libc/`, and browser packaging tools are under
-`src/html-rt/tools/`.  Nothing under `build/` is a source of truth.
+`src/aux/bash` builds the read-only `submodules/bash` sources into
+`build/aux/bash/bash.wasm`, explicitly installed as `/usr/bin/bash`. The browser
+and compatibility harness use the authored
+`src/aux/bash/launch.wast`, installed at `/usr/share/waste/launch.wast`, to
+replace the initial process with that binary through `execve`. Native `wasm`
+loads it directly through the same process/library initialization path. Bash
+uses the shared guest CRT/libc and engine kernel imports;
+libc owns the default root account/hostname records and the CRT binds its stream
+accessors. There is no embedded executable or WAT-rewriting build path. Guest-libc sources
+are under `src/aux/libc/`, and browser packaging tools are under
+`src/html-rt/tools/`. Nothing under `build/` is a source of truth.
 
 Authored browser assets are flattened under `src/html-rt/src/`: the shell/test
 page uses `index.html`, `app.js`, `worker.js`, and `style.css`, with shared
@@ -102,19 +119,21 @@ compare edits against a stored approval ledger. Wasm validation occurs on load;
 explicit installers and ABI tests also validate their candidate modules.
 No custom filesystem bundle is generated.
 The native option
-establishes mount parity; the separate `waste-session` companion adds shared
+establishes mount parity; the private `guest-session` companion adds shared
 guest imports and bounded child-first fork/exec terminal sessions through the
 shared process driver. Both runtimes use the shared WAST child handler, retaining
-assertions across READ/SELECT/HOST_IO resumes and mapping failed child assertions to an
+assertions across READ/SELECT/HOST_IO/PUMP resumes and mapping failed child assertions to an
 exit status without stopping the parent shell. See `native-guest-session.md`.
 Host engine assets and generated transport metadata are not guest VFS nodes.
 
-`src/vfs/root/waste/tests` holds explicitly installed snapshots of the WebAssembly corpus
+`src/vfs/root/test` holds explicitly installed snapshots of the WebAssembly corpus
 and authored `tests/engine-regressions/*.wast`, with a mounted policy/provenance
 manifest and companion assets. Sources remain in the pinned spec submodule,
-top-level regression directories and generated libc fixture directory. The
+top-level regression directories, package `src/aux/NAME/tests` directories and
+`src/system-tests`. The
 corpus collector shares selection/grouping logic with the installer.
-`waste-test`, the native batch companion, consumes `/root/waste/tests/manifest.json` and
+`wast --suite` delegates scheduling to the private `test-suite` companion, which
+consumes `/root/test/manifest.json` and
 WAST/support bytes from an installed directory without Node or an HTML payload.
 Its bounded manifest decoder
 lives in `src/engine/test_suite.{c,h}`; native child isolation, signal handling,
@@ -129,10 +148,65 @@ after execution. Native
 children each construct a fresh store/kernel and retain intentional aliases
 within their own script. Unsupported execution modes remain explicit skips;
 reports preserve assertion records and expected-failure distinctions.
-The native WAST adapter resumes finite kernel SELECT deadlines against a host
-monotonic clock through the shared process driver, preserving pending assertion
-arguments/results. Clock/sleep syscalls stay in cli-rt; terminal-input,
-indefinite and other externally driven waits require the full session adapter.
+The public native `wast` and batch companion use the reusable native runtime
+for invocation, explicit yields, finite SELECT deadlines and monotonic clocks.
+Language scripts begin with empty descriptors. Production-context scripts
+receive terminal descriptors and can resume READ/SELECT through native stdin;
+unsupported external waits in language context fail explicitly. Clock/sleep
+syscalls and host polling stay in cli-rt. Nested host batch launching is disabled
+in standalone scripts and batch children.
+
+Public `wasm`/`wat` applications distinguish inherited TTYs, pipes and files,
+and preserve their access directions. The kernel owns bounded input queues,
+descriptor aliases, EOF and terminal state. OFDs carry opaque input/output
+capability IDs; only `src/cli-rt/native_terminal.c` resolves these to private
+duplicates of inherited host stdio. Closing or replacing a guest fd cannot
+redirect a surviving alias to an unrelated host descriptor. Shared process
+selection recognizes stream/terminal aliases beyond fd 0.
+
+The native adapter captures/restores host terminal modes and signal handlers,
+transports raw TTY bytes and queries real dimensions. Guest termios/Readline and
+kernel output processing supply terminal behavior. Pipe/file stdio transfers
+raw bytes; inherited regular files retain their type but are stream endpoints
+without seeking or complete host stat metadata. This does not extend guest VFS
+paths into host filesystem access. Private session and production WAST contexts
+retain modeled terminals for deterministic tests. Host signals enqueue guest
+foreground-group signals; they are distinct from timeout and harness cancellation.
+Default termination is checked at evaluator checkpoints and wait resumption,
+with POSIX signal wait status and descriptor cleanup before the parent resumes.
+Native pump checkpoints poll terminal input so Ctrl-C can interrupt a CPU-bound
+child. Canonical input, erase/kill and echo belong to the shared kernel; native
+and browser adapters transport the resulting bytes.
+
+Caught input-wait signals are engine-owned. A blocking read consumes one
+unmasked pending signal; the guest adapter invokes its handler before returning
+EINTR or re-registering a READ with SA_RESTART. SELECT/pselect invoke the same
+handler path and return EINTR. Compiled C actions carry a shared-table slot,
+action mask and flags; table resolution selects the process-owned function
+instance and validates its signature. Legacy table-free WAT probes retain their
+local function-index/action-prefix ABI. Callback mask/scope restoration also
+covers traps, exits and guest longjmp. Handlers execute synchronously, suppress
+browser pump yields and reject blocking calls rather than publishing a second
+suspended callback. Unblocked self-signals run before kill/raise returns, which
+allows Readline to forward a signal to the temporarily restored Bash handler.
+Caught asynchronous handlers run at input waits; default termination also runs
+at evaluator checkpoints. Exec resets caught actions while preserving ignored
+actions, masks and pending signals. Default notification signals are ignored;
+stop/continue job scheduling remains unsupported.
+
+Standalone production context comes from the shared C process driver: it
+creates the memory/table provider, loads mounted `/usr/lib/libc.so.wasm`, and
+uses the production startup block and libc initialization without starting an
+application. Imported minima determine resource sizes within shared limits.
+Context setup clones the mounted kernel, attaches terminal descriptors in place,
+and rolls back providers and kernel state on failure. Auto selection scans the
+whole script before execution. Ordinary imports from `libc` or `waste-runtime`
+request that context; script registrations of either provider or module
+assertions using them preserve a language namespace for the entire file.
+Explicit `--context runtime` rejects those conflicts; `language` suppresses
+implicit providers. Every input file owns a fresh store/kernel. JSON assertion
+reports retain the existing schema, and guest writes go to stderr in JSON mode
+so stdout remains machine readable.
 The offline shell's `test-suite.js` controller runs this same installed corpus
 through fresh production `worker.js` instances. Browser API exports decode the
 mounted manifest with the shared decoder, read WAST/companions through temporary
@@ -147,8 +221,8 @@ execution and mount checks, and [test boundary selection](techniques.md#test-bou
 for the contracts that require direct C or host tests.
 
 Focused worker-test metadata lives in `build/html-rt/tests/payload.json` and
-the Bash page bootstrap inputs live in
-`build/html-rt/{waste-wast.wasm,bash-runtime.wast}`. The one browser page,
+the Bash page consumes `build/html-rt/waste-wast.wasm` and the installed
+launcher and executable from `src/vfs`. The one browser page,
 `bash.html`, includes the installed corpus diagnostic runner. Packaging reads
 authored frontend files plus these generated inputs; no standalone test
 dashboard is generated.
@@ -175,9 +249,21 @@ Upload/download requests yield through `EXEC_YIELD_HOST_IO`, with pending state
 in `native_store.host_io`. `browser_api.c` exposes the request to `worker.js`;
 `app.js` owns the browser file picker, FileReader and Blob download. The engine
 copies uploaded bytes into owned storage before the worker frees its temporary
-buffer, then commits the file to the guest VFS on resume. Native polling, clocks and transcript output live in
-`src/cli-rt/guest_session.c`; guest paths are never forwarded to host syscalls.
+buffer, then commits the file to the guest VFS on resume. Native polling,
+clocks, execution and output live in `src/cli-rt/native_runtime.c`;
+`guest_session.c` supplies the private compatibility harness CLI. Guest paths
+are never forwarded to host syscalls.
 Both runtimes resume explicitly saved evaluator state through ordinary C calls.
+
+The native `wasm` and `wat` frontends share application option handling and
+the runtime adapter. `native_input.c` discovers the default VFS from the actual
+executable's location or accepts an explicit root. Canonical inputs beneath
+that root map to guest paths; external inputs grant only a bounded file
+snapshot staged in guest state. Their parent directories are not mounted and
+guest changes do not write back to the source tree. Application deadlines,
+traces and harness reports are opt-in. Common native engine/runtime objects
+are cached separately for release and sanitizer linking profiles; guest libc
+remains an installed Wasm shared library.
 
 `src/engine/process_driver.{c,h}` owns reusable fork/exec/child selection and
 parent/provider continuation restoration policy, with mutable state in a
@@ -207,7 +293,7 @@ an accessibility/diagnostic mirror. Neither changes terminal semantics.
 
 The renderer/font provenance and MIT/OFL notices live in
 `src/html-rt/src/terminal/GLF-NOTICES.md`. These assets and notices are installed
-under `/root/waste/app/terminal` and extracted from the offline VFS tarball
+under `/root/app/terminal` and extracted from the offline VFS tarball
 before the shell starts. No font fetch, server, cross-origin isolation,
 SharedArrayBuffer or Asyncify is required.
 
@@ -572,19 +658,36 @@ browser runtime follows these same rules and does not use host `mmap`,
 ## Guest Libc
 
 Production Bash loads `/usr/lib/libc.so.wasm` from the installed VFS. Build
-and install it with `make -C src/libc install`; HTML packaging consumes that
-snapshot just as the native runtime mounts it. `src/libc/allocator.c` and the
+and install it with `make -C src/aux install-libc`; HTML packaging consumes that
+snapshot just as the native runtime mounts it. `src/aux/libc/allocator.c` and the
 focused C sources beside it compile with PIC and link as a `dylink.0` shared
 object. The library provides allocator state, stdio objects, errno storage,
 string and conversion helpers, locale and wide character support, identity
 databases, patterns, and terminal/environment wrappers. `/lib/libc.so.wasm`
 and `/usr/lib/libc.so.wasm` are compatibility copies, like the ncurses library.
 
-The Bash bootstrap owns the neutral `waste-runtime` memory, table and stack
-pointer, loads libc and initializes its allocator. Named `libc` imports resolve
-through the process's loaded-library catalogue; the `env` registration remains
-for legacy fixtures and kernel ABI adapters. It embeds no libc module. Libraries share the process
-memory/table while keeping their own relocated data and globals. `printf`
+The browser's authored Bash launcher supplies initial `waste-runtime` memory,
+table and stack resources and calls `execve` on `/usr/bin/bash`. The shared
+`native_process_driver_start` API can instead create these resources directly
+in C for a fresh native or browser store and load an executable without a
+launcher. A store-owned resource provider participates in the existing import
+and fork graph. Initial startup keeps a candidate kernel until loading and
+initialization succeed; failure releases the partial image/providers and
+restores the original kernel and descriptors. Native `wasm` and `wat` use this
+API; `private/guest-session --exec` retains a private compatibility route. Initial
+start options can specify binary/text format, a checked alternative entry,
+and readable interpreter input while subsequent guest exec retains execute
+permission checks. Memoryless modules without a startup hook do not require
+the C ABI startup block.
+Initial startup and later exec share runtime initialization, which initializes
+the process-local libc allocator, environment and stdio before entering the
+CRT, which obtains streams through libc accessors. Initializers must have the
+expected signatures and complete successfully; traps, failure results and
+unsupported startup waits propagate to the caller. Named `libc` imports resolve
+through the process's loaded-library catalogue; production startup needs no
+`env` registration alias. Kernel imports use host adapters, and legacy fixtures
+may register their own aliases. Libraries share the process memory/table while
+keeping their own relocated data and globals. `printf`
 formats in guest libc and calls `write`, which passes through engine-owned
 descriptors to the native or browser I/O adapter. Process, exec, fork, wait,
 thread, VFS, signal and clock semantics remain in the C engine's kernel.
@@ -595,7 +698,7 @@ until process exit, so the per-process library bound also limits reopen cycles.
 Range/slot reuse, blocking constructors and general POSIX loader conformance
 remain deferred.
 
-`src/libc/runtime/` contains the small freestanding C support library used by
+`src/aux/libc/runtime/` contains the small freestanding C support library used by
 the interpreter itself: memory/string operations, allocation helpers, math,
 formatting and host errno. Those sources compile into each runtime because the
 interpreter needs them to load and execute guest Wasm. They operate on host
@@ -607,21 +710,23 @@ error numbers and must never depend on the build host's global errno.  Calls
 that require unavailable capabilities fail explicitly rather than pretending
 to succeed.
 
-The static test profile (`build-waste-libc.py`) still combines `stdlib.wat`
-with the same C helpers for isolated legacy fixtures. Production Coreutils,
-Bash, Rogue, ncurses, ldd, upload and download import matching function signatures
-from `libc`; the Coreutils build does not merge libc into utility images. Memory
-and table imports remain process resources, and engine imports retain their
-runtime namespaces. The freestanding waste-test command has no libc dependency.
-`ldd` walks the unique import-module dependency closure without executing code,
-reporting the installed library paths, built-in adapters and unresolved libraries.
-Bash retains two legacy `env` adapters (`lseek` and `__fpurge`) with signatures
-that differ from the public libc ABI. Generated libc fixtures instantiate client modules against the
-test library's memory and table. This is an ABI test as well as a functional test: pointers,
-callbacks, allocator metadata, and errno must be observed through the actual
-cross-module aliases. `guest-session-check.py --scenario shared-libc` instead
-checks the installed production library in both native and browser C builds,
-including actual printf output and ncurses handle/reference lifetime.
+Production Coreutils, Bash, Rogue, ncurses, ldd, upload and download import
+matching function signatures from `libc`; utilities do not embed a copy of
+libc. Memory and table imports remain process resources, and engine imports
+retain their runtime namespaces. The freestanding waste-test command has no
+libc dependency. `ldd` walks the unique import-module dependency closure
+without executing code, reporting the installed library paths, built-in
+adapters and unresolved libraries. Bash imports `lseek` and `__fpurge` directly
+from shared libc using the public SDK signatures.
+
+Package WAST tests under `src/aux/libc/tests` import the installed `libc` and
+Bash's existing `waste-runtime` memory/table. System interactions are tested
+under `src/system-tests/libc`. Both run through `/bin/wast` inside native or
+browser Bash; they inherit the actual loaded production library rather than
+constructing a separate test library. Cross-module pointers, callbacks,
+allocator metadata and errno use the same aliases as applications. Compiler
+header/layout checks remain separate system SDK probes, because WAST imports
+cannot establish C declaration correctness.
 
 ## Wasm32 Application ABI
 
@@ -672,7 +777,7 @@ strings in that image, including the cwd independently of argv[0].
 
 Guest structures are wire layouts, not the host compiler's C structures.
 `struct dirent` has 64-bit `d_ino` and `d_off`, then 16-bit `d_reclen`, 8-bit
-`d_type`, and `d_name` at byte offset 19, matching prebuilt Bash. The compact
+`d_type`, and `d_name` at byte offset 19, following the public Wasm32 guest ABI. The compact
 pathname metadata record is 48 bytes: kind/mode/uid/gid at offsets 0/4/8/12,
 signed size at 16, inode at 24, signed mtime seconds at 32, nanoseconds at 40.
 Guest `stat` expands it into the 128-byte public structure. Guest `time_t` is

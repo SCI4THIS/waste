@@ -36,6 +36,26 @@ typedef struct {
 
 void native_process_driver_init(native_process_driver *driver);
 void native_process_driver_destroy(native_process_driver *driver);
+/* Prepare the first image in a fresh store. The store must have exactly its
+ * initial process and no instantiated modules. On success selection names
+ * the entry to invoke; argv/envp are copied and may be released by the caller.
+ * On failure the original kernel and an empty process capsule are restored. */
+exec_status native_process_driver_start(native_process_driver *driver,
+    native_store *store, const char *path, const char *const *argv,
+    uint32_t argc, const char *const *envp, uint32_t envc, exec_error *error);
+typedef struct {
+    const char *entry; /* Default _start. Process entries have type () -> (). */
+    native_exec_format format;
+    int readable_input; /* Explicit interpreter reads; later exec checks X_OK. */
+} native_process_start_options;
+exec_status native_process_driver_start_with_options(native_process_driver *driver,
+    native_store *store, const char *path, const char *const *argv,
+    uint32_t argc, const char *const *envp, uint32_t envc,
+    const native_process_start_options *options, exec_error *error);
+/* Fresh-store production resource/libc context without starting an application.
+ * Failures restore the original mounted kernel and leave no providers. */
+exec_status native_process_driver_prepare_runtime(native_process_driver *,
+    native_store *, uint32_t memory_pages, uint32_t table_entries, exec_error *);
 exec_status native_process_driver_invoke(native_process_driver *driver,
     native_store *store, waste_exec_engine *engine, uint32_t function,
     const wasm_value *args, int arg_count, wasm_value *results,

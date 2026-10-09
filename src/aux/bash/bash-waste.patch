@@ -1,0 +1,71 @@
+--- a/include/shmbutil.h
++++ b/include/shmbutil.h
+@@ -26,6 +26,8 @@
+ /* Include config.h for HANDLE_MULTIBYTE */
+ #include <config.h>
+ 
++extern int locale_utf8locale;	/* Also used by single-byte glob matching. */
++
+ #if defined (HANDLE_MULTIBYTE)
+ #include "shmbchar.h"
+ 
+@@ -38,7 +40,6 @@
+ extern char *xstrchr (const char *, int);
+ 
+ extern int locale_mb_cur_max;	/* XXX */
+-extern int locale_utf8locale;	/* XXX */
+ 
+ #ifndef MB_INVALIDCH
+ #define MB_INVALIDCH(x)		((x) == (size_t)-1 || (x) == (size_t)-2)
+--- a/builtins/printf.def
++++ b/builtins/printf.def
+@@ -284,7 +284,7 @@
+   char convch, thisch, nextch, *format, *modstart, *precstart, *fmt, *start;
+ #if defined (HANDLE_MULTIBYTE)
+   char mbch[25];		/* 25 > MB_LEN_MAX, plus can handle 4-byte UTF-8 and large Unicode characters*/
+-  int mbind, mblen, mb_cur_max;
++  int mbind, mblen;
+ #endif
+ #if defined (ARRAY_VARS)
+   int arrayflags;
+@@ -355,7 +355,7 @@
+ 
+   garglist = orig_arglist = list->next;
+ 
+-  mb_cur_max = MB_CUR_MAX;
++  int mb_cur_max = MB_CUR_MAX;
+ 
+   /* Basic algorithm is to scan the format string for conversion
+      specifications -- once one is found, find out if the field
+@@ -1175,7 +1175,8 @@
+ static char *
+ bexpand (char *string, size_t len, int *sawc, size_t *lenp)
+ {
+-  int temp, c;
++  int temp;
++  char c;
+   char *ret, *r, *s, *send;
+ #if defined (HANDLE_MULTIBYTE)
+   char mbch[25];
+--- a/bashline.c
++++ b/bashline.c
+@@ -4142,7 +4142,7 @@
+ 	}
+     }
+ #else
+-    rl_point++:
++    rl_point++;
+ #endif
+   return point;
+ }
+--- a/execute_cmd.c
++++ b/execute_cmd.c
+@@ -1475,7 +1475,7 @@
+       selfb.ru_utime.tv_sec = kidsb.ru_utime.tv_sec = selfb.ru_stime.tv_sec = kidsb.ru_stime.tv_sec = 0;
+       selfb.ru_utime.tv_usec = kidsb.ru_utime.tv_usec = selfb.ru_stime.tv_usec = kidsb.ru_stime.tv_usec = 0;
+       before = shellstart;
+-#else
++#elif defined (HAVE_TIMES)
+       before.tms_utime = before.tms_stime = before.tms_cutime = before.tms_cstime = 0;
+       tbefore = shell_start_time;
+ #endif

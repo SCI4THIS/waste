@@ -10,6 +10,7 @@
 #include "wast/setup.h"
 #include "posix_stubs.h"
 #include "process_driver.h"
+#include "guest_posix.h"
 #include "lib/include/kernel.h"
 
 #include <stddef.h>
@@ -1817,8 +1818,8 @@ __attribute__((export_name("waste_wast_enqueue_input")))
 int32_t waste_wast_enqueue_input(uint32_t ptr, uint32_t length) {
     int32_t result = -POSIX_EINVAL;
     if (g_yield_context.store.kernel_terminal && length <= INT32_MAX)
-        result = posix_kernel_terminal_enqueue(
-            g_yield_context.store.kernel, 0,
+        result = guest_posix_enqueue_input(
+            &g_yield_context.store, 0,
             (const uint8_t *)(uintptr_t)ptr, (int)length);
     free((void *)(uintptr_t)ptr);
     if (result == 0)

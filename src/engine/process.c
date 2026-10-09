@@ -174,10 +174,11 @@ int native_store_complete_process_handler_signal(native_store *store,
     capsule->pending_result = 128 + signal;
     capsule->pending_result_valid = 1;
     native_process_capsule_clear_handler(capsule);
-    process->exit_status = ((128 + signal) & 0xff) << 8;
+    process->exit_status = signal & 0x7f;
     process->zombie = 1;
     capsule->state = NATIVE_PROCESS_EXITED;
     capsule->pending_transition = NATIVE_PROCESS_TRANSITION_EXIT;
+    posix_kernel_close_all_fds(process->kernel);
     return 0;
 }
 
@@ -424,7 +425,7 @@ int native_store_suspend_process_handler_for_yield(
         native_store *store, exec_yield_reason reason) {
     native_process_capsule *capsule;
     if (reason != EXEC_YIELD_READ && reason != EXEC_YIELD_SELECT
-            && reason != EXEC_YIELD_HOST_IO)
+            && reason != EXEC_YIELD_HOST_IO && reason != EXEC_YIELD_PUMP)
         return -POSIX_EINVAL;
     if (native_store_suspend_process_handler(
             store, NATIVE_PROCESS_BROWSER_BLOCKED) != 0)
@@ -609,8 +610,9 @@ int native_process_capsule_select_entry(native_process_capsule *capsule,
 
 static int native_process_bind_engine_memory(
         native_process_capsule *capsule, waste_exec_engine *engine) {
-    if (!capsule || !engine || !engine->memory)
+    if (!capsule || !engine)
         return -POSIX_EINVAL;
+    if (!engine->memory) return 0;
     /* Only mutate memories the engine actually owns.  Modules that import
      * a shared memory (spectest.memory in the core test suite, env.memory
      * from waste-runtime for executables) must not acquire process-virtual
@@ -1087,6 +1089,7 @@ int native_process_capsule_clone(native_process_capsule *destination,
         destination->handler.stream_line = source->handler.stream_line;
         destination->handler.status = source->handler.status;
         destination->handler.exit_code = source->handler.exit_code;
+        destination->handler.verbose = source->handler.verbose;
         /* A forked child starts runnable; never carry the parent's external
          * wait marker into that fresh scheduling state. */
         destination->handler.wait_reason = EXEC_YIELD_NONE;
@@ -1182,7 +1185,18 @@ int native_store_set_active_process(native_store *store, int pid) {
     if (!process || process->zombie) return -POSIX_ECHILD;
     store->active_pid = pid;
     store->kernel = process->kernel;
-    store->kernel_terminal = process->kernel && process->kernel->fds[0].ofd != NULL;
+    /* A closed/replaced fd 0 does not revoke inherited stream aliases.
+     * Adapter availability follows OFD identity across the whole table. */
+    store->kernel_terminal = 0;
+    if (process->kernel) {
+        for (int fd = 0; fd < POSIX_KERNEL_FD_MAX; fd++) {
+            const posix_ofd *ofd = process->kernel->fds[fd].ofd;
+            if (ofd && (ofd->kind == POSIX_OFD_TERMINAL || ofd->kind == POSIX_OFD_STREAM)) {
+                store->kernel_terminal = 1;
+                break;
+            }
+        }
+    }
     process->capsule.state = NATIVE_PROCESS_RUNNABLE;
     return 0;
 }
@@ -1263,6 +1277,7 @@ int native_store_commit_process_image(native_store *store,
         }
     }
     posix_kernel_close_on_exec(process->kernel);
+    posix_kernel_signal_exec(process->kernel);
     release_image(process->capsule.image);
     process->capsule.image = image;
     process->capsule.engine = image->engine;
@@ -1511,16 +1526,51 @@ int native_store_signal_process(native_store *store, int pid, int signal) {
     native_process *process = find_process(store, pid);
     posix_signal_disposition disposition;
     if (!process || process->zombie || signal <= 0) return -POSIX_EINVAL;
-    if (posix_kernel_signal_raise(process->kernel, signal) != 0) return -POSIX_EINVAL;
+    int raised = posix_kernel_signal_raise(process->kernel, signal);
+    if (raised) return raised;
     if (posix_kernel_signal_get_disposition(process->kernel, signal,
                                              &disposition) != 0 ||
-        disposition != POSIX_SIGNAL_DEFAULT || signal == POSIX_SIGSTOP)
+        disposition != POSIX_SIGNAL_DEFAULT ||
+        posix_kernel_signal_default_pending(process->kernel) != signal ||
+        (pid == store->active_pid && process->capsule.image))
         return 0;
-    process->exit_status = ((128 + signal) & 0xff) << 8;
+    process->exit_status = signal & 0x7f;
     process->zombie = 1;
     process->capsule.state = NATIVE_PROCESS_EXITED;
     process->capsule.pending_transition = NATIVE_PROCESS_TRANSITION_EXIT;
+    posix_kernel_close_all_fds(process->kernel);
     return 0;
+}
+
+int native_store_default_signal(void *opaque) {
+    native_store *store = opaque;
+    native_process *process = active_process(store);
+    /* Language-only WAST sandboxes retain their raw syscall probe semantics. */
+    return process && process->capsule.image ?
+        posix_kernel_signal_default_pending(process->kernel) : 0;
+}
+
+int native_store_terminate_process(native_store *store, int signal) {
+    native_process *process = active_process(store);
+    if (!process || signal <= 0 || signal > POSIX_SIGNAL_MAX) return -POSIX_EINVAL;
+    process->exit_status = signal & 0x7f;
+    process->zombie = 1;
+    process->capsule.state = NATIVE_PROCESS_EXITED;
+    process->capsule.pending_transition = NATIVE_PROCESS_TRANSITION_EXIT;
+    posix_kernel_cancel_wait(process->kernel);
+    posix_kernel_signal_clear(process->kernel, signal);
+    posix_kernel_close_all_fds(process->kernel);
+    return 0;
+}
+
+int native_store_signal_foreground(native_store *store, int signal) {
+    if (!store || !store->kernel) return -POSIX_EINVAL;
+    for (int fd = 0; fd < POSIX_KERNEL_FD_MAX; fd++) {
+        posix_ofd *ofd = store->kernel->fds[fd].ofd;
+        if (ofd && ofd->kind == POSIX_OFD_TERMINAL)
+            return native_store_signal_process_group(store, ofd->terminal.foreground_pgid, signal);
+    }
+    return native_store_signal_process(store, store->active_pid, signal);
 }
 
 int native_store_signal_process_group(native_store *store, int pgid, int signal) {
@@ -1543,9 +1593,8 @@ int native_store_wait_process(native_store *store, int pid, int options,
                               int *status_out) {
     native_process *parent = active_process(store);
     if (!parent || !status_out) return -POSIX_EFAULT;
-    /* The browser Bash build passes implementation-specific wait flags. The
-     * process model only has exited/stopped state, so recognized lifecycle
-     * bits are ignored and unknown bits are treated as a non-blocking query. */
+    /* This process model reports exited children. WNOHANG selects a query;
+     * recognized stop/continue lifecycle bits do not add those states. */
     if (pid < -1) return -POSIX_EINVAL;
     if (pid == 0) pid = -1; /* single process group in the browser sandbox */
     native_process *candidate = NULL;

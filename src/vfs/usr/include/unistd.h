@@ -33,7 +33,7 @@ int link(const char *, const char *) WASTE_UNAVAILABLE("No WASTE runtime provide
 int symlink(const char *, const char *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 int symlinkat(const char *, int, const char *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 int linkat(int, const char *, int, const char *, int);
-off_t lseek(int, off_t, int) WASTE_UNAVAILABLE("Browser overrides lseek with Bash i64 ABI; default off_t is i32");
+off_t lseek(int, off_t, int);
 ssize_t read(int, void *, size_t);
 ssize_t readlink(const char *, char *, size_t);
 ssize_t readlinkat(int, const char *, char *, size_t) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");

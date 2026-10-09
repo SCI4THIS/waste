@@ -10,7 +10,7 @@ import tempfile
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--native", default="build/cli-rt/waste-session-sanitize")
+    parser.add_argument("--native", default="build/cli-rt/private/guest-session-sanitize")
     parser.add_argument("--vfs-root", default="src/vfs")
     parser.add_argument("--asan-options", default="detect_leaks=1:halt_on_error=1")
     parser.add_argument("--results", type=Path)

@@ -12,7 +12,7 @@ import tempfile
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--native", default="build/cli-rt/waste-session-sanitize")
+    parser.add_argument("--native", default="build/cli-rt/private/guest-session-sanitize")
     parser.add_argument("--vfs-root", default="src/vfs")
     parser.add_argument("--wasm", default="build/html-rt/waste-wast.wasm")
     parser.add_argument("--page")

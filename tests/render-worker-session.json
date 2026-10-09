@@ -1,8 +1,8 @@
 {
   "fixture": "src/vfs/usr/share/waste/launch.wast",
   "events": [
-    {"after": "bash-5.2#", "text": "wast /root/waste/tests/render/terminal.wast; printf '__RENDER_EXIT__%s\\n' \"$?\"; cat /tmp/terminal-renderer-results.json; printf '__REPORT_END__\\n'\n"},
-    {"after": "__REPORT_END__\r\n", "text": "wast /root/waste/tests/render/terminal.wast; printf '__RENDER_FAIL_EXIT__%s\\n' \"$?\"; cat /tmp/terminal-renderer-results.json; printf '__FAILED_REPORT_END__\\n'\n"},
+    {"after": "# ", "text": "wast /root/test/html-rt/terminal.wast; printf '__RENDER_EXIT__%s\\n' \"$?\"; cat /tmp/terminal-renderer-results.json; printf '__REPORT_END__\\n'\n"},
+    {"after": "__REPORT_END__\r\n", "text": "wast /root/test/html-rt/terminal.wast; printf '__RENDER_FAIL_EXIT__%s\\n' \"$?\"; cat /tmp/terminal-renderer-results.json; printf '__FAILED_REPORT_END__\\n'\n"},
     {"after": "__FAILED_REPORT_END__\r\n", "text": "exit\n"}
   ],
   "renderReplies": [

@@ -1,4 +1,5 @@
 CC ?= cc
+.DEFAULT_GOAL := applications-native
 CPPFLAGS ?=
 CFLAGS ?= -O3 -std=c11 -Wall -Wextra -Wpedantic -Werror
 
@@ -6,7 +7,6 @@ ENGINE_DIR := ../engine
 BUILD_DIR ?= ../../build/cli-rt
 ENGINE_BUILD_DIR ?= ../../build/engine
 WAST_GEN_DIR := $(ENGINE_BUILD_DIR)/gen
-FREESTANDING_FLAGS := -I$(ENGINE_DIR)/lib/include -fno-builtin -fno-stack-protector
 WASM_LD ?= $(shell command -v wasm-ld 2>/dev/null || printf '%s' $(abspath $(ENGINE_BUILD_DIR)/toolchain/usr/bin/wasm-ld))
 WASM_LD_LIB ?= $(abspath $(ENGINE_BUILD_DIR)/toolchain/usr/lib)
 
@@ -51,20 +51,41 @@ ENGINE_HEADERS += native_vfs.h $(ENGINE_DIR)/lib/json.h $(ENGINE_DIR)/process_dr
 	$(ENGINE_DIR)/lib/include/path.h
 ENGINE_HEADERS += $(ENGINE_DIR)/wast/setup.h
 
-# Freestanding library: shared portable interpreter support
-LIB_SHARED := ../libc/runtime/string.c ../libc/runtime/stdio.c \
-	../libc/runtime/stdlib.c ../libc/runtime/math.c ../libc/runtime/errno.c
+# System-libc runtime profile: one engine object set per optimization/sanitizer
+# ABI, shared by application frontends, session harness and batch companion.
+NATIVE_OBJECT_DIR := $(BUILD_DIR)/obj/native
+SAN_OBJECT_DIR := $(BUILD_DIR)/obj/sanitize
+NATIVE_ENGINE_INPUTS := $(filter $(ENGINE_DIR)/%,$(ENGINE_SOURCES))
+NATIVE_ENGINE_OBJECTS := $(patsubst $(ENGINE_DIR)/%.c,$(NATIVE_OBJECT_DIR)/engine/%.o,$(NATIVE_ENGINE_INPUTS)) $(NATIVE_OBJECT_DIR)/engine/dispatch_gen.o
+SAN_ENGINE_OBJECTS := $(patsubst $(ENGINE_DIR)/%.c,$(SAN_OBJECT_DIR)/engine/%.o,$(NATIVE_ENGINE_INPUTS)) $(SAN_OBJECT_DIR)/engine/dispatch_gen.o
+NATIVE_RUNTIME_OBJECTS := $(NATIVE_OBJECT_DIR)/runtime/native_runtime.o $(NATIVE_OBJECT_DIR)/runtime/native_vfs.o $(NATIVE_OBJECT_DIR)/runtime/native_wast.o $(NATIVE_OBJECT_DIR)/runtime/native_terminal.o
+SAN_RUNTIME_OBJECTS := $(SAN_OBJECT_DIR)/runtime/native_runtime.o $(SAN_OBJECT_DIR)/runtime/native_vfs.o $(SAN_OBJECT_DIR)/runtime/native_wast.o $(SAN_OBJECT_DIR)/runtime/native_terminal.o
+SAN_CFLAGS := -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-omit-frame-pointer
+NATIVE_RUNTIME_HEADERS := native_runtime.h native_input.h application.h guest_suite.h native_wast.h native_terminal.h
 
-# Freestanding library: native platform backend (local to cli-rt)
-LIB_NATIVE := lib/stdlib.c lib/stdio.c lib/fcntl.c \
-	lib/mman.c lib/time.c lib/unistd.c
+$(NATIVE_OBJECT_DIR)/engine/%.o: $(ENGINE_DIR)/%.c $(ENGINE_HEADERS)
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) -c $< -o $@
+$(SAN_OBJECT_DIR)/engine/%.o: $(ENGINE_DIR)/%.c $(ENGINE_HEADERS)
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(SAN_CFLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) -c $< -o $@
+$(NATIVE_OBJECT_DIR)/engine/dispatch_gen.o: $(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_HEADERS)
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) -c $< -o $@
+$(SAN_OBJECT_DIR)/engine/dispatch_gen.o: $(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_HEADERS)
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(SAN_CFLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) -c $< -o $@
+$(NATIVE_OBJECT_DIR)/runtime/%.o: %.c $(ENGINE_HEADERS) $(NATIVE_RUNTIME_HEADERS)
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) -c $< -o $@
+$(SAN_OBJECT_DIR)/runtime/%.o: %.c $(ENGINE_HEADERS) $(NATIVE_RUNTIME_HEADERS)
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(SAN_CFLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) -c $< -o $@
 
 # Generated parser objects
 WAST_TAB_C := $(WAST_GEN_DIR)/wast.tab.c
 WAST_TAB_H := $(WAST_GEN_DIR)/wast.tab.h
 WAST_LEX_C := $(WAST_GEN_DIR)/wast.lex.c
-WAST_TAB_O := $(BUILD_DIR)/wast.tab.native.o
-WAST_LEX_O := $(BUILD_DIR)/wast.lex.native.o
 WAST_TAB_SAN_O := $(BUILD_DIR)/wast.tab.sanitize.o
 WAST_LEX_SAN_O := $(BUILD_DIR)/wast.lex.sanitize.o
 
@@ -72,11 +93,11 @@ WAST_GENERATED_CFLAGS ?= -O2 -std=c11 -Wall -Wextra -Wno-unused-but-set-variable
 WAST_LEX_CFLAGS ?= -O2 -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -Wno-sign-compare
 
 # Targets
-WAST_TARGET := $(BUILD_DIR)/waste-cli
-SUITE_TARGET := $(BUILD_DIR)/waste-test
-SUITE_SAN_TARGET := $(BUILD_DIR)/waste-test-sanitize
-SESSION_TARGET := $(BUILD_DIR)/waste-session
-SESSION_SAN_TARGET := $(BUILD_DIR)/waste-session-sanitize
+WAST_TARGET := $(BUILD_DIR)/wast
+SUITE_TARGET := $(BUILD_DIR)/private/test-suite
+SUITE_SAN_TARGET := $(BUILD_DIR)/private/test-suite-sanitize
+SESSION_TARGET := $(BUILD_DIR)/private/guest-session
+SESSION_SAN_TARGET := $(BUILD_DIR)/private/guest-session-sanitize
 I32_SMOKE_TARGET := $(BUILD_DIR)/i32-smoke-sanitize
 WASM_BINARY_TEST_TARGET := $(BUILD_DIR)/wasm-binary-primitives-sanitize
 WASM_IMPORT_TEST_TARGET := $(BUILD_DIR)/wasm-import-decode-sanitize
@@ -121,17 +142,21 @@ WASTE_PROBE_WASM := $(BUILD_DIR)/waste-probe.wasm
 gen:
 	$(MAKE) -C $(ENGINE_DIR) BUILD_DIR=$(abspath $(ENGINE_BUILD_DIR)) gen
 
+# Materialize shared generated inputs before compiling, including when both
+# build directories are new. The recursive engine goal owns their contents;
+# an order-only dependency keeps its phony check from recompiling consumers.
+$(WAST_TAB_C) $(WAST_TAB_H) $(WAST_LEX_C) $(WAST_GEN_DIR)/dispatch_gen.c $(WAST_GEN_DIR)/dispatch_gen.h: | gen
+	@test -f $@
+
 # ---- Dead-code lint (reports unused non-static functions) ----
 
-lint: gen $(WAST_TAB_O) $(WAST_LEX_O)
+lint: gen $(BUILD_DIR)/wast.tab.session.o $(BUILD_DIR)/wast.lex.session.o
 	@echo "=== Dead-code report (unused non-static engine functions) ==="
 	@$(CC) $(CPPFLAGS) $(CFLAGS) \
 		-ffunction-sections -fdata-sections \
-		$(FREESTANDING_FLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
+		-D_POSIX_C_SOURCE=200809L -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
 		main.c native_vfs.c native_wast.c $(ENGINE_SOURCES) \
-		$(LIB_SHARED) $(LIB_NATIVE) \
-		$(WAST_TAB_O) $(WAST_LEX_O) \
-		-nostdlib -static \
+		$(BUILD_DIR)/wast.tab.session.o $(BUILD_DIR)/wast.lex.session.o -lm \
 		-Wl,--gc-sections -Wl,--print-gc-sections \
 		-o /dev/null 2>&1 \
 		| grep '\.text\.' \
@@ -147,21 +172,9 @@ lint: gen $(WAST_TAB_O) $(WAST_LEX_O)
 			-e '^strerror$$' \
 		| sort -u; \
 		echo "---"; \
-		echo "(Public API, freestanding lib, and parser functions are excluded)"
+		echo "(Public API and parser functions are excluded)"
 
 # ---- Compile generated parser objects ----
-
-$(WAST_TAB_O): $(WAST_TAB_C) $(WAST_TAB_H) $(ENGINE_HEADERS)
-	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(WAST_GENERATED_CFLAGS) \
-		$(FREESTANDING_FLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
-		-c $(WAST_TAB_C) -o $@
-
-$(WAST_LEX_O): $(WAST_LEX_C) $(WAST_TAB_H) $(ENGINE_HEADERS)
-	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(WAST_LEX_CFLAGS) \
-		$(FREESTANDING_FLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
-		-c $(WAST_LEX_C) -o $@
 
 $(WAST_TAB_SAN_O): $(WAST_TAB_C) $(WAST_TAB_H) $(ENGINE_HEADERS)
 	mkdir -p $(BUILD_DIR)
@@ -182,18 +195,8 @@ $(WAST_LEX_SAN_O): $(WAST_LEX_C) $(WAST_TAB_H) $(ENGINE_HEADERS)
 
 # ---- WAST native runner ----
 
-wast-native: gen $(WAST_TARGET)
-
-$(WAST_TARGET): native_vfs.c main.c native_wast.c native_wast.h $(ENGINE_SOURCES) $(LIB_SHARED) $(LIB_NATIVE) \
-		$(ENGINE_HEADERS) $(WAST_TAB_O) $(WAST_LEX_O)
-	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) \
-		$(FREESTANDING_FLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
-		main.c native_vfs.c native_wast.c $(ENGINE_SOURCES) \
-		$(LIB_SHARED) $(LIB_NATIVE) \
-		$(WAST_TAB_O) $(WAST_LEX_O) \
-		-nostdlib -static \
-		-o $(WAST_TARGET)
+# Compatibility Make alias; the public output is wast.
+wast-native: wast
 
 # Batch policy consumes the mounted distribution directly; no browser build
 # or Node process is needed. Host child isolation uses system libc, like the
@@ -201,59 +204,48 @@ $(WAST_TARGET): native_vfs.c main.c native_wast.c native_wast.h $(ENGINE_SOURCES
 .PHONY: test-suite test-suite-sanitize test-suite-check corpus-native
 test-suite: gen $(SUITE_TARGET)
 
-$(SUITE_TARGET): native_vfs.c test_suite.c native_wast.c native_wast.h \
-		$(ENGINE_DIR)/test_suite.c $(ENGINE_DIR)/test_suite.h \
-		$(ENGINE_SOURCES) $(ENGINE_HEADERS) \
-		$(BUILD_DIR)/wast.tab.session.o $(BUILD_DIR)/wast.lex.session.o
-	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
-		test_suite.c native_vfs.c native_wast.c $(ENGINE_DIR)/test_suite.c $(ENGINE_SOURCES) \
-		$(BUILD_DIR)/wast.tab.session.o $(BUILD_DIR)/wast.lex.session.o -lm -o $@
+$(SUITE_TARGET): $(NATIVE_OBJECT_DIR)/runtime/test_suite.o $(NATIVE_RUNTIME_OBJECTS) $(NATIVE_OBJECT_DIR)/engine/test_suite.o \
+        $(NATIVE_ENGINE_OBJECTS) $(BUILD_DIR)/wast.tab.session.o $(BUILD_DIR)/wast.lex.session.o
+	mkdir -p $(@D)
+	$(CC) $(CFLAGS) $^ -lm -o $@
 
 test-suite-sanitize: gen $(SUITE_SAN_TARGET)
 
 test-suite-check: test-suite-sanitize
 	python3 ../../tests/native-test-suite-check.py $(SUITE_SAN_TARGET)
 
-$(SUITE_SAN_TARGET): native_vfs.c test_suite.c native_wast.c native_wast.h \
-		$(ENGINE_DIR)/test_suite.c $(ENGINE_DIR)/test_suite.h \
-		$(ENGINE_SOURCES) $(ENGINE_HEADERS) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
-	$(CC) $(CPPFLAGS) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
-		-fsanitize=address,undefined -fno-omit-frame-pointer \
-		-I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
-		test_suite.c native_vfs.c native_wast.c $(ENGINE_DIR)/test_suite.c $(ENGINE_SOURCES) \
-		$(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O) -lm -o $@
+$(SUITE_SAN_TARGET): $(SAN_OBJECT_DIR)/runtime/test_suite.o $(SAN_RUNTIME_OBJECTS) $(SAN_OBJECT_DIR)/engine/test_suite.o \
+        $(SAN_ENGINE_OBJECTS) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
+	mkdir -p $(@D)
+	$(CC) $(SAN_CFLAGS) $^ -lm -o $@
 
-corpus-native: test-suite
-	$(SUITE_TARGET) --vfs-root=../vfs \
+corpus-native: wast
+	$(WAST_TARGET) --suite --vfs-root=../vfs \
 		--expected-failures=../../tests/native-corpus-expected-failures.txt \
 		--jobs=4 --json --results=$(BUILD_DIR)/corpus-results.json
 
-# Guest values remain in the installed WAST clients. Check complete ordered
-# outcomes, including individual mismatches inside the two tracked XFAILs.
-# This consumes the installed tree; it does not build HTML artifacts.
+# Compatibility gates now execute authored WAST against the installed DSO in Bash.
 .PHONY: libc-native libc-sanitize
-libc-native: wast-native test-suite
-	python3 ../../tests/libc-corpus-check.py --runner $(SUITE_TARGET) --parser $(WAST_TARGET) \
-		--results $(BUILD_DIR)/libc-results.json
-	python3 ../../tests/libc-corpus-contract-check.py $(BUILD_DIR)/libc-results.json $(WAST_TARGET)
+libc-native: applications-native
+	$(MAKE) -C ../aux test-libc WASM_RUNNER="$(abspath $(BUILD_DIR)/wasm)"
+	$(MAKE) -C ../system-tests test-libc WASM_RUNNER="$(abspath $(BUILD_DIR)/wasm)"
 
-libc-sanitize: wast-native test-suite-sanitize
-	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
-		python3 ../../tests/libc-corpus-check.py --runner $(SUITE_SAN_TARGET) --parser $(WAST_TARGET) \
-		--results $(BUILD_DIR)/libc-sanitize-results.json
+libc-sanitize: applications-sanitize
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(MAKE) -C ../aux \
+		test-libc WASM_RUNNER="$(abspath $(BUILD_DIR)/wasm-sanitize)"
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(MAKE) -C ../system-tests \
+		test-libc WASM_RUNNER="$(abspath $(BUILD_DIR)/wasm-sanitize)"
 
 # ---- i32 smoke test (ASan/UBSan, uses system libc) ----
 
-# The interactive companion uses system libc for poll/clock/output only.
-# Guest filesystem operations remain in the shared engine/kernel, never host
-# path syscalls. The freestanding conformance runner stays unchanged.
+# The private session harness shares the public system-libc runtime profile.
+# Guest filesystem operations remain in the shared engine/kernel.
 guest-session: gen $(SESSION_TARGET) test-suite $(BUILD_DIR)/native-corpus-expected-failures.txt
 
-$(SESSION_TARGET): native_vfs.c guest_session.c guest_suite.h $(ENGINE_SOURCES) $(ENGINE_HEADERS) \
-		$(BUILD_DIR)/wast.tab.session.o $(BUILD_DIR)/wast.lex.session.o
-	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) \
-		guest_session.c native_vfs.c $(ENGINE_SOURCES) \
-		$(BUILD_DIR)/wast.tab.session.o $(BUILD_DIR)/wast.lex.session.o -lm -o $@
+$(SESSION_TARGET): $(NATIVE_OBJECT_DIR)/runtime/guest_session.o $(NATIVE_RUNTIME_OBJECTS) \
+        $(NATIVE_ENGINE_OBJECTS) $(BUILD_DIR)/wast.tab.session.o $(BUILD_DIR)/wast.lex.session.o
+	mkdir -p $(@D)
+	$(CC) $(CFLAGS) $^ -lm -o $@
 
 $(BUILD_DIR)/wast.tab.session.o: $(WAST_TAB_C) $(WAST_TAB_H) $(ENGINE_HEADERS)
 	mkdir -p $(BUILD_DIR)
@@ -266,12 +258,67 @@ $(BUILD_DIR)/wast.lex.session.o: $(WAST_LEX_C) $(WAST_TAB_H) $(ENGINE_HEADERS)
 
 guest-session-sanitize: gen $(SESSION_SAN_TARGET) test-suite-sanitize $(BUILD_DIR)/native-corpus-expected-failures.txt
 
-$(SESSION_SAN_TARGET): native_vfs.c guest_session.c guest_suite.h $(ENGINE_SOURCES) $(ENGINE_HEADERS) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
-	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
-		-fsanitize=address,undefined -fno-omit-frame-pointer \
-		-I$(ENGINE_DIR) -I$(WAST_GEN_DIR) guest_session.c native_vfs.c $(ENGINE_SOURCES) \
-		$(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O) -lm -o $@
+# Private direct-start ownership gate; guest fixtures live with system tests.
+.PHONY: direct-start-build direct-start-check
+direct-start-build: gen $(BUILD_DIR)/direct-start-sanitize guest-session
+direct-start-check: direct-start-build
+	cd ../.. && ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(abspath $(BUILD_DIR))/direct-start-sanitize
+
+$(SAN_OBJECT_DIR)/checks/direct-start.o: ../system-tests/cli-runtime/direct-start.c $(ENGINE_HEADERS)
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(SAN_CFLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) -c $< -o $@
+$(BUILD_DIR)/direct-start-sanitize: $(SAN_OBJECT_DIR)/checks/direct-start.o $(SAN_ENGINE_OBJECTS) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
+	$(CC) $(SAN_CFLAGS) $^ -lm -o $@
+
+$(SESSION_SAN_TARGET): $(SAN_OBJECT_DIR)/runtime/guest_session.o $(SAN_RUNTIME_OBJECTS) \
+        $(SAN_ENGINE_OBJECTS) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
+	mkdir -p $(@D)
+	$(CC) $(SAN_CFLAGS) $^ -lm -o $@
+
+.PHONY: wasm wat applications-native applications-sanitize application-check application-check-sanitize
+wasm: gen $(BUILD_DIR)/wasm test-suite $(BUILD_DIR)/native-corpus-expected-failures.txt
+wat: gen $(BUILD_DIR)/wat test-suite $(BUILD_DIR)/native-corpus-expected-failures.txt
+applications-native: wasm wat wast
+applications-sanitize: gen $(BUILD_DIR)/wasm-sanitize $(BUILD_DIR)/wat-sanitize $(BUILD_DIR)/wast-sanitize test-suite-sanitize $(BUILD_DIR)/native-corpus-expected-failures.txt
+application-check: applications-native
+	python3 ../system-tests/cli-runtime/entrypoints/check.py
+application-check-sanitize: applications-sanitize
+	python3 ../system-tests/cli-runtime/entrypoints/check.py --sanitize
+
+.PHONY: terminal-check terminal-check-sanitize
+terminal-check: applications-native
+	python3 ../system-tests/cli-runtime/terminal/check.py --idle-seconds=31
+terminal-check-sanitize: applications-sanitize
+	python3 ../system-tests/cli-runtime/terminal/check.py --sanitize
+
+$(BUILD_DIR)/wasm $(BUILD_DIR)/wat: $(BUILD_DIR)/%: $(NATIVE_OBJECT_DIR)/runtime/%.o \
+        $(NATIVE_OBJECT_DIR)/runtime/application.o $(NATIVE_OBJECT_DIR)/runtime/native_input.o \
+        $(NATIVE_RUNTIME_OBJECTS) $(NATIVE_ENGINE_OBJECTS) $(BUILD_DIR)/wast.tab.session.o $(BUILD_DIR)/wast.lex.session.o
+	$(CC) $(CFLAGS) $^ -lm -o $@
+$(BUILD_DIR)/wasm-sanitize $(BUILD_DIR)/wat-sanitize: $(BUILD_DIR)/%-sanitize: $(SAN_OBJECT_DIR)/runtime/%.o \
+        $(SAN_OBJECT_DIR)/runtime/application.o $(SAN_OBJECT_DIR)/runtime/native_input.o \
+        $(SAN_RUNTIME_OBJECTS) $(SAN_ENGINE_OBJECTS) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
+	$(CC) $(SAN_CFLAGS) $^ -lm -o $@
+
+.PHONY: wast wast-sanitize wast-check wast-check-sanitize
+wast: gen $(BUILD_DIR)/wast test-suite $(BUILD_DIR)/native-corpus-expected-failures.txt
+wast-sanitize: gen $(BUILD_DIR)/wast-sanitize test-suite-sanitize $(BUILD_DIR)/native-corpus-expected-failures.txt
+wast-check: wast
+	python3 ../system-tests/cli-runtime/wast/check.py
+wast-check-sanitize: wast-sanitize
+	python3 ../system-tests/cli-runtime/wast/check.py --sanitize
+$(NATIVE_OBJECT_DIR)/runtime/diagnostics.o: main.c $(ENGINE_HEADERS) $(NATIVE_RUNTIME_HEADERS)
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -D_POSIX_C_SOURCE=200809L -DWASTE_CLI_NO_MAIN -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) -c $< -o $@
+$(SAN_OBJECT_DIR)/runtime/diagnostics.o: main.c $(ENGINE_HEADERS) $(NATIVE_RUNTIME_HEADERS)
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(SAN_CFLAGS) -D_POSIX_C_SOURCE=200809L -DWASTE_CLI_NO_MAIN -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) -c $< -o $@
+$(BUILD_DIR)/wast: $(NATIVE_OBJECT_DIR)/runtime/wast.o $(NATIVE_OBJECT_DIR)/runtime/native_input.o \
+        $(NATIVE_OBJECT_DIR)/runtime/diagnostics.o $(NATIVE_RUNTIME_OBJECTS) $(NATIVE_ENGINE_OBJECTS) $(BUILD_DIR)/wast.tab.session.o $(BUILD_DIR)/wast.lex.session.o
+	$(CC) $(CFLAGS) $^ -lm -o $@
+$(BUILD_DIR)/wast-sanitize: $(SAN_OBJECT_DIR)/runtime/wast.o $(SAN_OBJECT_DIR)/runtime/native_input.o \
+        $(SAN_OBJECT_DIR)/runtime/diagnostics.o $(SAN_RUNTIME_OBJECTS) $(SAN_ENGINE_OBJECTS) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
+	$(CC) $(SAN_CFLAGS) $^ -lm -o $@
 
 # ---- Minimal external-image ABI probe ----
 
@@ -290,7 +337,7 @@ $(WASTE_PROBE_WASM): ../../tests/c-engine-waste-probe.c
 i32-smoke: gen $(WAST_TARGET) $(SUITE_SAN_TARGET) $(I32_SMOKE_TARGET) $(I32_SMOKE_WASM) $(IMPORT_SMOKE_WASM) $(EXTERN_PROVIDER_WASM) $(EXTERN_CONSUMER_WASM)
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(I32_SMOKE_TARGET) $(I32_SMOKE_WASM) $(IMPORT_SMOKE_WASM) $(EXTERN_PROVIDER_WASM) $(EXTERN_CONSUMER_WASM)
 	for fixture in ../../tests/engine-regressions/*.wast; do \
-		cmp "$$fixture" "../vfs/root/waste/tests/engine-regressions/$${fixture##*/}" || exit $$?; \
+		cmp "$$fixture" "../vfs/root/test/engine-regressions/$${fixture##*/}" || exit $$?; \
 		$(WAST_TARGET) "$$fixture" || exit $$?; \
 	done
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
@@ -462,7 +509,7 @@ posix-path-abi: $(POSIX_PATH_ABI_TEST_TARGET)
 
 posix-path-vfs: gen $(POSIX_PATH_VFS_TEST_TARGET) $(WAST_TARGET) $(SUITE_SAN_TARGET)
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(POSIX_PATH_VFS_TEST_TARGET)
-	cmp ../../tests/engine-regressions/path-vfs.wast ../vfs/root/waste/tests/engine-regressions/path-vfs.wast
+	cmp ../../tests/engine-regressions/path-vfs.wast ../vfs/root/test/engine-regressions/path-vfs.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/path-vfs.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs path-vfs.wast --jobs=1 \
@@ -514,22 +561,22 @@ $(POSIX_SELECT_ABI_TEST_TARGET): ../../tests/posix-select-abi.c \
 
 posix-kernel: gen $(POSIX_KERNEL_TEST_TARGET) $(WAST_TARGET) $(SUITE_SAN_TARGET) terminal-readiness terminal-timing process-groups terminal-descriptors
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(POSIX_KERNEL_TEST_TARGET)
-	cmp ../../tests/engine-regressions/pipe-descriptors.wast ../vfs/root/waste/tests/engine-regressions/pipe-descriptors.wast
+	cmp ../../tests/engine-regressions/pipe-descriptors.wast ../vfs/root/test/engine-regressions/pipe-descriptors.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/pipe-descriptors.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs pipe-descriptors.wast --jobs=1 \
 		--results=$(BUILD_DIR)/pipe-regressions.json
-	cmp ../../tests/engine-regressions/descriptor-flags.wast ../vfs/root/waste/tests/engine-regressions/descriptor-flags.wast
+	cmp ../../tests/engine-regressions/descriptor-flags.wast ../vfs/root/test/engine-regressions/descriptor-flags.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/descriptor-flags.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs descriptor-flags.wast --jobs=1 \
 		--results=$(BUILD_DIR)/descriptor-regressions.json
-	cmp ../../tests/engine-regressions/directory-umask.wast ../vfs/root/waste/tests/engine-regressions/directory-umask.wast
+	cmp ../../tests/engine-regressions/directory-umask.wast ../vfs/root/test/engine-regressions/directory-umask.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/directory-umask.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs directory-umask.wast --jobs=1 \
 		--results=$(BUILD_DIR)/directory-regressions.json
-	cmp ../../tests/engine-regressions/shared-memory.wast ../vfs/root/waste/tests/engine-regressions/shared-memory.wast
+	cmp ../../tests/engine-regressions/shared-memory.wast ../vfs/root/test/engine-regressions/shared-memory.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/shared-memory.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs shared-memory.wast --jobs=1 \
@@ -550,7 +597,7 @@ $(POSIX_KERNEL_TEST_TARGET): ../../tests/posix-kernel.c \
 
 posix-select: gen $(POSIX_SELECT_TEST_TARGET) $(WAST_TARGET) $(SUITE_SAN_TARGET) terminal-readiness
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(POSIX_SELECT_TEST_TARGET)
-	cmp ../../tests/engine-regressions/select-polling.wast ../vfs/root/waste/tests/engine-regressions/select-polling.wast
+	cmp ../../tests/engine-regressions/select-polling.wast ../vfs/root/test/engine-regressions/select-polling.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/select-polling.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs select-polling.wast --jobs=1 \
@@ -622,7 +669,7 @@ $(POSIX_WAIT_TEST_TARGET): ../../tests/posix-wait.c \
 
 posix-signal: gen $(POSIX_SIGNAL_TEST_TARGET) $(WAST_TARGET) $(SUITE_SAN_TARGET)
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(POSIX_SIGNAL_TEST_TARGET)
-	cmp ../../tests/engine-regressions/signal-masks.wast ../vfs/root/waste/tests/engine-regressions/signal-masks.wast
+	cmp ../../tests/engine-regressions/signal-masks.wast ../vfs/root/test/engine-regressions/signal-masks.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/signal-masks.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs signal-masks.wast --jobs=1 \
@@ -643,7 +690,7 @@ $(POSIX_SIGNAL_TEST_TARGET): ../../tests/posix-signal.c \
 
 caller-instance: gen $(WAST_TARGET) $(SUITE_SAN_TARGET) $(CALLER_INSTANCE_TEST_TARGET) $(CALLER_A_WASM) $(CALLER_B_WASM)
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(CALLER_INSTANCE_TEST_TARGET) $(CALLER_A_WASM) $(CALLER_B_WASM)
-	cmp ../../tests/engine-regressions/caller-memory.wast ../vfs/root/waste/tests/engine-regressions/caller-memory.wast
+	cmp ../../tests/engine-regressions/caller-memory.wast ../vfs/root/test/engine-regressions/caller-memory.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/caller-memory.wast
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs caller-memory.wast --results=$(BUILD_DIR)/caller-memory-results.json
@@ -800,8 +847,8 @@ $(EXEC_MATRIX_TEST_TARGET): ../../tests/c-engine-exec-matrix.c \
 		$(ENGINE_DIR)/op/execute_exception.c $(ENGINE_DIR)/op/execute_table.c \
 		$(WAST_GEN_DIR)/dispatch_gen.c $(ENGINE_DIR)/instance.c \
 		$(ENGINE_DIR)/api.c \
-		../libc/runtime/string.c ../libc/runtime/stdlib.c \
-		../libc/runtime/math.c ../libc/runtime/errno.c \
+		../aux/libc/runtime/string.c ../aux/libc/runtime/stdlib.c \
+		../aux/libc/runtime/math.c ../aux/libc/runtime/errno.c \
 		lib/stdio.c -lm -o $@
 
 $(EXEC_LIFECYCLE_TEST_TARGET): ../../tests/c-engine-exec-lifecycle.c \
@@ -833,8 +880,12 @@ $(EXEC_LIFECYCLE_TEST_TARGET): ../../tests/c-engine-exec-lifecycle.c \
 continuation: gen $(WAST_TARGET) $(SUITE_SAN_TARGET) $(CONTINUATION_TEST_TARGET) $(CONTINUATION_WASM) $(CONTINUATION_CONSUMER_WASM)
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(CONTINUATION_TEST_TARGET) $(CONTINUATION_WASM) \
 		$(CONTINUATION_CONSUMER_WASM)
-	cmp ../../tests/engine-regressions/continuation-waits.wast ../vfs/root/waste/tests/engine-regressions/continuation-waits.wast
+	cmp ../../tests/engine-regressions/continuation-waits.wast ../vfs/root/test/engine-regressions/continuation-waits.wast
 	$(WAST_TARGET) ../../tests/engine-regressions/continuation-waits.wast
+	cmp ../../tests/engine-regressions/setjmp-buffer-copy.wast ../vfs/root/test/engine-regressions/setjmp-buffer-copy.wast
+	$(WAST_TARGET) ../../tests/engine-regressions/setjmp-buffer-copy.wast
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
+		--vfs-root=../vfs setjmp-buffer-copy.wast --results=$(BUILD_DIR)/setjmp-buffer-copy-results.json
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(SUITE_SAN_TARGET) \
 		--vfs-root=../vfs continuation-waits.wast --results=$(BUILD_DIR)/continuation-waits-results.json
 
@@ -920,8 +971,9 @@ $(CONTINUATION_TEST_TARGET): ../../tests/c-engine-continuation.c \
 		$(ENGINE_DIR)/instance.c $(ENGINE_DIR)/api.c -lm -o $@
 
 clean:
-	rm -f $(WAST_TARGET) $(SUITE_TARGET) $(SUITE_SAN_TARGET) $(SESSION_TARGET) $(SESSION_SAN_TARGET) \
-		$(BUILD_DIR)/wast.tab.session.o $(BUILD_DIR)/wast.lex.session.o \
+	rm -f $(BUILD_DIR)/wasm $(BUILD_DIR)/wat $(WAST_TARGET) \
+		$(BUILD_DIR)/wasm-sanitize $(BUILD_DIR)/wat-sanitize $(BUILD_DIR)/wast-sanitize \
+		$(SUITE_TARGET) $(SUITE_SAN_TARGET) $(SESSION_TARGET) $(SESSION_SAN_TARGET) \
 		$(I32_SMOKE_TARGET) $(WASM_BINARY_TEST_TARGET) \
 		$(WASM_IMPORT_TEST_TARGET) $(WASM_VALIDATION_TEST_TARGET) \
 		$(PARSER_REENTRANT_TEST_TARGET) $(POSIX_SELECT_ABI_TEST_TARGET) \
@@ -930,7 +982,7 @@ clean:
 		$(PROCESS_CONTINUATION_TEST_TARGET) $(PROCESS_CONTINUATION_WASM) \
 		$(CONTINUATION_TEST_TARGET) $(CONTINUATION_WASM) \
 		$(CONTINUATION_CONSUMER_WASM) \
-		$(WAST_TAB_O) $(WAST_LEX_O) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
+		$(BUILD_DIR)/wast.tab.session.o $(BUILD_DIR)/wast.lex.session.o $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
 
 .PHONY: guest-test-launcher
 guest-test-launcher: $(BUILD_DIR)/waste-test.wasm

@@ -1,6 +1,6 @@
-/* Browser interpreter POSIX stubs; guest wrappers live in src/libc. */
+/* Browser interpreter POSIX stubs; guest wrappers live in src/aux/libc. */
 
-#include "../../libc/include/helper.h"
+#include "../../aux/libc/include/helper.h"
 
 struct timespec { i64 tv_sec; long tv_nsec; };
 

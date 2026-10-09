@@ -439,10 +439,21 @@ static void guest_posix_set_errno(native_store *store,
     wasm_value result;
     int result_count = 0;
     waste_exec_engine *errno_engine = (waste_exec_engine *)caller;
-    native_linked_module *env = native_registered_module(store, "env");
-    if (env) errno_engine = native_store_process_engine(store, env->engine);
-    if (exec_find_export(errno_engine, "__errno_location", &index, &ignored) != EXEC_OK)
-        return;
+    if (!store || !caller || !caller->memory) return;
+    if (exec_find_export(errno_engine, "__errno_location", &index, &ignored) != EXEC_OK) {
+        /* Source-built executables import errno from the process-local DSO.
+         * They do not need a WAST registration alias for libc. */
+        native_loaded_library *libc = native_store_find_library(store, "libc");
+        errno_engine = libc ? native_store_process_engine(store, libc->engine) : NULL;
+        if (!errno_engine || errno_engine->memory != caller->memory ||
+            exec_find_export(errno_engine, "__errno_location", &index, &ignored) != EXEC_OK) {
+            native_linked_module *env = native_registered_module(store, "env");
+            errno_engine = env ? native_store_process_engine(store, env->engine) : NULL;
+            if (!errno_engine || errno_engine->memory != caller->memory ||
+                exec_find_export(errno_engine, "__errno_location", &index, &ignored) != EXEC_OK)
+                return;
+        }
+    }
     if (exec_invoke(errno_engine, index, NULL, 0,
                     &result, &result_count, &ignored) != EXEC_OK ||
         result_count != 1 || result.type != WASM_VALTYPE_I32)
@@ -788,6 +799,90 @@ static exec_status guest_posix_ftruncate(void *data, const wasm_value *args,
     return guest_posix_result(status, results, result_count);
 }
 
+/* C function pointers address the shared table. Table-free legacy WAT probes
+ * retain their local function-index ABI; a bad table slot never falls back. */
+static exec_status guest_posix_deliver_signal(native_store *store,
+    const waste_exec_engine *caller, int *restart, exec_error *error) {
+    int signal = posix_kernel_signal_last_delivered(store->kernel);
+    posix_signal_disposition disposition;
+    uint32_t handler;
+    *restart = 0;
+    if (signal <= 0 || posix_kernel_signal_get_disposition(store->kernel,
+            signal, &disposition))
+        return EXEC_OK;
+    if (disposition != POSIX_SIGNAL_HANDLER) {
+        native_process_capsule *capsule = native_store_active_capsule(store);
+        if (disposition == POSIX_SIGNAL_DEFAULT && capsule && capsule->image &&
+            signal != 17 && signal != 18 && signal != 23 && signal != POSIX_SIGWINCH) {
+            exec_fail(error, EXEC_ERROR_EXIT, "process terminated by signal");
+            error->signal = signal;
+            error->exit_code = 128 + signal;
+            return EXEC_ERROR_EXIT;
+        }
+        /* Default SIGWINCH is an ignored notification, not an interrupted
+         * application read. In particular, initial dimensions precede setup. */
+        *restart = disposition == POSIX_SIGNAL_DEFAULT && signal == POSIX_SIGWINCH;
+        return EXEC_OK;
+    }
+    if (posix_kernel_signal_get_handler(store->kernel, signal, &handler))
+        return exec_fail(error, EXEC_ERROR_TRAP, "invalid signal handler");
+    *restart = (store->kernel->signal_action_flags[signal] & POSIX_SA_RESTART) != 0;
+    waste_exec_engine *target = (waste_exec_engine *)caller;
+    uint32_t function = handler;
+    if (caller->table_count) {
+        exec_table *table = caller->tables[0];
+        if (!table || handler >= table->size || !table->elements[handler].owner)
+            return exec_fail(error, EXEC_ERROR_TRAP, "invalid signal handler table slot");
+        exec_table_element slot = table->elements[handler];
+        target = native_store_process_engine(store, exec_clone_resolve(caller, slot.owner));
+        function = slot.func_idx;
+    }
+    if (!target || function >= target->import_func_count + target->func_count)
+        return exec_fail(error, EXEC_ERROR_TRAP, "invalid signal handler function");
+    uint32_t type_index = function < target->import_func_count ?
+        target->import_func_types[function] :
+        target->funcs[function - target->import_func_count].type_index;
+    const exec_func_type *type = &target->types[type_index];
+    if (type->param_count != 1 || type->params[0] != WASM_VALTYPE_I32 || type->result_count)
+        return exec_fail(error, EXEC_ERROR_TRAP, "signal handler must have type (i32) -> ()");
+    exec_execution_control *control = target->execution_control;
+    if (control != &store->execution_control)
+        return exec_fail(error, EXEC_ERROR_TRAP, "signal handler has no process execution control");
+    posix_sigset saved_mask;
+    if (posix_kernel_signal_enter_handler(store->kernel, signal, &saved_mask))
+        return exec_fail(error, EXEC_ERROR_TRAP, "cannot mask signal handler");
+    uint64_t quantum = control->pump_quantum_ns;
+    control->pump_quantum_ns = 0;
+    control->synchronous_callbacks++;
+    wasm_value argument = i32_value((uint32_t)signal);
+    int count = 0;
+    exec_status status = exec_invoke(target, function, &argument, 1, NULL, &count, error);
+    control->synchronous_callbacks--;
+    control->pump_quantum_ns = quantum;
+    posix_kernel_signal_leave_handler(store->kernel, &saved_mask);
+    if (status != EXEC_OK) posix_kernel_cancel_wait(store->kernel);
+    return status;
+}
+
+static void guest_posix_echo(void *context, int fd, const uint8_t *bytes, int length) {
+    native_store *store = context;
+    posix_ofd *input = store->kernel->fds[fd].ofd;
+    for (int out = 0; out < POSIX_KERNEL_FD_MAX; out++) {
+        posix_ofd *ofd = store->kernel->fds[out].ofd;
+        if (ofd && ofd->kind == POSIX_OFD_TERMINAL &&
+            (!ofd->stream_mode || ofd->output_handle >= 0) &&
+            (ofd == input || out == 1 || out == 2)) {
+            (void)guest_posix_write_bytes(store, out, bytes, (uint32_t)length);
+            return;
+        }
+    }
+}
+
+int guest_posix_enqueue_input(native_store *store, int fd, const uint8_t *bytes, int length) {
+    return posix_kernel_terminal_enqueue_echo(store->kernel, fd, bytes, length,
+                                              guest_posix_echo, store);
+}
+
 static exec_status guest_posix_read(void *data, const wasm_value *args,
                                      int arg_count, wasm_value *results,
                                      int *result_count, exec_error *error,
@@ -800,6 +895,8 @@ static exec_status guest_posix_read(void *data, const wasm_value *args,
     if (arg_count != 3 || guest_posix_memory(caller, &memory, error) != EXEC_OK)
         return error->status;
     count = (uint32_t)args[2].i32;
+retry_read:
+    buffer = NULL;
     if ((count && !(buffer = (uint8_t *)malloc(count))) ||
         exec_memory_read(memory, (uint32_t)args[1].i32, buffer, count, error) != EXEC_OK) {
         free(buffer);
@@ -838,6 +935,14 @@ static exec_status guest_posix_read(void *data, const wasm_value *args,
             return EXEC_YIELD;
         }
     }
+    if (read_result == -POSIX_EINTR) {
+        free(buffer);
+        int restart = 0;
+        exec_status status = guest_posix_deliver_signal(store, caller, &restart, error);
+        if (status != EXEC_OK) return status;
+        if (restart) goto retry_read;
+        return guest_posix_result(-POSIX_EINTR, results, result_count);
+    }
     if (read_result > 0 && exec_memory_write(
             memory, (uint32_t)args[1].i32, buffer, (size_t)read_result,
             error) != EXEC_OK) {
@@ -846,6 +951,42 @@ static exec_status guest_posix_read(void *data, const wasm_value *args,
     }
     free(buffer);
     return guest_posix_result(read_result, results, result_count);
+}
+
+/* Kernel-owned reports use the same descriptors and terminal processing as
+ * guest write(), so shell redirection and terminal aliases remain faithful. */
+int32_t guest_posix_write_bytes(native_store *store, int32_t fd,
+                                const uint8_t *bytes, uint32_t count) {
+    if (count > INT32_MAX || (!bytes && count)) return -POSIX_EINVAL;
+    if (store && store->kernel && fd >= 0 && fd < POSIX_KERNEL_FD_MAX) {
+        const posix_ofd *ofd = store->kernel->fds[fd].ofd;
+        if (ofd && ofd->kind == POSIX_OFD_STREAM) {
+            if (ofd->output_handle < 0) return -POSIX_EBADF;
+            return guest_platform_write(store, fd, bytes, count);
+        }
+    }
+    if (store && store->kernel_terminal && posix_kernel_isatty(store->kernel, fd)) {
+        uint8_t translated[512];
+        uint32_t offset = 0;
+        while (offset < count) {
+            uint32_t chunk = count - offset;
+            if (chunk > 256) chunk = 256;
+            int length = posix_kernel_terminal_process_output(
+                store->kernel, fd, bytes + offset, (int)chunk,
+                translated, (int)sizeof(translated));
+            if (length < 0) return length;
+            int32_t written = guest_platform_write(store, fd, translated, (uint32_t)length);
+            char event[32];
+            snprintf(event, sizeof(event), "term-write-n%d", length);
+            guest_platform_trace(store, event);
+            if (written < 0) return written;
+            if (written != length) return (int32_t)offset;
+            offset += chunk;
+        }
+        return (int32_t)count;
+    }
+    return store && store->kernel ? posix_kernel_write(store->kernel, fd, bytes, (int)count) :
+                                   guest_platform_write(store, fd, bytes, count);
 }
 
 static exec_status guest_posix_write(void *data, const wasm_value *args,
@@ -857,7 +998,6 @@ static exec_status guest_posix_write(void *data, const wasm_value *args,
     uint8_t *buffer = NULL;
     uint8_t empty_buffer = 0;
     uint32_t count;
-    int32_t terminal_failure = -POSIX_EFAULT;
     if (arg_count != 3 || guest_posix_memory(caller, &memory, error) != EXEC_OK)
         return error->status;
     count = (uint32_t)args[2].i32;
@@ -869,57 +1009,12 @@ static exec_status guest_posix_write(void *data, const wasm_value *args,
                  "POSIX write buffer is outside guest memory");
         return error->status;
     }
-    if (store && store->kernel_terminal &&
-        posix_kernel_isatty(store->kernel, args[0].i32)) {
-        uint8_t translated[512];
-        uint32_t offset = 0;
-        while (offset < count) {
-            uint32_t chunk = count - offset;
-            if (chunk > 256) chunk = 256;
-            int translated_count = posix_kernel_terminal_process_output(
-                store->kernel, args[0].i32, buffer + offset, (int)chunk,
-                translated, (int)sizeof(translated));
-            if (translated_count < 0) {
-                terminal_failure = translated_count;
-                goto terminal_error;
-            }
-            int32_t written = guest_platform_write(store,
-                args[0].i32, translated, (uint32_t)translated_count);
-            char write_event[32];
-            int has_bash_prompt = 0;
-            for (int i = 0; i + 4 < translated_count; i++)
-                if (translated[i] == 'b' && translated[i + 1] == 'a' &&
-                    translated[i + 2] == 's' && translated[i + 3] == 'h' &&
-                    translated[i + 4] == '-') {
-                    has_bash_prompt = 1;
-                    break;
-                }
-            snprintf(write_event, sizeof(write_event), "term-write-n%d%s",
-                     translated_count, has_bash_prompt ? "-bash" : "");
-            guest_platform_trace(store, write_event);
-            if (written < 0) {
-                terminal_failure = written;
-                goto terminal_error;
-            }
-            if (written != translated_count)
-                { int32_t partial = (int32_t)offset; free(buffer);
-                  return guest_posix_result(partial, results, result_count); }
-            offset += chunk;
-        }
-        free(buffer);
-        return guest_posix_result((int32_t)count, results, result_count);
-    }
-    uint8_t *io_buffer = count ? buffer : &empty_buffer;
-    int32_t write_result = store && store->kernel ?
-        posix_kernel_write(store->kernel, args[0].i32, io_buffer, (int)count) :
-        guest_platform_write(store, args[0].i32, io_buffer, count);
+    int32_t written = guest_posix_write_bytes(store, args[0].i32,
+                                             count ? buffer : &empty_buffer, count);
     free(buffer);
-    return guest_posix_result(write_result, results, result_count);
-
-terminal_error:
-    free(buffer);
-    return guest_posix_result(terminal_failure, results, result_count);
+    return guest_posix_result(written, results, result_count);
 }
+
 
 static exec_status guest_posix_i32_zero(void *data, const wasm_value *args,
                                          int arg_count, wasm_value *results,
@@ -1212,51 +1307,56 @@ static exec_status guest_posix_sigpending(void *data, const wasm_value *args,
 
 /* Stable guest sigaction prefix: handler pointer at offset zero, followed by
  * a fixed-width 128-bit mask. Flags remain outside this ABI prefix. */
+/* Compiled C actions use handler + 128-bit mask + flags. Table-free legacy
+ * WAT probes retain their 20-byte prefix. Decode before writing aliased output. */
 static exec_status guest_posix_sigaction(void *data, const wasm_value *args,
                                           int arg_count, wasm_value *results,
                                           int *result_count, exec_error *error,
                                           const waste_exec_engine *caller) {
-    native_store *store = (native_store *)data;
+    native_store *store = data;
     if (!store || !store->kernel || arg_count != 3)
         return guest_posix_result(-POSIX_EINVAL, results, result_count);
     int signal = args[0].i32;
-    uint32_t action_ptr = (uint32_t)args[1].i32;
-    uint32_t old_ptr = (uint32_t)args[2].i32;
-    uint32_t old_handler = POSIX_SIG_DFL;
-    posix_sigset old_mask = {{0, 0, 0, 0}};
-    if (posix_kernel_signal_get_handler(store->kernel, signal, &old_handler) < 0)
+    uint32_t action_ptr = (uint32_t)args[1].i32, old_ptr = (uint32_t)args[2].i32;
+    uint32_t old_handler;
+    posix_sigset old_mask;
+    if (posix_kernel_signal_get_handler(store->kernel, signal, &old_handler) ||
+        posix_kernel_signal_get_action_mask(store->kernel, signal, &old_mask))
         return guest_posix_result(-POSIX_EINVAL, results, result_count);
-    if (posix_kernel_signal_get_action_mask(store->kernel, signal, &old_mask) < 0)
-        return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    uint8_t action[24] = {0}, old[24] = {0};
+    size_t size = caller->table_count ? sizeof(action) : 20;
+    exec_memory *memory = NULL;
+    if (guest_posix_memory(caller, &memory, error) != EXEC_OK ||
+        (action_ptr && !guest_posix_read_guest(memory, action_ptr, action, size)) ||
+        (old_ptr && !guest_posix_read_guest(memory, old_ptr, old, size)))
+        return guest_posix_result(-POSIX_EFAULT, results, result_count);
+    uint32_t handler = 0, flags = 0;
+    posix_sigset mask;
+    posix_signal_disposition disposition = POSIX_SIGNAL_DEFAULT;
+    if (action_ptr) {
+        for (unsigned i = 0; i < 4; i++) {
+            handler |= (uint32_t)action[i] << (8u * i);
+            flags |= (uint32_t)action[20 + i] << (8u * i);
+        }
+        posix_sigset_decode(&mask, action + 4);
+        disposition = handler == POSIX_SIG_DFL ? POSIX_SIGNAL_DEFAULT :
+            handler == POSIX_SIG_IGN || handler == 1 ? POSIX_SIGNAL_IGNORE : POSIX_SIGNAL_HANDLER;
+        if ((signal == POSIX_SIGKILL || signal == POSIX_SIGSTOP) &&
+            disposition != POSIX_SIGNAL_DEFAULT)
+            return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    }
     if (old_ptr) {
-        exec_memory *memory = NULL;
-        uint8_t bytes[sizeof(uint32_t) + POSIX_SIGSET_BYTES];
-        if (guest_posix_memory(caller, &memory, error) != EXEC_OK)
-            return guest_posix_result(-POSIX_EFAULT, results, result_count);
-        memcpy(bytes, &old_handler, sizeof(old_handler));
-        memcpy(bytes + sizeof(old_handler), &old_mask, POSIX_SIGSET_BYTES);
-        if (!guest_posix_write_guest(memory, old_ptr, bytes, sizeof(bytes)))
+        guest_posix_le32(old, old_handler);
+        posix_sigset_encode(old + 4, &old_mask);
+        guest_posix_le32(old + 20, store->kernel->signal_action_flags[signal]);
+        if (!guest_posix_write_guest(memory, old_ptr, old, size))
             return guest_posix_result(-POSIX_EFAULT, results, result_count);
     }
     if (action_ptr) {
-        exec_memory *memory = NULL;
-        uint8_t bytes[sizeof(uint32_t) + POSIX_SIGSET_BYTES];
-        uint32_t handler;
-        posix_sigset action_mask;
-        if (guest_posix_memory(caller, &memory, error) != EXEC_OK ||
-            !guest_posix_read_guest(memory, action_ptr, bytes, sizeof(bytes)))
-            return guest_posix_result(-POSIX_EFAULT, results, result_count);
-        memcpy(&handler, bytes, sizeof(handler));
-        memcpy(&action_mask, bytes + sizeof(handler), POSIX_SIGSET_BYTES);
-        posix_signal_disposition disposition = POSIX_SIGNAL_HANDLER;
-        if (handler == POSIX_SIG_DFL) disposition = POSIX_SIGNAL_DEFAULT;
-        else if (handler == POSIX_SIG_IGN || handler == UINT32_C(1))
-            disposition = POSIX_SIGNAL_IGNORE;
-        if (posix_kernel_signal_set_disposition(store->kernel, signal,
-                                                disposition) < 0)
-            return guest_posix_result(-POSIX_EINVAL, results, result_count);
+        posix_kernel_signal_set_disposition(store->kernel, signal, disposition);
         posix_kernel_signal_set_handler(store->kernel, signal, handler);
-        posix_kernel_signal_set_action_mask(store->kernel, signal, &action_mask);
+        posix_kernel_signal_set_action_mask(store->kernel, signal, &mask);
+        store->kernel->signal_action_flags[signal] = flags;
     }
     return guest_posix_result(0, results, result_count);
 }
@@ -1398,61 +1498,57 @@ static exec_status guest_posix_exit(void *data, const wasm_value *args,
     return EXEC_ERROR_EXIT;
 }
 
+/* A self-directed unblocked signal must run before kill/raise returns. In
+ * particular Readline restores the application's action only for that call. */
+static exec_status guest_posix_self_signal(native_store *store,
+        const waste_exec_engine *caller, exec_error *error) {
+    native_process_capsule *capsule = native_store_active_capsule(store);
+    if (!capsule || !capsule->image || !posix_kernel_signal_interrupt(store->kernel))
+        return EXEC_OK;
+    int restart = 0;
+    return guest_posix_deliver_signal(store, caller, &restart, error);
+}
+
 static exec_status guest_posix_raise(void *data, const wasm_value *args,
-                                      int arg_count, wasm_value *results,
-                                      int *result_count, exec_error *error,
-                                      const waste_exec_engine *caller) {
-    native_store *store = (native_store *)data;
-    int status;
-    posix_signal_disposition disposition;
-    (void)caller; (void)error;
+        int arg_count, wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    native_store *store = data;
     if (!store || arg_count != 1)
         return guest_posix_result(-POSIX_EINVAL, results, result_count);
-    status = posix_kernel_signal_raise(store->kernel, args[0].i32);
-    if (status == 0 && posix_kernel_signal_get_disposition(
-            store->kernel, args[0].i32, &disposition) == 0 &&
-        disposition == POSIX_SIGNAL_DEFAULT && args[0].i32 != POSIX_SIGSTOP) {
-        if (error) {
-            error->status = EXEC_ERROR_EXIT;
-            error->exit_code = 128 + args[0].i32;
-        }
-        return EXEC_ERROR_EXIT;
+    int value = posix_kernel_signal_raise(store->kernel, args[0].i32);
+    if (!value) {
+        exec_status status = guest_posix_self_signal(store, caller, error);
+        if (status != EXEC_OK) return status;
     }
-    return guest_posix_result(status, results, result_count);
+    return guest_posix_result(value, results, result_count);
 }
 
 static exec_status guest_posix_kill(void *data, const wasm_value *args,
-                                     int arg_count, wasm_value *results,
-                                     int *result_count, exec_error *error,
-                                     const waste_exec_engine *caller) {
-    native_store *store = (native_store *)data;
-    int pid;
-    (void)caller; (void)error;
-    if (!store || arg_count != 2 || args[0].i32 < 0)
+        int arg_count, wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    native_store *store = data;
+    if (!store || arg_count != 2 || args[0].i32 == INT32_MIN)
         return guest_posix_result(-POSIX_EINVAL, results, result_count);
-    pid = args[0].i32 == 0 ? native_store_getpid(store) : args[0].i32;
-    for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
-        if (store->processes[i].used && store->processes[i].pid == pid)
-            return guest_posix_result(native_store_signal_process(
-                                           store, pid, args[1].i32), results,
-                                       result_count);
+    int pid = args[0].i32, signal = args[1].i32, value;
+    if (pid <= 0) {
+        int group = pid == 0 ? posix_kernel_getpgid(store->kernel) : -pid;
+        value = native_store_signal_process_group(store, group, signal);
+        value = value > 0 ? 0 : -POSIX_EINVAL;
+    } else value = native_store_signal_process(store, pid, signal);
+    if (!value) {
+        exec_status status = guest_posix_self_signal(store, caller, error);
+        if (status != EXEC_OK) return status;
     }
-    return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    return guest_posix_result(value, results, result_count);
 }
 
 static exec_status guest_posix_killpg(void *data, const wasm_value *args,
-                                       int arg_count, wasm_value *results,
-                                       int *result_count, exec_error *error,
-                                       const waste_exec_engine *caller) {
-    native_store *store = (native_store *)data;
-    int pgid, delivered;
-    (void)caller; (void)error;
-    if (!store || arg_count != 2 || args[0].i32 < 0)
+        int arg_count, wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    if (arg_count != 2 || args[0].i32 < 0)
         return guest_posix_result(-POSIX_EINVAL, results, result_count);
-    pgid = args[0].i32 == 0 ? posix_kernel_getpgid(store->kernel) : args[0].i32;
-    delivered = native_store_signal_process_group(store, pgid, args[1].i32);
-    return guest_posix_result(delivered > 0 ? 0 : -POSIX_EINVAL, results,
-                               result_count);
+    wasm_value values[2] = {i32_value((uint32_t)-args[0].i32), args[1]};
+    return guest_posix_kill(data, values, 2, results, result_count, error, caller);
 }
 
 static exec_status guest_posix_fcntl(void *data, const wasm_value *args,
@@ -1483,7 +1579,7 @@ static exec_status guest_posix_fcntl(void *data, const wasm_value *args,
     return guest_posix_result(result, results, result_count);
 }
 
-/* C variadic arguments in the Bash image are passed in its Wasm stack area.
+/* C variadic arguments in guest images are passed in its Wasm stack area.
  * A direct fixed-width host import instead receives the argument value. Keep
  * those ABIs distinct so an F_DUPFD minimum is never mistaken for a pointer. */
 static exec_status guest_posix_fcntl_varargs(
@@ -1921,6 +2017,7 @@ static exec_status guest_posix_fstat(void *data, const wasm_value *args,
         metadata = ofd->directory.node->metadata;
     }
     guest_posix_metadata_stat(&metadata, &guest_stat);
+    if (ofd->stream_mode) guest_stat.st_mode = ofd->stream_mode;
     posix_guest_stat_encode(status, &guest_stat);
     if (!guest_posix_write_guest(memory, (uint32_t)args[1].i32,
                                   status, sizeof(status))) {
@@ -2256,6 +2353,12 @@ static exec_status guest_posix_select(void *data, const wasm_value *args,
 
     int32_t ret = posix_kernel_select(store->kernel, nfds, rp, wp, ep, tvp);
 
+    if (ret == -POSIX_EINTR) {
+        int restart = 0;
+        exec_status status = guest_posix_deliver_signal(store, caller, &restart, error);
+        if (status != EXEC_OK) return status;
+    }
+
     if (ret == -POSIX_EAGAIN) {
         error->yield_reason = EXEC_YIELD_SELECT;
         return EXEC_YIELD;
@@ -2356,35 +2459,11 @@ static exec_status guest_posix_pselect(void *data, const wasm_value *args,
     int32_t ret = posix_kernel_pselect(store->kernel, nfds, rp, wp, ep,
                                        tsp, mask_ptr);
 
-    /* A caught signal is delivered at the engine boundary, rather than via a
-     * JavaScript callback.  The sigaction ABI stores a wasm function index in
-     * its handler slot; invoke it with the POSIX signal number before the
-     * interrupted pselect returns EINTR. */
     if (ret == -POSIX_EINTR) {
-        int signal = posix_kernel_signal_last_delivered(store->kernel);
-        posix_signal_disposition disposition;
-        uint32_t handler = POSIX_SIG_DFL;
-        if (signal > 0 &&
-            posix_kernel_signal_get_disposition(store->kernel, signal,
-                                                &disposition) == 0 &&
-            disposition == POSIX_SIGNAL_HANDLER &&
-            posix_kernel_signal_get_handler(store->kernel, signal, &handler) == 0 &&
-            handler != POSIX_SIG_DFL && handler != POSIX_SIG_IGN) {
-            wasm_value handler_arg;
-            int handler_results = 0;
-            exec_error handler_error;
-            posix_sigset saved_mask;
-            memset(&handler_error, 0, sizeof(handler_error));
-            handler_arg.type = WASM_VALTYPE_I32;
-            handler_arg.i32 = signal;
-            if (posix_kernel_signal_enter_handler(store->kernel, signal,
-                                                  &saved_mask) == 0) {
-                (void)exec_invoke((waste_exec_engine *)caller, handler,
-                                  &handler_arg, 1, NULL, &handler_results,
-                                  &handler_error);
-                posix_kernel_signal_leave_handler(store->kernel, &saved_mask);
-            }
-        }
+        int restart = 0;
+        exec_status status = guest_posix_deliver_signal(store, caller, &restart, error);
+        if (status != EXEC_OK) return status;
+        /* SELECT/pselect always return EINTR; SA_RESTART applies to READ. */
     }
 
     if (ret == -POSIX_EAGAIN) {
@@ -2895,7 +2974,6 @@ static exec_host_func guest_posix_function(const char *module,
     if (strcmp(name, "exit") == 0 || strcmp(name, "_exit") == 0)
         return guest_posix_exit;
     if (strcmp(name, "atexit") == 0) return guest_posix_i32_zero;
-    if (strcmp(name, "__fpurge") == 0) return guest_posix_i32_zero;
     if (strcmp(name, "raise") == 0) return guest_posix_raise;
     if (strcmp(name, "kill") == 0) return guest_posix_kill;
     if (strcmp(name, "killpg") == 0) return guest_posix_killpg;
@@ -2922,7 +3000,7 @@ static exec_host_func guest_posix_function(const char *module,
     if (strcmp(name, "tcgetattr") == 0) return guest_posix_tcgetattr;
     if (strcmp(name, "tcsetattr") == 0) return guest_posix_tcsetattr;
     if (strcmp(name, "ioctl") == 0) return guest_posix_ioctl;
-    /* Legacy applications such as the prebuilt Bash image import the libc
+    /* Direct POSIX probes import the libc
      * names directly.  Route them through the same engine-owned readiness
      * implementation as the versioned waste_kernel ABI. */
     if (strcmp(name, "select") == 0) return guest_posix_select;
@@ -2982,12 +3060,9 @@ int guest_posix_host_resolver(const char *module, const char *name,
     out->function = func;
     out->host_data = context;
     out->control = guest_posix_control(module, name);
-    /* Bash is built with 64-bit off_t while the current guest-libc module's
-     * public off_t remains Wasm32 long. Route env.lseek to its native
-     * (i32, i64, i32) -> i64 adapter. Keep legacy fixed-width env.fcntl calls
-     * on the active kernel adapter; Bash uses the explicit varargs ABI above. */
+    /* Legacy fixed-width env.fcntl probes use the kernel ABI rather than
+     * libc's C varargs entrypoint. */
     out->prefer_over_module = strcmp(module, "env") == 0 &&
-        (strcmp(name, "lseek") == 0 || strcmp(name, "__fpurge") == 0 ||
-         strcmp(name, "fcntl") == 0);
+        strcmp(name, "fcntl") == 0;
     return 1;
 }

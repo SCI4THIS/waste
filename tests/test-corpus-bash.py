@@ -15,10 +15,10 @@ def main():
                         help="check only the first N manifest paths (diagnosis)")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
-    manifest = json.loads((repo / "src/vfs/root/waste/tests/manifest.json").read_text())
+    manifest = json.loads((repo / "src/vfs/root/test/manifest.json").read_text())
     # Restrict expansion to precisely the manifest's group directories. Hidden
     # support files and descendants must not be counted as additional tests.
-    patterns = " ".join(shlex.quote("/root/waste/tests/" + group) + "/*.wast"
+    patterns = " ".join(shlex.quote("/root/test/" + group) + "/*.wast"
                         for group in manifest["counts"]["groups"])
     count = manifest["counts"]["tests"]
     if args.limit is not None:

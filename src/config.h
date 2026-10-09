@@ -17,6 +17,18 @@
 #define POSIX_KERNEL_FD_MAX 64
 #define SOURCE_SHEBANG_MAX_BYTES 4096
 
+/* Initial process resources, also used when no guest launcher is present. */
+#define PROCESS_INITIAL_MEMORY_PAGES 2
+#define PROCESS_INITIAL_TABLE_ENTRIES 1
+#define PROCESS_STDIO_BUFFER_BYTES 4096
+#define NATIVE_SESSION_SOURCE_MAX_BYTES (64 * 1024 * 1024)
+#define NATIVE_SESSION_MAX_COMMANDS 1024
+#define NATIVE_STAGED_FILE_MAX 64
+#define NATIVE_HOST_IO_REPLY_MAX 16
+#define NATIVE_EXEC_BYTES_MAX (16 * 1024 * 1024)
+#define NATIVE_TERMINAL_COLUMNS 80
+#define NATIVE_TERMINAL_ROWS 24
+
 /* Batch policy. Native and production-browser controllers share deadlines. */
 #define SUITE_TIMEOUT_CORE_MS 15000
 #define SUITE_TIMEOUT_HEAVY_MS 10000

@@ -16,6 +16,10 @@ typedef struct guest_posix_platform {
 int guest_posix_host_resolver(const char *module, const char *name,
                               void *context, native_host_binding *out);
 
+/* Write host-owned report bytes through the active guest descriptor table. */
+int32_t guest_posix_write_bytes(native_store *, int32_t, const uint8_t *, uint32_t);
+int guest_posix_enqueue_input(native_store *, int, const uint8_t *, int);
+
 /* Bounded ABI helpers for platform-specific capabilities (e.g. file pickers). */
 exec_status guest_posix_memory(const waste_exec_engine *caller,
                                exec_memory **memory_out, exec_error *error);

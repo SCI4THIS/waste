@@ -16,6 +16,24 @@ static int open_at(int fd, const char *name, int directory) {
         HOST_NOFOLLOW | HOST_CLOEXEC | HOST_NONBLOCK | (directory ? HOST_DIRECTORY : 0), 0, 0, 0);
 }
 
+/* Allowlisted entries that may be symbolic links. The blessed symlinks serve
+ * live .wast files from checked-out source trees; everywhere else O_NOFOLLOW
+ * stays enforced. Keep in sync with BLESSED_SYMLINKS in src/html-rt/tools/vfs.py. */
+static int is_blessed_symlink(const char *parent, const char *name) {
+    if (strcmp(parent, "/root/test/wasm-spec")) return 0;
+    return !strcmp(name, "core") || !strcmp(name, "custom");
+}
+
+static int open_blessed(int fd, const char *name) {
+    return (int)syscall6(SYS_openat, fd, (long)name,
+        HOST_CLOEXEC | HOST_NONBLOCK | HOST_DIRECTORY, 0, 0, 0);
+}
+
+static int wast_leaf(const char *name) {
+    size_t length = strlen(name);
+    return length >= 5 && !memcmp(name + length - 5, ".wast", 5);
+}
+
 int native_vfs_open_root(const char *root) {
     return (int)sys_open(root, HOST_DIRECTORY | HOST_CLOEXEC, 0);
 }
@@ -70,8 +88,10 @@ static int add_node(tree_reader *reader, const char *path,
 
 /* Linux getdents64 records are bounded before reading any component. Opening
  * every child relative to its parent with O_NOFOLLOW confines traversal to the
- * selected tree, including intermediate directory components. */
-static int read_directory(tree_reader *reader, int fd, const char *parent) {
+ * selected tree, including intermediate directory components. The blessed-mode
+ * flag is set once we enter the resolved wasm-spec subtree: it filters files
+ * to .wast and suppresses directory entries that contain no retained children. */
+static int read_directory(tree_reader *reader, int fd, const char *parent, int blessed_mode) {
     unsigned char records[4096];
     for (;;) {
         long n = syscall3(SYS_getdents64, fd, (long)records, sizeof(records));
@@ -96,22 +116,45 @@ static int read_directory(tree_reader *reader, int fd, const char *parent) {
                                 !strcmp(parent, "/") ? "" : "/", name);
             if (used < 0 || (size_t)used >= sizeof(path)) return -1;
             strcpy(reader->path, path);
-            int child = open_at(fd, name, 0);
-            if (child < 0) return -1;
+            int blessed_link = is_blessed_symlink(parent, name);
+            int child = blessed_link ? open_blessed(fd, name) : open_at(fd, name, 0);
+            if (child < 0) {
+                /* Blessed symlink target may be absent when the submodule is
+                 * not checked out; skip silently rather than failing the load. */
+                if (blessed_link) continue;
+                return -1;
+            }
             struct __kernel_stat info;
             int status = -1;
             if (!sys_fstat(child, &info)) {
                 unsigned kind = info.st_mode & 0170000;
                 if (kind == 0040000) {
-                    status = add_node(reader, path, &info, NULL, 0);
-                    if (!status) status = read_directory(reader, child, path);
+                    if (blessed_mode || blessed_link) {
+                        /* Add the directory first so descendants can validate
+                         * their parent; drop it afterwards if no .wast files
+                         * were retained anywhere beneath it. */
+                        uint32_t before = reader->vfs.count;
+                        status = add_node(reader, path, &info, NULL, 0);
+                        if (!status) {
+                            status = read_directory(reader, child, path, 1);
+                            if (!status && reader->vfs.count == before + 1u)
+                                reader->vfs.count = before;
+                        }
+                    } else {
+                        status = add_node(reader, path, &info, NULL, 0);
+                        if (!status) status = read_directory(reader, child, path, 0);
+                    }
                 } else if (kind == 0100000) {
-                    size_t bytes_length = 0;
-                    uint8_t *bytes = read_file(child, WASTE_VFS_MAX_BYTES - reader->vfs.bytes,
-                                               &bytes_length, &info);
-                    if (bytes) {
-                        status = add_node(reader, path, &info, bytes, bytes_length);
-                        if (status) free(bytes);
+                    if (blessed_mode && !wast_leaf(name)) {
+                        status = 0;
+                    } else {
+                        size_t bytes_length = 0;
+                        uint8_t *bytes = read_file(child, WASTE_VFS_MAX_BYTES - reader->vfs.bytes,
+                                                   &bytes_length, &info);
+                        if (bytes) {
+                            status = add_node(reader, path, &info, bytes, bytes_length);
+                            if (status) free(bytes);
+                        }
                     }
                 }
             }
@@ -162,7 +205,7 @@ int native_vfs_load_at(int root_fd, waste_vfs *vfs, char *error, size_t capacity
     int fd = root_fd >= 0 ? open_at(root_fd, ".", 1) : -1;
     int status = -1;
     if (fd >= 0 && !sys_fstat(fd, &info) && !add_node(&reader, "/", &info, NULL, 0)) {
-        status = read_directory(&reader, fd, "/");
+        status = read_directory(&reader, fd, "/", 0);
         if (!status) status = add_virtual(&reader, "/bin", 1, 0755);
         if (!status) status = add_virtual(&reader, "/root", 1, 0755);
         if (!status) status = add_virtual(&reader, "/tmp", 1, 0777);

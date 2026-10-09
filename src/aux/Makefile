@@ -2,17 +2,21 @@ ifeq ($(origin CC), default)
 CC := clang
 endif
 CC ?= clang
-WASM_LD ?= wasm-ld
 PYTHON ?= python3
 CFLAGS ?= -O2
 AUX_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 REPO_ROOT := $(abspath $(AUX_DIR)/../..)
+TOOLCHAIN_ROOT := $(REPO_ROOT)/build/engine/toolchain/usr
+WASM_LD ?= $(shell command -v wasm-ld 2>/dev/null || printf '%s' "$(TOOLCHAIN_ROOT)/bin/wasm-ld")
+ifeq ($(WASM_LD),$(TOOLCHAIN_ROOT)/bin/wasm-ld)
+export LD_LIBRARY_PATH := $(TOOLCHAIN_ROOT)/lib$(if $(LD_LIBRARY_PATH),:$(LD_LIBRARY_PATH))
+endif
 BUILD_DIR ?= $(REPO_ROOT)/build/aux
 SDK_ROOT := $(REPO_ROOT)/src/vfs
 VFS_ROOT ?= $(SDK_ROOT)
 VFS_TOOL := $(REPO_ROOT)/src/html-rt/tools/vfs.py
-LIBC_REVIEW := $(REPO_ROOT)/src/html-rt/tools/shared_libc.py
-CRT_SOURCE := $(REPO_ROOT)/src/libc/waste-crt.c
+LIBC_REVIEW := $(REPO_ROOT)/src/aux/libc/tools/shared_libc.py
+CRT_SOURCE := $(REPO_ROOT)/src/aux/libc/waste-crt.c
 CRT_OBJECT := $(BUILD_DIR)/waste-crt.o
 SDK_HEADERS := $(shell find "$(SDK_ROOT)/usr/include" "$(SDK_ROOT)/usr/lib/waste/cc/include" -type f -name '*.h')
 WASM_CFLAGS := --target=wasm32 -std=c11 -ffreestanding -fno-builtin \
@@ -123,4 +127,8 @@ $(ROGUE_BUILD)/rogue.wasm: $(ROGUE_OBJECTS) $(CRT_OBJECT)
 
 -include $(ROGUE_OBJECTS:.o=.d)
 
+include $(AUX_DIR)/libc/libc.mk
+include $(AUX_DIR)/test.mk
 include $(AUX_DIR)/coreutils/coreutils.mk
+include $(AUX_DIR)/libncurses/libncurses.mk
+include $(AUX_DIR)/bash/bash.mk

@@ -357,7 +357,7 @@ static void usage(FILE *output, const char *name) {
                     "       %s --server\n", name, name, name);
 }
 
-int main(int argc, char *argv[]) {
+int native_wast_legacy_main(int argc, char *argv[]) {
     if (argc == 2 && strcmp(argv[1], "--help") == 0) {
         usage(stdout, argv[0]);
         return 0;
@@ -377,3 +377,7 @@ int main(int argc, char *argv[]) {
     usage(stderr, argv[0]);
     return 1;
 }
+
+#ifndef WASTE_CLI_NO_MAIN
+int main(int argc, char **argv) { return native_wast_legacy_main(argc, argv); }
+#endif

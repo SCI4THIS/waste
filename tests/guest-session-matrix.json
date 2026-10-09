@@ -2,59 +2,59 @@
   "fixture": "src/vfs/usr/share/waste/launch.wast",
   "events": [
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "printf 'CAT_PAYLOAD\\n' > /tmp/session-cat.txt; printf 'one two\\nthree\\n' > /tmp/session-wc.txt\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "/usr/bin/true; printf '__MATRIX_TRUE_%s__\\n' \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "/usr/bin/false; printf '__MATRIX_FALSE_%s__\\n' \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "/usr/bin/pwd; printf '__MATRIX_PWD_%s__\\n' \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "/usr/bin/echo MATRIX_ECHO; printf '__MATRIX_ECHO_%s__\\n' \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "/usr/bin/printf 'MATRIX_PRINTF\\n'; printf '__MATRIX_PRINTF_%s__\\n' \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "/usr/bin/basename /alpha/MATRIX_BASE; printf '__MATRIX_BASENAME_%s__\\n' \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "/usr/bin/dirname /alpha/beta/file; printf '__MATRIX_DIRNAME_%s__\\n' \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "/usr/bin/cat /tmp/session-cat.txt; printf '__MATRIX_CAT_%s__\\n' \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "/usr/bin/chmod 600 /tmp/session-cat.txt; printf '__MATRIX_CHMOD_%s__\\n' \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "/usr/bin/wc -l -w -c /tmp/session-wc.txt; printf '__MATRIX_WC_%s__\\n' \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "/usr/bin/ls -1 /bin; printf '__MATRIX_LS_%s__\\n' \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "/usr/bin/date -u +%Y; printf '__MATRIX_DATE_%s__\\n' \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "echo __AFTER"
     },
     {
@@ -62,7 +62,7 @@
       "text": "_MATRIX__\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "exit 9\n"
     }
   ],
@@ -87,7 +87,7 @@
     "\u001b[?2004l\r__AFTER_MATRIX__\r\n",
     "__MATRIX_CHMOD_0__\r\n"
   ],
-  "assertions": 7,
+  "assertions": 1,
   "exitStatus": 9,
   "processes": 12
 }

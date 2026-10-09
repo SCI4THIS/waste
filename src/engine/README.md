@@ -92,7 +92,7 @@ iteration out of Node and the browser while preserving parser diagnostics:
 ```sh
 make -C src/cli-rt BUILD_DIR=../../build/cli-rt \
   ENGINE_BUILD_DIR=../../build/engine wast-native
-build/cli-rt/waste-cli --parse-only tests/example.wast \
+build/cli-rt/wast --parse-only tests/example.wast \
   submodules/wasm-spec/test/core/forward.wast
 ```
 
@@ -137,9 +137,8 @@ UndefinedBehaviorSanitizer:
 make -C src/cli-rt BUILD_DIR=../../build/cli-rt parser-reentrant
 ```
 
-`tests/c-engine-global-constexpr.wast` is the global-initializer grammar gate.
-Initializers use the ordinary instruction-list parser, while a separate C
-validation pass enforces the constant-opcode set and declared result type. The
+Global initializers use the ordinary instruction-list parser, while a separate
+C validation pass enforces the constant-opcode set and declared result type. The
 stored expression remains terminator-free; the module encoder appends its
 single required `end` opcode. The validator mirrors the OCaml `check_const`
 whitelist: scalar/vector constants, `i32`/`i64` add/sub/mul, immutable
@@ -154,8 +153,7 @@ instead retains that error in its module-group record, allowing script parsing
 to continue and the native/browser assertion harness to observe the rejection
 without depending on the binary loader to fail for an unrelated reason.
 
-`tests/c-engine-function-fields.wast` is the function header/body boundary
-gate. Function fields follow the reference OCaml parser's recursive phases:
+Function fields follow the reference OCaml parser's recursive phases:
 type use, parameters, results, locals, and finally the instruction list.
 Inline exports recurse at phase boundaries for compatibility with existing
 C-engine fixtures. This lets an opening parenthesis be classified by the next
@@ -169,10 +167,9 @@ nullable block-field decision.
 
 `tests/c-engine-stage7-front-end.wast` covers nested comments and annotations,
 annotation-transparent folded operators and module fields, integer-spelled
-floating constants, exact data-string bytes, and raw binary modules.
-`tests/c-engine-stage7-inline-fields.wast` covers the dedicated bare-field
-entry point after leading comments and annotations. The reentrant parser gate
-also checks exact raw payload bytes and diagnostics for unterminated nested
-comments. It additionally checks scanner-owned command recovery and ordering,
+floating constants, exact data-string bytes, and raw binary modules. The
+reentrant parser gate also checks exact raw payload bytes and diagnostics for
+unterminated nested comments, as well as the dedicated bare-field entry point
+after leading comments and annotations. It additionally checks scanner-owned command recovery and ordering,
 and verifies that strict WAT mode rejects a multi-module input as one failed
 transaction.

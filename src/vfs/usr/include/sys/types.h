@@ -28,7 +28,7 @@ typedef unsigned int gid_t;
 #ifndef pid_t
 typedef int pid_t;
 #endif
-/* Match the prebuilt Bash/Emscripten ABI and remain valid beyond 2038. */
+/* Use the public Wasm32 timestamp ABI and remain valid beyond 2038. */
 typedef long long time_t;
 #ifndef socklen_t
 typedef unsigned int socklen_t;

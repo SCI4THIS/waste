@@ -1,24 +1,2 @@
-# Browser-corpus files that fail against the current engine/worker and are
-# therefore expected to appear as XFAIL rather than FAIL in CI output.
-#
-# Each entry is a relative file path matched against the harness's
-# `test.path || test.group/test.file` identity.  Comments (`#...`) and blank
-# lines are ignored.  When a listed file starts passing, the harness reports
-# XPASS and the overall run fails — remove the entry (and update the plan)
-# in the same change that fixes the underlying bug.
-#
-# Baseline recorded 2026-10-02 at build/engine/refactor-stage6a2-browser-corpus/.
-# Initially 13 entries.  Three Family A memory/table import-limit entries were
-# cleared by Phase 1, seven Family B libc-test fixtures by Phase 2, and
-# libc-test/time-resource.wast by Phase 2b of
-# docs/completed-browser-corpus-xfail-diagnosis.md (missing `close` export in the
-# waste-libc overlay).  The two remaining entries are behavioural gaps:
-# POSIX-surface implementations whose errno/return values do not match the
-# ENOSYS/EFAULT expectations encoded in the fixture.
-
-libc-test/environment-boundaries.wast
-libc-test/terminal.wast
-
-# Stage 6B.42 exposed ten ordinary setup errors in seven language files.
-# Stages 6B.43–6B.45 repair segment capacity, element types and spectest.table64;
-# all seven now pass native/browser C and the OCaml reference implementation.
+# All current batch-supported fixtures pass.
+# Package/system libc WAST tests run against the installed shared library from Bash.

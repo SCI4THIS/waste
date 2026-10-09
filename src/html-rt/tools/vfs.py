@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 
@@ -24,8 +25,15 @@ import test_distribution
 REPO = Path(__file__).resolve().parents[3]
 ROOT = REPO / "src/vfs"
 MANIFEST = ".inventory.json"  # Ignored legacy bookkeeping, never a guest node.
+# Blessed symlinks pointing from the VFS into checked-out source trees. Each
+# entry serves live .wast files from the submodule, replacing a committed copy
+# with a self-documenting link.
+BLESSED_SYMLINKS = {
+    "/root/test/wasm-spec/core": "submodules/wasm-spec/test/core",
+    "/root/test/wasm-spec/custom": "submodules/wasm-spec/test/custom",
+}
 COREUTILS = "true false pwd echo printf basename dirname cat chmod wc ls date".split()
-COMMANDS = COREUTILS + ["rogue", "ldd", "upload", "download", "waste-probe"]
+COMMANDS = COREUTILS + ["bash", "rogue", "ldd", "upload", "download", "waste-probe"]
 OPTIONAL_COMMANDS = ["waste-test"]
 BIN_COMMANDS = {"waste-probe", "waste-test"}
 COMPONENTS = COMMANDS + OPTIONAL_COMMANDS + ["libncurses", "libc", "launch", "app"]
@@ -55,9 +63,21 @@ def guest_path(value):
     return value
 
 
+def _under_blessed(path):
+    for prefix in BLESSED_SYMLINKS:
+        if path == prefix or path.startswith(prefix + "/"):
+            return True
+    return False
+
+
 def local(root, path):
     guest_path(path)
     result = root / path.lstrip("/")
+    if _under_blessed(path):
+        resolved = result.resolve()
+        if not resolved.is_relative_to(REPO.resolve()):
+            raise ValueError(f"escaping blessed host path: {path}")
+        return result
     if not result.resolve().is_relative_to(root.resolve()) or result.is_symlink():
         raise ValueError(f"escaping or symlink host path: {path}")
     return result
@@ -84,35 +104,70 @@ console.log(JSON.stringify({imports:WebAssembly.Module.imports(m),exports:WebAss
     return {"imports": sorted(names), "required_exports": required}
 
 
+def _emit_entry(entries, total, path, info, directory, data=None):
+    size = 0 if directory else len(data) if data is not None else info.st_size
+    total[0] += size
+    if size < 0 or total[0] > MAX_BYTES:
+        raise ValueError(f"VFS exceeds byte capacity: {path}")
+    entry = dict(path=path, kind=2 if directory else 1, mode=info.st_mode & 0o777,
+                 uid=0, gid=0, size=size, mtime_sec=info.st_mtime_ns // 10**9,
+                 mtime_nsec=info.st_mtime_ns % 10**9, role="directory" if directory else "file")
+    if not directory:
+        entry["sha256"] = digest(data)
+    entries[path] = entry
+    if len(entries) > MAX_ENTRIES:
+        raise ValueError("VFS exceeds entry capacity")
+
+
 def load(root):
     """Discover current files, including additions and edits, without a ledger."""
     root = Path(root)
     entries = {}
-    total = 0
+    total = [0]
     for p in chain((root,), root.rglob("*")):
         if p == root / MANIFEST:
             continue
         path = "/" + p.relative_to(root).as_posix() if p != root else "/"
         local(root, path)
+        if p.is_symlink():
+            if path not in BLESSED_SYMLINKS:
+                raise ValueError(f"unsupported VFS node: {path}")
+            target = (REPO / BLESSED_SYMLINKS[path]).resolve()
+            if p.resolve() != target:
+                raise ValueError(f"blessed symlink wrong target: {path}")
+            if not target.is_dir():
+                print(f"INFO: wasm-spec submodule missing for {path}; "
+                      "mounted .wast files from this tree will be skipped.",
+                      file=sys.stderr)
+                continue
+            _emit_entry(entries, total, path, target.stat(), True)
+            for sub in sorted(target.rglob("*.wast")):
+                relative_sub = sub.relative_to(target)
+                if "_output" in relative_sub.parts or sub.is_symlink():
+                    continue
+                parts = relative_sub.parts
+                for i in range(1, len(parts)):
+                    dir_path = path + "/" + "/".join(parts[:i])
+                    if dir_path not in entries:
+                        _emit_entry(entries, total, dir_path, (target / "/".join(parts[:i])).stat(), True)
+                sub_path = path + "/" + relative_sub.as_posix()
+                data = sub.read_bytes()
+                info = sub.stat()
+                if len(data) != info.st_size:
+                    raise ValueError(f"blessed symlink target changed while reading: {sub_path}")
+                _emit_entry(entries, total, sub_path, info, False, data)
+            continue
         info = p.stat(follow_symlinks=False)
         directory = stat.S_ISDIR(info.st_mode)
         if not directory and not stat.S_ISREG(info.st_mode):
             raise ValueError(f"unsupported VFS node: {path}")
-        size = 0 if directory else info.st_size
-        total += size
-        if size < 0 or total > MAX_BYTES:
-            raise ValueError(f"VFS exceeds byte capacity: {path}")
-        entry = dict(path=path, kind=2 if directory else 1, mode=info.st_mode & 0o777,
-                     uid=0, gid=0, size=size, mtime_sec=info.st_mtime_ns // 10**9,
-                     mtime_nsec=info.st_mtime_ns % 10**9, role="directory" if directory else "file")
-        if not directory:
+        if directory:
+            _emit_entry(entries, total, path, info, True)
+        else:
             data = p.read_bytes()
-            if len(data) != size or p.stat().st_mtime_ns != info.st_mtime_ns:
+            if len(data) != info.st_size or p.stat().st_mtime_ns != info.st_mtime_ns:
                 raise ValueError(f"VFS file changed while reading: {path}")
-            entry["sha256"] = digest(data)
-        entries[path] = entry
-        if len(entries) > MAX_ENTRIES:
-            raise ValueError("VFS exceeds entry capacity")
+            _emit_entry(entries, total, path, info, False, data)
     # Minimal guest boot directories and engine-provided interpreter commands.
     for path in ("/bin", "/root", "/tmp"):
         entries.setdefault(path, dict(path=path, kind=2, mode=0o777 if path == "/tmp" else 0o755,
@@ -189,18 +244,31 @@ def publish(root, changes, remove=()):
     backup = None
     try:
         if root.exists():
-            shutil.copytree(root, stage, dirs_exist_ok=True, copy_function=shutil.copy2)
+            shutil.copytree(root, stage, dirs_exist_ok=True, copy_function=shutil.copy2, symlinks=True)
+        saved_links = {}
+        for vfs_path in BLESSED_SYMLINKS:
+            staged_link = stage / vfs_path.lstrip("/")
+            if staged_link.is_symlink():
+                saved_links[vfs_path] = os.readlink(staged_link)
         for path in remove:
-            target = local(stage, path)
-            if target.is_dir():
-                shutil.rmtree(target)
-            elif target.exists():
+            target = stage / path.lstrip("/")
+            if target.is_symlink() or target.is_file():
                 target.unlink()
+            elif target.is_dir():
+                shutil.rmtree(target)
         for path, data, mode in changes:
+            if _under_blessed(path):
+                raise ValueError(f"refusing to write into blessed symlink tree: {path}")
             destination = local(stage, path)
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(data)
             destination.chmod(mode)
+        for vfs_path, link_target in saved_links.items():
+            staged_link = stage / vfs_path.lstrip("/")
+            staged_link.parent.mkdir(parents=True, exist_ok=True)
+            if staged_link.is_symlink() or staged_link.exists():
+                staged_link.unlink()
+            staged_link.symlink_to(link_target)
         (stage / MANIFEST).unlink(missing_ok=True)
         manifest = load(stage)
         if root.exists():
@@ -230,7 +298,7 @@ def install(root, legacy=None, component=None, source=None):
     for name, src in zip(component, source):
         if name == "app":
             for guest_name, source_name in APP_FILES.items():
-                changes.append(("/root/waste/app/" + guest_name, frontend_bytes(src / source_name), 0o644))
+                changes.append(("/root/app/" + guest_name, frontend_bytes(src / source_name), 0o644))
         else:
             if not src.is_file():
                 raise ValueError(f"missing compiler result: {src}")
@@ -257,7 +325,8 @@ def install_tests(root, source, corpus):
     # Validate candidate corpus coherence as an explicit fixture operation.
     # Existing local edits or changed selections do not prevent its installation.
     test_distribution.audit(corpus, lambda p: local(source, p).read_bytes(), audit_tree(source))
-    paths = [e["path"] for e in corpus["files"]] + [test_distribution.MANIFEST]
+    paths = [e["path"] for e in corpus["files"] if not _under_blessed(e["path"])]
+    paths.append(test_distribution.MANIFEST)
     publish(root, [(p, local(source, p).read_bytes(), 0o644) for p in paths],
             remove=(test_distribution.TEST_ROOT, test_distribution.LEGACY_TEST_ROOT))
 
@@ -265,6 +334,7 @@ def install_tests(root, source, corpus):
 def package(root, output):
     manifest = load(root)
     output.mkdir(parents=True, exist_ok=True)
+    dir_modes = []
     for entry in manifest["entries"]:
         path = entry["path"]
         if path == "/" or entry["role"] == "interpreter":
@@ -274,9 +344,12 @@ def package(root, output):
             raise ValueError(f"package destination conflict: {path}")
         if entry["kind"] == 2:
             destination.mkdir(parents=True, exist_ok=True)
-            destination.chmod(entry["mode"])
+            dir_modes.append((destination, entry["mode"]))
         else:
             shutil.copy2(local(root, path), destination)
+    # Apply directory modes after writes so read-only parents don't block children.
+    for destination, mode in reversed(dir_modes):
+        destination.chmod(mode)
     # Verify the copied bytes against their own freshly generated catalogue.
     audit(manifest, lambda p: local(output, p).read_bytes())
     (output / "vfs-manifest.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")

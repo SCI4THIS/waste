@@ -15,19 +15,8 @@
   },
   "api_policy": {
     "browser_adapter_review": {
-      "prefer_over_module": [
-        "lseek",
-        "__fpurge"
-      ],
+      "prefer_over_module": [],
       "signatures": {
-        "__fpurge": {
-          "params": [
-            127
-          ],
-          "results": [
-            127
-          ]
-        },
         "_exit": {
           "params": [
             127
@@ -403,14 +392,6 @@
     "format": 1,
     "unavailable_groups": [
       {
-        "names": "lseek",
-        "reason": "Browser overrides lseek with Bash i64 ABI; default off_t is i32"
-      },
-      {
-        "names": "__fpurge",
-        "reason": "Browser overrides __fpurge with an i32-returning no-op"
-      },
-      {
         "names": "_traceattr _traceattr2 _tracechar _tracechtype _tracechtype2 _tracef alloc_pair alloc_pair_sp define_key define_key_sp extended_color_content extended_color_content_sp extended_pair_content extended_pair_content_sp extended_slk_color extended_slk_color_sp find_pair find_pair_sp free_pair free_pair_sp init_extended_color init_extended_color_sp init_extended_pair init_extended_pair_sp is_term_resized is_term_resized_sp reset_color_pairs reset_color_pairs_sp resize_term resize_term_sp resizeterm resizeterm_sp slk_attr_off slk_attr_on tgoto_sp tparm_sp trace use_legacy_coding use_legacy_coding_sp use_window",
         "reason": "No implementation in the installed ncurses configuration"
       },
@@ -493,7 +474,7 @@
       "origin": "repository:src/vfs/usr/include/dirent.h",
       "path": "/usr/include/dirent.h",
       "role": "sdk-public",
-      "sha256": "0e52ed97a5c868cd81772cfe2888d01a75c41711454fb3f3112bdb825a4889e9"
+      "sha256": "df0b070af87de70d5333df02558dd0c216cf64a77fdb06b0c08b73e4ed23467b"
     },
     {
       "origin": "repository:src/vfs/usr/include/dlfcn.h",
@@ -639,7 +620,7 @@
       "origin": "repository:src/vfs/usr/include/stdio.h",
       "path": "/usr/include/stdio.h",
       "role": "sdk-public",
-      "sha256": "356158efc6f6995e9935824eba7e7c33d1e2365455e47b0327b7d5e6dca71a67"
+      "sha256": "9cf3dd63a8012b0df692a6c9e3a9d35cf58df176a396b90572e95ea770fa8abf"
     },
     {
       "origin": "repository:src/vfs/usr/include/stdio_ext.h",
@@ -711,7 +692,7 @@
       "origin": "repository:src/vfs/usr/include/sys/types.h",
       "path": "/usr/include/sys/types.h",
       "role": "sdk-public",
-      "sha256": "8830c3ea824139492312e675f543ad4ec59560097c423a5fa23eaf9fc500e42c"
+      "sha256": "3f33dc725d8d2fbf942cb78bf0811a0415aac972cc6760421aed9a19d7b5dfc3"
     },
     {
       "origin": "repository:src/vfs/usr/include/sys/wait.h",
@@ -763,7 +744,7 @@
       "origin": "repository:src/vfs/usr/include/unistd.h",
       "path": "/usr/include/unistd.h",
       "role": "sdk-public",
-      "sha256": "1f8cae9ce93782f3301d0cf7cefa63d6c09a56939ad507669771ef807c879c63"
+      "sha256": "709a568fe30566cf707a65d97af2d09554142f3ed16577d1a2dfc6f0711a6b22"
     },
     {
       "origin": "repository:src/vfs/usr/include/utime.h",
@@ -788,8 +769,8 @@
       "origin": "ncurses:87c2c84cbd2332d6d94b12a1dcaf12ad1a51a938",
       "path": "/usr/include/waste/ncurses/curses.h",
       "role": "sdk-ncurses",
-      "sha256": "623fa86b72977b9f7c2869fd796bdf56459aafb09fe69c5427d10fabac1e5d78",
-      "upstream_sha256": "4e7792e066bb734df56cb7700a7684064ea295500f85722b5aa1fa4fe11e26a5"
+      "sha256": "3b6b0d20389042f51fe766558ce5b66b1797f80ef8dc7106d4488174c282c12e",
+      "upstream_sha256": "69948b34cc9003a3f9ae510cc99161c42690306460c8e4a2b6e0d0cecb384150"
     },
     {
       "origin": "repository:src/vfs/usr/include/wchar.h",
@@ -988,8 +969,8 @@
   "link_profile": "Existing WASTE guest libc plus env/waste_kernel adapters; waste-crt.c startup. No host libc.",
   "ncurses": {
     "boolean": "unsigned, 4 bytes",
-    "configuration_sha256": "7acae5d39a2c37c13d86be35e18409ab155953b994521e045b4725218bbe27fe",
-    "library_sha256": "b5158484a4e54d9b6d84683dc3ef57b7d464ba11d061a26372d1507f43ddc232",
+    "configuration_sha256": "70d4718f3127ed8e915198f2131f6ad0e3a8263ac37bba1b58ceb634edae9394",
+    "library_sha256": "4c7729e9a4d3768dcdbbda01abbb1df3f2ea9ceed60c830f9338a11798f5bc4c",
     "revision": "87c2c84cbd2332d6d94b12a1dcaf12ad1a51a938"
   },
   "private_exclusions": [

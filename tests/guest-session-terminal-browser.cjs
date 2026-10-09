@@ -27,7 +27,7 @@ const self = {postMessage(message) {
   }
   if (message.type === "output" && !message.text.startsWith("WASTE_")) output += message.text;
 }};
-vm.runInContext(page.read("root/waste/app/worker.js").toString(), vm.createContext({self,
+vm.runInContext(page.read("root/app/worker.js").toString(), vm.createContext({self,
   WebAssembly, Uint8Array, DataView, TextDecoder, TextEncoder, Promise, Math,
   Number, String, Date, Error, setTimeout, clearTimeout, console,
   atob: value => Buffer.from(value, "base64").toString("binary")}));

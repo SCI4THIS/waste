@@ -19,7 +19,7 @@ or complete POSIX conformance suite.
 Run the installed DIY group directly in cli-rt:
 
 ```sh
-build/cli-rt/waste-test --vfs-root=src/vfs --group=diy-posix-test --jobs=1
+build/cli-rt/private/test-suite --vfs-root=src/vfs --group=diy-posix-test --jobs=1
 ```
 
 The group has four passing scripts (48 checks, including mmap) and the explicit

@@ -11,7 +11,7 @@ var WasteTestSuite = class {
     this.browserNativeSpecs = new Map();
     const inventory = JSON.parse(new TextDecoder().decode(vfs.inventory));
     const manifestIndex = inventory.entries.findIndex(entry =>
-      entry.path === "/root/waste/tests/manifest.json");
+      entry.path === "/root/test/manifest.json");
     const manifestFile = vfs.files.find(file => file.index === manifestIndex);
     if (manifestIndex >= 0 && manifestFile) {
       const manifest = JSON.parse(new TextDecoder().decode(manifestFile.bytes));
@@ -217,8 +217,8 @@ var WasteTestSuite = class {
           else if (state.cancelled) record.status = "CANCELLED";
           else {
             const budget = timeoutGroups[test.group] ?? timeoutMs ??
-              (test.group === "core" ? WASTE_CONFIG.SUITE_TIMEOUT_CORE_MS :
-                ["core/simd", "core/bulk-memory", "core/memory64"].includes(test.group) ? WASTE_CONFIG.SUITE_TIMEOUT_HEAVY_MS : WASTE_CONFIG.SUITE_TIMEOUT_DEFAULT_MS);
+              (test.group === "wasm-spec/core" ? WASTE_CONFIG.SUITE_TIMEOUT_CORE_MS :
+                ["wasm-spec/core/simd", "wasm-spec/core/bulk-memory", "wasm-spec/core/memory64"].includes(test.group) ? WASTE_CONFIG.SUITE_TIMEOUT_HEAVY_MS : WASTE_CONFIG.SUITE_TIMEOUT_DEFAULT_MS);
             let response;
             try { response = await this.request({mode: "run", identity: test.identity,
               browserNativeSpec: this.browserNativeSpecs.get(test.identity)}, budget, state); }

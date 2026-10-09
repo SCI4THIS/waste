@@ -42,8 +42,7 @@ static int probe_write_u32(u32 value) {
   return waste_probe_write(1, digits, length) == (int)length ? 0 : -1;
 }
 
-__attribute__((export_name("_start")))
-int waste_probe_start(void) {
+static int waste_probe_run(void) {
   if (probe_write_text("WASTE_PROBE_ENTRY_OK\n") != 0) return 1;
   int block = waste_probe_startup();
   if (block < 0) return probe_write_text("WASTE_PROBE_STARTUP_MISSING\n") == 0 ? 1 : 1;
@@ -112,3 +111,6 @@ int waste_probe_start(void) {
   (void)probe_message;
   return 0;
 }
+
+__attribute__((export_name("_start")))
+void waste_probe_start(void) { waste_probe_exit(waste_probe_run()); }

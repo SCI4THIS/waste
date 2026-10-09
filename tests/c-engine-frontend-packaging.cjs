@@ -40,7 +40,7 @@ const context = vm.createContext({});
 logStep("STEP load authored frontend loader");
 vm.runInContext(fs.readFileSync(path.join(frontend, "loader.js"), "utf8"), context);
 for (const [name, expected] of [
-  ["launch.wast", "../../../build/html-rt/bash-runtime.wast"],
+  ["launch.wast", "../../../build/html-rt/bash/launch.wast"],
   ["payload.json", "../../../build/html-rt/tests/payload.json"],
   ["waste-wast.wasm", "../../../build/html-rt/waste-wast.wasm"],
   ["vfs-manifest.json", "../../../build/html-rt/bash/vfs-manifest.json"],
@@ -71,7 +71,7 @@ logStep("BASH ASSERT app sources are not inlined into HTML");
 for (const name of ["app.js", "worker.js", "test-suite.js", "style.css",
   "terminal/model.js", "terminal/glf.js", "terminal/renderer.js", "terminal/render-test.js"]) {
   assert(!archive.html.includes(fs.readFileSync(path.join(frontend, name), "utf8")));
-  assertBytesEqual(archive.read("root/waste/app/" + name),
+  assertBytesEqual(archive.read("root/app/" + name),
     Buffer.from(["worker.js", "test-suite.js"].includes(name)
       ? withConfig(fs.readFileSync(path.join(frontend, name), "utf8"))
       : fs.readFileSync(path.join(frontend, name))), `bash VFS app ${name}`);
@@ -106,7 +106,7 @@ assert(archive.html.includes("WebAssembly.compile(zlibBytes)"));
 logStep("PAGE PASS target=bash");
 console.log("PASS bash: authored sources, embedded bytes, offline references and staging paths");
 
-const corpus = JSON.parse(archive.read("root/waste/tests/manifest.json"));
+const corpus = JSON.parse(archive.read("root/test/manifest.json"));
 assert.equal(new Set(corpus.tests.map(test => test.path)).size, corpus.tests.length);
 for (const test of corpus.tests) {
   if (test.executionSpec.mode !== "wast-stream") continue;
@@ -117,7 +117,7 @@ assert(fs.existsSync(path.join(frontend, "tests-worker.js")), "Node worker confo
 
 for (const [script, args] of [
   ["generate-c-engine-tests.py", ["--tests", "tests/diy-posix-test"]],
-  ["generate-c-engine-bash-html.py", ["--launch", "build/html-rt/bash-runtime.wast"]],
+  ["generate-c-engine-bash-html.py", []],
 ]) {
   logStep(`GENERATOR GUARD BEGIN script=${script} args=${JSON.stringify(args)}`);
   const result = spawnSync("python3", ["src/html-rt/tools/" + script,

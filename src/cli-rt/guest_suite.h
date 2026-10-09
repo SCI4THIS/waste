@@ -30,9 +30,11 @@ static int session_test_suite(cli_guest_session *session, exec_error *error) {
     if (!slash) return 0;
     int sanitized = strstr(slash, "-sanitize") != NULL;
     *slash = '\0';
+    char *parent = strrchr(executable, '/');
+    if (parent && !strcmp(parent + 1, "private")) *parent = '\0';
     snprintf(baseline, sizeof(baseline), "--expected-failures=%s/native-corpus-expected-failures.txt", executable);
     size_t directory_length = strlen(executable);
-    const char *name = sanitized ? "/waste-test-sanitize" : "/waste-test";
+    const char *name = sanitized ? "/private/test-suite-sanitize" : "/private/test-suite";
     if (directory_length + strlen(name) >= sizeof(executable)) return 0;
     memcpy(executable + directory_length, name, strlen(name)+1);
     if (session->suite_root_fd < 0) return 0;

@@ -8,8 +8,8 @@ parser, encoder, validator, linker, runner, and executor code lives in
 library, and native build rules live in `src/cli-rt/`. The browser/Wasm API,
 browser POSIX adapters, HTML generators, and browser
 build rules live in `src/html-rt/`. Keep shared semantics in `src/engine/`; add
-platform behavior only to the matching runtime directory. Compiled Bash input
-is in `examples/bash.wat`.
+platform behavior only to the matching runtime directory. Bash builds from the read-only `submodules/bash` checkout through
+`src/aux/bash`; both runtimes launch the installed `src/vfs/usr/bin/bash`.
 
 Follow `docs/architecture.md`: C is the browser runtime. The OCaml reference
 interpreter in `submodules/wasm-spec/interpreter` was used as a language
@@ -21,7 +21,7 @@ validation, execution, linking, browser, and verification practices established
 during the port. Current staged work is tracked in the `docs/active-*.md`
 plans.
 Packaging tools are in `src/html-rt/tools/`; guest libc sources are in
-`src/libc/`. Build/install the shared guest library with `make -C src/libc install`.
+`src/aux/libc/`. Build/install the shared guest library with `make -C src/aux install-libc`.
 Auxiliary commands build through `src/aux/Makefile`; Rogue's package profile and
 patches live in `src/aux/rogue`. Use `make -C src/aux rogue` and `install-rogue`;
 stage upstream sources under `build/aux/rogue` and leave the submodule untouched.
@@ -29,13 +29,16 @@ When adding or migrating an auxiliary binary, read and apply the
 [add-aux-binary skill](skills/add-aux-binary/SKILL.md).
 Coreutils commands use per-command `src/aux/NAME/sources.mk` files and shared
 `src/aux/coreutils` staging, private headers and Make rules. Build with
-`make -C src/aux NAME`, install with `install-NAME`; generated outputs live
+`make -C src/aux NAME`, install with `install-NAME`, and test with
+`test-NAME`; package WAST tests and instructions belong under `src/aux/NAME`.
+System interaction tests belong under `src/system-tests`. Generated outputs live
 under `build/aux`. Generate release corresponding source explicitly with
 `make -C src/aux coreutils-source-package`.
-Portable support needed by the interpreter itself lives in `src/libc/runtime/`
+Portable support needed by the interpreter itself lives in `src/aux/libc/runtime/`
 and is statically linked into each runtime; kernel semantics stay in `src/engine/`.
 Architecture notes are in `docs/`, and project probes
-are in `tests/`, especially `tests/diy-posix-test/` and `tests/libc-test/`.
+are in `tests/`, package WAST tests in `src/aux/NAME/tests`, and system
+interaction/SDK probes in `src/system-tests/`.
 Treat all of `build/` as generated output. Shared generated engine sources and
 logs go under `build/engine/`, native executables under `build/cli-rt/`, and
 browser artifacts under `build/html-rt/`.
@@ -55,8 +58,8 @@ snapshots live in `src/vfs/usr/lib/waste/cc/include`. Keep engine/native headers
 and libc `helper.h` private. Use `guest-sdk-check` for explicit header/ABI/provider
 checks; `guest-sdk-install` refreshes selected dependency headers when requested.
 See `docs/guest-sdk.md` for informational SDK metadata and build profiles.
-Test files in `src/vfs/root/waste/tests` are installed distribution snapshots,
-not authored sources. They mount at `/root/waste/tests`. Refresh with
+Test files in `src/vfs/root/test` are installed distribution snapshots,
+not authored sources. They mount at `/root/test`. Refresh with
 `vfs-tests-install` and audit with `vfs-tests-check`; the single `bash.html`
 page runs browser corpus diagnostics from these mounted snapshots. See
 `docs/techniques.md` (Installed Corpus Workflow).
@@ -86,7 +89,7 @@ this explicit return path as stack unwinding/rewinding.
 
 - `./start.sh`: open the dependency/build/test wizard.
 - `./start.sh --check`: inspect dependencies and submodule state.
-- `./start.sh --cli-compile`: build the native C WAST runner.
+- `./start.sh --cli-compile`: build the native `wat`, `wasm` and `wast` commands.
 - `./start.sh --cli-test`: run the top-level core spec files with the native C
   runner.
 - `./start.sh --html-bash`: build the self-contained C-engine Bash page only.
@@ -94,18 +97,17 @@ this explicit return path as stack unwinding/rewinding.
   against the generated page without launching Chromium.
 - `./start.sh --html-browser-full`: run the full offline Chromium/browser suite
   against `bash.html`.
-- `./start.sh --build-libc`: build the guest libc module and generated test
-  fixtures.
+- `./start.sh --build-libc`: build the production guest libc shared module.
 - `./start.sh --generate-bash-html`: generate the offline WASTE Bash page.
 - `./start.sh --ocaml-reference`: stage and run the OCaml reference interpreter
   under `build/ocaml-interpreter/`; see
   [OCaml reference interpreter build](docs/techniques.md#ocaml-reference-interpreter-build).
-- `make -C src/cli-rt BUILD_DIR=../../build/cli-rt wast-native`: build the
-  native CLI runner.
+- `make -C src/cli-rt BUILD_DIR=../../build/cli-rt applications-native`: build the
+  three public CLI commands.
 - `make -C src/cli-rt corpus-native`: build the native batch companion and
   execute the installed manifest/tree without Node; write assertion-aware
   results to `build/cli-rt/corpus-results.json`.
-- `build/cli-rt/waste-test --vfs-root=src/vfs --list`: enumerate the installed
+- `build/cli-rt/wast --suite --list`: enumerate the installed
   corpus, including unsupported entries with skip reasons. Use `--group`,
   `--jobs`, `--expected-failures` and `--results` for batch execution.
 - `make -C src/cli-rt BUILD_DIR=../../build/cli-rt i32-smoke`: run the native
@@ -116,7 +118,7 @@ this explicit return path as stack unwinding/rewinding.
   session and native sanitizer/minimum-input guard without Node or HTML.
 - `make -C src/html-rt BUILD_DIR=../../build/html-rt wast-browser`: compile the
   same engine semantics for the browser.
-- `build/cli-rt/waste-cli --parse-only FILE...`: rapidly parse selected WAST
+- `build/cli-rt/wast --parse-only FILE...`: rapidly parse selected WAST
   files without Node or a browser.
 - `node tests/c-engine-browser-runtime.cjs`: exercise focused WAST payloads
   through the worker harness without generating an HTML dashboard.
@@ -131,7 +133,9 @@ this explicit return path as stack unwinding/rewinding.
   select, run or cancel the mounted corpus and download assertion JSON without
   Node. `node tests/c-engine-offline-browser.cjs --suite-full` is the focused
   automation gate for full production-browser batch execution.
-- `node tests/libc-test/allocator-native.cjs`: stress the built allocator natively.
+- `make -C src/aux test-libc`: run package WAST tests in native Bash.
+- `make -C src/system-tests test-libc`: run libc/kernel interaction WAST tests.
+- `make -C src/cli-rt libc-sanitize`: run both sets with ASan/UBSan.
 
 Retired dashboard options (`--html-test`, `--c-engine-html`, and
 `--generate-html`) report their replacements. Use `--cli-test` for native
@@ -161,8 +165,9 @@ fixtures as regression probes. Broader conformance work should trace tests to
 The Open Group suites. Revisit LTP's `testcases/open_posix_testsuite` after a
 guest C compiler works; then record upstream revisions and keep licensing and
 Wasm-adaptation patches separate.
-Keep libc test clients in `tests/libc-test/*.wast.inc`; generated fixtures
-belong under `build/html-rt/waste-libc/tests/`.
+Keep package test assertions entirely in `src/aux/NAME/tests/*.wast`;
+run them from Bash with `/bin/wast --verbose`. Stage system-level WAST tests
+and compiler-boundary checks under `src/system-tests`.
 The OCaml reference interpreter (`./start.sh --ocaml-reference`) may be used
 to cross-check WAT/WAST language behavior on supported official tests; see
 [OCaml reference interpreter build](docs/techniques.md#ocaml-reference-interpreter-build).

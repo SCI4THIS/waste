@@ -1,0 +1,80 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "events": [
+    {
+      "after": "# ",
+      "text": "/usr/bin/ldd /usr/bin/bash\n"
+    },
+    {
+      "after": "# ",
+      "text": "/usr/bin/bash --version; printf \"__AUX_VERSION_%s__\\n\" \"$?\"\n"
+    },
+    {
+      "after": "# ",
+      "text": "/usr/bin/bash --norc -c 'a=(zero one two); f() { printf \"__AUX_ARGS__%s:%s:%s\\n\" \"$1\" \"${a[2]}\" \"$((6*7))\"; }; f \"$1\"; exit 7' shell \"two words\"; printf \"__AUX_STATUS_%s__\\n\" \"$?\"\n"
+    },
+    {
+      "after": "# ",
+      "text": "/usr/bin/bash --norc -c 'no-such-aux-bash-command'; printf \"__AUX_MISSING_%s__\\n\" \"$?\"; /usr/bin/bash --bad-aux-option; printf \"__AUX_OPTION_%s__\\n\" \"$?\"\n"
+    },
+    {
+      "after": "# ",
+      "text": "/usr/bin/bash --norc -c 'f() { return 5; }; f; printf \"__AUX_RETURN_BUILTIN__%s\\n\" \"$?\"; trap \"echo __AUX_EXIT_TRAP__\" EXIT; eval \"exit 6\"'; printf \"__AUX_EVAL_%s__\\n\" \"$?\"\n"
+    },
+    {
+      "after": "# ",
+      "text": "/usr/bin/bash --norc -c \"exit 9\"; printf \"__AUX_RETURN_%s__\\n\" \"$?\"\n"
+    },
+    {
+      "after": "# ",
+      "text": "PS1=\"__AUX_ROOT__ \" exec /usr/bin/bash --norc -i\n"
+    },
+    {
+      "after": "__AUX_ROOT__ ",
+      "text": "echo __AUX_FRAGMENT"
+    },
+    {
+      "after": "__AUX_FRAGMENT",
+      "text": "_OK__\n"
+    },
+    {
+      "after": "__AUX_ROOT__ ",
+      "text": "printf \"__AUX_READ_READY__\\n\"; IFS= read -r value; printf \"__AUX_READ__%s:%s\\n\" \"$?\" \"$value\"\n"
+    },
+    {
+      "after": "__AUX_READ_READY__\r\n",
+      "text": "delayed input\n"
+    },
+    {
+      "after": "__AUX_ROOT__ ",
+      "text": "printf \"SOURCE\\n\" > /tmp/aux-bash-file; /usr/bin/cat /tmp/aux-bash-file | /usr/bin/cat; value=$(printf SUBST); printf \"__AUX_PIPE__%s:%s\\n\" \"$?\" \"$value\"; /usr/bin/true & wait $!; printf \"__AUX_WAIT__%s\\n\" \"$?\"; printf \"__AUX_SCRIPT_%s__\\n\" \"$?\"\n"
+    },
+    {
+      "after": "__AUX_ROOT__ ",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "libc => /usr/lib/libc.so.wasm",
+    "GNU bash, version 5.3.",
+    "__AUX_VERSION_0__\r\n",
+    "__AUX_ARGS__two words:two:42\r\n",
+    "__AUX_STATUS_7__\r\n",
+    "SOURCE\r\n",
+    "__AUX_PIPE__0:SUBST\r\n",
+    "__AUX_WAIT__0\r\n",
+    "__AUX_SCRIPT_0__\r\n",
+    "__AUX_MISSING_127__\r\n",
+    "__AUX_OPTION_2__\r\n",
+    "__AUX_RETURN_9__\r\n",
+    "\u001b[?2004l\r__AUX_FRAGMENT_OK__\r\n",
+    "__AUX_READ__0:delayed input\r\n",
+    "__AUX_RETURN_BUILTIN__5\r\n",
+    "__AUX_EXIT_TRAP__\r\n",
+    "__AUX_EVAL_6__\r\n"
+  ],
+  "assertions": 1,
+  "exitStatus": 0,
+  "comparison": "markers",
+  "normalization": "Background-job notifications may vary; all output and exit-status markers remain required."
+}

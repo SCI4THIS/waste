@@ -1,0 +1,19 @@
+;; Run from Bash with /bin/wast --verbose; imports the installed shared libc.
+;; Verify the stable WASTE guest struct stat layout.
+(module $stat_abi_tests
+  (import "waste-runtime" "memory" (memory 4))
+  (import "libc" "waste_stat_size" (func $stat_size (result i32)))
+  (import "libc" "waste_stat_mode_offset" (func $mode_offset (result i32)))
+  (import "libc" "waste_stat_size_offset" (func $size_offset (result i32)))
+  (import "libc" "waste_stat_atime_offset" (func $atime_offset (result i32)))
+  (import "libc" "waste_stat_ctime_nsec_offset" (func $ctime_offset (result i32)))
+  (func (export "stat-size") (result i32) call $stat_size)
+  (func (export "mode-offset") (result i32) call $mode_offset)
+  (func (export "size-offset") (result i32) call $size_offset)
+  (func (export "atime-offset") (result i32) call $atime_offset)
+  (func (export "ctime-nsec-offset") (result i32) call $ctime_offset))
+(assert_return (invoke $stat_abi_tests "stat-size") (i32.const 128))
+(assert_return (invoke $stat_abi_tests "mode-offset") (i32.const 16))
+(assert_return (invoke $stat_abi_tests "size-offset") (i32.const 40))
+(assert_return (invoke $stat_abi_tests "atime-offset") (i32.const 64))
+(assert_return (invoke $stat_abi_tests "ctime-nsec-offset") (i32.const 104))

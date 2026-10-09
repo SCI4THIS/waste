@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicitly prepare/install the shared browser-test corpus under /root/waste/tests."""
+"""Explicitly prepare/install the shared browser-test corpus under /root/test."""
 import argparse
 import json
 from pathlib import Path

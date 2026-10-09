@@ -44,6 +44,7 @@
 #define POSIX_SIGSTOP 19
 #define POSIX_SIG_DFL UINT32_C(0)
 #define POSIX_SIG_IGN UINT32_C(0xfffffffe)
+#define POSIX_SA_RESTART UINT32_C(0x10000000)
 
 typedef enum {
     POSIX_SIGNAL_DEFAULT = 0,
@@ -128,6 +129,8 @@ typedef enum {
     POSIX_OFD_PIPE_WRITE,
     POSIX_OFD_REGULAR,
     POSIX_OFD_DIRECTORY,
+    /* Bounded input queue/output capability supplied by an embedding runtime. */
+    POSIX_OFD_STREAM,
 } posix_ofd_kind;
 
 typedef struct posix_kernel_path_node posix_kernel_path_node;
@@ -167,6 +170,9 @@ typedef struct posix_pipe {
 typedef struct posix_ofd {
     posix_ofd_kind kind;
     int ref_count;     /* number of fd entries pointing here */
+    /* Opaque platform capability IDs; never host descriptor numbers. */
+    int input_handle, output_handle;
+    uint32_t stream_mode;
     union {
         struct {
             uint8_t *input;
@@ -243,6 +249,7 @@ typedef struct posix_kernel {
     uint8_t signal_disposition[POSIX_SIGSET_BYTES * 8 + 1];
     uint32_t signal_handlers[POSIX_SIGSET_BYTES * 8 + 1];
     posix_sigset signal_action_masks[POSIX_SIGSET_BYTES * 8 + 1];
+    uint32_t signal_action_flags[POSIX_SIGSET_BYTES * 8 + 1];
     char cwd[POSIX_PATH_NODE_NAME_MAX];
     posix_kernel_path_node path_nodes[POSIX_PATH_NODE_MAX];
     int path_node_count;
@@ -255,6 +262,16 @@ typedef struct posix_kernel {
    interactive=0 leaves all fds closed (for WAST test sandboxes).
    Returns NULL on allocation failure. */
 posix_kernel *posix_kernel_create(int interactive);
+/* Attach a shared terminal at fds 0/1/2 while retaining mounted paths.
+   All three descriptors must be empty; failure leaves the kernel unchanged.
+   Returns 0 or a negative POSIX errno. */
+int posix_kernel_attach_terminal(posix_kernel *kernel);
+/* Attach an inherited stream to an empty descriptor. A terminal uses the
+   existing kernel line discipline; other streams expose a raw byte queue.
+   Negative handles disable that direction. Host access stays in the runtime. */
+int posix_kernel_attach_stream(posix_kernel *kernel, int fd, int terminal,
+                                int input_handle, int output_handle,
+                                uint32_t mode);
 posix_shm_namespace *posix_shm_namespace_create(void);
 void posix_shm_namespace_retain(posix_shm_namespace *namespace_);
 void posix_shm_namespace_release(posix_shm_namespace *namespace_);
@@ -313,6 +330,11 @@ int posix_kernel_signal_raise(posix_kernel *kernel, int signal);
 int posix_kernel_signal_clear(posix_kernel *kernel, int signal);
 int posix_kernel_signal_pending(const posix_kernel *kernel, int signal);
 int posix_kernel_signal_last_delivered(posix_kernel *kernel);
+/* Consume one unmasked pending signal, cancel the interrupted wait, and
+   publish its number through signal_last_delivered. Returns 0 or -EINTR. */
+int posix_kernel_signal_interrupt(posix_kernel *kernel);
+int posix_kernel_signal_default_pending(posix_kernel *kernel);
+void posix_kernel_signal_exec(posix_kernel *kernel);
 int posix_kernel_signal_set_disposition(posix_kernel *kernel, int signal,
                                         posix_signal_disposition disposition);
 int posix_kernel_signal_get_disposition(const posix_kernel *kernel, int signal,
@@ -352,6 +374,9 @@ int posix_kernel_terminal_enqueue(posix_kernel *kernel, int fd,
 /* Signal EOF on the terminal associated with fd.
    Returns 0 on success or negative errno. */
 int posix_kernel_terminal_signal_eof(posix_kernel *kernel, int fd);
+typedef void (*posix_terminal_echo_fn)(void *, int, const uint8_t *, int);
+int posix_kernel_terminal_enqueue_echo(posix_kernel *, int, const uint8_t *, int,
+                                       posix_terminal_echo_fn, void *);
 
 /* Apply terminal output flags to a bounded byte span. */
 int posix_kernel_terminal_process_output(const posix_kernel *kernel, int fd,

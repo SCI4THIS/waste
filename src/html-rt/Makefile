@@ -53,8 +53,8 @@ ENGINE_HEADERS += $(ENGINE_DIR)/lib/include/kernel.h \
 	$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h
 
 # Freestanding library: shared portable interpreter support
-LIB_SHARED_SRC := ../libc/runtime/string.c ../libc/runtime/stdio.c \
-	../libc/runtime/stdlib.c ../libc/runtime/math.c ../libc/runtime/errno.c
+LIB_SHARED_SRC := ../aux/libc/runtime/string.c ../aux/libc/runtime/stdio.c \
+	../aux/libc/runtime/stdlib.c ../aux/libc/runtime/math.c ../aux/libc/runtime/errno.c
 
 # Freestanding library: Wasm platform backend (local to html-rt)
 LIB_WASM_SRC := lib/stdlib.c lib/stdio.c lib/unistd.c
@@ -82,7 +82,7 @@ RT_OBJS := $(BUILD_DIR)/browser_api.o $(BUILD_DIR)/posix_stubs.o $(BUILD_DIR)/te
 
 ENGINE_HEADERS += $(ENGINE_DIR)/test_suite.h
 
-WASM_LIB_SHARED_O := $(patsubst ../libc/runtime/%.c,$(BUILD_DIR)/lib_shared_%.o,$(LIB_SHARED_SRC))
+WASM_LIB_SHARED_O := $(patsubst ../aux/libc/runtime/%.c,$(BUILD_DIR)/lib_shared_%.o,$(LIB_SHARED_SRC))
 WASM_LIB_WASM_O := $(patsubst lib/%.c,$(BUILD_DIR)/lib_wasm_%.o,$(LIB_WASM_SRC))
 
 WAST_TAB_C := $(WAST_GEN_DIR)/wast.tab.c
@@ -93,34 +93,7 @@ WAST_LEX_WASM_O := $(BUILD_DIR)/wast.lex.wasm.o
 
 WAST_WASM_TARGET := $(BUILD_DIR)/waste-wast.wasm
 
-LIBC_BUILDER := tools/build-waste-libc.py
-include ../libc/sources.mk
-LIBC_SOURCE_MANIFEST := ../libc/sources.mk tools/libc_sources.py
-LIBC_CLIENTS := $(wildcard $(REPO_ROOT)/tests/libc-test/*-client.wast.inc)
-LIBC_SOURCES := ../libc/stdlib.wat $(addprefix ../libc/,$(LIBC_C_SOURCES)) \
-	../libc/include/helper.h $(LIBC_CLIENTS) $(LIBC_BUILDER) $(LIBC_SOURCE_MANIFEST)
-LIBC_OUTPUT := $(BUILD_DIR)/waste-libc/waste-libc.wasm
-LIBC_FIXTURES := $(patsubst $(REPO_ROOT)/tests/libc-test/%-client.wast.inc,\
-	$(BUILD_DIR)/waste-libc/tests/%.wast,$(LIBC_CLIENTS))
-LIBC_OUTPUTS := $(LIBC_OUTPUT) $(LIBC_FIXTURES)
-
-WASTE_SYSROOT_TOOL := tools/build-waste-sysroot.py
-WASTE_SYSROOT_DIR := $(REPO_ROOT)/build/engine/guest-sdk/sysroot
-WASTE_SYSROOT_CC := $(WASTE_SYSROOT_DIR)/bin/waste-wasm-clang
-WASTE_SYSROOT_HEADERS := $(shell find $(REPO_ROOT)/src/vfs/usr/include \
-	$(REPO_ROOT)/src/vfs/usr/lib/waste/cc/include -type f -name '*.h' -print) \
-	$(REPO_ROOT)/src/vfs/usr/share/waste/sdk.json tools/guest_sdk.py \
-	tools/guest_providers.py tools/wasm_signatures.py tools/sdk-api-policy.json
-LIBC_SOURCES += $(WASTE_SYSROOT_HEADERS)
-WASTE_CRT_SOURCE := ../libc/waste-crt.c
-WASTE_CRT_OBJECT := $(REPO_ROOT)/build/engine/guest-sdk/waste-crt.o
-WASTE_HELLO_SOURCE := $(REPO_ROOT)/tests/coreutils-sysroot-hello.c
-WASTE_HELLO_OBJECT := $(REPO_ROOT)/build/engine/guest-sdk/sysroot-hello.o
-WASTE_HELLO_WASM := $(REPO_ROOT)/build/engine/guest-sdk/sysroot-hello.wasm
-WASTE_HELLO_WAT := $(REPO_ROOT)/build/engine/guest-sdk/sysroot-hello.wat
-WASTE_HELLO_AUDIT := $(REPO_ROOT)/build/engine/guest-sdk/sysroot-hello.audit.json
-
-.PHONY: wast-browser waste-libc gen clean coreutils-sysroot coreutils-crt-fixture
+.PHONY: wast-browser gen clean coreutils-sysroot coreutils-crt-fixture
 
 # ---- Parser generation (delegate to engine) ----
 
@@ -264,7 +237,7 @@ $(BUILD_DIR)/guest_posix.o: $(ENGINE_DIR)/guest_posix.c $(ENGINE_HEADERS)
 
 # ---- Compile freestanding library objects ----
 
-$(BUILD_DIR)/lib_shared_%.o: ../libc/runtime/%.c
+$(BUILD_DIR)/lib_shared_%.o: ../aux/libc/runtime/%.c
 	mkdir -p $(BUILD_DIR)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
@@ -288,6 +261,20 @@ $(WAST_LEX_WASM_O): $(WAST_LEX_C) $(WAST_TAB_H) $(ENGINE_HEADERS)
 
 wast-browser: gen $(WAST_WASM_TARGET)
 
+# Same private ownership/startup probe against the browser C object set.
+.PHONY: direct-start-probe
+direct-start-probe: gen $(BUILD_DIR)/direct-start-check.wasm
+
+$(BUILD_DIR)/direct-start-check.o: ../system-tests/cli-runtime/direct-start.c $(ENGINE_HEADERS)
+	mkdir -p $(BUILD_DIR)
+	clang $(WASM_CC_FLAGS) -c $< -o $@
+
+$(BUILD_DIR)/direct-start-check.wasm: $(BUILD_DIR)/direct-start-check.o $(ENGINE_OBJS) \
+		$(WASM_LIB_SHARED_O) $(WASM_LIB_WASM_O) $(WAST_TAB_WASM_O) $(WAST_LEX_WASM_O)
+	env LD_LIBRARY_PATH=$(WASM_LD_LIB) $(WASM_LD) --no-entry --export-memory \
+		--export=malloc --export=free --initial-memory=67108864 --max-memory=536870912 \
+		-z stack-size=8388608 $^ -o $@
+
 $(WAST_WASM_TARGET): $(ENGINE_OBJS) $(RT_OBJS) $(WASM_LIB_SHARED_O) $(WASM_LIB_WASM_O) \
 		$(WAST_TAB_WASM_O) $(WAST_LEX_WASM_O)
 	env LD_LIBRARY_PATH=$(WASM_LD_LIB) $(WASM_LD) --no-entry --export-memory \
@@ -297,20 +284,13 @@ $(WAST_WASM_TARGET): $(ENGINE_OBJS) $(RT_OBJS) $(WASM_LIB_SHARED_O) $(WASM_LIB_W
 		$(WAST_TAB_WASM_O) $(WAST_LEX_WASM_O) \
 		-o $(WAST_WASM_TARGET)
 
-# The builder emits the standalone module and every generated test fixture in
-# one transaction. Grouped targets ensure it runs only once when any output is
-# missing or older than its WAT, C helper, client, or builder source.
+# Guest libc and fixture generation are owned by the aux package.
 .PHONY: libc-shared libc-shared-install
 libc-shared:
-	$(MAKE) -C ../libc
+	$(MAKE) -C ../aux libc
 
 libc-shared-install:
-	$(MAKE) -C ../libc install
-
-waste-libc: $(LIBC_OUTPUTS)
-
-$(LIBC_OUTPUTS) &: $(LIBC_SOURCES)
-	$(PYTHON) $(LIBC_BUILDER) --repo-root $(abspath $(REPO_ROOT))
+	$(MAKE) -C ../aux install-libc
 
 # Guest package ownership lives in src/aux; keep aggregate compatibility targets.
 AUX_BUILD_DIR ?= $(REPO_ROOT)/build/aux
@@ -319,42 +299,15 @@ coreutils-stage build-coreutils coreutils-wasm coreutils-install coreutils-sourc
 	$(MAKE) -C ../aux BUILD_DIR="$(abspath $(AUX_BUILD_DIR))" \
 		$(if $(filter coreutils-stage coreutils-source-package,$@),$@,$(if $(filter coreutils-install,$@),install-coreutils,coreutils))
 
-# Stage 8D: generate the freestanding target sysroot and build the startup
-# fixture through its compiler wrapper.  All outputs remain under build/.
-coreutils-sysroot: $(WASTE_SYSROOT_DIR)/manifest.json
+# Compiler/SDK system probes are owned by src/system-tests.
+coreutils-sysroot:
+	$(MAKE) -C ../system-tests sysroot
 
-$(WASTE_SYSROOT_DIR)/manifest.json: $(WASTE_SYSROOT_TOOL) $(WASTE_CRT_SOURCE) \
-		$(WASTE_SYSROOT_HEADERS)
-	mkdir -p $(dir $(WASTE_CRT_OBJECT))
-	$(PYTHON) $(WASTE_SYSROOT_TOOL) --repo-root $(abspath $(REPO_ROOT)) \
-		--output $(abspath $(WASTE_SYSROOT_DIR))
-
-$(WASTE_CRT_OBJECT): $(WASTE_SYSROOT_DIR)/manifest.json $(WASTE_CRT_SOURCE)
-	mkdir -p $(dir $(WASTE_CRT_OBJECT))
-	$(WASTE_SYSROOT_CC) -c $(WASTE_CRT_SOURCE) -o $@
-
-$(WASTE_HELLO_OBJECT): $(WASTE_SYSROOT_DIR)/manifest.json $(WASTE_HELLO_SOURCE)
-	mkdir -p $(dir $(WASTE_CRT_OBJECT))
-	$(WASTE_SYSROOT_CC) -c $(WASTE_HELLO_SOURCE) -o $@
-
-$(WASTE_HELLO_WASM): $(WASTE_CRT_OBJECT) $(WASTE_HELLO_OBJECT)
-	env LD_LIBRARY_PATH=$(WASM_LD_LIB) $(WASM_LD) --no-entry --gc-sections \
-		--export=_start --export-memory --initial-memory=33554432 \
-		--max-memory=268435456 $(WASTE_CRT_OBJECT) $(WASTE_HELLO_OBJECT) -o $@
-
-$(WASTE_HELLO_WAT): $(WASTE_HELLO_WASM)
-	wasm-dis $< -o $@
-
-$(WASTE_HELLO_AUDIT): $(WASTE_HELLO_WASM)
-	$(PYTHON) tools/audit-wasm-imports.py $< \
-		--allow env:exit --allow env:write \
-		--allow waste_kernel:startup_v1 --json $@
-
-coreutils-crt-fixture: $(WASTE_HELLO_AUDIT) $(WASTE_HELLO_WAT)
-	$(PYTHON) -c 'import json; p=json.load(open("$(WASTE_HELLO_AUDIT)")); assert p["ok"] and not p["unknown"] and not p["asyncifySymbols"]'
+coreutils-crt-fixture:
+	$(MAKE) -C ../system-tests crt-fixture
 
 .PHONY: vfs-audit vfs-install-launch vfs-install-app vfs-tests-install vfs-tests-check
-vfs-tests-install: waste-libc wast-browser
+vfs-tests-install: wast-browser
 	$(PYTHON) tools/build-test-corpus.py --install
 
 vfs-tests-check:
@@ -366,17 +319,17 @@ vfs-audit:
 	$(PYTHON) tools/vfs.py audit
 
 .PHONY: guest-sdk-install guest-sdk-check
-guest-sdk-install: $(LIBC_OUTPUT)
+guest-sdk-install:
 	$(PYTHON) tools/build-guest-sdk.py --install
 
-guest-sdk-check: $(LIBC_OUTPUT)
+guest-sdk-check:
 	$(PYTHON) tools/build-guest-sdk.py --audit
-	$(PYTHON) $(REPO_ROOT)/tests/guest-sdk-check.py
+	$(PYTHON) $(REPO_ROOT)/src/system-tests/guest-sdk/check.py
 	$(PYTHON) tools/audit-guest-providers.py
 
 
 vfs-install-launch:
-	$(PYTHON) tools/vfs.py install --component launch --source $(BUILD_DIR)/bash-runtime.wast
+	$(MAKE) -C ../aux install-bash-launch
 
 vfs-install-app:
 	$(PYTHON) tools/vfs.py install --component app --source $(REPO_ROOT)/src/html-rt/src

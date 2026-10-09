@@ -188,7 +188,7 @@ async function waitSession(session, name = "waits") {
         document.querySelector('#suite-list').click();`);
       await until(sessionId, `document.querySelector('#suite-status').textContent === '296 installed tests'`);
       assert.equal(await evaluate(sessionId, `browserTestSuite.catalogue.filter(test => test.skipReason).length`), 4);
-      await evaluate(sessionId, `document.querySelector('#suite-files').value = 'address.wast path-runtime.wast';
+      await evaluate(sessionId, `document.querySelector('#suite-files').value = 'address.wast setjmp-buffer-copy.wast';
         document.querySelector('#suite-run').click();`);
       await until(sessionId, `browserTestResults !== null && !document.querySelector('#suite-run').disabled`);
       assert.equal(await evaluate(sessionId, "browserTestResults.summary.pass"), 2);
@@ -233,10 +233,10 @@ async function waitSession(session, name = "waits") {
       await until(sessionId, `browserTestResults !== null && !document.querySelector('#suite-run').disabled`);
       assert.equal(await evaluate(sessionId, "browserTestResults.exitCode"), 130);
       await evaluate(sessionId, `document.querySelector('#terminal-input').value =
-        'waste-test --json --results=/tmp/guest-suite.json path-runtime.wast >/tmp/guest-stdout.json; printf "__GUEST_BATCH__%s\\n" "$?"; cat /tmp/guest-suite.json';
+        'waste-test --json --results=/tmp/guest-suite.json setjmp-buffer-copy.wast >/tmp/guest-stdout.json; printf "__GUEST_BATCH__%s\\n" "$?"; cat /tmp/guest-suite.json';
         document.querySelector('#terminal-form').dispatchEvent(new Event('submit', {cancelable: true}));`);
       await until(sessionId, `document.querySelector('#terminal-transcript').textContent.includes('__GUEST_BATCH__0') &&
-        document.querySelector('#terminal-transcript').textContent.includes('"identity":"libc-test/path-runtime.wast"')`);
+        document.querySelector('#terminal-transcript').textContent.includes('"identity":"engine-regressions/setjmp-buffer-copy.wast"')`);
       await evaluate(sessionId, `document.querySelector('#terminal-input').value =
         'waste-test --group=core --results=/tmp/guest-cancel.json >/tmp/guest-cancel.txt; printf "__GUEST_CANCEL__%s\\n" "$?"';
         document.querySelector('#terminal-form').dispatchEvent(new Event('submit', {cancelable: true}));`);

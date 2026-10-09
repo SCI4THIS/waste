@@ -11,10 +11,10 @@ const {readOfflinePackage} = require("./offline-html-package.cjs");
   // Prepare the installed-only C probe before starting the engine checks.
   const scratch = "build/engine/guest-sdk";
   fs.mkdirSync(scratch, {recursive:true});
-  execFileSync("python3", ["src/html-rt/tools/build-waste-sysroot.py", "--repo-root", ".",
-    "--output", scratch + "/sysroot"]);
-  execFileSync(scratch + "/sysroot/bin/waste-wasm-clang", ["-O2", "tests/guest-sdk-abi.c",
-    "tests/guest-sdk-stat.c", "-Wl,--allow-undefined", "-Wl,--export=sdk_check",
+  execFileSync("make", ["-C", "src/system-tests", "sysroot",
+    "SYSROOT_DIR=" + path.resolve(scratch, "sysroot")]);
+  execFileSync(scratch + "/sysroot/bin/waste-wasm-clang", ["-O2", "src/system-tests/guest-sdk/abi.c",
+    "src/system-tests/guest-sdk/stat.c", "-Wl,--allow-undefined", "-Wl,--export=sdk_check",
     "-Wl,--export=sdk_stat_check", "-Wl,--export=sdk_signal_check",
     "-Wl,--export=sdk_assert_fail", "-o", scratch + "/abi.wasm"]);
   const text = execFileSync("wasm-dis", [scratch + "/abi.wasm"], {encoding:"utf8"});
@@ -113,7 +113,7 @@ const {readOfflinePackage} = require("./offline-html-package.cjs");
   assert.equal(exp.waste_wast_results_total(), 4, details);
   assert.equal(exp.waste_wast_results_passed(), 4, details);
   console.log("PASS mounted-only C SDK: real compiled engine varargs, stat/signal canaries and assert trap");
-  const corpus = JSON.parse(page.read("root/waste/tests/manifest.json"));
+  const corpus = JSON.parse(page.read("root/test/manifest.json"));
   let offset = 16384;
   const data = [], checks = [];
   for (const test of corpus.tests) {

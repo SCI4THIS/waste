@@ -2,40 +2,40 @@
   "fixture": "src/vfs/usr/share/waste/launch.wast",
   "events": [
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "waste-test --help\n"
     },
     {
-      "after": "bash-5.2# ",
-      "text": "waste-test --list --json --results=/tmp/list.json path-runtime.wast >/tmp/list-stdout.json; printf \"__LIST_STATUS__%s\\n\" \"$?\"; cat /tmp/list.json; cat /tmp/list-stdout.json\n"
+      "after": "# ",
+      "text": "waste-test --list --json --results=/tmp/list.json setjmp-buffer-copy.wast >/tmp/list-stdout.json; printf \"__LIST_STATUS__%s\\n\" \"$?\"; cat /tmp/list.json; cat /tmp/list-stdout.json\n"
     },
     {
-      "after": "bash-5.2# ",
-      "text": "waste-test --jobs=2 --results=/tmp/suite.json address.wast path-runtime.wast spectest-isolation-a.wast spectest-isolation-b.wast; printf \"__BATCH_STATUS__%s\\n\" \"$?\"; cat /tmp/suite.json\n"
+      "after": "# ",
+      "text": "waste-test --jobs=2 --results=/tmp/suite.json address.wast setjmp-buffer-copy.wast spectest-isolation-a.wast spectest-isolation-b.wast; printf \"__BATCH_STATUS__%s\\n\" \"$?\"; cat /tmp/suite.json\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "waste-test --timeout-ms=1 address.wast >/tmp/timeout.txt; printf \"__TIMEOUT_STATUS__%s\\n\" \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "waste-test --group=missing 2>/tmp/selection-error.txt; printf \"__INVALID_STATUS__%s\\n\" \"$?\"; cat /tmp/selection-error.txt\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "waste-test --vfs-root=/host; printf \"__CAPABILITY_STATUS__%s\\n\" \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
-      "text": "waste-test --list --exclude=path-runtime.wast --group=libc-test >/tmp/selected.txt; printf \"__EXCLUDE_STATUS__%s\\n\" \"$?\"\n"
+      "after": "# ",
+      "text": "waste-test --list --exclude=setjmp-buffer-copy.wast --group=engine-regressions >/tmp/selected.txt; printf \"__EXCLUDE_STATUS__%s\\n\" \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
-      "text": "waste-test --json --results=/tmp/xfail.json environment-boundaries.wast >/tmp/json-stdout.txt; printf \"__XFAIL_STATUS__%s\\n\" \"$?\"; cat /tmp/xfail.json\n"
+      "after": "# ",
+      "text": "waste-test --json --results=/tmp/xfail.json system/libc/environment-boundaries.wast >/tmp/json-stdout.txt; printf \"__SKIP_STATUS__%s\\n\" \"$?\"; cat /tmp/xfail.json\n"
     },
     {
-      "after": "bash-5.2# ",
-      "text": "echo __CANCEL_BEGIN__; waste-test --group=core --results=/tmp/cancel.json >/tmp/cancel-out.txt; printf \"__CANCEL_STATUS__%s\\n\" \"$?\"\n"
+      "after": "# ",
+      "text": "echo __CANCEL_BEGIN__; waste-test --group=wasm-spec/core --results=/tmp/cancel.json >/tmp/cancel-out.txt; printf \"__CANCEL_STATUS__%s\\n\" \"$?\"\n"
     },
     {
       "after": "__CANCEL_BEGIN__\r\n",
@@ -45,7 +45,7 @@
       "duringBatch": true
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "text": "echo __PARENT_SHELL_OK__; exit 0\n"
     }
   ],
@@ -53,18 +53,18 @@
     "usage: waste-test",
     "__LIST_STATUS__0\r\n",
     "__BATCH_STATUS__0\r\n",
-    "PASS libc-test/path-runtime.wast",
+    "PASS engine-regressions/setjmp-buffer-copy.wast",
     "PASS diy-posix-test/spectest-isolation-a.wast",
     "PASS diy-posix-test/spectest-isolation-b.wast",
     "__TIMEOUT_STATUS__1\r\n",
     "__INVALID_STATUS__2\r\n",
     "__CAPABILITY_STATUS__2\r\n",
     "__EXCLUDE_STATUS__0\r\n",
-    "__XFAIL_STATUS__0\r\n",
+    "__SKIP_STATUS__0\r\n",
     "__PARENT_SHELL_OK__\r\n",
     "__CANCEL_STATUS__130\r\n",
-    "PASS core/address.wast"
+    "PASS wasm-spec/core/address.wast"
   ],
-  "assertions": 7,
+  "assertions": 1,
   "exitStatus": 0
 }

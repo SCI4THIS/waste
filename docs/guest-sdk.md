@@ -8,7 +8,7 @@ in-guest compiler; a provider can still be a documented compatibility stub.
 ## Ownership and installation
 
 Authored guest headers live in `src/vfs/usr/include`. Private libc helpers remain
-in `src/libc/include/helper.h`; engine and native headers remain in their
+in `src/aux/libc/include/helper.h`; engine and native headers remain in their
 own include roots. `waste/abi/posix.h` contains fixed-width guest wire layouts,
 not Linux host structures. Public `FILE` is opaque.
 
@@ -18,7 +18,7 @@ Selected Clang 22.1.8 support headers are installed snapshots under
 checked-arithmetic/count-of extensions used by the pinned Coreutils source.
 Their dependencies are selected explicitly, not mounted from a host directory.
 
-Configured ncurses headers are snapshots from `build/ncurses/build/include`.
+Configured ncurses headers are snapshots from `build/aux/libncurses/build/include`.
 The adapted upstream `curses.h` lives under `waste/ncurses`; the public wrapper
 preserves C11 `bool` while parsing ncurses declarations with the DSO's four-byte
 `unsigned` Boolean ABI. Rogue's named legacy build profile intentionally uses
@@ -56,7 +56,7 @@ files are not rejected for differing from recorded hashes. To refresh a library
 and its matching headers together:
 
 ```sh
-python3 src/html-rt/tools/build-ncurses.py --repo-root . --install
+make -C src/aux install-libncurses
 ```
 
 The SDK installer preserves files outside its explicit copy list. Filesystem
@@ -65,7 +65,8 @@ HTML packaging neither installs headers nor checks SDK provenance freshness.
 
 ## Build profiles and ABI
 
-`build-waste-sysroot.py` copies only the mounted public/compiler tree for its
+`make -C src/system-tests sysroot` delegates to
+`src/system-tests/guest-sdk/build-sysroot.py`, which copies the mounted public/compiler tree for its
 default wrapper. It uses `-ffreestanding -nostdinc -nostdlib`; no host C include
 directory or implicit Clang resource path is permitted. Compiler predefined
 types/limits, builtin `va_list`, attributes, and `push_macro`/`pop_macro` remain
@@ -86,10 +87,9 @@ The current wasm32 profile has four-byte pointers/int/long, eight-byte
 bytes, `dirent` 280, termios 60, timeval/timespec 16. The engine adapter's
 `mmap` offset is explicitly `int64_t`, not legacy `off_t`; `MAP_FIXED` is not
 supported. These are guest layouts, not native Linux declarations.
-Direct `lseek` is unavailable in the default SDK: the browser overrides that
-symbol with Bash's i64 ABI. `__fpurge` is also unavailable because its browser
-override returns i32 rather than the declared void. Use the supported libc
-file-position/purge interfaces through the documented link profile instead.
+`lseek` uses the shared libc's four-byte `off_t` signature; its internal kernel
+call carries an i64 offset. `__fpurge` uses the declared void signature from
+shared libc. Both are available through the normal libc link profile.
 `abort` is unavailable because its browser binding returns normally. Default
 `assert` traps without a diagnostic or SIGABRT; `NDEBUG` omits evaluation.
 
@@ -114,7 +114,8 @@ or new POSIX capabilities.
 
 ## Verification
 
-`tests/guest-sdk-check.py` checks standalone headers, include orders, hermetic
+`make -C src/system-tests check-sdk` runs
+`src/system-tests/guest-sdk/check.py` to check standalone headers, include orders, hermetic
 dependencies, ABI sizes/offsets, real Wasm variadic execution and negative
 host/private-header cases. Native directory-mount sanitizer tests verify all
 mounted bytes/metadata; `tests/guest-sdk-mounted.wast` checks public presence

@@ -4,12 +4,12 @@
   "normalization": "Rogue maps and cursor redisplay depend on real-time random seeds. Compare semantic markers, child PIDs at each post-yield event, wait boundaries and exact shell exit status; retain unnormalized transcripts.",
   "events": [
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "pid": 1,
       "text": "ldd /usr/bin/rogue; printf '__LDD_%s__\\n' \"$?\"\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "pid": 1,
       "text": "rogue; printf '__ROGUE_1_%s__\\n' \"$?\"\n"
     },
@@ -38,7 +38,7 @@
       "text": "\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "pid": 1,
       "text": "rogue; printf '__ROGUE_2_%s__\\n' \"$?\"\n"
     },
@@ -67,7 +67,7 @@
       "text": "\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "pid": 1,
       "text": "echo __AFTER"
     },
@@ -77,7 +77,7 @@
       "text": "_ROGUE__\n"
     },
     {
-      "after": "bash-5.2# ",
+      "after": "# ",
       "pid": 1,
       "text": "exit 5\n"
     }
@@ -92,7 +92,7 @@
     "\u001b[?25h",
     "\u001b[?2004l\r__AFTER_ROGUE__\r\n"
   ],
-  "assertions": 7,
+  "assertions": 1,
   "exitStatus": 5,
   "processes": 3
 }

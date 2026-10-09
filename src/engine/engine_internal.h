@@ -43,7 +43,12 @@ typedef enum {
 typedef struct {
     exec_stop_reason (*poll)(void *);
     void *context;
+    /* Engine-owned process termination, separate from host cancellation. */
+    int (*signal_poll)(void *);
+    void *signal_context;
     uint32_t remaining;
+    /* Synchronous callbacks cannot publish a second suspended invocation. */
+    uint32_t synchronous_callbacks;
     exec_stop_reason stopped;
     /* Cooperative pump: when non-zero, the dispatch-loop safepoint checks
      * the provided clock; if `pump_quantum_ns` has elapsed since the last

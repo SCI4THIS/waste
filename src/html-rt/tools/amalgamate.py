@@ -60,7 +60,7 @@ def main() -> int:
             raise ValueError(f"expected one {tag} in {index_html}")
         html = html.replace(tag, f"<{replacement}>\n{source}\n</{replacement}>")
 
-    # 1. The Bash theme is installed in /root/waste/app and is loaded after the
+    # 1. The Bash theme is installed in /root/app and is loaded after the
     # compressed VFS is unpacked. The index keeps only loading-overlay CSS.
     html = html.replace(f'<link rel="stylesheet" href="{style_css.name}">', "")
 

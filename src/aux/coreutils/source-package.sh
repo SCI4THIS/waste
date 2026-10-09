@@ -16,7 +16,7 @@ trap 'rm -rf -- "$PACKAGE_STAGE"' EXIT
 # those files so the release archive doesn't depend on this build directory.
 cp -aL "$COREUTILS_BUILD/source" "$PACKAGE_STAGE/coreutils-source"
 mkdir -p "$PACKAGE_STAGE/waste"
-for INPUT in start.sh .gitmodules src/config.h src/aux src/engine src/cli-rt src/libc src/html-rt \
+for INPUT in start.sh .gitmodules src/config.h src/aux src/engine src/cli-rt src/html-rt src/system-tests \
   src/vfs/usr/include src/vfs/usr/lib/waste/cc/include src/vfs/usr/share/licenses/clang \
   docs/coreutils-source-distribution.md docs/architecture.md docs/techniques.md docs/guest-sdk.md; do
   mkdir -p "$PACKAGE_STAGE/waste/$(dirname -- "$INPUT")"

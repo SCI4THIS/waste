@@ -3,6 +3,8 @@
   (import "host" "pause" (func $pause (result i32)))
   (import "env" "sigsetjmp" (func $setjmp (param i32) (result i32)))
   (import "env" "siglongjmp" (func $longjmp (param i32 i32)))
+  ;; Non-local guest control uses a writable buffer, including its token.
+  (memory 1)
   (table (export "table") 1 funcref)
   (elem (i32.const 0) $inner)
 

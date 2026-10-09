@@ -3,6 +3,7 @@
 #include "wast/runner.h"
 #include "wast/stream.h"
 #include "wast/setup.h"
+#include "wasm/decode.h"
 #include "runtime_internal.h"
 #include "guest_posix.h"
 #include "process_driver.h"
@@ -244,10 +245,6 @@ void native_wast_json_string(FILE *output, const char *s) {
     fputc('"', output);
 }
 
-static void json_string(const char *value) {
-    native_wast_json_string(stdout, value);
-}
-
 static int native_monotonic_ns(uint64_t *now) {
     struct __kernel_timespec value;
     if (sys_clock_gettime(1 /* CLOCK_MONOTONIC */, &value)) return -1;
@@ -281,19 +278,32 @@ typedef struct {
     wast_setup_report setup;
     char parse_error[256];
     int stopped, completed;
+    const native_wast_options *options;
+    char first_failure[256];
 } native_wast_context;
 
 static void native_result(native_wast_context *context, int passed,
                            const char *name, const char *message) {
     unsigned index = context->counts->total++;
     if (passed) context->counts->passed++;
-    if (index) printf(",\n");
-    printf("{\"index\":%u,\"line\":%u,\"func\":", index, context->line);
-    json_string(name);
-    printf(",\"pass\":%s,\"error\":", passed ? "true" : "false");
-    if (passed || !message || !message[0]) printf("null");
-    else json_string(message);
-    printf("}");
+    else if (!context->first_failure[0])
+        snprintf(context->first_failure, sizeof(context->first_failure), "%.63s: %.189s",
+                 name, message && message[0] ? message : "failed");
+    FILE *out = context->options->output;
+    if (!context->options->json) {
+        if (context->options->verbose) {
+            fputc(passed ? '.' : 'F', out);
+            fflush(out);
+        }
+        return;
+    }
+    if (index) fprintf(out, ",\n");
+    fprintf(out, "{\"index\":%u,\"line\":%u,\"func\":", index, context->line);
+    native_wast_json_string(out, name);
+    fprintf(out, ",\"pass\":%s,\"error\":", passed ? "true" : "false");
+    if (passed || !message || !message[0]) fprintf(out, "null");
+    else native_wast_json_string(out, message);
+    fprintf(out, "}");
 }
 
 static void native_parse_failure(native_wast_context *context, const char *message) {
@@ -306,6 +316,9 @@ static exec_status native_assertion_invoke(void *opaque,
     waste_exec_engine *engine, uint32_t function, const wasm_value *args,
     int count, wasm_value *results, int *result_count, exec_error *error) {
     native_wast_context *context = opaque;
+    if (context->options->invoke)
+        return context->options->invoke(context->options->invoke_context, engine, function,
+            args, count, results, result_count, error);
     for (;;) {
         exec_status status = native_process_driver_invoke(&context->driver, context->store, engine,
             function, args, count, results, result_count, error);
@@ -546,17 +559,107 @@ static int native_command(wast_stream_command_kind kind, const char *bytes,
     return 0;
 }
 
-int native_wast_run(native_store *store, const char *filename,
-                    const char *source, size_t length, native_wast_counts *counts) {
+/* Inspect parsed commands, not comments or string searches. A script owning
+ * either production registration, or asserting linkage against it, retains
+ * a language namespace. Only ordinary modules request automatic context. */
+typedef struct { int required, language; uint64_t pages, table_entries; } native_context_request;
+static int production_name(const char *name) {
+    return !strcmp(name, "libc") || !strcmp(name, "waste-runtime");
+}
+static int context_command(wast_stream_command_kind kind, const char *bytes,
+    size_t length, size_t offset, unsigned line, wast_script *parsed, void *opaque) {
+    (void)bytes; (void)length; (void)offset; (void)line;
+    native_context_request *request = opaque;
+    for (int g = 0; g < parsed->group_count; g++) {
+        wast_group *group = &parsed->groups[g];
+        const wast_module *module = &group->module;
+        if (production_name(module->register_name)) request->language = 1;
+        if (kind == WAST_STREAM_REGISTER) continue;
+        int required = 0;
+        for (int i = 0; i < module->func_count; i++)
+            required |= production_name(module->funcs[i].import_module);
+        for (int i = 0; i < module->global_count; i++)
+            required |= production_name(module->globals[i].import_module);
+        for (int i = 0; i < module->tag_count; i++)
+            required |= production_name(module->tags[i].import_module);
+        for (int i = 0; i < module->table_count; i++) {
+            required |= production_name(module->tables[i].import_module);
+            if (production_name(module->tables[i].import_module) &&
+                module->tables[i].limits.min > request->table_entries)
+                request->table_entries = module->tables[i].limits.min;
+        }
+        for (int i = 0; i < module->memory_count; i++) {
+            required |= production_name(module->memories[i].import_module);
+            if (production_name(module->memories[i].import_module) &&
+                module->memories[i].limits.min > request->pages)
+                request->pages = module->memories[i].limits.min;
+        }
+        if (group->raw_module.kind != WAST_RAW_NONE) {
+            size_t size = 0;
+            char error[256] = {0};
+            uint8_t *bytes = encode_group_module(group, &size, error);
+            wasm_module decoded;
+            wasm_decode_error decode_error;
+            wasm_module_init(&decoded);
+            if (bytes && wasm_decode_module_imports(bytes, size, &decoded, &decode_error) == WASM_DECODE_OK) {
+                for (uint32_t i = 0; i < decoded.import_count; i++) {
+                    const wasm_import *import = &decoded.imports[i];
+                    if (!production_name(import->module)) continue;
+                    required = 1;
+                    if (import->kind == WASM_IMPORT_MEMORY &&
+                        import->descriptor.memory.limits.minimum > request->pages)
+                        request->pages = import->descriptor.memory.limits.minimum;
+                    if (import->kind == WASM_IMPORT_TABLE &&
+                        import->descriptor.table.limits.minimum > request->table_entries)
+                        request->table_entries = import->descriptor.table.limits.minimum;
+                }
+            }
+            wasm_module_dispose(&decoded);
+            free(bytes);
+        }
+        if (group->has_module_assertion && required) request->language = 1;
+        else if (required) request->required = 1;
+    }
+    return 0;
+}
+
+int native_wast_run_with_options(native_store *store, const char *filename,
+    const char *source, size_t length, native_wast_counts *counts,
+    const native_wast_options *options) {
     memset(counts, 0, sizeof(*counts));
     native_wast_context context = {0};
     context.store = store;
     context.counts = counts;
     context.line = 1;
+    context.options = options;
     native_process_driver_init(&context.driver);
-    printf("{\"file\":");
-    json_string(filename);
-    printf(",\"assertions\":[\n");
+    FILE *out = options->output;
+    if (options->json) {
+        fprintf(out, "{\"file\":"); native_wast_json_string(out, filename);
+        fprintf(out, ",\"assertions\":[\n");
+    }
+    if (options->mode != NATIVE_WAST_LANGUAGE) {
+        native_context_request request = {.pages = PROCESS_INITIAL_MEMORY_PAGES};
+        wast_stream scan;
+        wast_stream_init(&scan, source, length);
+        while (wast_stream_next(&scan, context_command, &request) > 0) {}
+        wast_stream_destroy(&scan);
+        if (options->mode == NATIVE_WAST_RUNTIME && request.language) {
+            wast_setup_record(&context.setup, 1, EXEC_ERROR_FORMAT, WAST_SETUP_LOAD,
+                "runtime context conflicts with script-owned providers or linkage assertions");
+            context.stopped = 1;
+        } else if (options->mode == NATIVE_WAST_RUNTIME || (request.required && !request.language)) {
+            exec_error error = {0};
+            exec_status status = request.pages <= UINT32_MAX && request.table_entries <= UINT32_MAX ?
+                native_process_driver_prepare_runtime(options->driver ? options->driver : &context.driver,
+                    store, (uint32_t)request.pages, (uint32_t)request.table_entries, &error) : EXEC_ERROR_FORMAT;
+            if (status != EXEC_OK) {
+                wast_setup_record(&context.setup, 1, status, WAST_SETUP_LOAD,
+                    error.message[0] ? error.message : "runtime context memory exceeds limit");
+                context.stopped = 1;
+            } else if (options->context_ready) options->context_ready(options->invoke_context);
+        }
+    }
     wast_stream stream;
     wast_stream_init(&stream, source, length);
     while (!context.stopped) {
@@ -571,29 +674,50 @@ int native_wast_run(native_store *store, const char *filename,
         }
     }
     wast_stream_destroy(&stream);
-    printf("\n],\"passed\":%u,\"total\":%u", counts->passed, counts->total);
-    if (context.parse_error[0]) { printf(",\"error\":"); json_string(context.parse_error); }
-    printf(",\"completed\":%s,\"setup\":{\"total\":%u,\"passed\":%u,\"complete\":%s,\"failures\":[",
-           context.completed ? "true" : "false", context.setup.total,
-           context.setup.passed, context.setup.incomplete ? "false" : "true");
-    const char *phases[] = {"", "encode", "load", "definition", "retain"};
-    for (unsigned i = 0; i < context.setup.count; i++) {
-        const wast_setup_failure *failure = &context.setup.failures[i];
-        printf("%s{\"line\":%u,\"status\":%d,\"phase\":", i ? "," : "", failure->line, failure->status);
-        json_string(phases[failure->phase]);
-        printf(",\"error\":"); json_string(failure->error); printf("}");
+    if (options->json) {
+        fprintf(out, "\n],\"passed\":%u,\"total\":%u", counts->passed, counts->total);
+        if (context.parse_error[0]) { fprintf(out, ",\"error\":"); native_wast_json_string(out, context.parse_error); }
+        fprintf(out, ",\"completed\":%s,\"setup\":{\"total\":%u,\"passed\":%u,\"complete\":%s,\"failures\":[",
+               context.completed ? "true" : "false", context.setup.total,
+               context.setup.passed, context.setup.incomplete ? "false" : "true");
+        const char *phases[] = {"", "encode", "load", "definition", "retain"};
+        for (unsigned i = 0; i < context.setup.count; i++) {
+            const wast_setup_failure *failure = &context.setup.failures[i];
+            fprintf(out, "%s{\"line\":%u,\"status\":%d,\"phase\":", i ? "," : "", failure->line, failure->status);
+            native_wast_json_string(out, phases[failure->phase]);
+            fprintf(out, ",\"error\":"); native_wast_json_string(out, failure->error); fprintf(out, "}");
+        }
+        fprintf(out, "]}}\n");
+    } else {
+        if (options->verbose) {
+            fprintf(out, "\nWAST: %u PASS, %u FAIL, %u total\n", counts->passed,
+                    counts->total - counts->passed, counts->total);
+            if (context.setup.passed != context.setup.total)
+                fprintf(out, "Setup: %u PASS, %u FAIL, %u total\n", context.setup.passed,
+                    context.setup.total - context.setup.passed, context.setup.total);
+        }
+        if (!context.first_failure[0] && context.setup.count)
+            snprintf(context.first_failure, sizeof(context.first_failure), "line %u: %.210s",
+                context.setup.failures[0].line, context.setup.failures[0].error);
+        if (context.first_failure[0]) fprintf(stderr, "%s: %s\n", filename, context.first_failure);
     }
-    printf("]}");
-    printf("}\n");
     native_process_driver_destroy(&context.driver);
     for (unsigned i = 0; i < context.retained_count; i++) {
         wast_script_free(context.retained[i]);
         free(context.retained[i]);
     }
     free(context.retained);
+    /* Receipt completeness describes serialized evidence, not script EOF.
+     * A truncated script still has a complete JSON failure report. */
     counts->completed = !context.setup.incomplete;
     int passed = counts->passed == counts->total &&
-                 context.setup.passed == context.setup.total && counts->completed;
+                 context.setup.passed == context.setup.total && context.completed && counts->completed && !ferror(out);
     wast_setup_reset(&context.setup);
     return passed ? 0 : 1;
+}
+
+int native_wast_run(native_store *store, const char *filename,
+    const char *source, size_t length, native_wast_counts *counts) {
+    native_wast_options options = {.json = 1, .output = stdout, .mode = NATIVE_WAST_LANGUAGE};
+    return native_wast_run_with_options(store, filename, source, length, counts, &options);
 }

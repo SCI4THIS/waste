@@ -23,11 +23,11 @@ let renderReplies = 0;
 let transitionEvidence = "";
 const suiteContext = vm.createContext({setTimeout, clearTimeout, performance,
   TextDecoder, TextEncoder, Uint8Array, DataView});
-const suiteSource = page.read("root/waste/app/test-suite.js").toString();
+const suiteSource = page.read("root/app/test-suite.js").toString();
 assert.equal(suiteSource, withConfig(fs.readFileSync("src/html-rt/src/test-suite.js", "utf8")),
   "package contains the production suite controller");
 vm.runInContext(suiteSource, suiteContext);
-const workerSource = page.read("root/waste/app/worker.js").toString();
+const workerSource = page.read("root/app/worker.js").toString();
 const suite = new suiteContext.WasteTestSuite({wasmBytes:page.read("waste-wast.wasm"),
   vfs, expectedFailures:fs.readFileSync("tests/browser-corpus-expected-failures.txt", "utf8"),
   createWorker() {
@@ -74,7 +74,7 @@ const self = {postMessage(message) {
   }
   if (message.type === "done") done = message;
 }};
-vm.runInContext(page.read("root/waste/app/worker.js").toString(), vm.createContext({self,
+vm.runInContext(page.read("root/app/worker.js").toString(), vm.createContext({self,
   WebAssembly, Uint8Array, DataView, TextDecoder, TextEncoder, Promise, Math,
   Number, String, Date, Error, setTimeout, clearTimeout, console,
   atob: value => Buffer.from(value, "base64").toString("binary")}));
@@ -96,14 +96,17 @@ const wait = async predicate => {
   }
   self.onmessage({data:{type:"start", wasmBytes:buffer(page.read("waste-wast.wasm")),
     source:fs.readFileSync(scenario.fixture, "utf8"), vfs,
+    executionLimits:scenario.executionLimits,
     vfsFiles:(scenario.files || []).map(file => ({path:file.path, mode:file.mode,
       bytes:buffer(fs.readFileSync(file.source)), mtimeSec:0, mtimeNsec:0})),
     vfsPaths:manifest.entries.map(entry => entry.path)}});
   let previous = 0, consumed = 0;
   for (const event of scenario.events) {
-    await wait(() => ready > previous && output.indexOf(event.after || "", consumed) >= 0);
+    await wait(() => ready > previous && output.indexOf(event.after || "", consumed) >= 0 &&
+      (event.pid === undefined || pid === event.pid) &&
+      (event.duringBatch ? [5] : [1, 2]).includes(waitKind));
     assert((event.duringBatch ? [5] : [1, 2]).includes(waitKind));
-    if (event.pid !== undefined) assert.equal(pid, event.pid);
+    if (event.pid !== undefined) assert.equal(pid, event.pid, output.slice(-4000));
     if (event.waitKind !== undefined) assert.equal(waitKind, event.waitKind);
     previous = ready; consumed = output.length;
     await new Promise(resolve => setTimeout(resolve, 30));

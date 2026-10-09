@@ -1,13 +1,13 @@
 {
   "fixture": "src/vfs/usr/share/waste/launch.wast",
   "events": [
-    {"after": "bash-5.2# ", "text": "echo __FRAG"},
+    {"after": "# ", "text": "echo __FRAG"},
     {"after": "__FRAG", "text": "MENT_OK__\n"},
-    {"after": "bash-5.2# ", "text": "echo __SECOND_OK__\n"},
-    {"after": "bash-5.2# ", "text": "IFS= read -r first < /root/waste/tests/core/address.wast; printf '__FILE_READ__%s:%s\\n' \"$?\" \"$first\"\n"},
-    {"after": "bash-5.2# ", "text": "exit 7\n"}
+    {"after": "# ", "text": "echo __SECOND_OK__; printf '__SOURCE_BASH__%s\\n' \"$BASH_VERSION\"\n"},
+    {"after": "# ", "text": "IFS= read -r first < /root/test/core/address.wast; printf '__FILE_READ__%s:%s\\n' \"$?\" \"$first\"\n"},
+    {"after": "# ", "text": "exit 7\n"}
   ],
-  "contains": ["\u001b[?2004l\r__FRAGMENT_OK__\r\n", "\u001b[?2004l\r__SECOND_OK__\r\n", "__FILE_READ__0:;; Load i32 data with different offset/align arguments\r\n"],
-  "assertions": 7,
+  "contains": ["\u001b[?2004l\r__FRAGMENT_OK__\r\n", "\u001b[?2004l\r__SECOND_OK__\r\n", "__SOURCE_BASH__5.3.", "__FILE_READ__0:;; Load i32 data with different offset/align arguments\r\n"],
+  "assertions": 1,
   "exitStatus": 7
 }

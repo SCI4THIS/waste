@@ -2,14 +2,6 @@
   "format": 1,
   "unavailable_groups": [
     {
-      "reason": "Browser overrides lseek with Bash i64 ABI; default off_t is i32",
-      "names": "lseek"
-    },
-    {
-      "reason": "Browser overrides __fpurge with an i32-returning no-op",
-      "names": "__fpurge"
-    },
-    {
       "reason": "No implementation in the installed ncurses configuration",
       "names": "_traceattr _traceattr2 _tracechar _tracechtype _tracechtype2 _tracef alloc_pair alloc_pair_sp define_key define_key_sp extended_color_content extended_color_content_sp extended_pair_content extended_pair_content_sp extended_slk_color extended_slk_color_sp find_pair find_pair_sp free_pair free_pair_sp init_extended_color init_extended_color_sp init_extended_pair init_extended_pair_sp is_term_resized is_term_resized_sp reset_color_pairs reset_color_pairs_sp resize_term resize_term_sp resizeterm resizeterm_sp slk_attr_off slk_attr_on tgoto_sp tparm_sp trace use_legacy_coding use_legacy_coding_sp use_window"
     },
@@ -42,10 +34,7 @@
     "signals": "Engine-owned 128-bit signal sets, block/unblock/setmask and blocked-pending queries; SIGKILL/SIGSTOP cannot be blocked. Caught handlers are serviced at the existing pselect boundary, whose handler slot uses an engine function index; arbitrary compiled C function-pointer and sigaction flag conformance is not established."
   },
   "browser_adapter_review": {
-    "prefer_over_module": [
-      "lseek",
-      "__fpurge"
-    ],
+    "prefer_over_module": [],
     "source": "src/engine/guest_posix.c",
     "signatures": {
       "lseek": {
@@ -56,14 +45,6 @@
         ],
         "results": [
           126
-        ]
-      },
-      "__fpurge": {
-        "params": [
-          127
-        ],
-        "results": [
-          127
         ]
       },
       "fork": {
@@ -178,8 +159,12 @@
         ]
       },
       "umask": {
-        "params": [127],
-        "results": [127]
+        "params": [
+          127
+        ],
+        "results": [
+          127
+        ]
       },
       "dup2": {
         "params": [

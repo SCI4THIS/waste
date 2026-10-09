@@ -7,9 +7,8 @@ from pathlib import Path, PurePosixPath
 import subprocess
 
 from test_corpus import collect_layout_tests, layout_roots
-from libc_sources import libc_source_paths
 
-TEST_ROOT = "/root/waste/tests"
+TEST_ROOT = "/root/test"
 LEGACY_TEST_ROOT = "/tests"
 MANIFEST = TEST_ROOT + "/manifest.json"
 LEGACY_MANIFEST = LEGACY_TEST_ROOT + "/manifest.json"
@@ -33,6 +32,10 @@ def entries(repo):
     result = []
     for root, suite, prefix in layout_roots(repo):
         if not root.is_dir():
+            if suite == "wasm-spec":
+                # Missing submodule is reported by collect_layout_tests and skipped.
+                result.extend(collect_layout_tests(root, suite, prefix))
+                continue
             raise ValueError(f"missing test source directory: {root}")
         result.extend(collect_layout_tests(root, suite, prefix))
     return result
@@ -102,7 +105,7 @@ def prepare(repo, output, payload_path, baseline=None):
                 raise ValueError(f"wrong installed-test source: {identity}")
         elif spec["mode"] != "browser-native" or spec.get("error"):
             raise ValueError(f"unusable browser execution specification: {identity}")
-        path = TEST_ROOT + "/" + identity
+        path = TEST_ROOT + "/" + entry["mountRelative"]
         add(path, data, "test-input", source)
         assets = []
         for index, module in enumerate(spec.get("modules", [])):
@@ -126,6 +129,10 @@ def prepare(repo, output, payload_path, baseline=None):
                           nativeParity=("shared-engine" if entry["suite"] in ("wasm-spec", "engine-regressions")
                                         or (entry["suite"] == "diy-posix-test" and spec["mode"] == "wast-stream")
                                         else "pending-stage-6")))
+    runner = repo / "tests/html-rt.sh"
+    if not runner.is_file() or runner.is_symlink():
+        raise ValueError(f"missing browser test runner source: {runner}")
+    add(TEST_ROOT + "/html-rt.sh", runner.read_bytes(), "test-runner", "tests/html-rt.sh")
     if baseline:
         old = previous
         if set(old) != {t["id"] for t in tests}:
@@ -143,21 +150,13 @@ def prepare(repo, output, payload_path, baseline=None):
                     or previous["expect_failure"] != t["expectFailure"] or previous["unsupported"] != t["unsupported"]):
                 raise ValueError(f"test bytes/policy differ from retained baseline: {t['id']}")
     inputs = []
-    for directory in ("tests/diy-posix-test", "tests/libc-test"):
+    for directory in ("tests/diy-posix-test",):
         for path in sorted((repo / directory).rglob("*")):
             if not path.is_file() or path.suffix == ".wast":
                 continue
             relative = path.relative_to(repo).as_posix()
             data = path.read_bytes()
             inputs.append(dict(path=relative, size=len(data), sha256=sha(data), hostOnly=not path.name.endswith(".wast.inc")))
-            if path.name.endswith(".wast.inc"):
-                add(TEST_ROOT + "/.support/libc-test/" + path.name, data, "test-support", relative)
-    for path in (repo / "src/libc/stdlib.wat", repo / "build/html-rt/waste-libc/waste-libc.wasm",
-                 repo / "src/vfs/usr/share/waste/sdk.json", repo / "src/html-rt/tools/build-waste-libc.py",
-                 repo / "src/libc/include/helper.h",
-                 *libc_source_paths(repo)):
-        data = path.read_bytes()
-        inputs.append(dict(path=path.relative_to(repo).as_posix(), size=len(data), sha256=sha(data), hostOnly=True))
     license_source = "submodules/wasm-spec/test/LICENSE"
     add(LICENSE, (repo / license_source).read_bytes(), "notice", license_source)
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo / "submodules/wasm-spec", text=True).strip()
@@ -197,10 +196,15 @@ def audit(manifest, read, declared):
         raise ValueError("missing test corpus license/provenance")
     for test in tests:
         identity = test["id"]
-        if identity in seen or test["path"] != test_root + "/" + identity or test["path"] not in files:
+        mounted_path = PurePosixPath(test["path"])
+        if (identity in seen or not test["path"].startswith(test_root + "/") or
+                ".." in mounted_path.parts or test["path"] not in files):
             raise ValueError(f"conflicting or omitted corpus identity: {identity}")
         seen.add(identity)
-        if files[test["path"]]["role"] != "test-input" or declared[test["path"]]["mode"] != 0o644:
+        mounted_mode = declared[test["path"]]["mode"]
+        source_is_readonly_submodule = test["source"]["path"].startswith("submodules/wasm-spec/")
+        valid_mode = mounted_mode == 0o644 or (source_is_readonly_submodule and mounted_mode == 0o444)
+        if files[test["path"]]["role"] != "test-input" or not valid_mode:
             raise ValueError(f"invalid installed test role/mode: {identity}")
         if (test["source"]["sha256"] != files[test["path"]]["sha256"] or
                 test["source"]["size"] != files[test["path"]]["size"] or

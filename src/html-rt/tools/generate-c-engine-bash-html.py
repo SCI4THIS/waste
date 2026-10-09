@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate a self-contained C-engine Bash page.
 
-Stages generated engine/bootstrap assets or packages the authored frontend
+Stages the engine and installed-executable launcher or packages the authored frontend
 through build.sh. No generated copy of the shell UI or worker is maintained.
 
 Terminal output is captured through the posix_write host import.  Interactive
@@ -25,8 +25,6 @@ def main() -> None:
                         default=Path(__file__).resolve().parents[3])
     parser.add_argument("--wasm", type=Path, required=True,
                         help="Path to waste-wast.wasm (C engine)")
-    parser.add_argument("--launch", type=Path,
-                        help="Legacy option; bootstrap comes from the current VFS tree")
     parser.add_argument("--vfs-root", type=Path, default=None,
                         help="Current VFS distribution tree")
     output = parser.add_mutually_exclusive_group(required=True)

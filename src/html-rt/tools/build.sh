@@ -41,7 +41,6 @@ while (($#)); do
     --source-dir) PAGE_DIR="$2" ;;
     --vfs-root) VFS_ROOT="$2" ;;
     --wasm) WASM_FILE="$2" ;;
-    --launch) : ;; # Legacy argument; use usr/share/waste/launch.wast in VFS_ROOT.
     --payload) PAYLOAD_FILE="$2" ;;
     --output) FINAL="$2" ;;
     *) echo "error: unknown option '$1'" >&2; exit 1 ;;
@@ -70,7 +69,9 @@ done
 mkdir -p "$BUILD_DIR"
 python3 "$SCRIPT_DIR/runtime_config.py" --javascript > "$BUILD_DIR/runtime-config.js"
 WORK_DIR=$(mktemp -d "$BUILD_DIR/package-$TARGET-XXXXXX")
-trap 'rm -rf "$WORK_DIR"' EXIT
+# Blessed symlink targets inherit read-only submodule directory modes; restore
+# write access before rm so cleanup never fails on the staged copy.
+trap 'chmod -R u+rwX "$WORK_DIR" 2>/dev/null || true; rm -rf "$WORK_DIR"' EXIT
 
 echo "=== Building $TARGET ==="
 

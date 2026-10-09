@@ -33,8 +33,7 @@ static int write_all(int fd, const u8 *bytes, u32 n) {
 }
 static u32 word(const u8 *b) { return b[0] | (u32)b[1] << 8 | (u32)b[2] << 16 | (u32)b[3] << 24; }
 static void fail(const char *text) { write_all(2, (const u8 *)text, length(text)); exit_guest(2); }
-__attribute__((export_name("_start")))
-int start(void) {
+static int run(void) {
  int block = startup();
  if (block < 0) { fail("waste-test: startup unavailable\n"); return 2; }
  const u32 *state = (const u32 *)(unsigned long)(u32)block;
@@ -69,3 +68,5 @@ int start(void) {
  }
  exit_guest((int)status); return (int)status;
 }
+__attribute__((export_name("_start")))
+void start(void) { exit_guest(run()); }

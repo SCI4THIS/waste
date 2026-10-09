@@ -63,6 +63,7 @@ int native_store_commit_process_handler_with_context(
         free(source);
         return -POSIX_EBUSY;
     }
+    capsule->handler.verbose = request->handler_verbose;
     posix_kernel_close_on_exec(store->kernel);
     old_image = capsule->image;
     native_process_image_release(old_image);
@@ -145,7 +146,7 @@ static int native_path_has_suffix(const char *path, const char *suffix) {
  * process image's visible linear memory. The process capsule records the
  * occupied top pages as a startup region, leaving the lower module region
  * available for the future brk/stack layout without host pointers. */
-static exec_status native_process_image_startup_block(
+exec_status native_process_image_startup_block(
         native_process_image *image, const native_exec_request *request,
         native_store *store, exec_error *error) {
     uint32_t hook;
@@ -159,6 +160,9 @@ static exec_status native_process_image_startup_block(
     exec_error hook_error;
     int has_hook = exec_find_export(image->engine, "__waste_startup", &hook,
                                     error) == EXEC_OK;
+    /* A freestanding () -> () entry may have no linear memory. Retain its
+     * host-owned argv/env metadata, but materialize no inaccessible ABI block. */
+    if (!memory && !has_hook) return EXEC_OK;
     if (!memory || memory->pages == 0)
         return exec_fail(error, EXEC_ERROR_FORMAT,
                          "startup hook requires linear memory");
@@ -509,8 +513,10 @@ exec_status native_store_instantiate_executable(
     int effective_request_owned = 0;
     uint32_t effective_owned_count = 0;
     const char *load_path = request ? request->path : NULL;
-    int wat_handler = request && strcmp(request->path, "/bin/wat") == 0;
-    int wast_handler = request && strcmp(request->path, "/bin/wast") == 0;
+    int wat_handler = request && request->format == NATIVE_EXEC_FORMAT_AUTO &&
+        strcmp(request->path, "/bin/wat") == 0;
+    int wast_handler = request && request->format == NATIVE_EXEC_FORMAT_AUTO &&
+        strcmp(request->path, "/bin/wast") == 0;
     if (!store || !request || !image_out || !request->active) {
         if (error) {
             error->status = EXEC_ERROR_FORMAT;
@@ -521,18 +527,27 @@ exec_status native_store_instantiate_executable(
     }
     *image_out = NULL;
     if (wat_handler || wast_handler) {
-        if (request->argc < 2 || !request->argv[1] ||
-            strlen(request->argv[1]) >= NATIVE_EXEC_PATH_MAX)
+        uint32_t source_arg = 1;
+        if (wast_handler && source_arg < request->argc &&
+            !strcmp(request->argv[source_arg], "--verbose")) {
+            request->handler_verbose = 1;
+            source_arg++;
+        }
+        if (wast_handler && source_arg < request->argc &&
+            !strcmp(request->argv[source_arg], "--")) source_arg++;
+        if (source_arg >= request->argc || !request->argv[source_arg] ||
+            strlen(request->argv[source_arg]) >= NATIVE_EXEC_PATH_MAX ||
+            (wast_handler && request->argc != source_arg + 1u))
             return exec_fail(error, EXEC_ERROR_FORMAT,
-                             "/bin/wat requires a source path");
-        load_path = request->argv[1];
+                             "usage: /bin/wast [--verbose] [--] FILE (or /bin/wat FILE)");
+        load_path = request->argv[source_arg];
     }
     memset(&vfs_executable, 0, sizeof(vfs_executable));
     if (store->kernel) {
         /* An explicit interpreter reads its input; only direct exec requires
          * the input file itself to have executable permission. Installed WAST
          * corpus snapshots deliberately have mode 0644. */
-        vfs_status = (wat_handler || wast_handler ?
+        vfs_status = (wat_handler || wast_handler || request->readable_input ?
             posix_kernel_path_read_snapshot : posix_kernel_path_snapshot)(
             store->kernel, (const uint8_t *)load_path,
             strlen(load_path), NATIVE_EXEC_BYTES_MAX, &vfs_bytes,
@@ -579,6 +594,16 @@ exec_status native_store_instantiate_executable(
         is_wat = strcmp(source_view.interpreter, "/bin/wat") == 0;
         is_wast = strcmp(source_view.interpreter, "/bin/wast") == 0;
     }
+    if (request->format != NATIVE_EXEC_FORMAT_AUTO) {
+        is_wat = request->format == NATIVE_EXEC_FORMAT_WAT;
+        is_wast = 0;
+        if ((is_wat && image_size >= 4 && !memcmp(image_bytes, "\0asm", 4)) ||
+            (!is_wat && (image_size < 4 || memcmp(image_bytes, "\0asm", 4)))) {
+            free(vfs_bytes);
+            return exec_fail(error, EXEC_ERROR_FORMAT,
+                             is_wat ? "expected WAT input" : "expected Wasm binary input");
+        }
+    }
     if (source_result == WASTE_SOURCE_INVALID_SHEBANG ||
         source_result == WASTE_SOURCE_SHEBANG_TOO_LONG) {
         free(vfs_bytes);
@@ -587,7 +612,7 @@ exec_status native_store_instantiate_executable(
                          "shebang line exceeds loader limit" :
                          "invalid shebang line");
     }
-    if (source_result == WASTE_SOURCE_OK &&
+    if (request->format == NATIVE_EXEC_FORMAT_AUTO && source_result == WASTE_SOURCE_OK &&
         strcmp(source_view.interpreter, "/bin/wat") == 0) {
         if (request->interpreter_depth >= NATIVE_EXEC_INTERPRETER_MAX) {
             free(vfs_bytes);
@@ -644,11 +669,14 @@ exec_status native_store_instantiate_executable(
     free(compiled_bytes);
     free(vfs_bytes);
     vfs_bytes = NULL;
-    if (status != EXEC_OK) return status;
+    if (status != EXEC_OK) {
+        exec_free(engine);
+        return status;
+    }
 
     native_exec_request_init(&effective_request);
     effective_request = *request;
-    if (source_result == WASTE_SOURCE_OK &&
+    if (request->format == NATIVE_EXEC_FORMAT_AUTO && source_result == WASTE_SOURCE_OK &&
         strcmp(source_view.interpreter, "/bin/wat") == 0) {
         uint32_t argument_count = request->argc;
         uint32_t shebang_argument = source_view.argument[0] ? 1u : 0u;
@@ -698,7 +726,15 @@ exec_status native_store_instantiate_executable(
     }
     const native_exec_request *startup_request =
         effective_request_owned ? &effective_request : request;
-    status = exec_find_export(engine, executable->entry, &entry_func, error);
+    status = exec_find_export(engine, request->entry[0] ? request->entry : executable->entry,
+                              &entry_func, error);
+    if (status == EXEC_OK) {
+        uint32_t type_index;
+        status = exec_get_func_type_index(engine, entry_func, &type_index, error);
+        if (status == EXEC_OK && (type_index >= engine->type_count ||
+            engine->types[type_index].param_count || engine->types[type_index].result_count))
+            status = exec_fail(error, EXEC_ERROR_FORMAT, "process entry must have type () -> ()");
+    }
     if (status != EXEC_OK) {
         if (effective_request_owned) {
             for (uint32_t i = 0; i < effective_owned_count; i++)
@@ -837,6 +873,8 @@ static exec_global *native_spectest_global(native_store *store,
 
 void native_store_init(native_store *store) {
     memset(store, 0, sizeof(*store));
+    store->execution_control.signal_poll = native_store_default_signal;
+    store->execution_control.signal_context = store;
     native_exec_request_init(&store->exec_request);
     store->spectest_memory.pages = 1;
     /* Imported memories use the same engine-owned linear-memory bound as
@@ -1039,9 +1077,11 @@ int native_store_add(native_store *store, waste_exec_engine *engine,
     memset(linked, 0, sizeof(*linked));
     linked->engine = engine;
     linked->module = metadata;
-    snprintf(linked->id, sizeof(linked->id), "%s", identity->id);
-    snprintf(linked->registered, sizeof(linked->registered), "%s",
-             identity->register_name);
+    if (identity) {
+        snprintf(linked->id, sizeof(linked->id), "%s", identity->id);
+        snprintf(linked->registered, sizeof(linked->registered), "%s",
+                 identity->register_name);
+    }
     return 1;
 }
 
@@ -1353,7 +1393,11 @@ exec_status native_load_module(native_store *store,
             store, request->module);
         native_loaded_library *loaded_provider =
             native_store_find_library(store, request->module);
-        if (loaded_provider) {
+        /* An explicit WAST (register ...) binding is the newest store
+         * registration and must win over a same-named process DSO. The DSO
+         * list is only a fallback for process providers missing a linked
+         * module entry; otherwise Bash's libc would shadow a test's provider. */
+        if (!provider && loaded_provider) {
             process_provider.engine = loaded_provider->engine;
             provider = &process_provider;
         }
@@ -1554,6 +1598,14 @@ exec_status native_load_module(native_store *store,
                 }
                 else if (strcmp(request->name, "__stack_pointer") == 0)
                     value = store->library_load_ctx.stack_pointer;
+            }
+            if (!value && strcmp(request->module, "env") == 0 &&
+                strcmp(request->name, "__stack_pointer") == 0) {
+                native_linked_module *runtime = native_registered_module(store, "waste-runtime");
+                exec_error ignored = {0};
+                if (runtime)
+                    (void)exec_find_export_global(native_store_process_engine(
+                        store, runtime->engine), request->name, &value, &ignored);
             }
             /* GOT.func and GOT.mem globals are resolved as mutable i32
              * globals.  The loader fills them after instantiation. */

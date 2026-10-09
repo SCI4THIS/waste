@@ -32,7 +32,6 @@ typedef struct {
 #define NATIVE_EXEC_PATH_MAX 256
 #define NATIVE_EXEC_ARG_MAX 128
 #define NATIVE_EXEC_ENV_MAX 256
-#define NATIVE_EXEC_BYTES_MAX (16u * 1024u * 1024u)
 #define NATIVE_EXEC_INTERPRETER_MAX 4u
 
 typedef enum {
@@ -41,6 +40,12 @@ typedef enum {
 } native_exec_handler_kind;
 
 typedef struct native_process_image native_process_image;
+
+typedef enum {
+    NATIVE_EXEC_FORMAT_AUTO = 0,
+    NATIVE_EXEC_FORMAT_WASM,
+    NATIVE_EXEC_FORMAT_WAT
+} native_exec_format;
 
 /* Immutable executable metadata. Bytes are owned by the store registry and
  * remain valid while any process image is instantiated from this entry. */
@@ -64,9 +69,14 @@ typedef struct {
     uint32_t envc;
     int pid;
     int failure_errno;
+    /* Explicit first-image interpretation; guest execve leaves these zero. */
+    char entry[WAST_MAX_EXPORT_NAME];
+    uint8_t format;
+    uint8_t readable_input;
     uint8_t active;
     uint8_t interpreter_depth;
     uint8_t handler_kind;
+    uint8_t handler_verbose;
     uint8_t *handler_bytes;
     size_t handler_size;
 } native_exec_request;
@@ -83,6 +93,7 @@ struct native_process_image {
     uint32_t envc;
     uint32_t startup_ptr;
     uint32_t startup_size;
+    uint8_t runtime_initialized;
     uint32_t references;
     uint32_t checkpoint_pins;
 };
@@ -125,6 +136,7 @@ typedef struct {
     exec_status status;
     int exit_code;
     exec_yield_reason wait_reason;
+    int verbose;
 } native_process_handler;
 
 typedef struct native_store_checkpoint native_store_checkpoint;
@@ -350,6 +362,8 @@ int native_exec_request_take_handler(native_exec_request *request,
                                      native_exec_handler_kind kind,
                                      uint8_t **bytes_out, size_t *size_out);
 void native_process_image_init(native_process_image *image);
+exec_status native_process_image_startup_block(native_process_image *,
+    const native_exec_request *, native_store *, exec_error *);
 void native_process_image_retain(native_process_image *image);
 void native_process_image_pin(native_process_image *image);
 void native_process_image_unpin(native_process_image *image);
@@ -572,6 +586,9 @@ int native_store_clone_process_graph(native_store *store, int parent_pid,
                                      int child_pid);
 int native_store_exit_process(native_store *store, int status);
 int native_store_signal_process(native_store *store, int pid, int signal);
+int native_store_default_signal(void *store);
+int native_store_terminate_process(native_store *store, int signal);
+int native_store_signal_foreground(native_store *store, int signal);
 /* Fan a signal across every live process whose kernel pgid matches.  Returns
  * the number of delivered members (zero if the group is empty), or a negative
  * POSIX errno for invalid arguments.  Shared by guest killpg and host-side
