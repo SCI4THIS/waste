@@ -19,3 +19,6 @@
 [submodule "submodules/rogue"]
 	path = submodules/rogue
 	url = https://github.com/Davidslv/rogue
+[submodule "submodules/vim"]
+	path = submodules/vim
+	url = https://github.com/vim/vim.git
