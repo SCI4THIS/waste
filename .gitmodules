@@ -22,3 +22,6 @@
 [submodule "submodules/vim"]
 	path = submodules/vim
 	url = https://github.com/vim/vim.git
+[submodule "submodules/llvm-project"]
+	path = submodules/llvm-project
+	url = https://github.com/llvm/llvm-project.git
