@@ -110,3 +110,23 @@ diff --git a/src/ls.c b/src/ls.c
  
    /* When sort_type == sort_time, use time_type as subindex.  */
    mpsort ((void const **) sorted_file, cwd_n_used,
+
+diff --git a/src/sleep.c b/src/sleep.c
+--- a/src/sleep.c
++++ b/src/sleep.c
+@@ -18,2 +18,3 @@
+ #include <stdio.h>
++#include <getopt.h>
+ #include <sys/types.h>
+@@ -22,1 +23,1 @@
+-#include "cl-strtod.h"
++#include "waste-sleep.h"
+@@ -122,3 +126,3 @@
+-      double duration = cl_strtod (argv[i], &p);
++      double duration = waste_sleep_strtod (argv[i], &p);
+       double s = dtimespec_bound (duration, errno);
+       if (argv[i] == p
+@@ -142,2 +146,2 @@
+-  if (xnanosleep (seconds))
++  if (waste_sleep_seconds (seconds))
+     error (EXIT_FAILURE, errno, _("cannot read realtime clock"));

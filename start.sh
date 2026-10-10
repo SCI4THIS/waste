@@ -466,7 +466,7 @@ generate_c_engine_tests() {
 
 # ── Auxiliary utility build helpers ──────────────────────────────────────
 
-AUX_UTILITIES=(libc true false pwd echo printf basename dirname cat chmod wc ls date bash rogue libncurses ldd upload download)
+AUX_UTILITIES=(libc true false pwd echo printf basename dirname cat chmod wc ls date sleep bash rogue libncurses ldd upload download vim)
 AUX_STAGING="$REPO_ROOT/src/vfs"
 AUX_LOG="$LOG_DIR/aux-build.log"
 
@@ -502,6 +502,12 @@ build_single_aux() {
     bash)
       if ! have_command cc || ! have_command patch; then
         show_message "Aux build" "A host C compiler (cc) and patch are required for Bash generators and staging."
+        return 1
+      fi
+      ;;
+    vim)
+      if ! have_command cc || ! have_command patch; then
+        show_message "Aux build" "A host C compiler (cc) and patch are required for Vim generators and staging."
         return 1
       fi
       ;;

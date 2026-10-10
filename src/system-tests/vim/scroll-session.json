@@ -1,0 +1,264 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/vim-scroll.txt",
+      "source": "src/system-tests/vim/scroll.txt",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "vim /tmp/vim-scroll.txt; printf '__VIM_SCROLL_EXIT_%s__\\n' \"$?\"\n"
+    },
+    {
+      "pid": 2,
+      "text": "22j"
+    },
+    {
+      "pid": 2,
+      "screen": {
+        "line": "LINE_0023",
+        "x": 0,
+        "y": 22,
+        "rows": {
+          "0": "LINE_0001",
+          "21": "LINE_0022",
+          "22": "LINE_0023"
+        },
+        "noUnderlineRows": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22
+        ]
+      },
+      "text": "j"
+    },
+    {
+      "pid": 2,
+      "screen": {
+        "line": "LINE_0024",
+        "x": 0,
+        "y": 22,
+        "rows": {
+          "0": "LINE_0002",
+          "21": "LINE_0023",
+          "22": "LINE_0024"
+        },
+        "noUnderlineRows": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22
+        ]
+      },
+      "text": "j"
+    },
+    {
+      "pid": 2,
+      "screen": {
+        "line": "LINE_0025",
+        "x": 0,
+        "y": 22,
+        "rows": {
+          "0": "LINE_0003",
+          "21": "LINE_0024",
+          "22": "LINE_0025"
+        },
+        "noUnderlineRows": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22
+        ]
+      },
+      "text": "22k"
+    },
+    {
+      "pid": 2,
+      "screen": {
+        "line": "LINE_0003",
+        "x": 0,
+        "y": 0,
+        "rows": {
+          "0": "LINE_0003",
+          "22": "LINE_0025"
+        },
+        "noUnderlineRows": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22
+        ]
+      },
+      "text": "k"
+    },
+    {
+      "pid": 2,
+      "screen": {
+        "line": "LINE_0002",
+        "x": 0,
+        "y": 0,
+        "rows": {
+          "0": "LINE_0002",
+          "22": "LINE_0024"
+        },
+        "noUnderlineRows": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22
+        ]
+      },
+      "text": "k"
+    },
+    {
+      "pid": 2,
+      "screen": {
+        "line": "LINE_0001",
+        "x": 0,
+        "y": 0,
+        "rows": {
+          "0": "LINE_0001",
+          "22": "LINE_0023"
+        },
+        "noUnderlineRows": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22
+        ]
+      },
+      "text": ":q!\n",
+      "drainTimers": true
+    },
+    {
+      "after": "__VIM_SCROLL_EXIT_0__\r\n",
+      "pid": 1,
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__VIM_SCROLL_EXIT_0__\r\n"
+  ],
+  "assertions": 1,
+  "exitStatus": 0,
+  "processes": 1
+}

@@ -54,6 +54,7 @@ void __fpurge(FILE *);
 void __fseterr(FILE *);
 FILE *fopen(const char *, const char *);
 FILE *fdopen(int, const char *);
+char *fgets(char *, int, FILE *);
 FILE *freopen(const char *, const char *, FILE *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 int fclose(FILE *);
 int fflush(FILE *);

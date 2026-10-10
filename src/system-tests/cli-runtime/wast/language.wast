@@ -1,0 +1,12 @@
+;; Full command-stream behavior, including definitions and registration.
+(module definition $definition (func (export "answer") (result i32) i32.const 42))
+(module instance $provider $definition)
+(register "probe" $provider)
+(module $client (import "probe" "answer" (func $answer (result i32)))
+  (func (export "answer") (result i32) call $answer)
+  (func (export "trap") unreachable))
+(assert_return (invoke $client "answer") (i32.const 42))
+(assert_trap (invoke $client "trap") "unreachable")
+(assert_invalid (module (func (result i32) f32.const 0)) "type mismatch")
+(assert_malformed (module binary "\00asm\01\00\00") "unexpected end")
+(assert_unlinkable (module (import "absent" "answer" (func))) "unknown import")

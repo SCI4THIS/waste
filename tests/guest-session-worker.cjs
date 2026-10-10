@@ -11,6 +11,8 @@ const {Worker} = require("node:worker_threads");
 const {readOfflinePackage} = require("./offline-html-package.cjs");
 const page = readOfflinePackage(process.argv[2]);
 const scenario = JSON.parse(fs.readFileSync(process.argv[3]));
+const screen = scenario.events.some(event => event.screen)
+  ? require("./terminal-screen.cjs")(page.read("root/app/terminal/model.js")) : null;
 const manifest = JSON.parse(page.read("vfs-manifest.json"));
 if (scenario.fixture === "src/vfs/usr/share/waste/launch.wast")
   assert.deepEqual(page.read("launch.wast"), fs.readFileSync(scenario.fixture));
@@ -66,8 +68,10 @@ const self = {postMessage(message) {
       transitionEvidence = message.text;
     if (message.text.startsWith("WASTE_DONE_RESULTS="))
       diagnosticResults = JSON.parse(message.text.slice("WASTE_DONE_RESULTS=".length));
-    else if (!message.text.startsWith("WASTE_TRANSITION_EVIDENCE="))
+    else if (!message.text.startsWith("WASTE_TRANSITION_EVIDENCE=")) {
       output += message.text;
+      screen?.write(message.text);
+    }
   }
   if (message.type === "started" || message.type === "io-ready") {
     ready++; pid = message.pid; waitKind = message.waitKind;
@@ -106,6 +110,7 @@ const wait = async predicate => {
       (event.pid === undefined || pid === event.pid) &&
       (event.duringBatch ? [5] : [1, 2]).includes(waitKind));
     assert((event.duringBatch ? [5] : [1, 2]).includes(waitKind));
+    if (event.screen) screen.check(event.screen);
     if (event.pid !== undefined) assert.equal(pid, event.pid, output.slice(-4000));
     if (event.waitKind !== undefined) assert.equal(waitKind, event.waitKind);
     previous = ready; consumed = output.length;
@@ -160,6 +165,7 @@ const wait = async predicate => {
     total:done.total, exitStatus:done.exitStatus,
     results:done.results,
     manifestSha256:sha256(Buffer.from(JSON.stringify(manifest))), output,
+    ...(screen ? {terminalScreens: screen.checks} : {}),
     ...(diagnosticResults ? {diagnosticResults} : {})}));
 })().catch(error => {
   console.error(error); self.onmessage({data:{type:"stop"}}); process.exitCode = 1;

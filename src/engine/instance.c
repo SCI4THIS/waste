@@ -79,6 +79,8 @@ exec_status exec_clone_engine(const waste_exec_engine *source,
     if (clone->static_ref_count)
         (*clone->static_ref_count)++;
     clone->shared_static = 1;
+    clone->clone_bindings = NULL;
+    clone->clone_binding_count = 0;
     clone->gc_objects = NULL;
     clone->exception_objects = NULL;
     clone->jump_snapshots = NULL;
@@ -245,6 +247,14 @@ exec_status exec_clone_engine(const waste_exec_engine *source,
     }
     if (source->memory == source->memories[0] && source->memory_count)
         clone->memory = clone->memories[0];
+    if (source->clone_binding_count) {
+        size_t bytes = (size_t)source->clone_binding_count *
+                       sizeof(*clone->clone_bindings);
+        clone->clone_bindings = malloc(bytes);
+        if (!clone->clone_bindings) goto failure;
+        memcpy(clone->clone_bindings, source->clone_bindings, bytes);
+        clone->clone_binding_count = source->clone_binding_count;
+    }
     *clone_out = clone;
     return EXEC_OK;
 
@@ -259,17 +269,39 @@ exec_status exec_clone_engine_bind(waste_exec_engine *clone,
                                    exec_error *error) {
     if (!clone || (binding_count && !bindings))
         return exec_fail(error, EXEC_ERROR_FORMAT, "invalid clone bindings");
-    free(clone->clone_bindings);
-    clone->clone_bindings = NULL;
-    clone->clone_binding_count = 0;
-    if (!binding_count) return EXEC_OK;
-    clone->clone_bindings = malloc((size_t)binding_count *
-                                   sizeof(*clone->clone_bindings));
-    if (!clone->clone_bindings)
+    if (!binding_count) {
+        free(clone->clone_bindings);
+        clone->clone_bindings = NULL;
+        clone->clone_binding_count = 0;
+        return EXEC_OK;
+    }
+    size_t capacity = (size_t)binding_count + clone->clone_binding_count;
+    if (capacity > UINT32_MAX || capacity > SIZE_MAX / sizeof(*bindings))
+        return exec_fail(error, EXEC_ERROR_TRAP, "clone bindings capacity exceeded");
+    exec_clone_binding *replacement = malloc(capacity * sizeof(*replacement));
+    if (!replacement)
         return exec_fail(error, EXEC_ERROR_TRAP, "clone bindings allocation failed");
-    memcpy(clone->clone_bindings, bindings,
-           (size_t)binding_count * sizeof(*clone->clone_bindings));
-    clone->clone_binding_count = binding_count;
+    memcpy(replacement, bindings, (size_t)binding_count * sizeof(*replacement));
+    uint32_t count = binding_count;
+    /* Funcrefs retain their original owner identity across fork generations.
+     * Compose inherited aliases with the new graph, rather than letting an
+     * indirect call escape into an ancestor's evaluator or address space. */
+    for (uint32_t i = 0; i < clone->clone_binding_count; i++) {
+        exec_clone_binding inherited = clone->clone_bindings[i];
+        uint32_t j;
+        for (j = 0; j < count; j++)
+            if (replacement[j].source == inherited.source) break;
+        if (j < count) continue;
+        for (j = 0; j < binding_count; j++) {
+            if (bindings[j].source != inherited.clone) continue;
+            replacement[count++] = (exec_clone_binding){
+                inherited.source, bindings[j].clone};
+            break;
+        }
+    }
+    free(clone->clone_bindings);
+    clone->clone_bindings = replacement;
+    clone->clone_binding_count = count;
     return EXEC_OK;
 }
 

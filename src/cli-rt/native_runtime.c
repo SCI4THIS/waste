@@ -83,6 +83,11 @@ static uint64_t session_now(void *opaque) {
     return host_now();
 }
 
+static uint64_t session_pump_now(void *opaque) {
+    (void)opaque;
+    return host_now();
+}
+
 static uint64_t session_realtime(void *opaque) {
     cli_guest_session *session = opaque;
     struct timespec value;
@@ -242,7 +247,7 @@ static int session_input(cli_guest_session *session, exec_error *error) {
                        "external input waits require a runtime terminal context");
         return 0;
     }
-    if (session->input_eof && !selecting && !session->host_stdio) {
+    if (session->input_eof && !selecting && !pumping && !session->host_stdio) {
         snprintf(error->message, sizeof(error->message), "guest yielded after terminal EOF");
         return 0;
     }
@@ -259,6 +264,12 @@ static int session_input(cli_guest_session *session, exec_error *error) {
         uint64_t deadline = session->deadline ? session->deadline : UINT64_MAX;
         if (session->cancel_deadline && session->cancel_deadline < deadline)
             deadline = session->cancel_deadline;
+        uint64_t scheduled_remaining;
+        if (native_process_driver_wait_timeout(&session->store, &scheduled_remaining)) {
+            if (!scheduled_remaining) return 1;
+            if (deadline > host && scheduled_remaining < deadline - host)
+                deadline = host + scheduled_remaining;
+        }
         if (selecting && wait->active && wait->has_deadline) {
             /* The guest's SELECT deadline uses the kernel-visible clock, which
              * may be a scripted deterministic value independent of host time.
@@ -711,6 +722,8 @@ native_runtime *native_runtime_create_vfs(const char *root, const waste_vfs *mou
     wast_process_handler_init(&session->handler, &session->store, session_handler_result, session);
     session->driver.handler_step = session_handler_step;
     session->driver.handler_reset = wast_process_handler_reset;
+    session->driver.handler_create = wast_process_handler_create;
+    session->driver.handler_destroy = wast_process_handler_destroy_owned;
     session->driver.handler_context = &session->handler;
     if (options->trace_process) session->driver.trace = session_process_trace;
     session->raw_output = options->raw_output;
@@ -750,11 +763,9 @@ native_runtime *native_runtime_create_vfs(const char *root, const waste_vfs *mou
     if (options->cancel_after_ms) session->cancel_deadline = now + (uint64_t)options->cancel_after_ms * 1000000u;
     session->store.execution_control.poll = session_control;
     session->store.execution_control.context = session;
-    if (session->host_stdio) {
-        session->store.execution_control.pump_quantum_ns = UINT64_C(16000000);
-        session->store.execution_control.pump_clock_now = session_now;
-        session->store.execution_control.pump_clock_context = session;
-    }
+    session->store.execution_control.pump_quantum_ns = UINT64_C(16000000);
+    session->store.execution_control.pump_clock_now = session_pump_now;
+    session->store.execution_control.pump_clock_context = session;
     waste_vfs vfs = {0};
     char error[256] = {0};
     session->suite_root_fd = native_vfs_open_root(root);

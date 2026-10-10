@@ -68,6 +68,8 @@ int native_store_commit_process_handler_with_context(
     old_image = capsule->image;
     native_process_image_release(old_image);
     capsule->image = NULL;
+    capsule->is_application = 0;
+    capsule->wait_reason = EXEC_YIELD_NONE;
     capsule->engine = NULL;
     capsule->root_func_idx = 0;
     capsule->root_arg_count = 0;
@@ -972,6 +974,10 @@ void native_store_free(native_store *store) {
     }
     free(store->modules);
     free(store->orphan_engines);
+    store->modules = NULL;
+    store->module_count = store->module_capacity = 0;
+    store->orphan_engines = NULL;
+    store->orphan_count = store->orphan_capacity = 0;
     exec_memory_release(&store->spectest_memory);
     free(store->spectest_table.elements);
     free(store->spectest_table64.elements);
@@ -1031,34 +1037,29 @@ int native_store_keep_orphan(native_store *store,
     return 1;
 }
 
-native_linked_module *native_registered_module(native_store *store,
-                                                const char *name) {
+static int native_module_visible(native_store *store, native_linked_module *module) {
+    return !module->owner_pid || module->owner_pid == store->active_pid;
+}
+
+native_linked_module *native_registered_module(native_store *store, const char *name) {
     for (int i = store->module_count; i > 0; i--)
-        if (strcmp(store->modules[i - 1].registered, name) == 0)
+        if (native_module_visible(store, &store->modules[i - 1]) &&
+            strcmp(store->modules[i - 1].registered, name) == 0)
             return &store->modules[i - 1];
     return NULL;
 }
 
-waste_exec_engine *native_selected_engine(native_store *store,
-                                           const char *id) {
-    if (!id || !id[0])
-        return store->module_count ?
-               store->modules[store->module_count - 1].engine : NULL;
+native_linked_module *native_selected_module(native_store *store, const char *id) {
     for (int i = store->module_count; i > 0; i--)
-        if (strcmp(store->modules[i - 1].id, id) == 0)
-            return store->modules[i - 1].engine;
+        if (native_module_visible(store, &store->modules[i - 1]) &&
+            (!id || !id[0] || strcmp(store->modules[i - 1].id, id) == 0))
+            return &store->modules[i - 1];
     return NULL;
 }
 
-native_linked_module *native_selected_module(native_store *store,
-                                              const char *id) {
-    if (!id || !id[0])
-        return store->module_count ?
-               &store->modules[store->module_count - 1] : NULL;
-    for (int i = store->module_count; i > 0; i--)
-        if (strcmp(store->modules[i - 1].id, id) == 0)
-            return &store->modules[i - 1];
-    return NULL;
+waste_exec_engine *native_selected_engine(native_store *store, const char *id) {
+    native_linked_module *module = native_selected_module(store, id);
+    return module ? module->engine : NULL;
 }
 
 int native_store_add(native_store *store, waste_exec_engine *engine,
@@ -1077,6 +1078,9 @@ int native_store_add(native_store *store, waste_exec_engine *engine,
     memset(linked, 0, sizeof(*linked));
     linked->engine = engine;
     linked->module = metadata;
+    native_process_capsule *capsule = native_store_active_capsule(store);
+    if (capsule && capsule->handler.kind != NATIVE_PROCESS_HANDLER_NONE)
+        linked->owner_pid = store->active_pid;
     if (identity) {
         snprintf(linked->id, sizeof(linked->id), "%s", identity->id);
         snprintf(linked->registered, sizeof(linked->registered), "%s",

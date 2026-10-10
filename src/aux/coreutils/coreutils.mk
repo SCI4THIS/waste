@@ -1,5 +1,5 @@
 # Shared upstream Coreutils build, included by src/aux/Makefile.
-COREUTILS_UTILITIES := basename cat chmod date dirname echo false ls printf pwd true wc
+COREUTILS_UTILITIES := basename cat chmod date dirname echo false ls printf pwd sleep true wc
 COREUTILS_DIR := $(AUX_DIR)/coreutils
 COREUTILS_BUILD ?= $(BUILD_DIR)/coreutils
 COREUTILS_SOURCE := $(COREUTILS_BUILD)/source
@@ -10,7 +10,7 @@ COREUTILS_REVISION := $(shell git -C "$(COREUTILS_UPSTREAM)" rev-parse HEAD)
 # Avoid walking thousands of Gnulib files on every per-command invocation.
 COREUTILS_UPSTREAM_INPUTS := $(COREUTILS_UPSTREAM)/bootstrap \
 	$(COREUTILS_UPSTREAM)/bootstrap.conf $(COREUTILS_UPSTREAM)/configure.ac \
-	$(COREUTILS_UPSTREAM)/Makefile.am $(COREUTILS_UPSTREAM)/gnulib/gnulib-tool \
+	$(COREUTILS_UPSTREAM)/Makefile.am \
 	$(shell git -C "$(COREUTILS_UPSTREAM)/gnulib" rev-parse --git-path HEAD)
 COREUTILS_HEADERS := $(shell find "$(COREUTILS_DIR)/include" -type f -name '*.h')
 COREUTILS_STAGE_STAMP := $(COREUTILS_SOURCE)/.prepared-$(COREUTILS_REVISION)
@@ -91,10 +91,12 @@ define COREUTILS_RULE
 $(1): $(BUILD_DIR)/$(1)/$(1).wasm
 install-$(1): $(1)
 $(BUILD_DIR)/$(1)/$(1).wasm: $(COREUTILS_ARCHIVE) $(COREUTILS_CRT) \
-		$(LIBC_REVIEW) $(SDK_ROOT)/lib/libc.so.wasm
+		$(LIBC_REVIEW) $(SDK_ROOT)/lib/libc.so.wasm \
+		$(COREUTILS_EXTRA_OBJECTS_$(1))
 	mkdir -p "$$(@D)"
 	$(WASM_LD) $(LDFLAGS) $(COREUTILS_LDFLAGS) -o "$$(@D)/$(1)-raw.wasm" \
 		$(foreach object,$(COREUTILS_OBJECTS_$(1)),"$(COREUTILS_CONFIGURE)/$(object)") \
+		$(foreach object,$(COREUTILS_EXTRA_OBJECTS_$(1)),"$(object)") \
 		"$(COREUTILS_CONFIGURE)/src/libver.a" "$(COREUTILS_ARCHIVE)" "$(COREUTILS_ARCHIVE)" "$(COREUTILS_CRT)"
 	wasm-opt "$$(@D)/$(1)-raw.wasm" --strip-debug -o "$$(@D)/$(1)-stripped.wasm"
 	$(PYTHON) "$(LIBC_REVIEW)" --provider "$(SDK_ROOT)/lib/libc.so.wasm" \

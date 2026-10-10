@@ -86,9 +86,12 @@ static exec_status process_capture_parent_graph(native_process_driver *driver, n
         uint32_t n = pass == 0 ? (uint32_t)store->module_count :
                                 (uint32_t)store->orphan_count;
         for (uint32_t i = 0; i < n; i++) {
+            if (!pass && store->modules[i].owner_pid &&
+                store->modules[i].owner_pid != store->active_pid) continue;
             waste_exec_engine *engine = pass == 0 ?
                 store->modules[i].engine :
                 store->orphan_engines[i];
+            engine = native_store_process_engine(store, engine);
             if (!engine || engine == root ||
                 process_engine_seen(engines, count, engine)) continue;
             if (count == capacity) {
@@ -142,55 +145,140 @@ static void process_discard_parent_graph(native_process_capsule *capsule) {
     capsule->continuation_count = 0;
 }
 
-/* Restore the suspended Bash parent before a child replacement starts or
- * finishes.  Both ordinary Wasm image exec and future process handlers must
- * use this same ordering so the parent continuation is never skipped. */
-static exec_status process_restore_fork_parent(native_process_driver *driver, native_store *store,
-                                               exec_error *error) {
-    native_process_capsule *parent_capsule;
-    waste_exec_engine *parent_engine;
-    uint32_t parent_func_idx;
-    int parent_arg_count;
-    wasm_value parent_args[WAST_MAX_ARGS];
-    exec_status restored;
-    if (!store || !driver->fork_active || driver->parent_restored)
-        return EXEC_OK;
-    parent_capsule = native_store_process_capsule(
-        store, store->fork_parent_pid);
-    if (!parent_capsule)
-        return exec_fail(error, EXEC_ERROR_TRAP,
-                         "missing parent process capsule");
-    if (!parent_capsule->continuation || !parent_capsule->engine)
-        return exec_fail(error, EXEC_ERROR_TRAP,
-                         "missing parent continuation engine");
-    parent_engine = parent_capsule->engine;
-    parent_func_idx = parent_capsule->continuation->root_func_idx;
-    parent_arg_count = parent_capsule->continuation->root_arg_count;
-    memcpy(parent_args, parent_capsule->continuation->root_args,
-           sizeof(parent_args));
-    restored = process_restore_parent_graph(parent_capsule, error);
-    if (restored != EXEC_OK) return restored;
-    /* The graph snapshots are consumed by the restore.  Release them before
-     * the next WAST/WAT child can capture a replacement graph; otherwise
-     * repeated execs leak continuation frames and exhaust the Wasm heap. */
-    process_discard_parent_graph(parent_capsule);
-    restored = exec_continuation_resume(
-        parent_capsule->continuation, parent_engine,
-        store->fork_parent_pid, EXEC_YIELD_FORK, error);
-    if (restored != EXEC_OK) return restored;
-    parent_capsule->engine = parent_engine;
-    parent_capsule->root_func_idx = parent_func_idx;
-    parent_capsule->root_arg_count = parent_arg_count;
-    memcpy(parent_capsule->root_args, parent_args, sizeof(parent_args));
-    parent_capsule->state = NATIVE_PROCESS_RUNNABLE;
-    driver->active_engine = parent_engine;
-    driver->active_func_idx = parent_func_idx;
-    driver->active_arg_count = parent_arg_count;
-    for (int i = 0; i < parent_arg_count; i++)
-        driver->active_args[i] = parent_args[i];
-    driver->parent_restored = 1;
-    process_consume_parent_continuation(parent_capsule);
+/* Fork leaves two independently owned evaluator graphs. Restore the parent
+ * immediately, returning the child PID without waiting for the child's exit. */
+static exec_status process_restore_fork_parent(native_process_capsule *parent,
+                                                int child_pid,
+                                                exec_error *error) {
+    exec_status status = process_restore_parent_graph(parent, error);
+    if (status != EXEC_OK) return status;
+    process_discard_parent_graph(parent);
+    status = exec_continuation_resume(parent->continuation, parent->engine,
+                                     parent->continuation->owner_pid,
+                                     EXEC_YIELD_FORK, error);
+    if (status != EXEC_OK) return status;
+    process_consume_parent_continuation(parent);
+    parent->pending_result = child_pid;
+    parent->pending_result_valid = 1;
+    parent->state = NATIVE_PROCESS_RUNNABLE;
+    parent->wait_reason = EXEC_YIELD_NONE;
     return EXEC_OK;
+}
+
+static int process_wait_ready(native_store *store, native_process *process) {
+    native_process_capsule *capsule = &process->capsule;
+    if (capsule->wait_reason == EXEC_YIELD_NONE) return 1;
+    if (capsule->wait_reason == EXEC_YIELD_WAITPID) {
+        int children = 0;
+        for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
+            native_process *child = &store->processes[i];
+            if (!child->used || child->ppid != process->pid ||
+                (capsule->wait_pid > 0 && child->pid != capsule->wait_pid))
+                continue;
+            children++;
+            if (child->zombie) return 1;
+        }
+        if (!children || posix_kernel_signal_default_pending(process->kernel)) return 1;
+        for (unsigned i = 0; i < POSIX_SIGSET_BYTES / sizeof(uint32_t); i++) {
+            if (process->kernel->pending_signals.words[i] &
+                ~process->kernel->signal_mask.words[i]) return 1;
+        }
+        return 0;
+    }
+    if (capsule->wait_reason == EXEC_YIELD_READ ||
+        capsule->wait_reason == EXEC_YIELD_SELECT)
+        return process->kernel->wait.active &&
+               posix_kernel_wait_poll(process->kernel) != POSIX_WAIT_BLOCKED;
+    return 0;
+}
+
+static void process_driver_count_exits(native_process_driver *driver, native_store *store) {
+    unsigned live = 0;
+    for (int i = 0; i < NATIVE_PROCESS_MAX; i++)
+        if (store->processes[i].used && !store->processes[i].zombie &&
+            store->processes[i].pid != driver->invocation_pid) live++;
+    /* A signal can zombie and reap a child inside one parent invocation, so
+     * counting only the selected child's return misses asynchronous exits. */
+    driver->child_exits = driver->forks >= live ? driver->forks - live : 0;
+}
+
+int native_process_driver_wait_timeout(native_store *store, uint64_t *nanoseconds) {
+    int found = 0;
+    uint64_t earliest = UINT64_MAX;
+    for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
+        native_process *process = &store->processes[i];
+        if (!process->used || process->zombie || !process->kernel) continue;
+        posix_kernel *kernel = process->kernel;
+        posix_wait_record *wait = &kernel->wait;
+        if (!wait->active || !wait->has_deadline || !kernel->clock_now) continue;
+        uint64_t now = kernel->clock_now(kernel->clock_data);
+        uint64_t remaining = wait->deadline_ns > now ? wait->deadline_ns - now : 0;
+        if (remaining < earliest) earliest = remaining;
+        found = 1;
+    }
+    if (found && nanoseconds) *nanoseconds = earliest;
+    return found;
+}
+
+/* Pick runnable work after the current slot. If all processes are blocked,
+ * publish the earliest deadline (or an input wait) to the platform adapter. */
+static int process_schedule(native_process_driver *driver, native_store *store,
+                            int prefer_current, exec_error *error) {
+    int current = 0, blocked = -1, input = -1;
+    uint64_t deadline = UINT64_MAX;
+    for (int i = 0; i < NATIVE_PROCESS_MAX; i++)
+        if (store->processes[i].used && store->processes[i].pid == store->active_pid)
+            current = i;
+    for (int n = 0; n < NATIVE_PROCESS_MAX; n++) {
+        int i = (current + n + (prefer_current ? 0 : 1)) % NATIVE_PROCESS_MAX;
+        native_process *process = &store->processes[i];
+        if (!process->used || process->zombie || (!process->capsule.engine &&
+            process->capsule.handler.kind == NATIVE_PROCESS_HANDLER_NONE)) continue;
+        native_process_capsule *capsule = &process->capsule;
+        if (process_wait_ready(store, process)) {
+            if (native_store_set_active_process(store, process->pid) != 0) return -1;
+            capsule->wait_reason = EXEC_YIELD_NONE;
+            if (capsule->handler.kind != NATIVE_PROCESS_HANDLER_NONE &&
+                capsule->handler.wait_reason != EXEC_YIELD_NONE &&
+                native_store_resume_process_handler(store) != 0) return -1;
+            process_driver_select(driver, store, capsule->engine,
+                capsule->root_func_idx, capsule->root_args, capsule->root_arg_count);
+            return 1;
+        }
+        if (capsule->wait_reason != EXEC_YIELD_READ &&
+            capsule->wait_reason != EXEC_YIELD_SELECT) continue;
+        posix_wait_record *wait = &process->kernel->wait;
+        if (wait->active) {
+            for (int fd = 0; fd < POSIX_KERNEL_FD_MAX; fd++) {
+                const posix_ofd *ofd = process->kernel->fds[fd].ofd;
+                if (posix_fd_isset(fd, &wait->readfds) && ofd &&
+                    (ofd->kind == POSIX_OFD_TERMINAL || ofd->kind == POSIX_OFD_STREAM)) {
+                    input = i;
+                    break;
+                }
+            }
+        }
+        if (blocked < 0 || (wait->active && wait->has_deadline &&
+                            wait->deadline_ns < deadline)) {
+            blocked = i;
+            deadline = wait->active && wait->has_deadline ? wait->deadline_ns : UINT64_MAX;
+        }
+    }
+    if (input >= 0) blocked = input;
+    if (blocked < 0) {
+        exec_fail(error, EXEC_ERROR_TRAP, "process scheduler has no runnable or external wait");
+        return -1;
+    }
+    native_process *process = &store->processes[blocked];
+    if (native_store_set_active_process(store, process->pid) != 0) return -1;
+    process->capsule.state = NATIVE_PROCESS_BROWSER_BLOCKED;
+    process_driver_select(driver, store, process->capsule.engine,
+        process->capsule.root_func_idx, process->capsule.root_args,
+        process->capsule.root_arg_count);
+    driver->selection.wait_reason = process->capsule.wait_reason;
+    error->status = EXEC_YIELD;
+    error->yield_reason = driver->selection.wait_reason;
+    return 0;
 }
 
 static waste_exec_engine *process_image_runtime_export(
@@ -574,7 +662,7 @@ exec_status native_process_driver_start_with_options(native_process_driver *driv
         capsule->file_mapping_count || capsule->handler.kind != NATIVE_PROCESS_HANDLER_NONE ||
         capsule->state != NATIVE_PROCESS_RUNNABLE || store->processes[0].pid != 1 ||
         capsule->pending_transition != NATIVE_PROCESS_TRANSITION_NONE ||
-        driver->active_engine || driver->fork_active)
+        driver->active_engine || driver->invocation_pid)
         return exec_fail(error, EXEC_ERROR_TRAP, "initial startup requires a fresh process store");
     size_t path_length = 0;
     while (path_length < NATIVE_EXEC_PATH_MAX && path[path_length]) path_length++;
@@ -649,11 +737,10 @@ exec_status native_process_driver_start_with_options(native_process_driver *driv
     return status;
 }
 
-/* Drive an invocation through internal process transitions.  A fork yield is
- * handled entirely inside this per-session engine driver: the parent evaluator
- * and store are captured, the child continuation runs with fork returning zero, and a
- * child exit restores the parent before the fork call is resumed with its PID.
- * Terminal/select yields remain visible to the platform runtime. */
+/* Drive an invocation through fork/exec and scheduling transitions. Fork makes
+ * two independent continuations runnable; blocked imports and opcode time
+ * slices select peers. Publish READ/SELECT only when all processes are blocked.
+ * The existing single host-request channel remains serialized. */
 exec_status native_process_driver_invoke(native_process_driver *driver, native_store *store,
                                           waste_exec_engine *engine,
                                           uint32_t func_idx,
@@ -668,15 +755,16 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
     uint32_t active_func_idx = func_idx;
     int image_active = driver->image_active;
     int child_exit_recorded = 0;
-    int handler_wake_recorded = 0;
     native_process_capsule *capsule =
         native_store_active_capsule(store);
+    if (!driver->invocation_pid) driver->invocation_pid = native_store_getpid(store);
     driver->active_engine = active_engine;
     driver->active_func_idx = active_func_idx;
     driver->active_arg_count = arg_count;
     for (int i = 0; i < arg_count && i < WAST_MAX_ARGS; i++)
         driver->active_args[i] = args[i];
-    if (capsule && capsule->handler.kind == NATIVE_PROCESS_HANDLER_NONE) {
+    if (capsule && capsule->handler.kind == NATIVE_PROCESS_HANDLER_NONE &&
+        capsule->wait_reason == EXEC_YIELD_NONE) {
         capsule->engine = active_engine;
         capsule->root_func_idx = active_func_idx;
         capsule->root_arg_count = arg_count;
@@ -684,6 +772,21 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
             capsule->root_args[i] = args[i];
         capsule->state = NATIVE_PROCESS_RUNNABLE;
         (void)native_process_capsule_bind_memory(capsule);
+    }
+    if (capsule && capsule->wait_reason != EXEC_YIELD_NONE) {
+        /* A legacy host READ has no kernel wait record. Retry it after the
+         * adapter's explicit resume; kernel-owned waits are readiness driven. */
+        if (capsule->wait_reason == EXEC_YIELD_READ && !store->kernel->wait.active)
+            capsule->wait_reason = EXEC_YIELD_NONE;
+        int scheduled = process_schedule(driver, store, 1, error);
+        if (scheduled < 0) return error->status;
+        if (!scheduled) return EXEC_YIELD;
+        capsule = native_store_active_capsule(store);
+        active_engine = capsule->engine;
+        active_func_idx = capsule->root_func_idx;
+        args = capsule->root_args;
+        arg_count = capsule->root_arg_count;
+        image_active = capsule->is_application;
     }
     exec_status status = EXEC_OK;
     for (;;) {
@@ -711,7 +814,7 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
                 driver->selection.wait_reason = driver->handler_wait_reason;
                 error->status = status;
                 error->yield_reason = driver->handler_wait_reason;
-                return status;
+                goto process_yield;
             }
             if (status != EXEC_OK && status != EXEC_ERROR_EXIT)
                 driver->handler_wait_reason = EXEC_YIELD_NONE;
@@ -728,35 +831,14 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
                 handler_exit_code = native_process_handler_default_exit_code(
                     handler_status, handler_exit_code);
                 error->exit_code = handler_exit_code;
-                if (driver->fork_active &&
-                    native_store_getpid(store) ==
-                        store->fork_child_pid) {
-                    /* Leave the child selected here.  The common fork-exit
-                     * path below must perform the parent wake after it has
-                     * observed the child exit; the combined helper selects
-                     * the parent too early for that path. */
-                    if ((error->signal ?
-                        native_store_complete_process_handler_signal(
-                            store, handler_status, error->signal) :
-                        native_store_complete_process_handler(
-                            store, handler_status,
-                            handler_exit_code)) != 0)
-                        return exec_fail(error, EXEC_ERROR_TRAP,
-                                         "failed to complete WAST handler");
-                    process_driver_engine_trace(driver, "handler-completed",
-                                                      driver->parent_engine);
-                    status = EXEC_ERROR_EXIT;
-                } else {
-                    if ((error->signal ?
-                        native_store_complete_process_handler_signal(
-                            store, handler_status, error->signal) :
-                        native_store_complete_process_handler(
-                            store, handler_status,
-                            handler_exit_code)) != 0)
-                        return exec_fail(error, EXEC_ERROR_TRAP,
-                                         "failed to complete WAST handler");
-                    status = EXEC_ERROR_EXIT;
-                }
+                if ((error->signal ?
+                    native_store_complete_process_handler_signal(
+                        store, handler_status, error->signal) :
+                    native_store_complete_process_handler(
+                        store, handler_status, handler_exit_code)) != 0)
+                    return exec_fail(error, EXEC_ERROR_TRAP,
+                                     "failed to complete WAST handler");
+                status = EXEC_ERROR_EXIT;
             }
         }
         if (status != EXEC_ERROR_EXIT) {
@@ -771,18 +853,15 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
                          (unsigned long long)function_count);
                 return exec_fail(error, EXEC_ERROR_NOT_FOUND, entry_error);
             }
-            if (!driver->fork_active &&
-                active_engine == driver->parent_engine)
+            if (active_engine == driver->parent_engine)
                 process_driver_trace(driver, "parent-invoke");
             status = exec_invoke(active_engine, active_func_idx,
                                  args, arg_count, results, result_count, error);
-            if (!driver->fork_active &&
-                active_engine == driver->parent_engine)
+            if (active_engine == driver->parent_engine)
                 process_driver_trace(driver, status == EXEC_YIELD ?
                                           "parent-invoke-yield" :
                                           "parent-invoke-return");
-            if (!driver->fork_active &&
-                active_engine == driver->parent_engine &&
+            if (active_engine == driver->parent_engine &&
                 status != EXEC_OK && status != EXEC_YIELD &&
                 status != EXEC_ERROR_EXIT) {
                 char invoke_event[256];
@@ -792,8 +871,7 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
                          error && error->message[0] ? error->message : "unknown");
                 process_driver_trace(driver, invoke_event);
             }
-            if (!driver->fork_active &&
-                active_engine == driver->parent_engine &&
+            if (active_engine == driver->parent_engine &&
                 status == EXEC_YIELD) {
                 char yield_event[32];
                 snprintf(yield_event, sizeof(yield_event), "parent-yield-r%u",
@@ -827,9 +905,13 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
                     NATIVE_EXEC_HANDLER_WAST && driver->handler_step) {
                 process_driver_engine_trace(driver, "handler-before",
                                                   driver->parent_engine);
-                if (native_store_commit_process_handler_with_context(
-                        store, &store->exec_request,
-                        NATIVE_PROCESS_HANDLER_WAST, driver->handler_context, NULL) != 0) {
+                void *handler_context = driver->handler_create ?
+                    driver->handler_create(driver->handler_context) : driver->handler_context;
+                if (!handler_context || native_store_commit_process_handler_with_context(
+                        store, &store->exec_request, NATIVE_PROCESS_HANDLER_WAST,
+                        handler_context, driver->handler_create ? driver->handler_destroy : NULL) != 0) {
+                    if (driver->handler_create && handler_context && driver->handler_destroy)
+                        driver->handler_destroy(handler_context);
                     (void)process_finish_exec_provider_continuations(
                         saved_providers, saved_provider_count, 1, error);
                     return exec_fail(error, EXEC_ERROR_TRAP,
@@ -847,7 +929,7 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
                 arg_count = 0;
                 image_active = 0;
                 driver->image_active = 0;
-                if (driver->handler_reset) driver->handler_reset(driver->handler_context);
+                if (driver->handler_reset) driver->handler_reset(handler_context);
                 driver->execs++;
                 continue;
             }
@@ -873,34 +955,14 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
                 native_store_abort_process_exec(store);
                 continue;
             }
-            /* Eagerly restore the dormant parent before running replacement
-             * guest code.  The child then runs against an independent image,
-             * and child exit only selects the already-restored parent. */
-            if (driver->fork_active && !driver->parent_restored) {
-                exec_status restored = process_restore_fork_parent(driver, store,
-                                                                    error);
-                if (restored != EXEC_OK) {
-                    (void)process_finish_exec_provider_continuations(
-                        saved_providers, saved_provider_count, 1, error);
-                    native_process_image_release(image);
-                    return restored;
-                }
-            }
             capsule = native_store_active_capsule(store);
-            int replaces_parent_image = !driver->fork_active && capsule &&
+            int replaces_parent_image = capsule &&
                 capsule->image && capsule->image->engine == driver->parent_engine;
             if (native_store_commit_process_image(store, image) != 0) {
                 exec_status restored = process_finish_exec_provider_continuations(
                     saved_providers, saved_provider_count, 1, error);
                 native_process_image_release(image);
                 if (restored != EXEC_OK) return restored;
-                /* Once the parent has been eagerly restored there is no
-                 * coherent child evaluator left to retry.  Treat a commit
-                 * failure as an internal transition error rather than
-                 * resuming the stale pre-exec child. */
-                if (driver->parent_restored)
-                    return exec_fail(error, EXEC_ERROR_TRAP,
-                                     "failed to commit executable image");
                 native_store_abort_process_exec(store);
                 store->exec_request.failure_errno = POSIX_ENOMEM;
                 continue;
@@ -960,90 +1022,56 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
             image_active = 0;
             driver->image_active = 0;
         }
-        if (status == EXEC_ERROR_EXIT && driver->fork_active &&
-            native_store_getpid(store) ==
-                store->fork_child_pid) {
-            int parent_pid = store->fork_parent_pid;
-            process_driver_engine_trace(driver, "child-before-wake",
-                                              driver->parent_engine);
-            if (!child_exit_recorded && !handler_wake_recorded)
-                (void)native_store_exit_process(store,
-                                                error->exit_code);
-            if (!handler_wake_recorded &&
-                native_store_wake_process(store, parent_pid,
-                                          store->fork_child_pid) != 0)
-                return exec_fail(error, EXEC_ERROR_TRAP,
-                                 "failed to restore parent process");
-            if (!driver->parent_restored) {
-                exec_status restored = process_restore_fork_parent(driver, store,
-                                                                    error);
-                if (restored != EXEC_OK) return restored;
+process_yield:
+        process_driver_count_exits(driver, store);
+        if (status == EXEC_ERROR_EXIT) {
+            if (native_store_getpid(store) == driver->invocation_pid) return status;
+            if (!child_exit_recorded)
+                (void)native_store_exit_process(store, error->exit_code);
+            process_driver_count_exits(driver, store);
+        } else if (status == EXEC_YIELD && error->yield_reason != EXEC_YIELD_FORK) {
+            capsule = native_store_active_capsule(store);
+            if (!capsule) return exec_fail(error, EXEC_ERROR_TRAP, "missing scheduled process");
+            if (error->yield_reason == EXEC_YIELD_HOST_IO) {
+                process_driver_select(driver, store, active_engine, active_func_idx, args, arg_count);
+                driver->selection.wait_reason = error->yield_reason;
+                return status;
             }
-            driver->child_exits++;
-            driver->fork_active = 0;
-            native_process_capsule *parent_capsule =
-                native_store_process_capsule(store, parent_pid);
-            exec_continuation_destroy(&driver->continuation);
-            /* The child image has finished.  Resume the original parent
-             * evaluator at the suspended fork import; otherwise the next
-             * iteration would invoke the replacement image a second time. */
-            active_engine = parent_capsule && parent_capsule->engine ?
-                parent_capsule->engine : driver->parent_engine;
-            process_driver_engine_trace(driver, "parent-after-wake", active_engine);
-            active_func_idx = parent_capsule && parent_capsule->engine ?
-                parent_capsule->root_func_idx : driver->parent_func_idx;
-            args = parent_capsule && parent_capsule->engine ?
-                parent_capsule->root_args : driver->parent_args;
-            arg_count = parent_capsule && parent_capsule->engine ?
-                parent_capsule->root_arg_count : driver->parent_arg_count;
-            image_active = parent_capsule && parent_capsule->image != NULL;
+            capsule->wait_reason = error->yield_reason == EXEC_YIELD_PUMP ?
+                EXEC_YIELD_NONE : error->yield_reason;
+            capsule->state = error->yield_reason == EXEC_YIELD_PUMP ?
+                NATIVE_PROCESS_RUNNABLE : NATIVE_PROCESS_BROWSER_BLOCKED;
+        } else if (status != EXEC_YIELD) {
+            return status;
+        }
+        if (status == EXEC_ERROR_EXIT || error->yield_reason != EXEC_YIELD_FORK) {
+            int pump = status == EXEC_YIELD && error->yield_reason == EXEC_YIELD_PUMP;
+            int scheduled = process_schedule(driver, store, 0, error);
+            if (scheduled < 0) return error->status;
+            if (!scheduled) return EXEC_YIELD;
+            capsule = native_store_active_capsule(store);
+            active_engine = capsule->engine;
+            active_func_idx = capsule->root_func_idx;
+            args = capsule->root_args;
+            arg_count = capsule->root_arg_count;
+            image_active = capsule->is_application;
             driver->image_active = image_active;
-            driver->parent_restored = 0;
-            /* Each child has its own exit transition. An earlier exec child
-             * must not suppress closing a later builtin-only child's pipe
-             * descriptors before the parent reads command substitution. */
-            child_exit_recorded = 0;
-            handler_wake_recorded = 0;
             driver->active_engine = active_engine;
             driver->active_func_idx = active_func_idx;
             driver->active_arg_count = arg_count;
-            capsule = native_store_active_capsule(store);
-            if (capsule) {
-                capsule->engine = active_engine;
-                capsule->root_func_idx = active_func_idx;
-                capsule->root_arg_count = arg_count;
-                capsule->state = NATIVE_PROCESS_RUNNABLE;
-                /* native_store_wake_process already queued the child PID;
-                 * keep that result authoritative for the resumed fork. */
-                capsule->pending_result_valid = 1;
+            child_exit_recorded = 0;
+            if (pump) {
+                error->status = EXEC_YIELD;
+                error->yield_reason = EXEC_YIELD_PUMP;
+                driver->selection.wait_reason = EXEC_YIELD_PUMP;
+                return EXEC_YIELD;
             }
-            status = EXEC_OK;
+            memset(error, 0, sizeof(*error));
             continue;
         }
-        if (status != EXEC_YIELD || error->yield_reason != EXEC_YIELD_FORK) {
-            if (status == EXEC_YIELD) {
-                driver->selection.engine = driver->active_engine ?
-                    driver->active_engine : active_engine;
-                driver->selection.func_idx = driver->active_engine ?
-                    driver->active_func_idx : active_func_idx;
-                driver->selection.arg_count = driver->active_engine ?
-                    driver->active_arg_count : arg_count;
-                for (int i = 0; i < driver->selection.arg_count; i++)
-                    driver->selection.args[i] = driver->active_engine ?
-                        driver->active_args[i] : args[i];
-                driver->selection.pid = native_store_getpid(store);
-            }
-            return status;
-        }
-        if (driver->fork_active)
-            return exec_fail(error, EXEC_ERROR_TRAP,
-                             "nested child-first fork is unsupported");
-        native_process_capsule *parent_capsule =
-            native_store_process_capsule(store,
-                                         native_store_getpid(store));
+        native_process_capsule *parent_capsule = native_store_active_capsule(store);
         if (!parent_capsule)
-            return exec_fail(error, EXEC_ERROR_TRAP,
-                             "missing parent process capsule");
+            return exec_fail(error, EXEC_ERROR_TRAP, "missing parent process capsule");
         exec_continuation_destroy(&driver->continuation);
         exec_continuation_init(&driver->continuation);
         if (exec_continuation_capture(active_engine, &driver->continuation,
@@ -1060,13 +1088,8 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
         for (int i = 0; i < arg_count && i < WAST_MAX_ARGS; i++)
             parent_capsule->root_args[i] = args[i];
         int parent_pid = native_store_getpid(store);
-        driver->parent_engine = active_engine;
-        process_driver_engine_trace(driver, "parent-at-fork",
-                                          driver->parent_engine);
-        driver->parent_func_idx = active_func_idx;
-        driver->parent_arg_count = arg_count;
-        for (int i = 0; i < arg_count && i < WAST_MAX_ARGS; i++)
-            driver->parent_args[i] = args[i];
+        if (parent_pid == driver->invocation_pid) driver->parent_engine = active_engine;
+        process_driver_engine_trace(driver, "parent-at-fork", active_engine);
         exec_continuation_describe(&driver->continuation, active_engine,
                                    active_func_idx, args, arg_count,
                                    EXEC_YIELD_FORK, parent_pid, 1);
@@ -1085,21 +1108,18 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
             native_store_set_active_process(store, child_pid) != 0)
             return exec_fail(error, EXEC_ERROR_TRAP,
                              "failed to create child process");
-        store->fork_parent_pid = parent_pid;
-        store->fork_child_pid = child_pid;
         if (native_store_clone_process_graph(store, parent_pid,
                                              child_pid) != 0)
             return exec_fail(error, EXEC_ERROR_TRAP,
                              "failed to clone linked process graph");
+        if (process_restore_fork_parent(parent_capsule, child_pid, error) != EXEC_OK)
+            return error->status;
         capsule = native_store_active_capsule(store);
         if (capsule) {
             capsule->pending_result = 0;
             capsule->pending_result_valid = 1;
         }
         driver->forks++;
-        driver->fork_active = 1;
-        if (parent_capsule)
-            parent_capsule->state = NATIVE_PROCESS_BROWSER_BLOCKED;
         capsule = native_store_active_capsule(store);
         if (capsule) {
             /* Fork cloned the evaluator state before selecting the child.
@@ -1109,6 +1129,8 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
             args = capsule->root_args;
             arg_count = capsule->root_arg_count;
             capsule->state = NATIVE_PROCESS_RUNNABLE;
+            image_active = capsule->is_application;
+            driver->image_active = image_active;
             driver->active_engine = active_engine;
             driver->active_func_idx = active_func_idx;
             driver->active_arg_count = arg_count;

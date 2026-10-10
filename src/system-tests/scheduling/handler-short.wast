@@ -1,0 +1,10 @@
+(module $same
+  (import "env" "select" (func $select (param i32 i32 i32 i32 i32) (result i32)))
+  (memory 1)
+  (data (i32.const 128) "\00\00\00\00\00\00\00\00\a0\86\01\00")
+  (func (export "sleep") (result i32)
+    (call $select (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 128)))
+  (func (export "value") (result i32) (i32.const 22)))
+(register "same" $same)
+(assert_return (invoke $same "sleep") (i32.const 0))
+(assert_return (invoke "value") (i32.const 22))

@@ -7,10 +7,15 @@ TEST_NAME="$3"
 TEST_SOURCE="$(realpath -- "$4")"
 TEST_OUTPUT="$5"
 WASM_RUNNER="$6"
+TEST_SETUP="${7:-}"
 mkdir -p "$TEST_OUTPUT"
 TEST_RUN="$(mktemp -d "$TEST_OUTPUT/run-XXXXXX")"
 TEST_COMMANDS="$TEST_RUN/commands.sh"
 printf 'status=0\n' > "$TEST_COMMANDS"
+if [[ -n "$TEST_SETUP" ]]; then
+  cat -- "$TEST_SETUP" >> "$TEST_COMMANDS"
+  printf '\n' >> "$TEST_COMMANDS"
+fi
 shopt -s nullglob
 TEST_FILES=("$TEST_SOURCE/"*.wast)
 if ((${#TEST_FILES[@]} == 0)); then

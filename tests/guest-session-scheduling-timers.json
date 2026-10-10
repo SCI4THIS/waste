@@ -1,0 +1,35 @@
+{
+  "fixture": "src/system-tests/scheduling/timers.wast",
+  "clockMonotonicNs": 1000000000,
+  "events": [
+    {
+      "after": "ARMED\r\n",
+      "monotonicNs": 1100000000,
+      "pid": 4,
+      "waitKind": 2
+    },
+    {
+      "after": "ONE\r\n",
+      "monotonicNs": 1200000000,
+      "pid": 3,
+      "waitKind": 2
+    },
+    {
+      "after": "TWO\r\n",
+      "monotonicNs": 1300000000,
+      "pid": 2,
+      "waitKind": 2
+    },
+    {
+      "after": "GROUP\r\n",
+      "monotonicNs": 1400000000,
+      "pid": 1,
+      "waitKind": 2
+    }
+  ],
+  "assertions": 2,
+  "exited": false,
+  "exitStatus": 0,
+  "processes": 4,
+  "output": "ARMED\r\nONE\r\nTWO\r\nTHREE\r\nGROUP\r\n"
+}

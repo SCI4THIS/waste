@@ -26,6 +26,7 @@ typedef struct {
     const wast_module *module;
     char id[WAST_MAX_EXPORT_NAME];
     char registered[WAST_MAX_EXPORT_NAME];
+    int owner_pid; /* Zero for shared definitions; WAST commands belong to a PID. */
 } native_linked_module;
 
 #define NATIVE_PROCESS_MAX 16
@@ -219,12 +220,15 @@ typedef struct {
      * linked table/function bindings can still refer to that original clone. */
     waste_exec_engine *owned_fork_engine;
     native_process_image *image;
+    uint8_t is_application;
     uint32_t root_func_idx;
     wasm_value root_args[WAST_MAX_ARGS];
     int root_arg_count;
     exec_continuation *continuation;
     uint64_t generation;
     native_process_run_state state;
+    exec_yield_reason wait_reason;
+    int wait_pid;
     native_process_transition pending_transition;
     int pending_result;
     int pending_error;

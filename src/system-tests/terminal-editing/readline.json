@@ -1,0 +1,17 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "events": [
+    {"after": "# ", "text": "wst --verbose"},
+    {"screen": {"line": "# wst --verbose", "x": 15}, "bytes": [1]},
+    {"screen": {"line": "# wst --verbose", "x": 2}, "bytes": [6]},
+    {"screen": {"line": "# wst --verbose", "x": 3}, "text": "a"},
+    {"screen": {"line": "# wast --verbose", "x": 4}, "bytes": [5]},
+    {"screen": {"line": "# wast --verbose", "x": 16}, "bytes": [1, 6, 4]},
+    {"screen": {"line": "# wst --verbose", "x": 3}, "text": "as"},
+    {"screen": {"line": "# wasst --verbose", "x": 5}, "bytes": [4]},
+    {"screen": {"line": "# wast --verbose", "x": 5}, "bytes": [1, 11]},
+    {"screen": {"line": "#", "x": 2}, "text": "exit 0\n"}
+  ],
+  "assertions": 1,
+  "exitStatus": 0
+}

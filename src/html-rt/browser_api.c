@@ -846,6 +846,8 @@ static exec_status browser_invoke_process(browser_wast_context *context,
     browser_process_state_init();
     g_shared_process.handler_step = browser_driver_handler_step;
     g_shared_process.handler_reset = wast_process_handler_reset;
+    g_shared_process.handler_create = wast_process_handler_create;
+    g_shared_process.handler_destroy = wast_process_handler_destroy_owned;
     g_shared_process.handler_context = &context->handler;
     g_shared_process.trace = browser_driver_trace;
     exec_status status = native_process_driver_invoke(&g_shared_process, &context->store,
@@ -1353,6 +1355,23 @@ uint32_t waste_wast_wait_kind(void) {
         stored_reason != EXEC_YIELD_NONE)
         return g_yield_active ? (uint32_t)stored_reason : EXEC_YIELD_NONE;
     return g_yield_active ? (uint32_t)g_yield_reason : EXEC_YIELD_NONE;
+}
+
+/* Earliest timer across blocked processes, including background jobs while
+ * the foreground shell reads. Frozen test clocks retain a short poll so the
+ * test driver can advance them through its control message. */
+__attribute__((export_name("waste_wast_wait_timeout_ms")))
+uint32_t waste_wast_wait_timeout_ms(void) {
+    uint64_t remaining_ns;
+    if (!g_yield_active ||
+        !native_process_driver_wait_timeout(&g_yield_context.store, &remaining_ns))
+        return 0;
+    if (g_clock_monotonic_fixed) return 10;
+    if (!remaining_ns) return 1;
+    uint64_t milliseconds = remaining_ns / 1000000u;
+    if (remaining_ns % 1000000u) milliseconds++;
+    return milliseconds > 0x7fffffffu ? 0x7fffffffu :
+           (uint32_t)milliseconds;
 }
 
 __attribute__((export_name("waste_wast_set_execution_limits")))

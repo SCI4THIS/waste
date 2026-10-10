@@ -34,6 +34,8 @@ char *strnul(const char *);
 char *strrchr(const char *, int);
 char *strstr(const char *, const char *);
 char *strdup(const char *);
+char *strtok(char *, const char *);
+char *strtok_r(char *, const char *, char **);
 const char *strerror(int);
 
 static inline int memeq(const void *a, const void *b, size_t n) {

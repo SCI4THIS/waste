@@ -128,7 +128,9 @@ WAST handlers. Its allocation-free evaluator safepoint polls at most every
 4,096 dispatched instructions, including tail calls. Module starts receive
 the policy before invocation. Parser/decoder work, a long single instruction
 and blocking host callbacks are not preempted; this is a cooperative limit,
-not a hard host-process deadline or a general concurrent scheduler.
+not a hard host-process deadline. Process scheduling uses these same opcode
+checkpoints for time slices; runtime calls and individual opcodes still finish
+through ordinary returns before another process can run.
 
 The browser export `waste_wast_set_execution_limits(timeout_ms, cancel_ms)`
 configures subsequent script runs; zero disables that limit. It rejects
@@ -143,10 +145,18 @@ wait-time advancement are described below; host policy time stays independent.
 Cancellation of running code still requires a cooperative engine safe point.
 
 Both runtimes now
-use `src/engine/process_driver.{c,h}` for bounded child-first fork, executable
-replacement, parent/provider continuation restoration and child exit/wakeup.
-The kernel/store still owns wait/reaping and process memory. Nested child-first
-fork remains unsupported; this is not a concurrent process/thread scheduler.
+use `src/engine/process_driver.{c,h}` for concurrent process scheduling,
+executable replacement and process-local continuations. The kernel/store owns
+wait/reaping and process memory. Fork resumes the parent immediately with the
+child PID and retains independent child/provider evaluator graphs. Runnable
+processes rotate on dispatch time slices; blocked imports retain their original
+arguments and retry when input, a timer, pipe readiness or a child exit is ready.
+This supports `bash FILE` with external commands, pipelines, substitutions and
+WAST handlers, and overlapping background sleeps. Runtimes service input and
+the earliest deadline across the whole session when every process is blocked.
+This provides concurrent execution on one interpreter worker; guest pthread
+creation/join and simultaneous execution on multiple host cores remain separate
+implementation work.
 Both runtimes use `src/engine/wast/handler.{c,h}` for WAST child command streams,
 including definitions/instances, registration, module assertions and invocation
 assertions. READ/SELECT/HOST_IO/PUMP yields retain the exact assertion and its selected
@@ -249,9 +259,13 @@ including the default-memory fast path. Cloning an importer does not install
 child memory access checks on its borrowed parent object before rebinding.
 This fixes process isolation, not allocator bounds or Bash cleanup semantics.
 
-`guest-session-linked-fork.wast` independently checks three repeated forks,
+`guest-session-linked-fork.wast` independently checks repeated and nested forks,
 transitive linked calls, imported mutable globals, indirect callbacks, shared
-memory aliases within each process, private parent/child state and reaping.
+memory aliases within each process, private parent/child/grandchild state and reaping.
+Its five assertions check seven child exits, including both levels of wait
+status and indirect/tail callbacks after returning from the grandchild.
+Every engine clone owns its clone-binding array; rebinding composes inherited
+aliases so original funcref owners resolve to the current generation's engines.
 Provider host writes also check the cached default-memory path. The same
 fixture and exact output run natively and through browser exports, alongside
 the real Bash interaction contracts. Pre-fix traces and final verification

@@ -32,6 +32,7 @@
       this.cursorVisible = true;
       this.applicationCursorKeys = false;
       this.applicationKeypad = false;
+      this.insertMode = false;
       this.state = "normal";
       this.csi = "";
       this.osc = "";
@@ -43,13 +44,16 @@
     }
 
     makeScreen() {
-      return {columns: this.columns, rows: this.rows, x: 0, y: 0, cells: Array.from(
+      return {columns: this.columns, rows: this.rows, x: 0, y: 0,
+        scrollTop: 0, scrollBottom: this.rows - 1, cells: Array.from(
         {length: this.columns * this.rows}, blankCell)};
     }
 
     resetScreen(screen) {
       screen.x = 0;
       screen.y = 0;
+      screen.scrollTop = 0;
+      screen.scrollBottom = this.rows - 1;
       screen.cells.fill(null);
       for (let i = 0; i < screen.cells.length; i++) screen.cells[i] = blankCell();
     }
@@ -100,21 +104,67 @@
       return next;
     }
 
-    scroll() {
-      this.active.cells.splice(0, this.columns);
-      for (let i = 0; i < this.columns; i++) this.active.cells.push(blankCell());
-      this.active.y = this.rows - 1;
+    eraseCell() {
+      /* Scrolling creates erased cells, not printed spaces. Preserve the
+       * effective colors, but do not turn active text decorations (e.g.
+       * Vim's underlined status row) into lines across the blank area. */
+      return {code: 32,
+        fg: this.current.inverse ? this.current.bg : this.current.fg,
+        bg: this.current.inverse ? this.current.fg : this.current.bg,
+        bold: false, underline: false, inverse: false};
+    }
+
+    scrollLines(top, bottom, count, down = false) {
+      count = clamp(count, 1, bottom - top + 1);
+      const start = top * this.columns, end = (bottom + 1) * this.columns;
+      const offset = count * this.columns;
+      const cells = this.active.cells;
+      if (down) cells.copyWithin(start + offset, start, end - offset);
+      else cells.copyWithin(start, start + offset, end);
+      const blankStart = down ? start : end - offset;
+      for (let i = blankStart; i < blankStart + offset; i++)
+        cells[i] = this.eraseCell();
     }
 
     lineFeed() {
-      if (this.y === this.rows - 1) this.scroll();
+      if (this.y === this.active.scrollBottom)
+        this.scrollLines(this.active.scrollTop, this.active.scrollBottom, 1);
       else this.y++;
+    }
+
+    reverseIndex() {
+      if (this.y === this.active.scrollTop)
+        this.scrollLines(this.active.scrollTop, this.active.scrollBottom, 1, true);
+      else this.y--;
+    }
+
+    changeLines(count, insert) {
+      if (this.y < this.active.scrollTop || this.y > this.active.scrollBottom) return;
+      this.scrollLines(this.y, this.active.scrollBottom, count, insert);
+      this.x = 0;
+    }
+
+    setScrollRegion(top, bottom) {
+      top = (top || 1) - 1;
+      bottom = (bottom || this.rows) - 1;
+      if (top < 0 || bottom >= this.rows || top >= bottom) return;
+      this.active.scrollTop = top;
+      this.active.scrollBottom = bottom;
+      this.x = 0; this.y = 0;
     }
 
     put(code, cellOverride = null) {
       if (code < 0x20 || code === 0x7f) return;
       const cell = cellOverride ? {...cellOverride} : {...this.current, code};
       if (!cellOverride && cell.inverse) [cell.fg, cell.bg] = [cell.bg, cell.fg];
+      if (this.insertMode) {
+        /* IRM (CSI 4 h): shift cells right from the cursor so readline's
+         * mid-line insertions do not overwrite the trailing characters. */
+        const row = this.y;
+        for (let column = this.columns - 1; column > this.x; column--)
+          this.active.cells[this.index(column, row)] =
+            this.active.cells[this.index(column - 1, row)];
+      }
       this.active.cells[this.index(this.x, this.y)] = cell;
       this.lastGraphic = {...cell};
       if (this.x === this.columns - 1) {
@@ -187,6 +237,9 @@
         else if (code === 99) this.fullReset();
         else if (code === 61) this.applicationKeypad = true;
         else if (code === 62) this.applicationKeypad = false;
+        else if (code === 68) this.lineFeed();
+        else if (code === 69) { this.x = 0; this.lineFeed(); }
+        else if (code === 77) this.reverseIndex();
         this.state = "normal";
         return;
       }
@@ -200,15 +253,19 @@
     }
 
     params() {
-      let privateMode = false;
+      let prefix = "";
       let source = this.csi;
-      if (source[0] === "?") { privateMode = true; source = source.slice(1); }
+      if (/^[<=>?]/.test(source)) { prefix = source[0]; source = source.slice(1); }
       const values = source.split(";").map(value => value === "" ? 0 : Number(value));
-      return {privateMode, values: values.map(value => Number.isFinite(value) ? value : 0)};
+      return {privateMode: prefix === "?", prefix,
+        values: values.map(value => Number.isFinite(value) ? value : 0)};
     }
 
     executeCsi(final) {
-      const {privateMode, values} = this.params();
+      const {privateMode, prefix, values} = this.params();
+      /* Private queries are not ordinary CSI commands. In particular,
+       * Vim's CSI ? 4 m (modifyOtherKeys query) must not enable underline. */
+      if (prefix && !(privateMode && (final === "h" || final === "l"))) return;
       const first = values[0] || 0;
       switch (final) {
         case "A": this.y -= first || 1; break;
@@ -224,11 +281,20 @@
         case "J": this.eraseDisplay(first); break;
         case "K": this.eraseLine(first); break;
         case "X": this.eraseCharacters(first || 1); break;
+        case "@": this.insertCharacters(first || 1); break;
+        case "P": this.deleteCharacters(first || 1); break;
+        case "L": this.changeLines(first || 1, true); break;
+        case "M": this.changeLines(first || 1, false); break;
+        case "S": this.scrollLines(this.active.scrollTop,
+          this.active.scrollBottom, first || 1); break;
+        case "T": this.scrollLines(this.active.scrollTop,
+          this.active.scrollBottom, first || 1, true); break;
         case "b": this.repeatLast(first || 1); break;
         case "m": this.sgr(values); break;
         case "s": this.saveCursor(); break;
         case "u": this.restoreCursor(); break;
         case "h": case "l":
+          if (!privateMode && values.includes(4)) this.insertMode = final === "h";
           if (privateMode && values.includes(1))
             this.applicationCursorKeys = final === "h";
           if (privateMode && (values.includes(1049) || values.includes(47))) {
@@ -237,8 +303,8 @@
           if (privateMode && values.includes(25)) this.cursorVisible = final === "h";
           break;
         case "r":
-          /* Scroll regions are intentionally treated as the full screen. */
-          this.y = 0; this.x = 0; break;
+          if (!privateMode) this.setScrollRegion(values[0], values[1]);
+          break;
         default: break;
       }
     }
@@ -249,6 +315,32 @@
         const cell = {...this.current, code: 32};
         if (cell.inverse) [cell.fg, cell.bg] = [cell.bg, cell.fg];
         this.active.cells[this.index(x, this.y)] = cell;
+      }
+    }
+
+    insertCharacters(count) {
+      count = clamp(count, 1, this.columns - this.x);
+      const row = this.y;
+      for (let column = this.columns - 1; column >= this.x + count; column--)
+        this.active.cells[this.index(column, row)] =
+          this.active.cells[this.index(column - count, row)];
+      for (let column = this.x; column < this.x + count; column++) {
+        const cell = {...this.current, code: 32};
+        if (cell.inverse) [cell.fg, cell.bg] = [cell.bg, cell.fg];
+        this.active.cells[this.index(column, row)] = cell;
+      }
+    }
+
+    deleteCharacters(count) {
+      count = clamp(count, 1, this.columns - this.x);
+      const row = this.y;
+      for (let column = this.x; column < this.columns - count; column++)
+        this.active.cells[this.index(column, row)] =
+          this.active.cells[this.index(column + count, row)];
+      for (let column = this.columns - count; column < this.columns; column++) {
+        const cell = {...this.current, code: 32};
+        if (cell.inverse) [cell.fg, cell.bg] = [cell.bg, cell.fg];
+        this.active.cells[this.index(column, row)] = cell;
       }
     }
 
@@ -323,6 +415,7 @@
       this.resetScreen(this.primary); this.resetScreen(this.alternate);
       this.active = this.primary; this.cursorVisible = true; this.state = "normal";
       this.applicationCursorKeys = false; this.applicationKeypad = false;
+      this.insertMode = false;
       this.lastGraphic = null;
       this.current = {fg: PALETTE[7], bg: PALETTE[0], bold: false, underline: false, inverse: false};
     }

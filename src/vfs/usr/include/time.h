@@ -40,7 +40,7 @@ static inline int timespec_getres(struct timespec *resolution, int base)
 
 time_t time(time_t *);
 clock_t clock(void) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
-int nanosleep(const struct timespec *, struct timespec *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
+int nanosleep(const struct timespec *, struct timespec *);
 struct tm *gmtime(const time_t *);
 struct tm *gmtime_r(const time_t *, struct tm *);
 struct tm *localtime(const time_t *);

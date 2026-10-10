@@ -29,3 +29,9 @@ ac_cv_func_pstat_getprocvm=no
 # portable over-allocation shim for larger alignments such as cat's page-sized
 # I/O buffers instead of selecting the limited POSIX entry point.
 ac_cv_func_posix_memalign=no
+# The guest implements timed waits through nanosleep/pselect; pause is not a
+# separate kernel capability and must not leave an unresolved import in sleep.
+ac_cv_func_pause=no
+# Cross-configuration cannot execute the guest nanosleep probe. Trust the
+# runtime implementation so Coreutils does not bundle Gnulib's fallback.
+gl_cv_func_nanosleep=yes

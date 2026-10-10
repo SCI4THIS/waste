@@ -56,6 +56,18 @@ publishes the library at `/lib/libncurses.so.wasm` and `/usr/lib/libncurses.so.w
 together with its matching public SDK headers; `start.sh` delegates to this
 target. See [the ncurses build notes](../src/aux/libncurses/README.md).
 
+Vim stages the read-only upstream checkout through `src/aux/vim`. Its main
+function takes two arguments, so compile its CRT with `WASTE_MAIN_TWO_ARGS`;
+a mismatched main signature can link with a warning and leave an unusable
+entry shim. Configure the terminal library as termcap (`vim_cv_terminfo=no`)
+to match shared libc's formatter. Install the small authored defaults file
+under the compiled `/usr/share/vim` runtime directory so ordinary `vim FILE`
+does not stop on a missing `defaults.vim` warning. The package tests check
+version output and saved file bytes, while the system session checks the
+interactive screen and return to Bash in both runtimes. Executable access
+alone cannot verify that an installed module's imports resolve or its entry
+function runs. See [the Vim package notes](../src/aux/vim/README.md).
+
 ## Shared Guest Libc Build
 
 `make -C src/aux libc` compiles the production guest library directly with Clang
@@ -202,13 +214,42 @@ global.  Then inspect linked provider continuations (especially libc); a store
 checkpoint that restores memory without restoring provider evaluator frames can
 resume a child `execve` activation in the parent.
 
-Keep the browser process driver as a selector, not a scheduler of its own.  It
-records the selected capsule and wait reason, re-selects that PID on resume,
-and resets deterministically on completion or error.  Exercise successful exec,
+Keep runnable selection and readiness in the shared C process scheduler.
+Runtime adapters record the published capsule and service input and the
+earliest session deadline, then resume through ordinary C returns. They do
+not decide which guest process runs next.  Exercise successful exec,
 failed exec, command-not-found, repeated terminal waits, child exit, and parent
 reaping under warnings-as-errors plus ASan/UBSan.  Disable LeakSanitizer only
 for the documented ptrace environment; do not treat that exception as a reason
 to weaken ownership checks.
+
+Timed guest sleeps use the versioned `waste_kernel.pselect_v1` timeout ABI. The
+engine installs an absolute monotonic deadline and returns through
+`EXEC_YIELD_SELECT`; native sessions wait on the host clock, while the browser
+worker arms a `setTimeout` for the remaining interval and resumes the saved
+engine continuation. Do not implement guest sleeps as busy loops or host calls
+inside shared libc.
+
+Fork must restore the parent's continuation immediately after cloning the
+child graph, with a process-owned return value for each side. Deep-copy clone
+bindings and compose inherited aliases: copied funcrefs can still name an
+ancestor's original provider. Capture only the active process's provider frames,
+not another runnable process's evaluator. Test grandchildren's direct, indirect
+and tail calls, private memory/globals and both wait statuses under ASan/UBSan.
+`guest-session-linked-fork` covers these invariants.
+
+Scheduling rotates runnable capsules on opcode time slices and blocking
+imports. Keep kernel wait records and absolute deadlines process-local; retry
+blocking waitpid only when its matching child can be reaped. Publish input
+waits together with the minimum timer across all processes, so background jobs
+progress while Bash waits at its prompt. Use host monotonic time for CPU slices
+even when a test freezes the guest timer clock. WAST handlers need independent
+command contexts and PID-owned definitions/registrations; cleanup must remove
+only their own modules and failed-start engines, including cancellation paths.
+The system probes under `src/system-tests/scheduling` check overlapping timers
+at controlled clock boundaries and a CPU spin that requires a sibling to run.
+`aux-bash` checks concurrent handlers using identical module names, nested
+scripts and background sleeps through native, browser API and packaged workers.
 
 ## Terminal Rendering and Shell Verification
 
@@ -217,6 +258,33 @@ the exact engine-processed byte stream; canonical/raw handling and ONLCR belong
 in the C kernel. Preserve incremental UTF-8/escape parsing, alternate-screen
 state, CSI REP and character-set designators used by ncurses. Application-cursor
 mode must affect the input encoder as well as output parsing.
+
+Keep scrolling margins per screen buffer. Vim limits scrolling to its text
+rows with `CSI top;bottom r`, indexes at the bottom margin to scroll up, and
+inserts lines with `CSI L` when scrolling back down. Implement index/reverse
+index, line insertion/deletion and explicit scrolling within those margins;
+preserve header/status rows outside them and use the current background for
+new blank cells. Reset margins when clearing a buffer for alternate-screen
+entry or resizing it. `src/system-tests/vim/scroll-session.json` checks visible
+rows in both directions before later input can trigger a full redraw.
+New scroll blanks must have no underline/bold decorations: Vim can scroll
+while its status-line rendition is active. Preserve effective colors without
+copying those text decorations or changing the rendition for later printed
+characters. Check cell attributes as well as row text; otherwise stray
+underlines in trailing blank cells can pass a text-only regression.
+Preserve CSI private prefixes when dispatching commands. Vim's `CSI ?4m`
+queries modifyOtherKeys; it is not the ordinary `CSI 4m` underline command.
+Ignore unsupported private queries without changing text rendition, and keep
+supported DEC private mode changes (`CSI ?...h/l`) distinct from ordinary CSI.
+
+Advertise only implemented terminal capabilities. Readline checks whether an
+insert capability exists, even when its returned string is empty; an empty
+`im` therefore selects an insert path that overwrites visible text. Shared
+libc supplies ANSI insert-mode entry/exit (`CSI 4 h` / `CSI 4 l`), matching the
+browser model and native terminals. The libc `termcap.wast` probe checks these
+capabilities. The system fixture in `src/system-tests/terminal-editing` feeds
+real Bash editing keys and checks screen cells and cursor positions before
+each next key, so a later redisplay cannot conceal an insertion failure.
 
 Use font metrics to transform GLF geometry into cells. Preserve cmap format
 4/6 lookup, missing-glyph behavior, indexed glyph ranges and analytic curve
@@ -241,11 +309,10 @@ download /tmp/terminal-renderer-results.json
 ```
 
 Run the browser Bash fixtures together and save the verbose transcript for
-download. Source the script into the current shell so the WAST commands do not
-require a nested Bash process:
+download. Nested Bash now supports launching the WAST commands in the script:
 
 ```sh
-. /root/test/html-rt.sh > /tmp/html-rt.txt
+bash /root/test/html-rt.sh > /tmp/html-rt.txt
 download /tmp/html-rt.txt
 ```
 
@@ -578,19 +645,17 @@ across the yield, or infer the blocked operation in JavaScript.  The POSIX
 runtime should attach an explicit wait reason, stable handles, deadline, and
 cancellation generation as described by the active `select`/`pselect` plan.
 
-## Bounded process continuation
+## Process continuation and scheduling
 
-The browser Bash command-not-found path uses a bounded child-first process
-transition. At `fork`, capture the parent evaluator and mutable store state;
-run the child until failed `execve` and `exit(127)`; record the zombie; restore
-the parent; resume `fork` with the child PID; and let `waitpid` reap the saved
-status. Child and parent transitions remain inside the C driver. Only terminal
-or select waits cross into the browser worker.
+Fork captures the parent evaluator/provider graph, clones process-private
+state, and resumes the parent with the child PID immediately. The child starts
+with fork returning zero. Child exit records a zombie and closes descriptors;
+waitpid later reaps the saved status. These transitions remain inside the shared
+C scheduler. Input readiness and deadlines wake blocked processes, while opcode
+pump yields rotate CPU-bound peers and let the runtime service its event loop.
+The existing host upload/download/test-request channel remains serialized.
 
-This slice is intentionally not a general scheduler: process records do not
-make multiple guest threads concurrently runnable. Add per-thread runnable and
-blocked states before extending it to independent live parent/child work. The
-regression must exercise more than one post-fork terminal read, because the
+A regression must exercise more than one post-fork terminal read, because a
 single-command smoke path does not validate repeated continuation re-entry.
 The static Bash-page build therefore runs an assignment/expansion/process
 sequence (`HOME_DIR=/home/a`, `echo ${HOME_DIR}`, `ls`), verifies exit status
@@ -1273,8 +1338,8 @@ shared `cli-runtime` probe tests real callbacks, ownership, masks and canaries
 against native and browser C builds. Default process termination must honor
 masks and preserve a signal wait status, independently of host cancellation.
 Exec drops caught actions and retains ignored actions and the process mask.
-Stop/continue scheduling and asynchronous caught handlers during CPU-only work
-remain outside the bounded child-first process model.
+Stop/continue lifecycle states and asynchronous caught handlers during CPU-only
+work still require implementation beyond runnable process selection.
 
 ## Retain segment declarations or reject the resource bound
 

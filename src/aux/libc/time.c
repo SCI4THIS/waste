@@ -2,6 +2,22 @@
 
 #include "include/helper.h"
 
+typedef struct { i64 tv_sec; i32 tv_nsec; i32 padding; } WasteTimespec;
+extern i32 pselect(i32, void *, void *, void *, const WasteTimespec *, const void *);
+
+/* Implement nanosleep via the engine's timed readiness wait. This keeps the
+ * blocking operation resumable in the browser and interruptible by signals. */
+i32 nanosleep(const WasteTimespec *requested, WasteTimespec *remaining) {
+  if (!requested) { *__errno_location() = 14; return -1; }
+  if (requested->tv_sec < 0 || requested->tv_nsec < 0 ||
+      requested->tv_nsec >= 1000000000) {
+    *__errno_location() = 22;
+    return -1;
+  }
+  if (remaining) { remaining->tv_sec = 0; remaining->tv_nsec = 0; remaining->padding = 0; }
+  return pselect(0, 0, 0, 0, requested, 0);
+}
+
 typedef struct WasteTm{i32 sec,min,hour,mday,mon,year,wday,yday,isdst;}WasteTm;
 typedef struct WasteTimeval{i64 sec;i32 usec,padding;}WasteTimeval;
 extern i32 waste_kernel_realtime_v1(i64 *seconds, i32 *nanoseconds)

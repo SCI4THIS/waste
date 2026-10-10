@@ -13,6 +13,8 @@ void *realloc(void *, size_t);
 int posix_memalign(void **, size_t, size_t);
 void *reallocarray(void *, size_t, size_t);
 void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
+void *bsearch(const void *, const void *, size_t, size_t,
+              int (*)(const void *, const void *));
 void qsort_r(void *, size_t, size_t,
              int (*)(const void *, const void *, void *), void *) WASTE_UNAVAILABLE("Package-owned gnulib API; not provided by WASTE guest libc");
 void free(void *);
@@ -25,12 +27,14 @@ _Noreturn void abort(void) WASTE_UNAVAILABLE("Browser abort adapter returns norm
 _Noreturn void exit(int);
 int atexit(void (*)(void));
 int atoi(const char *);
+long atol(const char *);
 long strtol(const char *, char **, int);
 unsigned long strtoul(const char *, char **, int) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 double strtod(const char *, char **);
 float strtof(const char *, char **);
 long double strtold(const char *, char **);
 int abs(int);
+long labs(long);
 int rand(void);
 void srand(unsigned int);
 char *getenv(const char *);

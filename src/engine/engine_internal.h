@@ -89,6 +89,8 @@ typedef enum {
      * loop (process cancel messages, user input) and resume via the normal
      * yield_frames path.  Never set by guest syscalls. */
     EXEC_YIELD_PUMP,
+    /* Engine scheduler wait; never exposed as platform I/O. */
+    EXEC_YIELD_WAITPID,
 } exec_yield_reason;
 
 typedef struct {

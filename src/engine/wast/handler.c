@@ -13,6 +13,7 @@ void wast_process_handler_init(wast_process_handler *handler, native_store *stor
                                wast_handler_result result, void *data) {
     memset(handler, 0, sizeof(*handler));
     handler->store = store;
+    handler->pid = store ? store->active_pid : 0;
     handler->result = result;
     handler->result_data = data;
 }
@@ -33,6 +34,59 @@ void wast_process_handler_reset(void *opaque) {
     handler->first_failure[0] = '\0';
 }
 
+/* Remove only this process's definitions. Other runnable handlers may have
+ * appended modules after ours, so truncating a shared registry is invalid. */
+static void handler_release_modules(wast_process_handler *handler) {
+    native_store *store = handler->store;
+    if (!store) return;
+    for (int i = store->module_count; i > 0; i--) {
+        if (store->modules[i - 1].owner_pid != handler->pid) continue;
+        exec_free(store->modules[i - 1].engine);
+        memmove(&store->modules[i - 1], &store->modules[i],
+                (size_t)(store->module_count - i) * sizeof(*store->modules));
+        store->module_count--;
+    }
+    for (unsigned j = 0; j < handler->owned_orphan_count; j++) {
+        for (int i = 0; i < store->orphan_count; i++) {
+            if (store->orphan_engines[i] != handler->owned_orphans[j]) continue;
+            exec_free(store->orphan_engines[i]);
+            memmove(&store->orphan_engines[i], &store->orphan_engines[i + 1],
+                    (size_t)(store->orphan_count - i - 1) * sizeof(*store->orphan_engines));
+            store->orphan_count--;
+            break;
+        }
+    }
+    free(handler->owned_orphans);
+    handler->owned_orphans = NULL;
+    handler->owned_orphan_count = 0;
+}
+
+static int handler_keep_orphan(wast_process_handler *handler, waste_exec_engine *engine) {
+    waste_exec_engine **owned = realloc(handler->owned_orphans,
+        (handler->owned_orphan_count + 1u) * sizeof(*owned));
+    if (!owned) return 0;
+    handler->owned_orphans = owned;
+    if (!native_store_keep_orphan(handler->store, engine)) return 0;
+    owned[handler->owned_orphan_count++] = engine;
+    return 1;
+}
+
+void *wast_process_handler_create(void *opaque) {
+    wast_process_handler *template = opaque;
+    wast_process_handler *handler = calloc(1, sizeof(*handler));
+    if (handler)
+        wast_process_handler_init(handler, template->store, template->result,
+                                   template->result_data);
+    return handler;
+}
+
+void wast_process_handler_destroy_owned(void *opaque) {
+    wast_process_handler *handler = opaque;
+    handler_release_modules(handler);
+    wast_process_handler_destroy(handler);
+    free(handler);
+}
+
 void wast_process_handler_destroy(wast_process_handler *handler) {
     wast_process_handler_reset(handler);
     for (unsigned i = 0; i < handler->retained_count; i++) {
@@ -40,6 +94,7 @@ void wast_process_handler_destroy(wast_process_handler *handler) {
         free(handler->retained[i]);
     }
     free(handler->retained);
+    free(handler->owned_orphans);
     memset(handler, 0, sizeof(*handler));
 }
 
@@ -162,7 +217,7 @@ static void handler_module(wast_process_handler *handler, wast_group *group) {
     exec_status status = native_load_module(handler->store, module, binary, size, &engine, &error);
     free(binary);
     if (status == EXEC_ERROR_INTERRUPTED) {
-        if (engine && !native_store_keep_orphan(handler->store, engine)) exec_free(engine);
+        if (engine && !handler_keep_orphan(handler, engine)) exec_free(engine);
         handler_result(handler, 0, "(module)", error.message);
         handler->stopped = 1;
         return;
@@ -170,7 +225,7 @@ static void handler_module(wast_process_handler *handler, wast_group *group) {
     if (status == EXEC_YIELD) {
         /* Instantiation is not a resumable command transaction yet. In
          * particular, a paused start is not a satisfied assert_invalid. */
-        if (engine && !native_store_keep_orphan(handler->store, engine)) exec_free(engine);
+        if (engine && !handler_keep_orphan(handler, engine)) exec_free(engine);
         handler_result(handler, 0, "(module)", "yielding module starts are unsupported in WAST handlers");
         handler->stopped = 1;
         handler->exit_code = 126;
@@ -182,7 +237,7 @@ static void handler_module(wast_process_handler *handler, wast_group *group) {
         handler_result(handler, passed, "(module)", passed ? NULL :
                         status == EXEC_OK ? "module unexpectedly instantiated" : error.message);
         /* Failed starts may already have linked callers; retain their engine. */
-        if (engine && !native_store_keep_orphan(handler->store, engine)) {
+        if (engine && !handler_keep_orphan(handler, engine)) {
             exec_free(engine);
             handler->stopped = 1;
             handler_result(handler, 0, "(module)", "cannot retain module assertion engine");
@@ -190,7 +245,7 @@ static void handler_module(wast_process_handler *handler, wast_group *group) {
         return;
     }
     if (status != EXEC_OK) {
-        if (engine && !native_store_keep_orphan(handler->store, engine)) exec_free(engine);
+        if (engine && !handler_keep_orphan(handler, engine)) exec_free(engine);
         handler_result(handler, 0, "(module)", error.message);
         handler->stopped = 1;
     } else if (!native_store_add(handler->store, engine, &group->module, module)) {
@@ -265,13 +320,7 @@ exec_status wast_process_handler_step(const uint8_t *source, size_t size,
     /* Commands belong to this child, not the parent's module namespace.
      * Destroy them before the child provider clones are reaped, and before a
      * later fork tries to clone their no-longer-live import bindings. */
-    while (handler->store->module_count > handler->module_start) {
-        native_linked_module *module = &handler->store->modules[--handler->store->module_count];
-        exec_free(module->engine);
-        memset(module, 0, sizeof(*module));
-    }
-    while (handler->store->orphan_count > handler->orphan_start)
-        exec_free(handler->store->orphan_engines[--handler->store->orphan_count]);
+    handler_release_modules(handler);
     while (handler->retained_count > handler->retained_start) {
         wast_script *script = handler->retained[--handler->retained_count];
         wast_script_free(script);

@@ -2,12 +2,15 @@
   "baselineRepairs": [],
   "counts": {
     "groups": {
-      "aux/libc": 7,
+      "aux/libc": 9,
+      "aux/sleep": 1,
+      "aux/vim": 1,
       "diy-posix-test": 5,
       "engine-regressions": 15,
       "render": 1,
       "system/cli-runtime/wast": 6,
-      "system/libc": 7,
+      "system/libc": 8,
+      "system/scheduling": 4,
       "system/wast": 3,
       "wasm-spec/core": 97,
       "wasm-spec/core/bulk-memory": 8,
@@ -22,7 +25,7 @@
       "wasm-spec/custom/name": 1
     },
     "supported": 281,
-    "tests": 305
+    "tests": 314
   },
   "files": [
     {
@@ -89,11 +92,39 @@
       "source": "src/aux/libc/tests/memory-conversion.wast"
     },
     {
+      "path": "/root/test/aux/libc/search-tokenize.wast",
+      "role": "test-input",
+      "sha256": "a63a989bd441afa154b7ba0266309a23e080aedce24de4d0f2677b6a2505862c",
+      "size": 2049,
+      "source": "src/aux/libc/tests/search-tokenize.wast"
+    },
+    {
       "path": "/root/test/aux/libc/stdio.wast",
       "role": "test-input",
       "sha256": "f3bb7128afb6e4cf3065dd60c9c84208268844b9a0db2b7459ccf1be64684f4d",
       "size": 3765,
       "source": "src/aux/libc/tests/stdio.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/termcap.wast",
+      "role": "test-input",
+      "sha256": "a421a69f5b5e14bbb60b4d76aad3668796611103c9ac0d9a547fccfa55918bcf",
+      "size": 1475,
+      "source": "src/aux/libc/tests/termcap.wast"
+    },
+    {
+      "path": "/root/test/aux/sleep/nanosleep.wast",
+      "role": "test-input",
+      "sha256": "4f26ef5c1573c70f0e672fa57cc0b485510da7249330695ad4075a9a72b4a368",
+      "size": 883,
+      "source": "src/aux/sleep/tests/nanosleep.wast"
+    },
+    {
+      "path": "/root/test/aux/vim/installed.wast",
+      "role": "test-input",
+      "sha256": "79e7b9b424fc7b8e946cf6baa5d6f62ee450e6fc9d5009d058161b79e62e0375",
+      "size": 2145,
+      "source": "src/aux/vim/tests/installed.wast"
     },
     {
       "path": "/root/test/diy-posix-test/bulk-operations.wast",
@@ -320,6 +351,13 @@
       "source": "src/system-tests/libc/environment-boundaries.wast"
     },
     {
+      "path": "/root/test/system/libc/file-sync.wast",
+      "role": "test-input",
+      "sha256": "b63ae2e1dd1808c79a4a092c592767ad190e96acaea8ac2c61aedf8db136dfda",
+      "size": 2382,
+      "source": "src/system-tests/libc/file-sync.wast"
+    },
+    {
       "path": "/root/test/system/libc/path-runtime.wast",
       "role": "test-input",
       "sha256": "773102be57337569b524d71242f2da4fb3cda3df6100aa1c46a425d01a556ce4",
@@ -360,6 +398,34 @@
       "sha256": "e4411ad05d20405b8d51b8f7be8a6519666f3c4d4cb6cae85f680860dd8a8296",
       "size": 3120,
       "source": "src/system-tests/libc/time-resource.wast"
+    },
+    {
+      "path": "/root/test/system/scheduling/cpu.wast",
+      "role": "test-input",
+      "sha256": "28ed2d4f6020eec3478c7100c164720f82367c08bcc1bca976282b2208a38c9c",
+      "size": 3822,
+      "source": "src/system-tests/scheduling/cpu.wast"
+    },
+    {
+      "path": "/root/test/system/scheduling/handler-long.wast",
+      "role": "test-input",
+      "sha256": "d9349261492fbbb8603de6d36e9a2879c62f556ca9f2d2aa8a9c22ab51964348",
+      "size": 797,
+      "source": "src/system-tests/scheduling/handler-long.wast"
+    },
+    {
+      "path": "/root/test/system/scheduling/handler-short.wast",
+      "role": "test-input",
+      "sha256": "8e8224d8a10e67bc9f0bf1df62663c313aef25384b626cd3bbee8ab705bbcd40",
+      "size": 483,
+      "source": "src/system-tests/scheduling/handler-short.wast"
+    },
+    {
+      "path": "/root/test/system/scheduling/timers.wast",
+      "role": "test-input",
+      "sha256": "87e3efdf05662800445faee906db15c16dd5180ac7f66f8d30b4addfc8caa8d1",
+      "size": 3710,
+      "source": "src/system-tests/scheduling/timers.wast"
     },
     {
       "path": "/root/test/wasm-spec/core/address.wast",
@@ -2215,7 +2281,7 @@
       "timeoutScope": "existing dashboard has no per-test deadline"
     }
   },
-  "selection_sha256": "4190fed742b3115c1f9831363222227a6523800e260fe2d97ac1ec9f2cf801e8",
+  "selection_sha256": "16f5ae2b13c3710667b0ddb3a694c86699c0639c42ff1c71b0a90f98f02bf62a",
   "sourceInputs": [
     {
       "hostOnly": true,
@@ -10451,6 +10517,33 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "aux/libc/search-tokenize.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 2049,
+        "sourcePath": "src/aux/libc/tests/search-tokenize.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/search-tokenize.wast",
+      "name": "search-tokenize.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/search-tokenize.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/search-tokenize.wast",
+        "sha256": "a63a989bd441afa154b7ba0266309a23e080aedce24de4d0f2677b6a2505862c",
+        "size": 2049
+      },
+      "spec_sha256": "fb6e9ef8c5bac51caf12f2ace97e85773c77eed63ad92234be85ac56f28ac2e9",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "aux/libc/stdio.wast",
         "mode": "wast-stream",
         "sourceBytes": 3765,
@@ -10470,6 +10563,87 @@
         "size": 3765
       },
       "spec_sha256": "8015f0818ad2540aaecff09b38caec5079f299ecd115f81c07a2715f03211dd3",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/termcap.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 1475,
+        "sourcePath": "src/aux/libc/tests/termcap.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/termcap.wast",
+      "name": "termcap.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/termcap.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/termcap.wast",
+        "sha256": "a421a69f5b5e14bbb60b4d76aad3668796611103c9ac0d9a547fccfa55918bcf",
+        "size": 1475
+      },
+      "spec_sha256": "f57dfddb85dd57bfd40608ddcfa4f9cab7bb7ada02554cb7c7d7f2ee8048d0ca",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/sleep/nanosleep.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 883,
+        "sourcePath": "src/aux/sleep/tests/nanosleep.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/sleep",
+      "id": "aux/sleep/nanosleep.wast",
+      "name": "nanosleep.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/sleep/nanosleep.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/sleep/tests/nanosleep.wast",
+        "sha256": "4f26ef5c1573c70f0e672fa57cc0b485510da7249330695ad4075a9a72b4a368",
+        "size": 883
+      },
+      "spec_sha256": "56671bb6b1e9e0c2881fffe95b23f0eeb6d58794d738f34844c7ca39ddb3d732",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/vim/installed.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 2145,
+        "sourcePath": "src/aux/vim/tests/installed.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/vim",
+      "id": "aux/vim/installed.wast",
+      "name": "installed.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/vim/installed.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/vim/tests/installed.wast",
+        "sha256": "79e7b9b424fc7b8e946cf6baa5d6f62ee450e6fc9d5009d058161b79e62e0375",
+        "size": 2145
+      },
+      "spec_sha256": "8e9814a12bd51d44f13052724c2b9959e3b4efc38bd717c51b9f0b64c89e821f",
       "suite": "aux",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
@@ -10667,6 +10841,33 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "system/libc/file-sync.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 2382,
+        "sourcePath": "src/system-tests/libc/file-sync.wast"
+      },
+      "expectFailure": false,
+      "group": "system/libc",
+      "id": "system/libc/file-sync.wast",
+      "name": "file-sync.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/libc/file-sync.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/libc/file-sync.wast",
+        "sha256": "b63ae2e1dd1808c79a4a092c592767ad190e96acaea8ac2c61aedf8db136dfda",
+        "size": 2382
+      },
+      "spec_sha256": "5eb8539d546a95239086b4b047e715628b138ea3c895409f183166555b736021",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "system/libc/path-runtime.wast",
         "mode": "wast-stream",
         "sourceBytes": 777,
@@ -10821,6 +11022,114 @@
         "size": 3120
       },
       "spec_sha256": "f8def3b7421e401d6f9dbfa1573827fc3a24e368141d7fb8894ecf5891a404eb",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/scheduling/cpu.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3822,
+        "sourcePath": "src/system-tests/scheduling/cpu.wast"
+      },
+      "expectFailure": false,
+      "group": "system/scheduling",
+      "id": "system/scheduling/cpu.wast",
+      "name": "cpu.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/scheduling/cpu.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/scheduling/cpu.wast",
+        "sha256": "28ed2d4f6020eec3478c7100c164720f82367c08bcc1bca976282b2208a38c9c",
+        "size": 3822
+      },
+      "spec_sha256": "294867a98e42bf100e58792e1ca2b9794b4278ad65ba51d61f7b237eea3393ec",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/scheduling/handler-long.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 797,
+        "sourcePath": "src/system-tests/scheduling/handler-long.wast"
+      },
+      "expectFailure": false,
+      "group": "system/scheduling",
+      "id": "system/scheduling/handler-long.wast",
+      "name": "handler-long.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/scheduling/handler-long.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/scheduling/handler-long.wast",
+        "sha256": "d9349261492fbbb8603de6d36e9a2879c62f556ca9f2d2aa8a9c22ab51964348",
+        "size": 797
+      },
+      "spec_sha256": "2d35ac91a8f27d2e825d6ac533e9533e08675dd5ad2e1e4cd8645185261a9418",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/scheduling/handler-short.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 483,
+        "sourcePath": "src/system-tests/scheduling/handler-short.wast"
+      },
+      "expectFailure": false,
+      "group": "system/scheduling",
+      "id": "system/scheduling/handler-short.wast",
+      "name": "handler-short.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/scheduling/handler-short.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/scheduling/handler-short.wast",
+        "sha256": "8e8224d8a10e67bc9f0bf1df62663c313aef25384b626cd3bbee8ab705bbcd40",
+        "size": 483
+      },
+      "spec_sha256": "c8e1cc659e7f50f9c6ca32fbefc7632adc61d3ee5046d0ddfdbbc96038bf314d",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/scheduling/timers.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3710,
+        "sourcePath": "src/system-tests/scheduling/timers.wast"
+      },
+      "expectFailure": false,
+      "group": "system/scheduling",
+      "id": "system/scheduling/timers.wast",
+      "name": "timers.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/scheduling/timers.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/scheduling/timers.wast",
+        "sha256": "87e3efdf05662800445faee906db15c16dd5180ac7f66f8d30b4addfc8caa8d1",
+        "size": 3710
+      },
+      "spec_sha256": "95e73d973646e103d06a925fb99bdd5161b90ad7aba65dc5c8184fd80be211ec",
       "suite": "system",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"

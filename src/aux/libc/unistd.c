@@ -47,6 +47,15 @@ i32 openat(i32 directory, const char *path, i32 flags, ...) {
       directory, path, c_length(path), flags, mode));
 }
 i32 close(i32 descriptor) { return env_result(waste_env_close(descriptor)); }
+extern i32 waste_kernel_fsync_v1(i32 descriptor)
+  __attribute__((import_module("waste_kernel"), import_name("fsync_v1")));
+extern i32 waste_kernel_ftruncate_v1(i32 descriptor, i64 length)
+  __attribute__((import_module("waste_kernel"), import_name("ftruncate_v1")));
+i32 fsync(i32 descriptor) { return waste_kernel_fsync_v1(descriptor); }
+i32 ftruncate(i32 descriptor, long length) {
+  i32 result = waste_kernel_ftruncate_v1(descriptor, (i64)length);
+  return result < 0 ? -1 : 0;
+}
 i32 chdir(const char *path) { return env_result(waste_kernel_chdir(path)); }
 char *getcwd(char *buffer, u32 capacity) {
   /* Keep the allocation in the calling image.  The host import only knows
@@ -105,6 +114,41 @@ i32 isatty(i32 fd){return waste_kernel_isatty_v1(fd);}
 __attribute__((import_module("env"), import_name("execve")))
 extern i32 waste_env_execve(const char *path, char *const *argv,
                             char *const *envp);
+
+extern char **environ;
+extern char *getenv(const char *name);
+i32 execvp(const char *file, char *const *argv) {
+  if (!file || !*file) { *__errno_location() = 2; return -1; }
+  for (const char *at = file; *at; at++)
+    if (*at == '/') return env_result(waste_env_execve(file, argv, environ));
+  const char *path = getenv("PATH");
+  if (!path) path = "/usr/bin:/bin";
+  u32 file_length = c_length(file);
+  int denied = 0;
+  do {
+    const char *end = path;
+    while (*end && *end != ':') end++;
+    size_t prefix = (size_t)(end - path);
+    if (prefix > (size_t)-1 - file_length - 2) {
+      *__errno_location() = 36; return -1;
+    }
+    char *candidate = malloc(prefix + file_length + 2);
+    if (!candidate) { *__errno_location() = 12; return -1; }
+    bytes_copy(candidate, path, prefix);
+    if (prefix) candidate[prefix++] = '/';
+    bytes_copy(candidate + prefix, file, file_length + 1);
+    env_result(waste_env_execve(candidate, argv, environ));
+    int saved_error = *__errno_location();
+    free(candidate);
+    if (saved_error == 13) denied = 1;
+    else if (saved_error != 2 && saved_error != 20) {
+      *__errno_location() = saved_error; return -1;
+    }
+    path = *end ? end + 1 : 0;
+  } while (path);
+  *__errno_location() = denied ? 13 : 2;
+  return -1;
+}
 
 static char tty_path[9]={'/','d','e','v','/','t','t','y',0};
 char *ttyname(i32 descriptor){return descriptor>=0&&descriptor<=2?tty_path:0;}

@@ -131,6 +131,7 @@ const genericMissingCommand = "waste-definitely-missing-command";
 const matrixCommands = [
   {tag: "TRUE", command: "/usr/bin/true", status: 0},
   {tag: "FALSE", command: "/usr/bin/false", status: 1},
+  {tag: "SLEEP", command: "/usr/bin/sleep 1", status: 0},
   {tag: "PWD", command: "/usr/bin/pwd", status: 0},
   {tag: "ECHO", command: "/usr/bin/echo MATRIX_ECHO_OUTPUT", status: 0},
   {tag: "PRINTF", command: "/usr/bin/printf 'MATRIX_PRINTF_OUTPUT\\n'", status: 0},
@@ -186,6 +187,8 @@ const coreutilsCatPath = path.join(stagingDir, "cat");
 const coreutilsWcPath = path.join(stagingDir, "wc");
 const coreutilsLsPath = path.join(stagingDir, "ls");
 const coreutilsDatePath = path.join(stagingDir, "date");
+const coreutilsSleepPath = path.join(stagingDir, "sleep");
+const coreutilsChmodPath = path.join(stagingDir, "chmod");
 const coreutilsTrueBytes = (coreutilsTrueProbe || coreutilsMatrixProbe) && hasAsset(coreutilsTruePath)
   ? readAsset(coreutilsTruePath) : null;
 const coreutilsFalseBytes = (coreutilsFalseProbe || coreutilsMatrixProbe) && hasAsset(coreutilsFalsePath)
@@ -210,6 +213,10 @@ const coreutilsLsBytes = (coreutilsLsProbe || coreutilsMatrixProbe || pipelinePr
   ? readAsset(coreutilsLsPath) : null;
 const coreutilsDateBytes = coreutilsMatrixProbe && hasAsset(coreutilsDatePath)
   ? readAsset(coreutilsDatePath) : null;
+const coreutilsSleepBytes = coreutilsMatrixProbe && hasAsset(coreutilsSleepPath)
+  ? readAsset(coreutilsSleepPath) : null;
+const coreutilsChmodBytes = coreutilsMatrixProbe && hasAsset(coreutilsChmodPath)
+  ? readAsset(coreutilsChmodPath) : null;
 const asArrayBuffer = bytes => bytes && bytes.buffer.slice(
   bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 const mountedVfs = fullPackageProbe || sharedLibraryProbe;
@@ -292,6 +299,8 @@ let watStatusRequested = false;
 let watAfterSeen = false;
 let wastRepeatStage = 0;
 let matrixStep = 0;
+let matrixSleepStartedAt = 0;
+let matrixSleepElapsedMs = 0;
 let pipelineStep = 0;
 let pipelineCountSeen = false;
 let pipelineRedirectDone = false;
@@ -359,7 +368,7 @@ const self = {
              message.paths?.includes("/usr/share/waste/wc-fixture.txt")) ||
             (coreutilsLsProbe && message.paths?.includes("/usr/bin/ls")) ||
             (coreutilsMatrixProbe &&
-             ["true", "false", "pwd", "echo", "printf", "basename",
+             ["true", "false", "sleep", "chmod", "pwd", "echo", "printf", "basename",
               "dirname", "cat", "wc", "ls", "date"].every(name =>
                 message.paths?.includes(`/usr/bin/${name}`)) &&
              message.paths?.includes("/bin/wat") &&
@@ -376,6 +385,10 @@ const self = {
     } else if (message.type === "output") {
       output += message.text;
       process.stdout.write(message.text);
+      if (coreutilsMatrixProbe && matrixSleepStartedAt && !matrixSleepElapsedMs &&
+          output.includes("__C_ENGINE_MATRIX_SLEEP_STATUS_0__")) {
+        matrixSleepElapsedMs = performance.now() - matrixSleepStartedAt;
+      }
       if (readlineEchoProbe && !readlineEnterSent &&
           output.includes("echo __C_ENGINE_READLINE_RESULT__")) {
         readlineEchoVisibleBeforeEnter = true;
@@ -718,6 +731,8 @@ const self = {
         const messageHasPrompt = /# /.test(message.text);
         if (commandSent && messageHasPrompt && matrixStep < matrixSteps.length) {
           const command = matrixSteps[matrixStep++];
+          if (command === "/usr/bin/sleep 1\n")
+            matrixSleepStartedAt = performance.now();
           if (command === "exit\n") exitSent = true;
           setTimeout(() => self.onmessage({data: {type: "input",
             bytes: Array.from(new TextEncoder().encode(command))}}), 10);
@@ -1183,6 +1198,14 @@ self.onmessage({data: {
     path: "/usr/bin/date",
     bytes: asArrayBuffer(coreutilsDateBytes),
     mode: 0o755,
+  }] : []), ...(coreutilsSleepBytes ? [{
+    path: "/usr/bin/sleep",
+    bytes: asArrayBuffer(coreutilsSleepBytes),
+    mode: 0o755,
+  }] : []), ...(coreutilsChmodBytes ? [{
+    path: "/usr/bin/chmod",
+    bytes: asArrayBuffer(coreutilsChmodBytes),
+    mode: 0o755,
   }] : []), ...(coreutilsWcBytes ? [{
     path: "/usr/bin/wc",
     bytes: asArrayBuffer(coreutilsWcBytes),
@@ -1259,14 +1282,15 @@ Promise.race([completion, timeout]).then(result => {
     .replace(/\r/g, "");
   const matrixStatusesPass = matrixCommands.every(({tag, status}) =>
     output.includes(`__C_ENGINE_MATRIX_${tag}_STATUS_${status}__`));
-  const matrixOutputsPass = normalizedOutput.includes("\n/root\n") &&
+  const matrixOutputsPass = matrixSleepElapsedMs >= 900 &&
+    normalizedOutput.includes("\n/root\n") &&
     normalizedOutput.includes("\nMATRIX_ECHO_OUTPUT\n") &&
     normalizedOutput.includes("\nMATRIX_PRINTF_OUTPUT\n") &&
     normalizedOutput.includes("\nMATRIX_BASENAME_OUTPUT\n") &&
     normalizedOutput.includes("\n/alpha/beta\n") &&
     normalizedOutput.includes("\nMATRIX_CAT_OUTPUT\n") &&
     /\n\s*2\s+3\s+14\s+\/tmp\/matrix-wc\.txt\n/.test(normalizedOutput) &&
-    ["true", "false", "pwd", "echo", "printf", "basename", "dirname",
+    ["true", "false", "sleep", "chmod", "pwd", "echo", "printf", "basename", "dirname",
      "cat", "wc", "ls", "date", "wat", "wast"].every(name =>
       normalizedOutput.includes(`\n${name}\n`)) &&
       normalizedOutput.includes(`\n${new Date().getUTCFullYear()}\n`);

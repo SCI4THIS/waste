@@ -781,6 +781,18 @@ static exec_status guest_posix_dup2(void *data, const wasm_value *args,
     return guest_posix_result(result, results, result_count);
 }
 
+static exec_status guest_posix_fsync(void *data, const wasm_value *args,
+                                      int arg_count, wasm_value *results,
+                                      int *result_count, exec_error *error,
+                                      const waste_exec_engine *caller) {
+    native_store *store = data;
+    (void)error;
+    int status = store && arg_count == 1 ?
+        posix_kernel_fsync(store->kernel, args[0].i32) : -POSIX_EINVAL;
+    if (status < 0) guest_posix_set_errno(store, caller, -status);
+    return guest_posix_result(status < 0 ? -1 : 0, results, result_count);
+}
+
 static exec_status guest_posix_ftruncate(void *data, const wasm_value *args,
                                           int arg_count, wasm_value *results,
                                           int *result_count, exec_error *error,
@@ -926,6 +938,12 @@ retry_read:
     } else if (store->kernel) {
         read_result = posix_kernel_read(store->kernel, args[0].i32,
                                         io_buffer, (int)count);
+        if (read_result == -POSIX_EAGAIN && store->kernel->wait.active) {
+            free(buffer);
+            error->status = EXEC_YIELD;
+            error->yield_reason = EXEC_YIELD_READ;
+            return EXEC_YIELD;
+        }
     } else {
         /* Noninteractive WAST sandboxes retain the narrow host capability. */
         read_result = guest_platform_read(store, args[0].i32, io_buffer, count);
@@ -1012,6 +1030,11 @@ static exec_status guest_posix_write(void *data, const wasm_value *args,
     int32_t written = guest_posix_write_bytes(store, args[0].i32,
                                              count ? buffer : &empty_buffer, count);
     free(buffer);
+    if (written == -POSIX_EAGAIN && store->kernel && store->kernel->wait.active) {
+        error->status = EXEC_YIELD;
+        error->yield_reason = EXEC_YIELD_SELECT;
+        return EXEC_YIELD;
+    }
     return guest_posix_result(written, results, result_count);
 }
 
@@ -2070,6 +2093,23 @@ static exec_status guest_posix_waitpid(void *data, const wasm_value *args,
     int status = 0;
     int waited = native_store_wait_process(store, args[0].i32, args[2].i32,
                                            &status);
+    if (waited == -POSIX_EAGAIN && !(args[2].i32 & POSIX_WNOHANG)) {
+        if (posix_kernel_signal_interrupt(store->kernel)) {
+            int restart = 0;
+            exec_status delivered = guest_posix_deliver_signal(store, caller, &restart, error);
+            if (delivered != EXEC_OK) return delivered;
+            if (!restart) {
+                guest_posix_set_errno(store, caller, POSIX_EINTR);
+                return guest_posix_result(-1, results, result_count);
+            }
+        }
+        native_process_capsule *capsule = native_store_active_capsule(store);
+        capsule->wait_pid = args[0].i32;
+        error->status = EXEC_YIELD;
+        error->yield_reason = EXEC_YIELD_WAITPID;
+        return EXEC_YIELD;
+    }
+    if (waited == 0) return guest_posix_result(0, results, result_count);
     if (waited < 0) {
         if (waited == -POSIX_ECHILD && args[0].i32 == 0 &&
             store->last_wait_pid > 0) {
@@ -2090,7 +2130,7 @@ static exec_status guest_posix_waitpid(void *data, const wasm_value *args,
     status_bytes[1] = (uint8_t)(status >> 8);
     status_bytes[2] = (uint8_t)(status >> 16);
     status_bytes[3] = (uint8_t)(status >> 24);
-    if (!guest_posix_write_guest(memory, (uint32_t)args[1].i32,
+    if (args[1].i32 && !guest_posix_write_guest(memory, (uint32_t)args[1].i32,
                                   status_bytes, sizeof(status_bytes)))
         return guest_posix_result(-POSIX_EFAULT, results, result_count);
     return guest_posix_result(waited, results, result_count);
@@ -2922,6 +2962,8 @@ static exec_host_func guest_posix_function(const char *module,
     if (strcmp(module, "waste_kernel") == 0) {
         if (strcmp(name, "startup_v1") == 0) return guest_posix_startup_v1;
         if (strcmp(name, "open_v1") == 0) return guest_posix_open;
+        if (strcmp(name, "fsync_v1") == 0) return guest_posix_fsync;
+        if (strcmp(name, "ftruncate_v1") == 0) return guest_posix_ftruncate;
         if (strcmp(name, "openat_v1") == 0) return guest_posix_openat_v1;
         if (strcmp(name, "fstatat_v1") == 0) return guest_posix_fstatat_v1;
         if (strcmp(name, "realtime_v1") == 0) return guest_posix_realtime_v1;
@@ -2960,6 +3002,7 @@ static exec_host_func guest_posix_function(const char *module,
     if (strcmp(name, "shm_open") == 0) return guest_posix_shm_open;
     if (strcmp(name, "shm_unlink") == 0) return guest_posix_shm_unlink;
     if (strcmp(name, "close") == 0) return guest_posix_close;
+    if (strcmp(name, "fsync") == 0) return guest_posix_fsync;
     if (strcmp(name, "read") == 0) return guest_posix_read;
     if (strcmp(name, "write") == 0) return guest_posix_write;
     if (strcmp(name, "getcwd") == 0) return guest_posix_getcwd;

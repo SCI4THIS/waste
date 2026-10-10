@@ -1,0 +1,70 @@
+# Cross-build answers for Vim against the wasm32 guest and shared libc.
+# Mirrors src/aux/bash/config.site; adds vim-specific vi_cv/vim_cv keys.
+ac_cv_c_bigendian=no
+ac_cv_header_stdc=yes
+ac_cv_func_alloca_works=yes
+ac_cv_func_malloc_0_nonnull=yes
+ac_cv_func_realloc_0_nonnull=yes
+ac_cv_func_sigaction=yes
+ac_cv_func_sigprocmask=yes
+# No utime/utimes provider; set_file_time becomes a no-op (acceptable).
+ac_cv_func_utime=no
+ac_cv_func_utimes=no
+ac_cv_header_utime_h=no
+# struct sigaltstack and SA_ONSTACK aren't exposed by the SDK; disable the
+# alternate-signal-stack path in os_unix.c even though libc exports the symbol.
+ac_cv_func_sigaltstack=no
+ac_cv_func_sigstack=no
+ac_cv_header_sys_wait_h=yes
+ac_cv_func_fork=yes
+ac_cv_func_waitpid=yes
+ac_cv_func_dup2=yes
+ac_cv_func_getpgrp=yes
+ac_cv_func_setpgid=yes
+ac_cv_func_setsid=no
+# VFS writes commit synchronously; descriptor fsync is supported, while no
+# persistent mount or system-wide sync capability is exposed.
+ac_cv_func_fsync=yes
+ac_cv_func_sync=no
+ac_cv_func_tcsetpgrp=yes
+ac_cv_func_rename=yes
+ac_cv_func_dlopen=no
+ac_cv_func_clock_gettime=no
+ac_cv_func_arc4random=no
+ac_cv_func_arc4random_uniform=no
+ac_cv_func_mmap=no
+ac_cv_func_pselect=no
+ac_cv_func_poll=no
+# Use libc's resumable pselect-backed sleep rather than an unresolved usleep.
+ac_cv_func_nanosleep=yes
+ac_cv_func_putenv=no
+ac_cv_func_gethostbyname=no
+ac_cv_func_getpeername=no
+ac_cv_func_getrusage=no
+ac_cv_func_getservent=no
+ac_cv_func_imaxdiv=no
+# WASTE's SDK marks symlink unavailable; vim's readlink block also calls symlink,
+# so pretend readlink is absent to skip the whole HAVE_READLINK path.
+ac_cv_func_readlink=no
+# mkdtemp is declared only in the vim-side include; libc's temp-file support is
+# absent, so disable to avoid the pointer/int mismatch warning in fileio.c.
+ac_cv_func_mkdtemp=no
+# Pseudoterminal allocation isn't exposed to guests.
+ac_cv_func_getpseudotty=no
+# Vim-specific cross-compilation answers.
+vim_cv_toupper_broken=no
+vim_cv_terminfo=no
+vim_cv_tgetent=zero
+vim_cv_getcwd_broken=no
+vim_cv_stat_ignores_slash=no
+vim_cv_memmove_handles_overlap=yes
+vim_cv_bcopy_handles_overlap=yes
+vim_cv_memcpy_handles_overlap=no
+vim_cv_timer_create=no
+vim_cv_timer_create_with_lrt=no
+vim_cv_timer_create_works=no
+vim_cv_ipv4_networking=no
+vim_cv_ipv6_networking=no
+vim_cv_uname_output=Linux
+vim_cv_uname_r_output=6.0.0
+vim_cv_uname_m_output=wasm32

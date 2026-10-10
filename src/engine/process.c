@@ -1034,6 +1034,7 @@ int native_process_capsule_clone(native_process_capsule *destination,
         }
     }
     destination->root_func_idx = source->root_func_idx;
+    destination->is_application = source->is_application;
     destination->root_arg_count = source->root_arg_count;
     for (int i = 0; i < source->root_arg_count && i < WAST_MAX_ARGS; i++)
         destination->root_args[i] = source->root_args[i];
@@ -1280,6 +1281,7 @@ int native_store_commit_process_image(native_store *store,
     posix_kernel_signal_exec(process->kernel);
     release_image(process->capsule.image);
     process->capsule.image = image;
+    process->capsule.is_application = 1;
     process->capsule.engine = image->engine;
     process->capsule.engine_source = NULL;
     process->capsule.root_func_idx = image->entry_func;
@@ -1446,6 +1448,7 @@ int native_store_clone_process_graph(native_store *store, int parent_pid,
     bindings[0].clone = child->capsule.engine;
     uint32_t used = 1;
     for (int i = 0; i < store->module_count; i++) {
+        if (store->modules[i].owner_pid && store->modules[i].owner_pid != parent_pid) continue;
         waste_exec_engine *canonical = store->modules[i].engine;
         waste_exec_engine *source = native_process_capsule_resolve_engine(
             &parent->capsule, canonical);
@@ -1506,6 +1509,12 @@ int native_store_clone_process_graph(native_store *store, int parent_pid,
     return 0;
 }
 
+static void native_process_notify_exit(native_store *store, native_process *process) {
+    native_process *parent = find_process(store, process->ppid);
+    if (parent && !parent->zombie)
+        (void)posix_kernel_signal_raise(parent->kernel, 17); /* SIGCHLD */
+}
+
 int native_store_exit_process(native_store *store, int status) {
     native_process *process = active_process(store);
     if (!process) return -POSIX_EINVAL;
@@ -1519,6 +1528,7 @@ int native_store_exit_process(native_store *store, int status) {
      * and readers can observe EOF.  The kernel stays alive for path-node
      * merging at waitpid time; only FDs are closed. */
     posix_kernel_close_all_fds(process->kernel);
+    native_process_notify_exit(store, process);
     return 0;
 }
 
@@ -1532,13 +1542,14 @@ int native_store_signal_process(native_store *store, int pid, int signal) {
                                              &disposition) != 0 ||
         disposition != POSIX_SIGNAL_DEFAULT ||
         posix_kernel_signal_default_pending(process->kernel) != signal ||
-        (pid == store->active_pid && process->capsule.image))
+        (pid == store->active_pid && process->capsule.is_application))
         return 0;
     process->exit_status = signal & 0x7f;
     process->zombie = 1;
     process->capsule.state = NATIVE_PROCESS_EXITED;
     process->capsule.pending_transition = NATIVE_PROCESS_TRANSITION_EXIT;
     posix_kernel_close_all_fds(process->kernel);
+    native_process_notify_exit(store, process);
     return 0;
 }
 
@@ -1546,7 +1557,7 @@ int native_store_default_signal(void *opaque) {
     native_store *store = opaque;
     native_process *process = active_process(store);
     /* Language-only WAST sandboxes retain their raw syscall probe semantics. */
-    return process && process->capsule.image ?
+    return process && process->capsule.is_application ?
         posix_kernel_signal_default_pending(process->kernel) : 0;
 }
 
@@ -1560,6 +1571,7 @@ int native_store_terminate_process(native_store *store, int signal) {
     posix_kernel_cancel_wait(process->kernel);
     posix_kernel_signal_clear(process->kernel, signal);
     posix_kernel_close_all_fds(process->kernel);
+    native_process_notify_exit(store, process);
     return 0;
 }
 

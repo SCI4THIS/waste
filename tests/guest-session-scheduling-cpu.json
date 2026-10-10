@@ -1,0 +1,11 @@
+{
+  "fixture": "src/system-tests/scheduling/cpu.wast",
+  "events": [],
+  "assertions": 2,
+  "exited": false,
+  "exitStatus": 0,
+  "processes": 2,
+  "output": "",
+  "pumpQuantumMs": 5,
+  "drainScheduling": true
+}

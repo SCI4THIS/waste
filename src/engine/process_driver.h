@@ -3,9 +3,8 @@
 
 #include "store.h"
 
-/* A bounded child-first selector, not a concurrent process/thread scheduler.
- * All mutable state belongs to one runtime session; kernels/capsules own the
- * actual process graph. External waits are returned to the runtime unchanged. */
+/* Shared round-robin process scheduler. Capsules own evaluator state and
+ * kernel waits; runtimes service external waits only when no process can run. */
 typedef struct {
     int pid;
     waste_exec_engine *engine;
@@ -17,7 +16,8 @@ typedef struct {
 
 typedef struct {
     exec_continuation continuation;
-    int initialized, fork_active, parent_restored, image_active;
+    int initialized, image_active;
+    int invocation_pid;
     waste_exec_engine *parent_engine, *active_engine;
     uint32_t parent_func_idx, active_func_idx;
     wasm_value parent_args[WAST_MAX_ARGS], active_args[WAST_MAX_ARGS];
@@ -27,6 +27,8 @@ typedef struct {
      * pointer, browser import, host syscall or mutable global lives here. */
     native_process_handler_step handler_step;
     void (*handler_reset)(void *);
+    void *(*handler_create)(void *);
+    void (*handler_destroy)(void *);
     void *handler_context;
     exec_yield_reason handler_wait_reason;
     void (*trace)(void *, const char *);
@@ -60,5 +62,8 @@ exec_status native_process_driver_invoke(native_process_driver *driver,
     native_store *store, waste_exec_engine *engine, uint32_t function,
     const wasm_value *args, int arg_count, wasm_value *results,
     int *result_count, exec_error *error);
+/* Earliest deadline across all blocked processes, relative to their guest
+ * monotonic clocks. Returns zero when there is no timer. */
+int native_process_driver_wait_timeout(native_store *store, uint64_t *nanoseconds);
 
 #endif

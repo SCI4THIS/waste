@@ -33,6 +33,22 @@ char *strstr(const char*h,const char*n){if(!*n)return(char*)h;u32 z=c_length(n);
 char *strcasestr(const char*h,const char*n){if(!*n)return(char*)h;u32 z=c_length(n);for(;*h;h++)if(!strncasecmp(h,n,z))return(char*)h;return 0;}
 char *strdup(const char*s){u32 n=c_length(s)+1;char*d=malloc(n);if(d)bytes_copy(d,s,n);return d;}
 
+char *strtok_r(char *text, const char *delimiters, char **saved) {
+  if (!text) text = *saved;
+  if (!text) return 0;
+  text += strspn(text, delimiters);
+  if (!*text) { *saved = text; return 0; }
+  char *end = text + strcspn(text, delimiters);
+  if (*end) *end++ = 0;
+  *saved = end;
+  return text;
+}
+
+char *strtok(char *text, const char *delimiters) {
+  static char *saved;
+  return strtok_r(text, delimiters, &saved);
+}
+
 /* ---- Error/signal name formatting ---- */
 
 char error_text[32];

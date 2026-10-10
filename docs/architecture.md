@@ -120,7 +120,7 @@ explicit installers and ABI tests also validate their candidate modules.
 No custom filesystem bundle is generated.
 The native option
 establishes mount parity; the private `guest-session` companion adds shared
-guest imports and bounded child-first fork/exec terminal sessions through the
+guest imports and concurrent fork/exec terminal sessions through the
 shared process driver. Both runtimes use the shared WAST child handler, retaining
 assertions across READ/SELECT/HOST_IO/PUMP resumes and mapping failed child assertions to an
 exit status without stopping the parent shell. See `native-guest-session.md`.
@@ -609,27 +609,36 @@ child begins with only the calling thread.  Page-granular copy-on-write may
 replace eager copying behind one memory-clone boundary without changing these
 semantics.
 
-The C browser runtime owns the bounded child-first
-fork/failed-`execve`/exit/`waitpid` continuation used by the Bash
-command-not-found path, including evaluator snapshots and store checkpoints.
-It still does not provide general concurrent process or guest-thread
-scheduling; remaining C capabilities belong to the active runtime plans.
+Both C runtimes use the shared engine process scheduler. Fork creates a
+private evaluator/provider graph and immediately makes both parent and child
+runnable. Round-robin selection rotates on opcode time slices and blocking
+imports; READ/SELECT readiness, absolute timer deadlines, and child exit wake
+only the affected processes. Blocking waitpid retries its original import
+when the requested child exits. Runtimes service external input and the earliest
+session deadline only when the engine has no runnable process. The current single host upload/download
+and test-request channel remains serialized.
+
+Cloned engine bindings have independent ownership and compose across fork
+generations so linked calls and funcrefs retain process-local memory identity.
+WAST command children own their command contexts and module namespaces; one
+handler finishing cannot remove another handler's definitions. Concurrent
+background jobs and CPU-bound processes share execution fairly on one runtime
+worker. This scheduling layer is the foundation for shared-memory guest threads
+and execution on multiple host cores; pthread creation/join and simultaneous
+host-core execution still require implementation.
 Acceptance uses C native/browser contracts.
 
-Two POSIX scenarios remain explicit profile gaps and have no C regression
-fixture:
+The scheduling regressions in `src/system-tests/scheduling` cover overlapping
+timers, CPU time slices, pipe backpressure, concurrent WAST command namespaces,
+and process-group termination. The group-kill probe creates a child, places it
+in its own process group, then sends SIGTERM and verifies wait status 15 in
+both runtimes.
 
-- **Stopped-then-continued wait.** A parent that `waitpid`s a child through
-  SIGSTOP/SIGCONT to final exit (expecting composed status 5759) does not yet
-  reproduce the full legacy sequence under child-first scheduling.
-- **Foreground-job group-kill.** A parent that creates a child, places it in
-  its own process group, sleeps briefly, and sends SIGTERM to the group
-  (expecting wait status 15) races with the child's exit before group
-  configuration completes.
-
-Both scenarios are known limitations of the current scheduler/signal
-interleaving; the APIs they exercise (`waitpid`, `kill`, `setpgid`) have
-separate per-API coverage.
+Stopped-then-continued wait remains an explicit profile gap: a parent that
+`waitpid`s a child through SIGSTOP/SIGCONT to final exit (expecting composed
+status 5759) does not yet reproduce the full legacy sequence. The individual
+`waitpid`, `kill`, and `setpgid` APIs have separate coverage, but the stopped
+process lifecycle still needs implementation.
 
 ### Engine-owned virtual memory
 

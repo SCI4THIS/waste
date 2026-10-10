@@ -1,0 +1,22 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "executionLimits": {
+    "pumpQuantumMs": 1,
+    "timeoutMs": 60000
+  },
+  "events": [
+    {
+      "after": "# ",
+      "text": "status=0; for t in /root/test/aux/libc/*.wast /root/test/system/libc/*.wast; do /bin/wast --verbose \"$t\" || status=1; done; printf \"__PACKAGE_STATUS__%s\\n\" \"$status\"\n"
+    },
+    {
+      "after": "__PACKAGE_STATUS__0\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__PACKAGE_STATUS__0\r\n"
+  ],
+  "assertions": 60,
+  "exitStatus": 0
+}

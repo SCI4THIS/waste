@@ -1,0 +1,11 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "events": [
+    {"after": "# ", "resize": [121, 41]},
+    {"text": "printf 'BROWSER_RESIZE_%s_%s\\n' \"$LINES\" \"$COLUMNS\"\n"},
+    {"after": "BROWSER_RESIZE_41_121\r\n", "text": "exit 0\n"}
+  ],
+  "contains": ["BROWSER_RESIZE_41_121\r\n"],
+  "assertions": 1,
+  "exitStatus": 0
+}

@@ -449,6 +449,7 @@ int posix_kernel_file_write_at(posix_kernel *kernel, int fd, uint64_t offset,
                                const void *buf, size_t count);
 int posix_kernel_file_size(posix_kernel *kernel, int fd, uint64_t *size_out);
 int posix_kernel_ftruncate(posix_kernel *kernel, int fd, uint64_t size);
+int posix_kernel_fsync(posix_kernel *kernel, int fd);
 int posix_kernel_file_identity(posix_kernel *kernel, int fd,
                                uint64_t *object_id_out,
                                int *writable_out);

@@ -732,6 +732,9 @@ posix_kernel *posix_kernel_clone(const posix_kernel *source) {
     }
     memset(clone->fds, 0, sizeof(clone->fds));
     clone->wait.active = 0;
+    /* Dispositions and masks are inherited; queued process signals are not. */
+    memset(&clone->pending_signals, 0, sizeof(clone->pending_signals));
+    clone->delivered_signal = 0;
     const posix_ofd *regular_sources[POSIX_KERNEL_FD_MAX] = {0};
     posix_ofd *regular_clones[POSIX_KERNEL_FD_MAX] = {0};
     int regular_count = 0;
@@ -1087,7 +1090,8 @@ int posix_kernel_signal_default_pending(posix_kernel *kernel) {
     for (int signal = 1; signal <= POSIX_SIGNAL_MAX; signal++)
         if (signal_bit_test(&kernel->pending_signals, signal) &&
             !signal_bit_test(&kernel->signal_mask, signal) &&
-            kernel->signal_disposition[signal] == POSIX_SIGNAL_DEFAULT)
+            kernel->signal_disposition[signal] == POSIX_SIGNAL_DEFAULT &&
+            signal != 17 && signal != 18 && signal != 23 && signal != POSIX_SIGWINCH)
             return signal;
     return 0;
 }
@@ -1932,6 +1936,17 @@ int posix_kernel_file_identity(posix_kernel *kernel, int fd,
     return 0;
 }
 
+int posix_kernel_fsync(posix_kernel *kernel, int fd) {
+    if (!kernel || !fd_valid(fd) || !kernel->fds[fd].ofd)
+        return -POSIX_EBADF;
+    posix_ofd *ofd = kernel->fds[fd].ofd;
+    if (ofd->kind != POSIX_OFD_REGULAR && ofd->kind != POSIX_OFD_DIRECTORY)
+        return -POSIX_EINVAL;
+    /* Writes and namespace updates commit synchronously to this in-memory
+     * mount. A future persistent mount must provide its own flush operation. */
+    return 0;
+}
+
 int posix_kernel_ftruncate(posix_kernel *kernel, int fd, uint64_t size) {
     posix_ofd *ofd;
     uint8_t *resized;
@@ -2024,7 +2039,16 @@ int posix_kernel_write(posix_kernel *kernel, int fd,
         posix_pipe *p = ofd->pipe;
         if (p->readers == 0) return -POSIX_EPIPE;
         int avail = p->capacity - p->length;
-        if (avail == 0) return -POSIX_EAGAIN;
+        if (avail == 0) {
+            if (posix_kernel_signal_interrupt(kernel)) return -POSIX_EINTR;
+            posix_fd_set writers, errors;
+            posix_fd_zero(&writers);
+            posix_fd_zero(&errors);
+            posix_fd_set_bit(fd, &writers);
+            posix_fd_set_bit(fd, &errors);
+            (void)posix_kernel_select(kernel, fd + 1, NULL, &writers, &errors, NULL);
+            return -POSIX_EAGAIN;
+        }
         int n = count < avail ? count : avail;
         memcpy(p->buffer + p->length, buf, n);
         p->length += n;

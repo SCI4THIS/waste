@@ -686,9 +686,11 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
         self.postMessage({type: "host-upload-request", destPath: path, verbose: vb});
       }
     }
-    // SELECT can become ready solely because its kernel deadline expires.
-    // Re-enter to let the kernel decide; READ still waits for an outside event.
-    do { await waitForIO(waitKind === 2 ? 10 : 0); }
+    // Another process's deadline can expire while the foreground shell reads.
+    // The C scheduler publishes the earliest timer across the whole session.
+    const waitTimeoutMs = (waitKind === 1 || waitKind === 2) && exp.waste_wast_wait_timeout_ms ?
+      exp.waste_wast_wait_timeout_ms() : waitKind === 2 ? 10 : 0;
+    do { await waitForIO(waitTimeoutMs); }
     while ((guestSuitePending || renderTestPending) && !terminated);
     if (terminated) break;
     yielded = exp.waste_wast_resume();

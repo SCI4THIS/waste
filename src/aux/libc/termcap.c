@@ -6,6 +6,11 @@
 
 #include "include/helper.h"
 
+/* Traditional termcap data symbols, resolved through the process GOT. */
+char *BC = "\b", *UP = "\033[A";
+char PC;
+short ospeed;
+
 /* --- String capabilities (tgetstr) --- */
 
 typedef struct { char id[4]; const char *value; } tc_string;
@@ -40,10 +45,11 @@ static const tc_string string_caps[] = {
     /* Scroll */
     {"sf", "\n"},               /* scroll forward                      */
 
-    /* Insert/exit insert mode — VT100 has no separate insert mode;
-       readline falls back to overwrite+redraw when these are empty. */
-    {"im", ""},
-    {"ei", ""},
+    /* Readline tests capability presence, including an empty string, when
+       choosing insertion over a full redraw. Supply the ANSI insert mode
+       implemented by the browser model and native terminals. */
+    {"im", "\033[4h"},
+    {"ei", "\033[4l"},
 
     /* Keypad */
     {"ks", ""},                 /* keypad transmit start               */

@@ -68,6 +68,8 @@ i64 strtoimax(const char*s,char**end,i32 base){i32 neg;u64 v=parse_unsigned(s,en
 u64 strtoumax(const char*s,char**end,i32 base){i32 neg;u64 v=parse_unsigned(s,end,base,&neg);return neg?0-v:v;}
 i32 atoi(const char*s){return strtol(s,0,10);}
 i32 abs(i32 value){return value<0?-value:value;}
+long atol(const char *text) { return strtol(text, 0, 10); }
+long labs(long value) { return value < 0 ? -value : value; }
 
 static double power10(i32 exponent){double value=1.0;if(exponent>0)while(exponent--)value*=10.0;else while(exponent++)value/=10.0;return value;}
 double strtod(const char*s,char**end){while(*s==' '||*s=='\t')s++;i32 neg=0;if(*s=='+'||*s=='-'){neg=*s=='-';s++;}const char*start=s;double value=0;while(*s>='0'&&*s<='9')value=value*10+(*s++-'0');if(*s=='.'){s++;double place=.1;while(*s>='0'&&*s<='9'){value+=(*s++-'0')*place;place*=.1;}}if(*s=='e'||*s=='E'){const char*mark=s++;i32 eneg=0;if(*s=='+'||*s=='-'){eneg=*s=='-';s++;}i32 e=0,any=0;while(*s>='0'&&*s<='9'){any=1;e=e*10+(*s++-'0');}if(any)value*=power10(eneg?-e:e);else s=mark;}if(end)*end=(char*)(s==start?start:s);return neg?-value:value;}
@@ -113,6 +115,21 @@ void sh_free(void*p,const char*file,i32 line){(void)file;(void)line;free(p);}
 
 static void swap_bytes(unsigned char*a,unsigned char*b,u32 n){while(n--){unsigned char t=*a;*a++=*b;*b++=t;}}
 void qsort(void*base,u32 count,u32 size,i32(*compare)(const void*,const void*)){unsigned char*p=base;if(!size)return;for(u32 i=1;i<count;i++)for(u32 j=i;j&&compare(p+(j-1)*size,p+j*size)>0;j--)swap_bytes(p+(j-1)*size,p+j*size,size);}
+
+void *bsearch(const void *key, const void *base, size_t count, size_t size,
+              int (*compare)(const void *, const void *)) {
+  const unsigned char *bytes = base;
+  if (!size || count > (size_t)-1 / size) return 0;
+  while (count) {
+    size_t middle = count / 2;
+    const unsigned char *candidate = bytes + middle * size;
+    int order = compare(key, candidate);
+    if (!order) return (void *)candidate;
+    if (order < 0) count = middle;
+    else { bytes = candidate + size; count -= middle + 1; }
+  }
+  return 0;
+}
 
 /* pthread stubs — single-threaded environment. */
 i32 pthread_mutex_init(void*m,const void*a){(void)m;(void)a;return 0;}

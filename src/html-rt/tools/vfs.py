@@ -32,8 +32,8 @@ BLESSED_SYMLINKS = {
     "/root/test/wasm-spec/core": "submodules/wasm-spec/test/core",
     "/root/test/wasm-spec/custom": "submodules/wasm-spec/test/custom",
 }
-COREUTILS = "true false pwd echo printf basename dirname cat chmod wc ls date".split()
-COMMANDS = COREUTILS + ["bash", "rogue", "ldd", "upload", "download", "waste-probe"]
+COREUTILS = "true false pwd echo printf basename dirname cat chmod wc ls date sleep".split()
+COMMANDS = COREUTILS + ["bash", "vim", "rogue", "ldd", "upload", "download", "waste-probe"]
 OPTIONAL_COMMANDS = ["waste-test"]
 BIN_COMMANDS = {"waste-probe", "waste-test"}
 COMPONENTS = COMMANDS + OPTIONAL_COMMANDS + ["libncurses", "libc", "launch", "app"]

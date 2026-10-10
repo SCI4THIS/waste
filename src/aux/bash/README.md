@@ -26,9 +26,12 @@ including `PS1='# '`. Shared libc and stdio are initialized by the guest CRT.
 `install-bash-launch` refreshes the launcher independently; HTML packaging
 reads the installed tree without compiling or reinstalling Bash.
 
-The current child-first process driver rejects a fork by an already forked
-child. Nested Bash is currently suitable for noninteractive builtin-only
-commands; the root shell can run external commands, pipelines and substitutions.
+The shared process scheduler supports nested forks within the kernel's
+process limit. `bash FILE` can run external commands, pipelines, substitutions
+and `/bin/wast` commands, then return its script exit status to the calling
+shell. Background jobs run concurrently: blocked sleeps let sibling processes
+and the parent run, while CPU-bound jobs rotate on interpreter time slices.
+Foreground input and the earliest background deadline both wake the session.
 
 `cc.sh` uses the mounted guest SDK and package-private headers, without host
 header fallback. Configure function answers are derived from the actual shared
@@ -68,7 +71,8 @@ python3 tests/guest-session-check.py --native build/cli-rt/private/guest-session
 
 The scenario explicitly invokes `/usr/bin/bash` and checks version, arguments,
 arrays/functions/arithmetic, exit and failure statuses, file I/O, pipelines,
-substitution, background wait and delayed interactive input. It also checks
+substitution, script arguments and exit status, nested WAST commands,
+background subshell sleeps, background wait and delayed interactive input. It also checks
 `ldd` reports the shared libc dependency.
 
 Bash is GPL-licensed; retain upstream `COPYING`. Before distributing a binary,

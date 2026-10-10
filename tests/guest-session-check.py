@@ -50,7 +50,13 @@ def native_session(executable, vfs_root, script, events, result, timeout=10, exp
         try:
             for event_index, event in enumerate(events):
                 marker = event.get("after", "").encode()
-                while not ((event.get("duringBatch") or len(waits) > last_wait) and output.find(marker, consumed) >= 0):
+                # stdout and wait traces use separate pipes. A marker can
+                # arrive before its process's wait record; await both rather
+                # than comparing it with an older child's trace.
+                while not ((event.get("duringBatch") or len(waits) > last_wait) and
+                           output.find(marker, consumed) >= 0 and
+                           ("pid" not in event or (waits and waits[-1]["pid"] == event["pid"])) and
+                           ("waitKind" not in event or (waits and waits[-1]["kind"] == event["waitKind"]))):
                     if time.monotonic() >= deadline:
                         raise AssertionError(f"native output timeout: {output!r}")
                     for key, _ in selector.select(0.1):
@@ -147,15 +153,17 @@ def main():
     parser.add_argument("--native", default="build/cli-rt/private/guest-session")
     parser.add_argument("--vfs-root", default="src/vfs")
     parser.add_argument("--wasm", default="build/html-rt/waste-wast.wasm")
-    parser.add_argument("--scenario", action="append", choices=("shared-dependencies", "shared-libc", "io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "bash-invalid", "aux-bash", "matrix", "chmod", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"))
+    parser.add_argument("--scenario", action="append", choices=("vim", "vim-scroll", "scheduling-timers", "scheduling-cpu", "shared-dependencies", "shared-libc", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "bash-invalid", "aux-bash", "matrix", "chmod", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"))
     parser.add_argument("--page", help="Also check identical scenarios through the packaged production worker")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="guest-session-", dir="build/engine") as temporary:
-        for name in args.scenario or ("shared-dependencies", "shared-libc", "io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "bash-invalid", "aux-bash", "matrix", "chmod", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"):
-            contract = f"tests/guest-session-{name}.json"
+        for name in args.scenario or ("vim", "vim-scroll", "scheduling-timers", "scheduling-cpu", "shared-dependencies", "shared-libc", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "bash-invalid", "aux-bash", "matrix", "chmod", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"):
+            contract = ("src/system-tests/vim/session.json" if name == "vim" else
+                        "src/system-tests/vim/scroll-session.json" if name == "vim-scroll" else
+                        f"tests/guest-session-{name}.json")
             scenario = json.loads(Path(contract).read_text())
             # Bash exercises the default mounted bootstrap, not a host copy.
-            script = scenario["fixture"] if name in ("shared-libc", "io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded") else None
+            script = scenario["fixture"] if name in ("scheduling-timers", "scheduling-cpu", "shared-libc", "io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded") else None
             extra_args = []
             if "clockRealtimeNs" in scenario:
                 extra_args += ["--clock-realtime-ns", str(scenario["clockRealtimeNs"])]
@@ -214,7 +222,7 @@ def main():
                 assert browser["output"] == output.decode(), browser
             assert browser["passed"] == result["passed"], browser
             assert browser["exited"] == result["exited"] and browser["exitStatus"] == code, browser
-            if args.page and name not in ("shared-libc", "io", "clock", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded"):
+            if args.page and name not in ("scheduling-timers", "scheduling-cpu", "shared-libc", "io", "clock", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded"):
                 worker = json.loads(subprocess.check_output([
                     "node", "tests/guest-session-worker.cjs", args.page, contract], text=True))
                 assert worker["passed"] == result["passed"] and worker["exitStatus"] == code, worker
@@ -226,7 +234,7 @@ def main():
                     assert worker["output"] == output.decode(), worker
             print(json.dumps(dict(scenario=name, native=result, browser=browser,
                                   nativeOutputBase64=base64.b64encode(output).decode(),
-                                  **({"worker": worker} if args.page and name not in ("shared-libc", "io", "clock", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded") else {})), indent=2))
+                                  **({"worker": worker} if args.page and name not in ("scheduling-timers", "scheduling-cpu", "shared-libc", "io", "clock", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded") else {})), indent=2))
         # An independent multi-module probe catches child provider mutations
         # even when a particular Bash allocation layout happens not to trap.
         contract = "tests/guest-session-linked-fork.json"
@@ -234,11 +242,11 @@ def main():
         code, output, report = native_session(args.native, args.vfs_root,
             scenario["fixture"], [], Path(temporary) / "linked-fork.json", 30)
         assert code == 0 and output == scenario["output"].encode() and not report["error"], report
-        assert report["passed"] == report["total"] == 3, report
-        assert report["forks"] == report["childExits"] == 3, report
+        assert report["passed"] == report["total"] == scenario["assertions"], report
+        assert report["forks"] == report["childExits"] == scenario["processes"], report
         browser = json.loads(subprocess.check_output([
             "node", "tests/guest-session-browser.cjs", args.wasm, args.vfs_root, contract], text=True))
-        assert browser["output"] == output.decode() and browser["passed"] == 3, browser
+        assert browser["output"] == output.decode() and browser["passed"] == scenario["assertions"], browser
         print(json.dumps(dict(scenario="linked-provider fork isolation", native=report, browser=browser)))
         negative = Path(temporary) / "fork.json"
         process = subprocess.Popen([args.native, "--vfs-root", args.vfs_root,

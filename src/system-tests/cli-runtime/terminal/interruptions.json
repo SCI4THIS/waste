@@ -1,0 +1,37 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "events": [
+    {
+      "after": "# ",
+      "text": "echo SHOULD_NOT_RUN\u0003"
+    },
+    {
+      "after": "# ",
+      "text": "printf \"BROWSER_IDLE_%s\\n\" \"$?\"\n"
+    },
+    {
+      "after": "BROWSER_IDLE_130\r\n",
+      "text": "/usr/bin/cat\n"
+    },
+    {
+      "pid": 2,
+      "waitKind": 1,
+      "text": "\u0003"
+    },
+    {
+      "after": "# ",
+      "pid": 1,
+      "text": "printf \"BROWSER_CHILD_%s\\n\" \"$?\"\n"
+    },
+    {
+      "after": "BROWSER_CHILD_130\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "BROWSER_IDLE_130\r\n",
+    "BROWSER_CHILD_130\r\n"
+  ],
+  "assertions": 1,
+  "exitStatus": 0
+}

@@ -6,6 +6,8 @@ const {treeVfs, stageVfs} = require("./vfs-package.cjs");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const scenario = JSON.parse(fs.readFileSync(process.argv[4] || "tests/guest-session-io.json"));
+const screen = scenario.events.some(event => event.screen)
+  ? require("./terminal-screen.cjs")(fs.readFileSync("src/html-rt/src/terminal/model.js")) : null;
 (async () => {
   let exp, output = "";
   const floating = (p, n) => Number(Buffer.from(new Uint8Array(exp.memory.buffer, p, n)).toString());
@@ -13,7 +15,9 @@ const scenario = JSON.parse(fs.readFileSync(process.argv[4] || "tests/guest-sess
     strtod: floating, strtof: floating, posix_open: () => -1,
     posix_close: () => 0, posix_read: () => -1, wall_clock_ms: () => Date.now(),
     posix_write: (_fd, p, n) => {
-      output += Buffer.from(new Uint8Array(exp.memory.buffer, p, n)).toString();
+      const text = Buffer.from(new Uint8Array(exp.memory.buffer, p, n)).toString();
+      output += text;
+      screen?.write(text);
       return n;
     },
   }});
@@ -45,6 +49,8 @@ const scenario = JSON.parse(fs.readFileSync(process.argv[4] || "tests/guest-sess
   assert.equal(exp.waste_wast_stage_cwd(cwdPtr, cwd.length), 0);
   exp.waste_wast_free(cwdPtr);
   const source = fs.readFileSync(scenario.fixture);
+  if (scenario.pumpQuantumMs)
+    assert.equal(exp.waste_wast_set_pump_quantum_ms(scenario.pumpQuantumMs), 0);
   const sourcePtr = allocate(source);
   if (scenario.events.some(event => event.monotonicNs !== undefined))
     assert.equal(exp.waste_wast_advance_clock_monotonic_ns(1, 0), -1,
@@ -80,9 +86,19 @@ const scenario = JSON.parse(fs.readFileSync(process.argv[4] || "tests/guest-sess
     }
   }
   drainHostIo();
+  if (scenario.drainScheduling) {
+    const deadline = Date.now() + 10000;
+    while (status === 1 && [2, 6].includes(exp.waste_wast_wait_kind())) {
+      assert(Date.now() < deadline, "scheduled guest did not complete");
+      const delay = exp.waste_wast_wait_kind() === 2 ? exp.waste_wast_wait_timeout_ms() : 0;
+      await new Promise(resolve => setTimeout(resolve, delay));
+      status = exp.waste_wast_resume();
+    }
+  }
   for (const event of scenario.events) {
     assert.equal(status, 1, output);
     assert([1, 2].includes(exp.waste_wast_wait_kind()));
+    if (event.screen) screen.check(event.screen);
     const at = output.indexOf(event.after || "", consumed);
     const evidence = exp.waste_wast_transition_evidence_ptr ? Buffer.from(
       new Uint8Array(exp.memory.buffer, exp.waste_wast_transition_evidence_ptr(),
@@ -123,6 +139,17 @@ const scenario = JSON.parse(fs.readFileSync(process.argv[4] || "tests/guest-sess
       assert.equal(exp.waste_wast_wait_kind(), event.waitKind);
     }
     drainHostIo();
+    if (event.drainTimers) {
+      const deadline = Date.now() + 10000;
+      while (status === 1 && [1, 2].includes(exp.waste_wast_wait_kind())) {
+        const milliseconds = exp.waste_wast_wait_timeout_ms();
+        if (!milliseconds) break;
+        assert(Date.now() < deadline, "guest timer did not complete");
+        await new Promise(resolve => setTimeout(resolve, milliseconds));
+        status = exp.waste_wast_resume();
+        drainHostIo();
+      }
+    }
   }
   assert.equal(hostIoQueue.length, 0, `undrained host-io: ${JSON.stringify(hostIoQueue)}`);
   for (const expected of scenario.hostIo || []) {
@@ -154,5 +181,6 @@ const scenario = JSON.parse(fs.readFileSync(process.argv[4] || "tests/guest-sess
   const exitStatus = exp.waste_wast_guest_exit_status();
   assert.equal(exited, scenario.exited ?? true);
   assert.equal(exitStatus, scenario.exitStatus);
-  console.log(JSON.stringify({runtime: "browser-guest-session", passed, total, exited, exitStatus, output, results}));
+  console.log(JSON.stringify({runtime: "browser-guest-session", passed, total, exited, exitStatus, output, results,
+    ...(screen ? {terminalScreens: screen.checks} : {})}));
 })().catch(error => { console.error(error); process.exitCode = 1; });

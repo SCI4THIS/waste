@@ -1,0 +1,19 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {"path": "/tmp/vim-installed.wast", "source": "src/aux/vim/tests/installed.wast", "mode": 420}
+  ],
+  "events": [
+    {"after": "# ", "text": "vim --version > /tmp/vim-package-version.txt; printf '__VIM_VERSION_%s__\\n' \"$?\"\n"},
+    {"after": "__VIM_VERSION_0__\r\n", "text": "vim /tmp/vim-package.txt; printf '__VIM_EXIT_%s__\\n' \"$?\"\n"},
+    {"pid": 3, "text": "iVIM_PACKAGE_SAVED"},
+    {"pid": 3, "screen": {"line": "VIM_PACKAGE_SAVED", "x": 17, "y": 0}, "text": "\u001b:wq\n", "drainTimers": true},
+    {"after": "__VIM_EXIT_0__\r\n", "pid": 1, "text": "/bin/wast --verbose /tmp/vim-installed.wast\n"},
+    {"after": "WAST: 4 PASS, 0 FAIL, 4 total", "text": "exit 0\n"}
+  ],
+  "contains": ["__VIM_VERSION_0__\r\n", "__VIM_EXIT_0__\r\n", "WAST: 4 PASS, 0 FAIL, 4 total"],
+  "assertions": 5,
+  "exitStatus": 0,
+  "processes": 3
+}

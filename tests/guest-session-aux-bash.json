@@ -27,6 +27,25 @@
     },
     {
       "after": "# ",
+      "text": "printf 'test \"$1\" = \"two words\" || exit 99; /usr/bin/true; /usr/bin/echo __AUX_SCRIPT_FILE_EXEC__ | /usr/bin/cat; value=$(printf SUBST); test \"$value\" = SUBST || exit 98; /bin/wast --verbose /root/test/html-rt/pass.wast || exit 97; exit 7\\n' > /tmp/aux-bash-script; /usr/bin/bash --norc /tmp/aux-bash-script \"two words\"; printf \"__AUX_SCRIPT_FILE_STATUS_%s__\\n\" \"$?\"\n"
+    },
+    {
+      "after": "# ",
+      "text": "(sleep .03; echo __AUX_NESTED_SLEEP_3__) & (sleep .02; echo __AUX_NESTED_SLEEP_2__) & (sleep .01; echo __AUX_NESTED_SLEEP_1__); wait; printf \"__AUX_NESTED_SLEEP_STATUS_%s__\\n\" \"$?\"\n",
+      "drainTimers": true
+    },
+    {
+      "after": "# ",
+      "text": "(sleep .25; echo __AUX_IDLE_TIMER__) &\n",
+      "drainTimers": true
+    },
+    {
+      "after": "__AUX_IDLE_TIMER__\r\n",
+      "text": "/bin/wast --verbose /tmp/concurrent-long.wast & first=$!; /bin/wast --verbose /tmp/concurrent-short.wast & second=$!; wait \"$second\"; second_status=$?; wait \"$first\"; printf \"__AUX_CONCURRENT_HANDLERS_%s_%s__\\n\" \"$second_status\" \"$?\"\n",
+      "drainTimers": true
+    },
+    {
+      "after": "# ",
       "text": "PS1=\"__AUX_ROOT__ \" exec /usr/bin/bash --norc -i\n"
     },
     {
@@ -67,14 +86,35 @@
     "__AUX_MISSING_127__\r\n",
     "__AUX_OPTION_2__\r\n",
     "__AUX_RETURN_9__\r\n",
+    "__AUX_SCRIPT_FILE_EXEC__\r\n",
+    "__AUX_SCRIPT_FILE_STATUS_7__\r\n",
+    "WAST: 3 PASS, 0 FAIL, 3 total",
+    "__AUX_NESTED_SLEEP_3__\r\n",
+    "__AUX_NESTED_SLEEP_2__\r\n",
+    "__AUX_NESTED_SLEEP_1__\r\n",
+    "__AUX_NESTED_SLEEP_STATUS_0__\r\n",
     "\u001b[?2004l\r__AUX_FRAGMENT_OK__\r\n",
     "__AUX_READ__0:delayed input\r\n",
     "__AUX_RETURN_BUILTIN__5\r\n",
     "__AUX_EXIT_TRAP__\r\n",
-    "__AUX_EVAL_6__\r\n"
+    "__AUX_EVAL_6__\r\n",
+    "__AUX_CONCURRENT_HANDLERS_0_0__\r\n",
+    "__AUX_IDLE_TIMER__\r\n"
   ],
-  "assertions": 1,
+  "assertions": 9,
   "exitStatus": 0,
   "comparison": "markers",
-  "normalization": "Background-job notifications may vary; all output and exit-status markers remain required."
+  "normalization": "Background-job notifications may vary; all output and exit-status markers remain required.",
+  "files": [
+    {
+      "path": "/tmp/concurrent-long.wast",
+      "source": "src/system-tests/scheduling/handler-long.wast",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/concurrent-short.wast",
+      "source": "src/system-tests/scheduling/handler-short.wast",
+      "mode": 493
+    }
+  ]
 }
