@@ -23,6 +23,27 @@ void native_exec_request_destroy(native_exec_request *request) {
     memset(request, 0, sizeof(*request));
 }
 
+/* Also validate requests from initial launch and interpreter expansion. Guest
+ * copies are bounded earlier, before allocating or yielding an exec request. */
+int native_exec_request_check_limits(const native_exec_request *request) {
+    size_t remaining = PROCESS_EXEC_MAX_BYTES;
+    if (!request) return POSIX_EFAULT;
+    if (request->argc > PROCESS_EXEC_MAX_ARGS ||
+        request->envc > PROCESS_EXEC_MAX_ENV) return POSIX_E2BIG;
+    for (unsigned vector = 0; vector < 2; vector++) {
+        uint32_t count = vector ? request->envc : request->argc;
+        char *const *items = vector ? request->envp : request->argv;
+        for (uint32_t i = 0; i < count; i++) {
+            size_t length = 0;
+            if (!items[i]) return POSIX_EFAULT;
+            while (length < remaining && items[i][length]) length++;
+            if (length == remaining) return POSIX_E2BIG;
+            remaining -= length + 1;
+        }
+    }
+    return 0;
+}
+
 int native_exec_request_take_handler(native_exec_request *request,
                                      native_exec_handler_kind kind,
                                      uint8_t **bytes_out, size_t *size_out) {
@@ -419,6 +440,9 @@ int native_store_bind_interpreter_paths(native_store *store) {
     int status = posix_kernel_path_add_data(
         store->kernel, "/bin/wat", &metadata, NULL, 0);
     if (status != 0) return status;
+    status = posix_kernel_path_add_data(
+        store->kernel, "/bin/wasm", &metadata, NULL, 0);
+    if (status != 0) return status;
     return posix_kernel_path_add_data(
         store->kernel, "/bin/wast", &metadata, NULL, 0);
 }
@@ -492,7 +516,7 @@ int native_store_register_executable(native_store *store, const char *path,
     return 0;
 }
 
-exec_status native_store_instantiate_executable(
+static exec_status native_store_instantiate_executable_sync(
         native_store *store, native_exec_request *request,
         native_process_image **image_out, exec_error *error) {
     const native_executable *executable;
@@ -515,6 +539,8 @@ exec_status native_store_instantiate_executable(
     int effective_request_owned = 0;
     uint32_t effective_owned_count = 0;
     const char *load_path = request ? request->path : NULL;
+    int wasm_handler = request && request->format == NATIVE_EXEC_FORMAT_AUTO &&
+        strcmp(request->path, "/bin/wasm") == 0;
     int wat_handler = request && request->format == NATIVE_EXEC_FORMAT_AUTO &&
         strcmp(request->path, "/bin/wat") == 0;
     int wast_handler = request && request->format == NATIVE_EXEC_FORMAT_AUTO &&
@@ -528,7 +554,12 @@ exec_status native_store_instantiate_executable(
         return EXEC_ERROR_FORMAT;
     }
     *image_out = NULL;
-    if (wat_handler || wast_handler) {
+    int limits_error = native_exec_request_check_limits(request);
+    if (limits_error) {
+        request->failure_errno = limits_error;
+        return exec_fail(error, EXEC_ERROR_FORMAT, "executable argument limits exceeded");
+    }
+    if (wasm_handler || wat_handler || wast_handler) {
         uint32_t source_arg = 1;
         if (wast_handler && source_arg < request->argc &&
             !strcmp(request->argv[source_arg], "--verbose")) {
@@ -541,7 +572,7 @@ exec_status native_store_instantiate_executable(
             strlen(request->argv[source_arg]) >= NATIVE_EXEC_PATH_MAX ||
             (wast_handler && request->argc != source_arg + 1u))
             return exec_fail(error, EXEC_ERROR_FORMAT,
-                             "usage: /bin/wast [--verbose] [--] FILE (or /bin/wat FILE)");
+                             "usage: /bin/wasm FILE [ARG...] (or /bin/wat FILE, /bin/wast [--verbose] [--] FILE)");
         load_path = request->argv[source_arg];
     }
     memset(&vfs_executable, 0, sizeof(vfs_executable));
@@ -549,15 +580,14 @@ exec_status native_store_instantiate_executable(
         /* An explicit interpreter reads its input; only direct exec requires
          * the input file itself to have executable permission. Installed WAST
          * corpus snapshots deliberately have mode 0644. */
-        vfs_status = (wat_handler || wast_handler || request->readable_input ?
-            posix_kernel_path_read_snapshot : posix_kernel_path_snapshot)(
+        vfs_status = posix_kernel_path_image_snapshot(
             store->kernel, (const uint8_t *)load_path,
-            strlen(load_path), NATIVE_EXEC_BYTES_MAX, &vfs_bytes,
-            &vfs_size, &vfs_metadata);
+            strlen(load_path), NATIVE_EXEC_BYTES_MAX,
+            !(wasm_handler || wat_handler || wast_handler || request->readable_input),
+            &vfs_bytes, &vfs_size, &vfs_metadata, vfs_executable.path,
+            sizeof(vfs_executable.path));
     }
     if (vfs_status == 0) {
-        snprintf(vfs_executable.path, sizeof(vfs_executable.path), "%s",
-                 load_path);
         vfs_executable.bytes = vfs_bytes;
         vfs_executable.size = vfs_size;
         vfs_executable.mode = vfs_metadata.mode;
@@ -570,7 +600,7 @@ exec_status native_store_instantiate_executable(
         /* Compatibility path for focused lifecycle fixtures that register an
          * image without constructing a VFS namespace. Production browser
          * images are always loaded from the VFS snapshot above. */
-        executable = (wat_handler || wast_handler) ? NULL :
+        executable = (wasm_handler || wat_handler || wast_handler) ? NULL :
             native_store_find_executable(store, request->path);
     } else if (vfs_status == -POSIX_EISDIR ||
                vfs_status == -POSIX_EACCES ||
@@ -588,10 +618,17 @@ exec_status native_store_instantiate_executable(
 
     image_bytes = executable->bytes;
     image_size = executable->size;
+    if (wasm_handler &&
+        (image_size < 4 || memcmp(image_bytes, "\0asm", 4))) {
+        free(vfs_bytes);
+        return exec_fail(error, EXEC_ERROR_FORMAT, "expected Wasm binary input");
+    }
     source_result = waste_source_view_init((const char *)image_bytes,
                                            image_size, &source_view);
-    int is_wat = wat_handler || native_path_has_suffix(executable->path, ".wat");
-    int is_wast = wast_handler || native_path_has_suffix(executable->path, ".wast");
+    int is_wat = !wasm_handler &&
+        (wat_handler || native_path_has_suffix(load_path, ".wat"));
+    int is_wast = !wasm_handler &&
+        (wast_handler || native_path_has_suffix(load_path, ".wast"));
     if (source_result == WASTE_SOURCE_OK && !wat_handler && !wast_handler) {
         is_wat = strcmp(source_view.interpreter, "/bin/wat") == 0;
         is_wast = strcmp(source_view.interpreter, "/bin/wast") == 0;
@@ -678,11 +715,28 @@ exec_status native_store_instantiate_executable(
 
     native_exec_request_init(&effective_request);
     effective_request = *request;
-    if (request->format == NATIVE_EXEC_FORMAT_AUTO && source_result == WASTE_SOURCE_OK &&
+    if (wasm_handler) {
+        effective_request.argv[0] = native_store_strdup(load_path);
+        if (!effective_request.argv[0]) {
+            exec_free(engine);
+            return exec_fail(error, EXEC_ERROR_FORMAT,
+                             "Wasm interpreter argv allocation failed");
+        }
+        for (uint32_t i = 1; i + 1 < request->argc; i++)
+            effective_request.argv[i] = request->argv[i + 1];
+        effective_request.argc = request->argc - 1;
+        effective_owned_count = 1;
+        effective_request_owned = 1;
+    } else if (request->format == NATIVE_EXEC_FORMAT_AUTO && source_result == WASTE_SOURCE_OK &&
         strcmp(source_view.interpreter, "/bin/wat") == 0) {
         uint32_t argument_count = request->argc;
         uint32_t shebang_argument = source_view.argument[0] ? 1u : 0u;
-        if (argument_count + 1u + shebang_argument >= NATIVE_EXEC_ARG_MAX) {
+        uint32_t effective_count = wat_handler ?
+            (argument_count > 1u ? argument_count - 1u : 1u) :
+            (argument_count ? argument_count + 1u + shebang_argument :
+                              2u + shebang_argument);
+        if (effective_count > PROCESS_EXEC_MAX_ARGS) {
+            request->failure_errno = POSIX_E2BIG;
             exec_free(engine);
             return exec_fail(error, EXEC_ERROR_FORMAT,
                              "WAT interpreter argument vector is too large");
@@ -728,6 +782,16 @@ exec_status native_store_instantiate_executable(
     }
     const native_exec_request *startup_request =
         effective_request_owned ? &effective_request : request;
+    limits_error = native_exec_request_check_limits(startup_request);
+    if (limits_error) {
+        if (effective_request_owned) {
+            for (uint32_t i = 0; i < effective_owned_count; i++)
+                free(effective_request.argv[i]);
+        }
+        exec_free(engine);
+        request->failure_errno = limits_error;
+        return exec_fail(error, EXEC_ERROR_FORMAT, "interpreter argument limits exceeded");
+    }
     status = exec_find_export(engine, request->entry[0] ? request->entry : executable->entry,
                               &entry_func, error);
     if (status == EXEC_OK) {
@@ -815,6 +879,23 @@ exec_status native_store_instantiate_executable(
     return EXEC_OK;
 }
 
+exec_status native_store_instantiate_executable(
+        native_store *store, native_exec_request *request,
+        native_process_image **image_out, exec_error *error) {
+    if (!store)
+        return native_store_instantiate_executable_sync(
+            store, request, image_out, error);
+    /* Module starts and startup hooks belong to the same synchronous loader
+     * transaction as DSO relocations/constructors. Its C locals cannot resume
+     * a cooperative pump yield. Keep timeout/cancellation polling active. */
+    uint64_t quantum = store->execution_control.pump_quantum_ns;
+    store->execution_control.pump_quantum_ns = 0;
+    exec_status status = native_store_instantiate_executable_sync(
+        store, request, image_out, error);
+    store->execution_control.pump_quantum_ns = quantum;
+    return status;
+}
+
 /* ---- cross-module call trampoline ---- */
 
 static exec_status native_linked_call(void *data, const wasm_value *args,
@@ -873,9 +954,28 @@ static exec_global *native_spectest_global(native_store *store,
 
 /* ---- store management ---- */
 
+static int native_store_jump_mask_get(void *context, posix_sigset *mask) {
+    native_store *store = context;
+    if (!store || !store->kernel || !mask) return -1;
+    posix_kernel_get_signal_mask(store->kernel, mask);
+    return 0;
+}
+
+static int native_store_jump_mask_set(void *context, const posix_sigset *mask) {
+    native_store *store = context;
+    if (!store || !store->kernel || !mask) return -1;
+    /* A jump abandons any syscall interest, including pselect's temporary
+     * mask. Restore the checkpoint only after releasing that interest. */
+    posix_kernel_cancel_wait(store->kernel);
+    posix_kernel_set_signal_mask(store->kernel, mask);
+    return 0;
+}
+
 void native_store_init(native_store *store) {
     memset(store, 0, sizeof(*store));
     store->execution_control.signal_poll = native_store_default_signal;
+    store->execution_control.signal_mask_get = native_store_jump_mask_get;
+    store->execution_control.signal_mask_set = native_store_jump_mask_set;
     store->execution_control.signal_context = store;
     native_exec_request_init(&store->exec_request);
     store->spectest_memory.pages = 1;
@@ -1397,6 +1497,18 @@ exec_status native_load_module(native_store *store,
             store, request->module);
         native_loaded_library *loaded_provider =
             native_store_find_library(store, request->module);
+        /* Older installed commands used env for libc exit functions. Resolve
+         * these through the same process-local provider as named libc imports;
+         * a raw fixture without libc retains only immediate env.exit. Explicit
+         * WAST registrations continue to take precedence over this fallback. */
+        if (!provider && !loaded_provider &&
+            request->kind == WASM_IMPORT_FUNCTION &&
+            strcmp(request->module, "env") == 0 &&
+            (strcmp(request->name, "exit") == 0 ||
+             strcmp(request->name, "atexit") == 0 ||
+             strcmp(request->name, "__cxa_atexit") == 0 ||
+             strcmp(request->name, "__cxa_finalize") == 0))
+            loaded_provider = native_store_find_library(store, "libc");
         /* An explicit WAST (register ...) binding is the newest store
          * registration and must win over a same-named process DSO. The DSO
          * list is only a fallback for process providers missing a linked
@@ -1723,29 +1835,35 @@ fail:
 
 uint8_t *encode_group_module(const wast_group *group, size_t *size_out,
                               char *error) {
-    if (group->raw_module.kind == WAST_RAW_BINARY) {
-        size_t allocation = group->raw_module.length ?
-                            group->raw_module.length : 1;
+    return encode_module_source(&group->module, &group->raw_module,
+                                size_out, error);
+}
+
+uint8_t *encode_module_source(const wast_module *module,
+                             const wast_raw_module *raw, size_t *size_out,
+                             char *error) {
+    if (raw->kind == WAST_RAW_BINARY) {
+        size_t allocation = raw->length ? raw->length : 1;
         uint8_t *copy = malloc(allocation);
         if (!copy) {
             snprintf(error, 256, "out of memory copying binary module");
             return NULL;
         }
-        if (group->raw_module.length)
-            memcpy(copy, group->raw_module.bytes, group->raw_module.length);
-        *size_out = group->raw_module.length;
+        if (raw->length)
+            memcpy(copy, raw->bytes, raw->length);
+        *size_out = raw->length;
         return copy;
     }
-    if (group->raw_module.kind == WAST_RAW_QUOTE) {
-        size_t length = group->raw_module.length;
+    if (raw->kind == WAST_RAW_QUOTE) {
+        size_t length = raw->length;
         uint8_t *wasm = NULL;
-        if (waste_wat_compile((const char *)group->raw_module.bytes, length,
+        if (waste_wat_compile((const char *)raw->bytes, length,
                               &wasm, size_out,
                               error, 256) != 0)
             wasm = NULL;
         return wasm;
     }
-    return wast_encode_module(&group->module, size_out, error);
+    return wast_encode_module(module, size_out, error);
 }
 
 /* ---- shared library loading ---- */

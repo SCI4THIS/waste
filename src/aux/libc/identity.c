@@ -2,8 +2,10 @@
  * guest libc. */
 
 #include "include/helper.h"
+#include <errno.h>
+#include <pwd.h>
 
-typedef struct WastePasswd { char *name; char *password; u32 uid; u32 gid; char *gecos; char *directory; char *shell; } WastePasswd;
+typedef struct passwd WastePasswd;
 typedef struct WasteGroup { char *name; char *password; u32 gid; char **members; } WasteGroup;
 typedef struct WasteService { char *name; char **aliases; i32 port; char *protocol; } WasteService;
 static u32 real_uid, effective_uid, real_gid, effective_gid;
@@ -21,8 +23,8 @@ void waste_identity_set(u32 uid, u32 euid, u32 gid, u32 egid, char *hostname) {
   real_uid=uid; effective_uid=euid; real_gid=gid; effective_gid=egid; host_name=hostname;
 }
 void waste_passwd_set(char *name,char *password,u32 uid,u32 gid,char *gecos,char *directory,char *shell) {
-  passwd_record.name=name; passwd_record.password=password; passwd_record.uid=uid; passwd_record.gid=gid;
-  passwd_record.gecos=gecos; passwd_record.directory=directory; passwd_record.shell=shell; passwd_cursor=0;
+  passwd_record.pw_name=name; passwd_record.pw_passwd=password; passwd_record.pw_uid=uid; passwd_record.pw_gid=gid;
+  passwd_record.pw_gecos=gecos; passwd_record.pw_dir=directory; passwd_record.pw_shell=shell; passwd_cursor=0;
 }
 void waste_group_set(char *name,char *password,u32 gid,char **members) {
   group_record.name=name; group_record.password=password; group_record.gid=gid; group_record.members=members; group_cursor=0;
@@ -40,9 +42,53 @@ i32 setuid(u32 uid){if(effective_uid && uid!=real_uid&&uid!=effective_uid){*__er
 i32 setgid(u32 gid){if(effective_uid && gid!=real_gid&&gid!=effective_gid){*__errno_location()=1;return -1;}real_gid=effective_gid=gid;return 0;}
 i32 getgroups(i32 capacity,i32 *groups){if(!capacity)return (i32)supplementary_count;if(capacity<(i32)supplementary_count){*__errno_location()=22;return -1;}bytes_copy(groups,supplementary_groups,supplementary_count*4);return (i32)supplementary_count;}
 i32 getgrouplist(const char *name,u32 base_gid,u32 *groups,i32 *capacity){(void)name;if(!capacity)return -1;i32 needed=1;if(*capacity<needed){*capacity=needed;return -1;}if(groups)groups[0]=base_gid;*capacity=needed;return needed;}
-WastePasswd *getpwuid(u32 uid){return passwd_record.name&&passwd_record.uid==uid?&passwd_record:0;}
-WastePasswd *getpwnam(const char *name){return passwd_record.name&&!c_compare(passwd_record.name,name)?&passwd_record:0;}
-void setpwent(void){passwd_cursor=0;} WastePasswd *getpwent(void){if(passwd_cursor++||!passwd_record.name)return 0;return &passwd_record;} void endpwent(void){passwd_cursor=1;}
+WastePasswd *getpwuid(u32 uid){return passwd_record.pw_name&&passwd_record.pw_uid==uid?&passwd_record:0;}
+WastePasswd *getpwnam(const char *name){return passwd_record.pw_name&&!c_compare(passwd_record.pw_name,name)?&passwd_record:0;}
+/* Reentrant lookups share the existing account record, but never expose its
+ * borrowed strings. Validate the complete size before modifying caller data. */
+static int passwd_copy(struct passwd *output, char *buffer, size_t capacity,
+                       struct passwd **result) {
+  struct passwd copy = passwd_record;
+  const char *fields[] = {copy.pw_name, copy.pw_passwd, copy.pw_gecos,
+                         copy.pw_dir, copy.pw_shell};
+  size_t lengths[5], used = 0;
+  for (size_t i = 0; i < 5; i++) {
+    if (!fields[i]) fields[i] = "";
+    size_t length = 0, remaining = capacity - used;
+    while (length < remaining && fields[i][length]) length++;
+    if (length == remaining) return ERANGE;
+    lengths[i] = length + 1;
+    used += lengths[i];
+  }
+  char **destinations[] = {&copy.pw_name, &copy.pw_passwd, &copy.pw_gecos,
+                           &copy.pw_dir, &copy.pw_shell};
+  used = 0;
+  for (size_t i = 0; i < 5; i++) {
+    *destinations[i] = buffer + used;
+    bytes_copy(buffer + used, fields[i], lengths[i]);
+    used += lengths[i];
+  }
+  *output = copy;
+  *result = output;
+  return 0;
+}
+int getpwuid_r(uid_t uid, struct passwd *output, char *buffer, size_t capacity,
+               struct passwd **result) {
+  if (!result) return EFAULT;
+  *result = 0;
+  if (!output || !buffer) return EFAULT;
+  if (!getpwuid(uid)) return 0;
+  return passwd_copy(output, buffer, capacity, result);
+}
+int getpwnam_r(const char *name, struct passwd *output, char *buffer,
+               size_t capacity, struct passwd **result) {
+  if (!result) return EFAULT;
+  *result = 0;
+  if (!name || !output || !buffer) return EFAULT;
+  if (!getpwnam(name)) return 0;
+  return passwd_copy(output, buffer, capacity, result);
+}
+void setpwent(void){passwd_cursor=0;} WastePasswd *getpwent(void){if(passwd_cursor++||!passwd_record.pw_name)return 0;return &passwd_record;} void endpwent(void){passwd_cursor=1;}
 WasteGroup *getgrgid(u32 gid){return group_record.name&&group_record.gid==gid?&group_record:0;}
 WasteGroup *getgrnam(const char *name){return group_record.name&&!c_compare(group_record.name,name)?&group_record:0;}
 void setgrent(void){group_cursor=0;} WasteGroup *getgrent(void){if(group_cursor++||!group_record.name)return 0;return &group_record;} void endgrent(void){group_cursor=1;}

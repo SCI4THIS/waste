@@ -99,6 +99,11 @@ See [the libc package notes](../src/aux/libc/README.md) and
 or generated WAST concatenation. `tools/shared_libc.py` also serves Bash,
 Coreutils and ncurses. SDK policy and generic Wasm inspection remain tools in
 `src/html-rt/tools`; SDK/sysroot tests live under `src/system-tests/guest-sdk`.
+Complete VFS installation before running tests that mount the source tree:
+publication replaces that tree, and simultaneous discovery can observe missing
+paths. For parallel verification, install once and run the common Bash transport
+against stable inputs; running multiple Make test targets can trigger additional
+installations through their prerequisites.
 `make -C src/system-tests sysroot` stages the installed headers and CRT under
 `build/system-tests/guest-sdk/sysroot`. This compiler fixture is independent
 of building libc.
@@ -171,6 +176,21 @@ error. `fork` and checkpoints retain backing-page and alias identity, while
 Use the native lifecycle/checkpoint fixtures and the offline browser harness
 after changing any of these ownership or commit rules.
 
+Guest `posix_madvise` goes through shared libc to the process capsule's mapping
+metadata. Validate alignment, advice, rounded bounds and every mapped page;
+permission checks or reads would incorrectly reject `PROT_NONE` or touch
+truncated backing files. Return positive error numbers without changing errno.
+Hints preserve bytes, permissions, dirty state and shared backing; resident or
+demand-zero pages need no additional advisory optimization. Keep public hint
+values shared with the engine in `waste/abi/mman.h`. This API does not implement
+Linux's destructive `madvise(MADV_DONTNEED)` semantics.
+
+For mapping regressions, execute ordinary guest programs with a process VM
+capsule and check their captured observations in WAST. An exec'd WAST handler
+has no application engine bound to its capsule; directly importing memory
+does not give it process mapping ownership. The unchanged LLVM mapping-method
+fixture under `src/system-tests/clang/advice` demonstrates this boundary.
+
 ## Deterministic WAST Command Framing
 
 A WAST file is a sequence of independently observable commands.  Before
@@ -230,6 +250,142 @@ worker arms a `setTimeout` for the remaining interval and resumes the saved
 engine continuation. Do not implement guest sleeps as busy loops or host calls
 inside shared libc.
 
+The legacy `usleep` wrapper converts microseconds into that same nanosleep
+timespec and propagates interruption. Zero returns without a wait; intervals
+of one million microseconds or more return EINVAL. Use nanosleep for longer
+intervals. `src/system-tests/clang/timed-locks` advances the existing injected
+clock to just before and onto deadlines, catches a signal, and executes LLVM's
+unchanged timed lock retries under ordinary guest process contention. Keep
+those observations and all runtime expectations in WAST.
+
+For clock consumers, use shared-libc `clock_gettime` and the versioned kernel
+reader rather than importing platform clocks into guest C++. Realtime and
+monotonic use distinct injected callbacks and the explicit guest timespec ABI.
+`src/aux/libc/tests/clocks.wast` checks real progression after a yielding sleep,
+normalization, output canaries and errors. The controlled scenario under
+`src/system-tests/clang` advances monotonic time without changing realtime,
+including seconds beyond 2038 and nanosecond precision. Supply large injected
+nanosecond values as JSON strings to avoid JavaScript Number rounding.
+libc++ selects its private `_LIBCPP_HAS_CLOCK_GETTIME` backend through the
+package's additional compile flags; do not advertise `_POSIX_TIMERS` merely
+to satisfy its platform guard.
+
+Do not infer guest CPU accounting from available wall/deadline clocks. Public
+`rusage` has two time64 timeval fields and fourteen wasm32 long counters;
+shared libc and the legacy env adapter explicitly reject accounting queries
+without touching the output. Keep `HAVE_GETRUSAGE` disabled in the LLVM guest
+profile so its existing fallback owns the zero CPU durations. The
+`src/system-tests/clang/process` fixture compiles unchanged full Process.cpp
+and executes its real PID/wall-time calls. Ordinary fork/wait children also
+check `_Exit` through the existing engine exit path. Section collection drops
+unreferenced crash-context methods, so this does not establish complete LLVM
+Process::Exit or C++ static shutdown. Keep all runtime assertions in WAST.
+
+Validate outputs before consuming process state. A wait destination can be
+read-only, unmapped or span a protected page; discovering that after reaping
+loses the child's status. `exec_memory_prepare_write` validates the full range
+and reserves lazy/copy-on-write backing without changing bytes or dirty flags.
+Repeat on every WAITPID retry and retain only the interpreter's integer call
+operands. `src/system-tests/clang/exec-wait` establishes child exit with pipe
+EOF, attempts invalid copies, then successfully reaps the same zombie. It also
+checks write-only output, exact-path execv/environment copying and caught/
+restarted waits through the existing signal and sleep paths.
+
+For finite child waits, use public `waste_waitpid_until` with an absolute
+CLOCK_MONOTONIC nanosecond deadline. Its versioned kernel adapter shares ordinary
+waitpid's complete output validation and signal callback path, while registering
+the existing syscall wait record. Keep the same absolute operand across EINTR
+retries and SA_RESTART; a relative timeout recalculated after each signal can
+extend the wait indefinitely. A ready child wins over expiry; expiry leaves it
+alive and returns zero without changing status or errno. Cancel the record on
+every completed/error/interrupted return without cancelling the independent
+alarm. The child-deadline fixture checks live/concurrent nested parents and
+controlled boundaries, masked alarms and cleanup. Use the shared scheduler's
+earliest deadline publication; do not reserve SIGALRM for a compiler timeout.
+Keep deadline presence separate from its numeric value: UINT64_MAX is a valid
+saturated finite deadline. When selecting a blocked process, prefer that timer
+over an indefinite wait with the same comparison sentinel.
+
+Audit optional output requests at their caller boundary. LLVM's Unix Wait
+passes a rusage record even when no statistics were requested; the guest
+adapter instead selects existing waitpid and rejects requested accounting
+explicitly, before spawning in ExecuteAndWait and before reaping in Wait.
+Positive LLVM timeouts now use the shared child-deadline API: read the monotonic
+clock once at Wait entry, add the unsigned duration with UINT64_MAX saturation,
+and retain that absolute deadline across caught signals. Polling expiry retains
+the child. Ordinary expiry sends SIGKILL and reaps only the target, retrying
+EINTR without consuming an unrelated child's status. The archive-linked
+finite-wait fixture checks these methods, independent alarms, sleeping/CPU-bound
+children and exact/full-width clock boundaries in both runtimes.
+Exercise CPU-bound children with the production scheduling default, rather than
+silently enabling a harness-only quantum. Native Bash and the production browser
+worker use EXECUTION_DEFAULT_PUMP_QUANTUM_MS from src/config.h. A browser pump
+resume that reaches READ/SELECT must publish the new wait kind through the same
+readiness notification as an ordinary IO resume; otherwise post-prompt input or
+clock controls can wait indefinitely in the harness.
+The actual staged Wait fixture checks polling, indefinite
+EINTR retry, status/error interpretation, unchanged signal dispositions and a
+later successful wait after rejected requests. Its extracted method preserves
+license/boundaries/hashes; full Program.cpp compilation and LLVM execution
+methods remain separate gates, rather than fixture fragments in production.
+
+After extracted-method checks, link callers against the actual built Support
+archive with ordinary CRT, current C++ archives and the installed libc. Audit
+retained imports and exercise real children through Bash in both runtimes.
+Section collection makes this a gate for the used methods, not every library
+dependency or C++ startup/shutdown. The program-execution fixture covers actual
+ExecuteAndWait/ExecuteNoWait, copied StringRef arguments/environments, redirects,
+polling, concurrent waits and detachment. A failed child setup must terminate
+that child; returning to the caller creates a second parent continuation and
+can report success to the original parent. Keep that correction guest-only.
+Reject optional affinity and memory budgets before fork when the shared kernel
+cannot enforce them, even if libc can store rlimit values. Validate redirect
+vector length in release builds before indexing it. Requested accounting
+remains explicitly unsupported; elapsed wall time is not child CPU usage.
+
+Implement null redirection as a shared kernel character device, independently
+of VFS transport bytes. Keep its metadata in a retained inode and avoid pointers
+into a cloned or compacted namespace in its stateless open description. Dup and
+fork share that description; the inode survives unlink and parent destruction.
+EOF reads and discarded writes are immediately ready in their allowed access
+directions, and do not allocate file storage or call a runtime output capability.
+Begin synthesized inode allocation beyond the configured VFS entry range to
+avoid collisions with automatically numbered native/browser catalogues.
+Preserve the 48-byte path metadata and 128-byte stat ABI; define node kinds in
+the shared public ABI so directory entries report DT_CHR. Test openat, symlink/
+hard-link resolution, descriptor flags, canaries and error boundaries in WAST.
+Keep private sanitizer guards for codec and orphan ownership. Test actual LLVM
+empty redirects in both synchronous and detached asynchronous children, checking
+their observed stdin, stdout/stderr and metadata through a separate output file.
+See `src/system-tests/devices` and `src/system-tests/clang/program-execution`.
+
+Separate physical terminal descriptors from controlling-session ownership.
+`setsid` must validate the whole process table before changing SID/PGID and
+clearing the caller's terminal ownership; it must not close inherited aliases
+or change the parent's shared terminal foreground group. Keep the device's
+session on its OFD and the process's SID/ownership in its kernel. Check both
+when consuming queued terminal signals; route host foreground signals through
+the device's session even if a detached child is active and has closed all its
+aliases. Copy integer device identity before delivering a signal: termination
+may release the device's last reference during the group walk. The compiled public
+session WAST checks nested fork/exec, zombies, errors and parent preservation.
+Private lifecycle sanitizer guards cover alias refcounts and host/queued signal
+routing under an otherwise unrepresentable group-ID collision. Keep terminal
+acquisition and session-leader exit/job-control gaps explicit.
+
+Do not reuse the pathname limit for argv/environment strings or advertise the
+host's ARG_MAX. Keep engine-owned count/string budgets in src/config.h and
+expose them through a bounded versioned query. Count every terminating NUL,
+including empty strings; share one remaining budget across both vectors.
+Track ownership after each copied element so a bad later pointer or excess
+entry frees partial copies. Recheck interpreter-added arguments before image
+commit, and preserve the specific E2BIG through rejected-exec resume. LLVM's
+guest fit overloads use actual current environment sizes/counts, avoiding a
+separate compiler budget or an arbitrary environment allowance. The
+argument-limits fixture derives boundaries from the running kernel and keeps
+all expectations in WAST; a successful fit followed by an enlarged environment
+must still fail exec safely.
+
 Fork must restore the parent's continuation immediately after cloning the
 child graph, with a process-owned return value for each side. Deep-copy clone
 bindings and compose inherited aliases: copied funcrefs can still name an
@@ -250,6 +406,10 @@ The system probes under `src/system-tests/scheduling` check overlapping timers
 at controlled clock boundaries and a CPU spin that requires a sibling to run.
 `aux-bash` checks concurrent handlers using identical module names, nested
 scripts and background sleeps through native, browser API and packaged workers.
+In the native session transport, check a `stillWaiting` output guard while
+awaiting the next expected wait record as well as after matching it. Premature
+guest progress can change READ to SELECT (or another PID); waiting only for
+the original wait type turns an intended negative control into a timeout.
 
 ## Terminal Rendering and Shell Verification
 
@@ -396,7 +556,10 @@ export it. Test libc allocation after loading another DSO.
 
 The synchronous loader defers cooperative pump yields across instantiation,
 relocations and constructors, while retaining deadline/cancellation polling.
-Restore the caller's pump quantum on every return. A yielded constructor
+Executable image preparation applies the same rule to module starts and startup
+hooks. Otherwise an expired opcode time slice can become a spurious ENOEXEC
+instead of committing a valid executable. Restore the caller's pump quantum
+on every return. A yielded constructor
 cannot resume a loader C activation that has already returned; do not report a
 cooperative timeslice as `dlopen` failure. Verify through the installed browser
 batch runner, which enables the pump, as well as direct engine calls.
@@ -564,6 +727,164 @@ Instantiation must preflight limits and references before exposing a partially
 constructed instance, while preserving specification-required side effects on
 failure paths.
 
+The shared `WASM_MAX_TYPES` bound in `src/config.h` controls WAT type storage,
+binary reference decoding, executor type tables and structural comparison.
+Its current 256 entries fit the existing eight-bit indexed-reference payload;
+larger values require a representation change, not just a limit increase.
+Allocate binary type slots for the declared entry count and grow within the
+bound when recursive groups expand it. Keep the old allocation until growth
+succeeds and zero new slots. Ordinary modules should not reserve the full
+configured table. Reject both excessive entry counts and excessive expanded
+group totals before writing a type slot.
+
+Recursive WAT forward references use parser-only placeholders outside the real
+value-type range. Those placeholders must still fit the low 16 bits used by
+storage-type packing; higher bits carry mutability and packed-field metadata.
+Resolve placeholders at group close before encoding, without changing an
+already resolved reference. `tests/engine-regressions/type-capacity.wast`
+exercises high indexes, recursion/growth failures, field mutation and structural
+equivalence through a 230-type chain across modules.
+
+Decoded function local types use an exact-sized allocation, separate from the
+live value frames used during execution. Preflight all local declaration groups
+with a copied bounded reader before allocating: validate even zero-count groups,
+check cumulative counts without overflow, and include parameters in the frame
+limit. Replay validated declarations into the allocated array. Functions with
+no declared locals keep a null pointer. These arrays are immutable instance
+metadata, shared with decoded instructions by cloned engines and released only
+by the last static owner, including after a failed load. Keep the combined
+parameter/local check in the validator too, before accessing its initialization
+bitmap. `tests/engine-regressions/local-storage.wast` exercises allocation
+boundaries, mixed groups, malformed declarations and recovery after failures.
+
+Grow decoded instruction buffers by the number of instructions, not by raw
+function-body bytes: LEB, floating-point and SIMD immediates are not separate
+instructions. Reserve space before decoding each instruction so allocation
+failure can release all previously decoded branch-table/catch payloads without
+stranding the current one. Keep open-control references as indexes across
+`realloc`, and initialize each record before appending it. Bound geometric
+growth by remaining original instruction bytes and checked allocation sizes.
+After decoding, try to shrink to the actual instruction count; a failed shrink
+keeps the valid buffer. Validate only after growth and trimming finish, then
+share the immutable buffer through existing instance ownership. The portable
+`instruction-storage.wast` regression covers growth boundaries, control-target
+relocation, heap-owned immediates and failed-load cleanup. This removes byte
+over-reservation; it does not establish that large modules fit the runtime's
+memory budget. Audit record size and total decoded counts separately.
+
+Decoded instruction immediates share an opcode-selected union: memory/lane
+operands, block/catch metadata, GC cast operands, and vector/scalar bit patterns
+are distinct payloads. Keep common indexes and validation caches outside it.
+Set the block-type sentinel only for control instructions, and store block
+parameter/result counts explicitly rather than in vector bytes. GC heap types,
+target types and nullability flags have their own fields. Only `try_table`
+instructions own a catch pointer; both failed-load cleanup and final instance
+destruction must check the opcode before reading or freeing it. SIMD helpers
+receive a lane only for lane operations and a vector immediate only for
+shuffle, so they do not read an unrelated union payload. The native and Wasm32
+record sizes are currently 56 bytes (previously 104 and 96 respectively).
+`instruction-layout.wast` covers mixed payloads and values that would be invalid
+catch pointers; retain growth/exception tests as well when changing the layout.
+
+The browser interpreter's maximum linear-memory size comes from
+`HTML_RUNTIME_MAX_MEMORY_BYTES` in `src/config.h`; both the production module
+and direct-start probe link with that setting. The current maximum is 2 GiB,
+with a 64 MiB initial allocation. Distinguish this configured budget from
+wasm32's architectural limit, and measure real startup RSS separately from
+streamed analysis. A maximum permits growth without allocating that entire
+heap initially. A boundary probe should allocate beyond the old ceiling and
+check both ends, alongside ordinary portable WAST regressions.
+
+WAST process handlers have no executable-image engine after exec. Before
+invoking an assertion, bind its engine to the active process capsule so VM
+imports target that process's memory; restore the previous binding afterward,
+including on yield or failure. Use the existing owned-memory binding helper
+rather than changing imported-memory ownership. Test this through Bash and
+parallel handler children as well as the standalone WAST API.
+
+Keep `memory.size` separate from the process's sparse virtual-page extent.
+An automatic `mmap` may use high pages without committing allocator heap in
+between. Promoting `memory.size` for those pages lets libc skip growth and write
+into a file mapping or an unmapped hole after `munmap`. Reuse existing linear
+holes first, then select high free pages within the mmap ABI's pointer range.
+Before linear growth changes any mapping metadata, reject overlap with existing
+virtual mappings; keep their bytes and the old size intact. Exercise both pure
+mapping fixtures with their staged file assets and the shared process-memory
+`mmap-heap.wast` regression through Bash. A standalone run of the older
+`diy-posix-test/mmap.wast` without its `/mmap-file` and `/mmap-short` assets does
+not test file-backed mappings correctly; use corpus selection or stage them.
+
+Lazy function loading and bounded decoded-code retention are separate choices:
+validate every body while retaining encoded bytes, decode a function on its
+first call, and initially retain its code until the shared code owner dies.
+Only introduce eviction when workloads justify it. Eviction must preserve code
+referenced by active/yielded frames and cloned processes/threads. Input archive
+selection is the guest linker's responsibility; interpreter lazy loading reduces
+decoded storage for functions in the linker executable itself.
+
+The production loader now uses that first-call policy for every defined
+function. Keep the retained bytes independent of the caller's module/source
+buffer. Validate even unused bodies before returning an instance, retain local
+declarations, and publish decoded code only after successful materialization.
+On failure free temporary code/payloads/locals without changing the cold row.
+The existing static reference count owns cold and decoded bodies across clones;
+release either representation only with its last owner. Revalidation at first
+use fills the ordinary instruction-resolution metadata. The private i32 smoke
+checks source disposal, cold clone lifetime, shared materialization, reuse and
+independent instances; portable stream-validation/instruction/call regressions
+check execution and rejection of uncalled invalid bodies.
+
+For large-module sizing, build the private native diagnostic with
+`make -C src/cli-rt module-footprint` and run
+`build/cli-rt/module-footprint FILE.wasm`. `module-footprint-sanitize` builds the
+ASan/UBSan version. By default the diagnostic uses the production body decoder
+but skips semantic validation, import binding, instantiation and start execution. It
+releases each decoded function before moving on and never returns an executable
+engine. It can inspect more definitions than the execution limit; ordinary
+loading still enforces that limit. Count-sized function metadata allocation is
+first bounded by available type-index bytes.
+
+Its JSON reports instruction arrays, declared locals, branch/catch payloads,
+encoded instruction bytes and a conservative single-function buffer-growth
+bound. `metadataLowerBoundBytes` projects common retained metadata; it excludes
+allocator overhead/slack, exports, guest memories/tables/data, filesystem and
+runtime state. Other section contents are skipped or used only for counts;
+`complete` means all function bodies decoded, not that the module is valid or
+can link/run. In this mode `validationRequested` and `validated` are false.
+`runnableInstance` and `executed` are always false in both modes. Use an external
+timeout/address-space limit for large native probes;
+ASan needs a different virtual-address budget for its shadow mapping.
+
+Add `--validate-functions` to run the same per-function semantic validator as
+ordinary loading, releasing each body immediately after it passes. Keep all
+function signatures and declaration indexes available until analysis finishes;
+validation of later calls must not depend on retaining earlier code. Counters
+include only successful bodies, and a failing body reports its definition index.
+The shared loader checks the remaining section structure and initializes private
+module objects. Function imports receive inert callbacks; memory, table, global
+and tag imports use private engine-owned placeholders with declared types and
+limits. Tables belong to the owned cleanup range, and memories use the normal
+ownership flags. No real provider is resolved, no start function runs and no
+engine escapes. Imported non-nullable reference globals are unsupported rather
+than given a fabricated reference. Placeholder values and ignored instantiation
+traps mean `validated: true` is scoped to function/loader validation; it does
+not establish real import compatibility, successful instantiation or startup.
+
+Use both modes on invalid unused bodies: decoding can succeed while validation
+fails. Test first/later failures, partial private-import cleanup, trapping and
+import-calling starts, and ordinary start traps separately. The portable
+`stream-validation.wast` guards full-body validation and ordinary execution;
+private generated binary probes cover the diagnostic's non-execution boundary.
+This analysis path does not implement an execution cache. A later bounded cache
+must pin active/yielded frames and preserve clone/thread ownership.
+
+Require an actual outer function `end` and exact body-reader consumption before
+either normal validation or measurement. A closed inner block is not the outer
+terminator. `function-envelope.wast` checks missing/trailing ends, recovery,
+normal semantic rejection and start traps. Shared function disposal releases
+locals and opcode-owned payloads for both streaming inspection and final
+instance teardown; clones continue to use the existing last-owner rule.
+
 ## Cross-Module Linking
 
 Resolve imports from the decoder's declarations rather than rescanning section
@@ -580,6 +901,25 @@ Tests should cover provider/consumer modules, explicit registrations, imports
 after expected instantiation failure, two consumers of one memory, and two
 instances created from one decoded module.  Destroy consumers before providers
 unless ownership has been promoted to a shared store object.
+
+Function import bindings are an exact-sized immutable table of host function,
+host-data pointer, type index and control kind. Count only function imports
+when allocating it; other import kinds have separate index spaces. The
+declaration map is one byte for each combined imported/defined function index.
+Allocate the imported prefix even without a function section, grow for defined
+functions with checked addition and zero the new suffix. Bounds checks on
+exports, element entries, constant `ref.func` and instruction validation use
+that combined space, not the defined-function limit alone.
+
+Both allocations share decoded-table reference counting across process clones;
+release them only with the last static owner. The host-data pointees retain
+their existing external ownership. An empty module needs neither allocation.
+`WASM_MAX_FUNCTIONS` in `src/config.h` bounds binary defined functions, while
+`WASM_MAX_IMPORTS` bounds import declarations of all kinds in the decoder and
+loader. Preserve those separate resource policies when checking combined
+indexes. The WAT parser has a separate construction bound. The portable
+`function-metadata.wast` regression exercises mixed/import-only modules,
+combined indexes through 16,383, declaration checks and failed-load recovery.
 
 ## Proper Tail Calls
 
@@ -615,8 +955,30 @@ ordinary global side effects intact.
 Treat guest `siglongjmp` as a typed engine result.  Ordinary C returns propagate
 it until the matching live interpreted frame restores the snapshot.  Reject
 stale environments and normalize a requested zero return value according to
-the guest ABI.  Signal-mask restoration is part of `sigsetjmp` semantics, not
-native process state.
+the guest ABI. The public SDK keeps `setjmp` as a caller-local macro and gives
+`longjmp` a real C-linkage declaration/import for libc++'s `std::longjmp` alias.
+Verify compiled C and C++ returns-twice behavior with real stack-pointer reads,
+copied buffers and unchanged global side effects; use WAST for expectations.
+See `src/system-tests/clang/checkpoint`. Bash's private header forwards to this
+shared ABI. Signal-mask restoration belongs to the engine-owned kernel, not
+native process state. Nonzero `save_mask` flags copy all guest mask words into
+the evaluator snapshot; zero leaves mask changes intact. Restore only at the
+validated matching frame, after clearing abandoned syscall interests and any
+temporary pselect mask. Keep copied/forked tokens and yielded continuations
+paired with their own saved mask. Signal callbacks restore their own entry
+scope before the outer checkpoint restores its mask. Verify jumps after sleep,
+out of handlers, with newly unblocked pending signals, and after fork using
+actual compiled C/C++ observations.
+
+Link actual LLVM crash recovery against the complete Support/C++ archives;
+compiled jumps alone do not establish this integration. Check disabled/enabled
+and nested contexts, explicit Process::Exit, caught guest signals, reverse
+resource cleanup and real Signals callbacks/file cleanup. Guest utility-mode
+registration must record only successfully installed handlers so uninstall
+does not overwrite ignored actions with stale previous actions. Native LLVM
+keeps its original backend. These checks establish supported guest signal
+recovery, not host faults, stack symbolication or recovery from all Wasm traps;
+the distinction is documented with `src/system-tests/clang/crash-recovery`.
 
 This design avoids native stack-unwinding machinery and permits deterministic
 cleanup on traps, exits, or cancellation.
@@ -740,6 +1102,60 @@ parallel JavaScript blob map or executable-byte registry. A compatibility
 registry may exist only for focused native lifecycle fixtures that do not
 construct a VFS namespace.
 
+Capture the resolved namespace pathname in the same operation as the owned byte
+snapshot. Copy that identity into the process capsule when committing the image,
+inherit it across fork, and replace it only on successful exec. Fork's evaluator
+clone does not borrow the parent's image descriptor. Shared-libc
+`waste_get_executable_path` calls the bounded `waste_kernel.executable_path_v1`
+copy ABI, so LLVM executable discovery does not rely on argv[0], cwd, dladdr,
+or re-resolving a path after rename/unlink. Check exact/short buffers, errno,
+invalid pointers and atomic failure at the end of memory. This identity query
+does not implement general realpath. Derive LLVM's private PATH_MAX and engine
+image storage from the existing VFS_PATH_MAX_BYTES configuration. Private
+include_next adapters must follow libc++ wrappers and precede the public SDK;
+the native-generator and C++ bootstrap profiles keep their own header order.
+See `src/system-tests/clang/executable-path` for the actual-source observer.
+
+When unlink compacts the namespace table, rebase open-description references to
+surviving nodes and detach references to the removed node. An open description
+retains its file object independently; dup aliases must be adjusted only once,
+and fork must accept detached regular descriptions. Captured process records
+use explicit file positions because cross-fork shared offsets remain pending.
+
+Use the shared component resolver for filesystem calls and loader snapshots.
+Resolve each symbolic link before processing later `..` components, and resolve
+relative targets from the containing directory. Preserve final entries for
+readlink/unlink/rename and no-follow operations. Follow intermediate links even
+with a final no-follow flag; check trailing slashes as directory requirements.
+Creation may tolerate only a missing final component. Reject missing parents
+and traversal through regular files. Bare language kernels synthesize `/tmp`
+alongside the existing initial directories. Keep lexical normalization for
+mount/seeding inputs, not guest pathname traversal.
+
+The versioned `symlinkat_v1` import copies and validates both strings before
+mutation, returns negative errno and leaves translation to shared libc. Allocate
+the target before publishing the node so failure cannot leave an incomplete
+link. Store its original bytes and length, independent of cwd or target existence.
+When rename replaces a regular/link entry, use the unlink lifetime/compaction
+path and re-find the source before moving its name; copying the source record
+over the destination would preserve the wrong name and leave a table hole.
+See `src/system-tests/clang/symlink` for compiled C++ calls, WAST assertions and
+Bash execution through final and directory links. Directory-subtree rename and
+symlink transport packaging remain separate capabilities.
+
+Canonical lookup reuses this resolver through `waste_kernel.realpath_v1`; it
+must not normalize away a missing, non-directory or inaccessible component
+before consuming a later `..`. Check search permission on each traversed
+directory and after a trailing slash, using the existing kernel credentials.
+Keep span/capacity and injected-credential checks private when guest APIs cannot
+reach those boundaries. Copy the complete resolved string only after validating
+the caller's writable range, so a protected-page crossing cannot publish a
+partial prefix. The import returns length or negative errno; shared libc handles
+errno and optional malloc-owned output. Derive canonical storage and LLVM's
+private PATH_MAX from `src/config.h`, without introducing a separate inventory
+or a public pathconf capability. See `src/system-tests/clang/realpath` for WAST
+assertions, compiled C++ calls and native/sanitized/production-worker steps.
+
 Classify binary Wasm by its `\0asm` magic, not by a filename suffix. Textual
 files use the explicit `/bin/wat` or `/bin/wast` handlers, a `.wat`/`.wast`
 suffix, or a bounded shebang naming one of those handlers. Shebang splitting,
@@ -783,6 +1199,21 @@ parent wake, so a later builtin-only child closes its pipe descriptors even
 when an earlier child replaced its image with `exec`. The fork-isolation
 fixture and the aux Bash pipeline/substitution session cover these paths.
 
+Bind CRT-owned stdin/stdout/stderr through the initialized process-local libc
+accessors before calling `__wasm_call_ctors`, not just before main. Engine stdio
+initialization alone leaves those executable globals null during constructors.
+The compiled [C++ startup fixture](../src/system-tests/clang/startup/README.md)
+first reproduced 21 failures, then verifies both main-signature variants through
+real prioritized constructors, redirected input/output, environment, existing
+sleep continuations and current C++ archive allocation/ownership. Keep local
+destruction distinct from the separately verified static-exit callback path. These constructors
+run inside the CRT's ordinary `_start` evaluator call; the synchronous library
+loader's constructor boundary described above has different yield constraints.
+The fixture's global observer is trivially destructible without suppressing
+registration flags;
+descriptor streams currently write directly, so return output is not buffered
+flush acceptance.
+
 `tests/guest-session-aux-bash.json` explicitly runs the installed source-built
 command, including failures, file I/O, child processes and delayed interactive
 input. Run `python3 tests/guest-session-check.py --scenario aux-bash --page
@@ -799,6 +1230,683 @@ scripts. Other executable-format failures retain ENOEXEC and normal shell
 fallback semantics. Do not embed executable bytes, bind private FILE slots
 or rewrite compiled WAT in the bootstrap. See [the package notes](../src/aux/bash/README.md)
 for prerequisites, limitations and the `bash-source-package` release target.
+
+## Clang Cross-Build (In Progress)
+
+The Clang aux port has its own staged LLVM source, host table-generator,
+guest C++ runtime and compiler/linker build directories. Its bootstrap SDK
+probe uses generated libc++ headers with the mounted guest headers; header
+compilation alone does not establish runtime support. Preserve SDK unavailable
+annotations and implement real missing capabilities before linking a compiler.
+See [the package instructions](../src/aux/clang/README.md) and
+[the active Clang plan](active-clang-plan.md) for its current incomplete status.
+
+Freestanding C++ does not give an ordinary `main` C linkage. LLVM's generated
+tool driver must explicitly expose C `main` in the guest profile to match the
+shared C CRT. Check the actual object symbol and reject an imported `main` in
+the linked executable. With dynamic unresolved-symbol imports, a link can
+succeed while importing `env:main` and discarding the entire compiler/linker
+driver; a small artifact and absence of C++ imports do not prove startup.
+
+Inspect the host compiler driver's verbose command and child process when a
+final link appears to wait after writing a valid Wasm file. Some host Clang
+builds automatically run Binaryen's `wasm-opt` at `-Os`. The linker may already
+have finished while the separate optimizer waits; wasm-ld's thread count does
+not control that child. Feature-detect the driver's `--no-wasm-opt` flag and
+disable that implicit pass for compiler-tool linking, retaining ordinary source
+optimization. Measure optional whole-module optimization separately.
+
+Audit a compiler component's callers against the generated target dependency
+closures before enabling a broad C++ runtime feature. A source compiled into a
+common archive can be unused by the selected executables. Exclude only a proven
+unused guest component, retain native builds and required output paths, and
+declare the omitted file in `LLVM_OPTIONAL_SOURCES` so LLVM's source inventory
+check remains enabled. Re-audit when changing the target graph.
+
+When one source file owns both required and unused algorithms, retain the
+required implementation and exclude only the unused guest options/class/
+entrypoints. Check callers across the full dependency source tree and confirm
+the actual configured projects, targets and linker drivers. CodeLayout's
+CDSort consumers are ELF/BOLT; the Wasm-only guest retains ExtTSP used by
+MachineBlockPlacement. Native profiles keep both algorithms. Do not add a
+private math approximation or fabricate a libc provider for the excluded
+path. Verify complete source profiles, real object imports, option registration
+and required API results. See `src/system-tests/clang/code-layout`; expanding
+the guest graph requires re-auditing this selection.
+
+For a source-backed output observer, keep LLVM's buffer/formatting implementation
+and capture its abstract sink callbacks. Verify complete bytes, pending writes,
+positions, flush/destruction and independent ownership in WAST. Vtables can keep
+dependencies that the exercised methods never call. When isolating independent
+upstream helper fragments for a fixture, preserve their definitions, license and
+source hashes, fail when extraction boundaries change, and keep generated sources
+under build. Such a fixture does not establish full platform translation-unit
+compilation or providers; do not use test fragments as production replacements.
+
+For aligned guest allocation, retain the ordinary boundary-tag header directly
+before the returned pointer. Split alignment padding into reusable free blocks;
+if a prefix would be too small for a block header/footer, advance to the next
+alignment boundary. This keeps free/realloc/coalescing on their usual ownership
+path. Round sizes with a wider integer before narrowing to internal block sizes.
+Check both padding fragments, adjacent live bytes, failure output/errno and
+large requests in WAST against the installed library on both runtimes. libc++'s
+aligned-new helper rounds sizes before calling aligned_alloc and releases via
+ordinary free; a successful C++ header probe alone does not verify that runtime.
+
+Guest `fenv.h` models Wasm's fixed round-to-nearest arithmetic and absence of
+sticky floating-point exception flags. Advertise only supported modes/flags
+(FE_TONEAREST and FE_ALL_EXCEPT=0); reject requests to change an unsupported
+mode or raise nonempty flags. Saved environments and flag snapshots are guest
+four-byte values, with default-environment sentinel handling before dereference.
+Do not import host fenv state into either runtime. Verify actual ties-to-even,
+NaN/infinity/underflow results, save/restore, rejected requests and output/errno
+preservation in WAST alongside C/C++ header/provider checks.
+
+For guest integer conversion, derive limits from the guest C types, rather
+than the native host's long width. The twelve shared `strto*`/`wcsto*` integer
+providers use one unsigned-magnitude parser. Its input reader retains the full
+wchar value; narrowing to a byte would misinterpret non-ASCII low bytes as
+digits, signs, whitespace or NUL. Use element indexes and typed end-pointer
+wrappers, with no transcoding buffer or pointer-to-pointer type punning. The
+accepted whitespace and digits are the C ASCII set; this is not Unicode
+classification. Validate bases before division; check the
+limit's quotient/remainder before multiplying and latch overflow while still
+advancing over all remaining digits. Permit the extra negative signed
+magnitude without signed overflow. Unsigned negation wraps only for in-range
+inputs; overflow must still saturate. Keep the original input as the no-digit
+end pointer, and consume `0x` only when a hex digit follows it. Package WAST
+checks results, end offsets, errno, input preservation and end-pointer canaries
+for both guest widths and every supported base. Widen each ASCII fixture in
+WAST to exercise both representations against the same expectations; also test
+non-ASCII wide fixtures and signed wchar extremes. Capture actual C++ calls
+through `<cwchar>`/`<cinttypes>` in compiled observers, with value, end offset
+and errno expectations remaining in WAST. C++ SDK checks verify C linkage
+and namespace return types independently of those runtime assertions.
+
+For guest floating conversion, scan lexical boundaries independently of the
+numeric representation. Preserve the original end pointer on no conversion;
+roll back an exponent marker without digits, and recognize a hex prefix only
+when a significand follows. Read full wchar elements using the same ASCII
+scanner. Saturate exponent accumulation beyond every possible guest input-length
+adjustment and still consume its digits, without exponent-sized floating loops.
+Use bounded integer ratios and powers of five, then extract the target precision
+and round by comparing the remainder against half the denominator. Test even
+and odd ties and tails just above them; converting first to double can introduce
+a second rounding for float and lose binary128 precision/range. Encode all three
+IEEE representations directly, without using approximate quad helpers.
+Derive the retained prefix and private word-array bounds from the widest guest
+format. Every target rounding midpoint has a shorter terminating decimal
+expansion; a nonzero discarded tail breaks an exact prefix tie. Keep trailing
+prefix zeros in the scale, preserving the sticky tail, rather than expanding
+large numerator/denominator arrays unnecessarily. Check the long-tail path in
+WAST with nonzero digits after 20,000 zeros. Also test exact/inexact subnormals,
+normal/overflow boundaries, signed zeros, infinity/NaN spelling, huge exponents,
+non-ASCII wide characters, end-pointer units and input/output canaries.
+Compiled C++ observers must capture actual float/double/binary128 return bits,
+not narrow values to a common double before WAST assertions. Fixture data in
+shared process memory must avoid provider-owned slots: a generated probe that
+lands on `__errno_location()` overwrites its own input when setting errno.
+Check the live slot address when diagnosing an isolated no-conversion mismatch;
+move the probe data rather than changing a correct provider. The current policy
+uses fixed nearest/ties-to-even rounding and detects tiny inexact results before
+rounding; it leaves exact subnormals and successful conversion errno unchanged.
+See the [C11 draft](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf),
+sections 7.22.1.3 and 7.29.4.1.1, for conversion grammar and end-pointer rules.
+
+For bounded wide formatting, keep counts and capacities in wchar elements.
+`swprintf` returns a negative result on insufficient capacity; it is not the
+count-only/truncation contract of `snprintf`. Terminate the retained prefix
+when capacity is nonzero and test exact fit, one/zero elements, errno and all
+unwritten canaries. Preserve full `%ls`/`%lc` elements; decode `%s` as complete
+UTF-8 characters and count precision in output elements. Reject invalid UTF-8,
+unsupported format syntax and decimal field overflow explicitly. Keep derived
+fractional precision in 64 bits: `%g` can add leading fractional zeros to an
+`INT_MAX` requested precision even though the parsed field fits an int.
+For floating output, decode the IEEE significand/exponent without quad
+arithmetic. An exact terminating decimal expansion follows by multiplying
+the significand by powers of two or five; keep the decimal scale separately.
+Bound the private decimal storage from the widest guest format, round discarded
+digits with ties-to-even and handle carry before selecting `%g` notation.
+Produce hex digits directly from significand bits. This preserves binary128
+range and low bits through `%Lf`, `%Le`, `%Lg` and `%La`; casting to double would
+lose them. Exercise normal/subnormal limits, negative zero, ties and adjacent
+values in WAST, and verify actual C/C++ variadic lowering independently.
+The bounded wide provider does not establish narrow floating formatting,
+wide stream IO, alternate locales or C++ owning-string startup. See the
+[C11 draft](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf),
+sections 7.29.2.1 and 7.29.2.3, for wide formatting and buffer semantics.
+
+Reuse that exact floating conversion for the narrow printf family, with a
+private parsed-spec header and separate byte/wchar output contracts. A narrow
+sink retains its bounded prefix and counts the full result; a wide sink stops
+with an insufficient-capacity error. Emit only actual decimal digits, then
+count zero/padding runs directly once narrow storage is full. This lets null
+sizing and enormous precision return promptly without a precision-sized loop.
+Check INT_MAX before narrowing counts and parsed fields. Preserve vararg
+alignment and consumption across double, binary128 and subsequent arguments;
+compiled C++ observations supplement raw argument-blob WAST checks. LLVM's
+inlining statistics can use its raw sink and `format("%.4g", ...)` with these
+shared providers, retaining native/threaded streams. See
+`src/system-tests/clang/inlining` and libc's `narrow-floating-format.wast`.
+
+Guest `math.h` classification macros use compiler builtins, preserving the
+operand type and evaluating it once. The five `FP_*` codes are defined in the
+public header; libc++ uses the same constants in its `<cmath>` overloads.
+Keep math provider declarations under C linkage. Run compiled C/C++ observation
+probes with volatile float/double/binary128 inputs and assert their classifications,
+signs, call counts and unchanged errno in WAST. Include the smallest/largest
+subnormals and normal boundaries to expose narrowing inside compiler helpers.
+Binary128 comparison must inspect both words, distinguish all fraction bits,
+treat signed zeros as equal and give the correct unordered result for each
+compiler-rt helper. Narrowing through double incorrectly collapses subnormals
+and merges distinct normal values. Exact comparison does not imply correctly
+rounded binary128 arithmetic: existing arithmetic/conversion helpers still
+use double internally.
+
+When cross-building LLVM against generated libc++ headers, put those wrappers
+before the guest C include directories, so `include_next` finds the public C
+types. Select libc++ explicitly for the guest LLVM configure, while native
+table generators retain their host library choice. Diagnose the source error
+in CMake's configure log; a failed standard-library version probe can report
+a misleading version error when header lookup actually failed. Never force
+such a probe to pass or enable native host-header fallback.
+
+Keep guest-only LLVM options in `src/aux/clang/guest.cmake`, separate from
+the native table generators. Set `LLVM_HOST_TRIPLE` to the guest triple;
+upstream's configure guess otherwise describes the machine running CMake.
+Source-level host detection must agree with that configured guest identity:
+LLVM's `LLVM_ON_UNIX` path otherwise includes `sys/utsname.h` and queries a
+host release even for `wasm32-unknown-unknown`. Select the configured triple
+in `TargetParser/Host.cpp` only for `LLVM_WASTE_GUEST`; preserve the optional
+target-override environment setting and the native Unix path. Verify the
+actual `LLVMTargetParser` archive's default/process triple and CPU fallback
+with source-backed WAST in both runtimes.
+The Generic platform cannot configure optional SHARED/MODULE outputs. Disable
+the libLTO, libclang and Remarks C API libraries and plugins through their
+upstream options, while retaining PIC and the static LLVM LTO/Remarks components
+used by LLD. Disabling PIC would alter the intended guest linking profile.
+
+Archive-only CMake probes establish compilation, not provider resolution.
+In particular, `check_library_exists` can report a library/function as present
+without linking it when `CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY` is used.
+Audit LLVM's resulting capability flags against the actual guest SDK/providers
+before accepting the executables. The guest profile explicitly excludes absent
+separate pthread/dl/rt/pfm libraries; those flags do not declare individual
+functions available or unavailable in shared libc. Configure success does not
+establish native OS facilities or a usable guest POSIX support implementation.
+
+Select LLVM's POSIX implementation through an explicit guest-only option,
+not by changing CMake's Generic target to Linux or defining host OS macros.
+`src/aux/clang/clang-waste.patch` adds `LLVM_WASTE_GUEST`, rejects other
+toolchains, and sets `LLVM_ON_UNIX` without enabling native linker version
+scripts. Apply the owned patch only to the staged source. Keep all underlying
+operations subject to guest declarations, provider audits and runtime tests;
+the backend selection itself does not make unsupported APIs available.
+Explicitly exclude absent frame/unwinder symbols and unavailable pthread
+rwlock initialization from archive-only configure successes.
+
+Audit structure fields separately from their POSIX typedef names. The stable
+guest `stat` ABI has 64-bit size/device/inode fields while existing
+`off_t`/`dev_t`/`ino_t` remain 32-bit. LLVM's private metadata storage and
+constructor parameters derive their types from the actual fields using
+`decltype`, preserving all bits without changing installed command ABIs.
+Probe the separate `st_mtime_nsec` member and use its matching access/modify
+nanosecond fields in Unix status conversion. Verify C linkage in both
+`sys/stat.h` and `fcntl.h`, including their shared declarations.
+The compiled observer in `src/system-tests/clang/filesystem` uses real guest
+status calls and actual upstream inline metadata. Keep synthetic large-size
+checks distinct from the VFS's file-size limits, and leave full out-of-line
+LLVM path/status acceptance pending until that source compiles and links.
+For exact file timestamps beyond 2038, use the existing private kernel-clock
+injection and assert the sampled clock bounds as well as status metadata in
+WAST. Ordinary public-CLI runs check timestamps against live bounds. Do not
+use the current `utimensat`/`futimens` stubs as successful timestamp setters;
+they return ENOSYS. `HAVE_FUTIMENS` describes an exported function, not
+successful mutation; LLVM's Unix/Path implementation propagates its errno.
+Independent access/change timestamp mutation requires kernel support beyond
+the compact mtime record and must not be approximated as a successful setter.
+
+Clang's archive-only emulated-TLS check can also succeed without a runtime
+definition. The guest profile disables `CLANG_HAVE_EMUTLS_GET_ADDRESS` because
+neither shared libc, linked C++/Support archives nor the adapter provides it.
+Keep the native generator's upstream probe. Check the actual provider and
+consumer rather than treating a compile-only result as a runtime capability.
+
+When LLVM's disabled-thread profile still names a libc++ synchronization type
+omitted by the matching runtime, adapt LLVM's own wrapper under the explicit
+guest option. Do not fabricate a type in `std` or enable unavailable pthread
+capabilities. The guest `SmartMutex` reuses its recursive acquisition counter,
+counts successful `try_lock` calls, and retains noncopyable ownership. Native
+and threaded branches retain their real recursive mutex. These counters are
+valid only for the compiler's single execution thread; engine/kernel scheduling
+and synchronization retain their separate semantics. The compiled observer in
+`src/system-tests/clang/mutex` exercises both wrapper variants and standard scoped
+lock helpers with all functional assertions in WAST. It also links the current
+bootstrap `libc++.a` to execute the real `llvm::call_once`; header compilation
+alone would not establish that archive-backed initialization works.
+
+Use the member's actual lock type when adapting unguarded LLVM/Clang owners:
+the guest single-thread PerThreadAllocator, FileCollector, HashingOutputBackend
+and AtomicLineLogger use LLVM's counted recursive mutex, while native/threaded
+branches keep `std::mutex`. SmartRWMutex counts reader/writer acquisitions,
+rejects conflicting try-locks and releases scoped readers exactly once.
+Omit unused BalancedPartitioning pool synchronization members only where its
+existing disabled-thread task methods cannot use them. Header/source compiles
+do not establish the owners' full filesystem or task-pool runtime behavior.
+
+For DWARF context caches, preserve recursive access and the selected state's
+eager DWO parsing when adapting its lock. The upstream `isThreadSafe` label
+selects that state; a counted lock in the disabled-thread guest does not prove
+cross-thread exclusion. Include the complete actual context source in the
+observer to access its anonymous state classes without production test hooks.
+Supply valid sections through `DWARFObject`, then check real unit/DIE values,
+cache identity, repeated source reads, eager/lazy selection and destruction in
+WAST. A section callback can reenter another cache and yield through shared
+`usleep` while the outer guard is live. Keep complete native/threaded syntax
+checks and the generated guest object rules beside the runtime fixture; see
+`src/system-tests/clang/dwarf-context`.
+
+For GSYM creator and transformer locks, use that same guest mutex wrapper and
+infer each guard's selected type. Check complete native/threaded sources as
+well as the actual guest objects. A source-backed fixture can supply multiple
+DWARF units, convert through the production archive, encode both GSYM versions
+and byte orders, and decode through the actual reader. Keep expected ranges,
+names, ownership and error outcomes in WAST. Overwriting the input encoding
+after `GsymReader::copyBuffer` distinguishes copied reader ownership from an
+accidental reference to the caller's storage. Exercise the transformer's
+task-pool branch without interpreting its disabled-thread backend as evidence
+of concurrent compiler execution; see `src/system-tests/clang/gsym`.
+
+For CFG node attributes, replace the omitted string-stream owner with LLVM's
+unbuffered `raw_string_ostream` only in the disabled-thread guest. Preserve the
+native/threaded stream and the existing insertion/return logic. Test the actual
+header method against complete production Analysis objects and real IR owners;
+individual generated object rules can supply a fixture while the full archive
+is unfinished. WAST should check exact bytes, including embedded NULs, empty
+IDs and separators, and retained results after callback-owner destruction.
+An ID callback can yield through shared `usleep` while the raw sink is live.
+Default block frequencies establish cold/unprofiled formatting only; see
+`src/system-tests/clang/cfg-format` for that boundary and complete source gates.
+Its heat helper needs the shared guest-libc binary64 `log2` and `round`
+providers. Normalize logarithm inputs by their IEEE exponent, including
+subnormals, and reduce the mantissa around one before a bounded atanh series.
+Test exact powers, high-precision reference vectors, domain/pole errno and
+non-finite values. For ties-away rounding, subtract the truncated magnitude
+before testing its fractional part; adding 0.5 first misrounds neighbors below
+a half-integer. Preserve signed zero and already-integral large inputs. These
+providers do not imply correctly rounded transcendental math or support for
+additional precision variants; package assertions live in `log2-round.wast`.
+
+The binary32 `log2f` provider explicitly promotes its input exactly, reuses
+the binary64 implementation and narrows once to the Wasm binary32 result.
+Domain/pole errno handling stays in the shared implementation. Verify float
+results and errno independently, including every positive power of two,
+subnormal and range-reduction boundaries, near-one inputs and integer-built
+signaling NaNs. The selected high-precision vectors in `log2f.wast` use a
+one-ULP bound; they do not establish general correct rounding. Check actual
+C++ overloads and final function imports: a source spelling `std::log2(float)`
+can introduce a `log2f` dependency through builtin lowering.
+
+For LLVM's optional constant folding, distinguish the compiler's evaluation
+providers from the generated program's target-library information. A missing
+host math provider can return LLVM's ordinary no-fold result, preserving the
+original operation. Keep exact APFloat shortcuts and supported computations;
+do not replace missing math with guessed values or weaken SDK availability.
+Apply the same conservative decision to side-effect queries before deleting
+math calls. A null optional host function must be checked before clearing errno
+or floating exception state. Native builds retain their host function pointers.
+Test complete production objects through public folding APIs: scalar and vector
+declines, exact special values, poison, supported providers, target availability,
+no-builtin/nondeterminism controls and retained call arguments. See
+`src/system-tests/clang/folding` for WAST and full source compatibility gates.
+
+Clang's module cache, dependency filesystem, preamble file owner and driver
+worker pool select compiler-local synchronization aliases. Native/threaded
+branches keep standard mutexes and condition variables. In the disabled-thread
+guest, ready predicates return with ownership intact; unfinished unbounded waits
+report a fatal error even under `NDEBUG`. Timed waits release the counted lock,
+use the existing LLVM monotonic backoff/shared POSIX sleep, then reacquire and
+recheck. Notifications have no queue in this one-thread profile. Do not replace
+the deadline with immediate success/timeout or create another scheduler.
+Single-mutex scoped guards can use `lock_guard` when this libc++ profile omits
+`scoped_lock`. Link actual cache sources against Support and current C++ archives
+to verify owning buffers, stable cached reads, invalidation keys and generations
+across unsafe unlock and old-owner destruction. Existing controlled clocks and
+signals exercise timed predicates; WAST checks child rejection and parent
+survival. See the [module-cache fixture](../src/system-tests/clang/module-cache/README.md).
+
+Linking the cache's real pruning implementation also retains LLVM directory
+iteration. Check public directory declarations' C linkage in C++: a header that
+only passes C preprocessing can emit mangled `opendir`/`readdir`/`closedir`
+imports with no provider. Redeclare available APIs with explicit C linkage in
+the C++ SDK probe and emit calls. Verify the linked artifact's actual imports
+and loading as well as its shared-libc import signatures; the latter does not
+by itself reject unrelated unresolved imports.
+
+For Clang's module compilation owner, reuse LLVM TaskGroup only under the
+explicit disabled-thread guest profile; it already runs callbacks inline.
+Queuing those callbacks until owner destruction would set its stop flag before
+recursive module discovery can submit its work. Preserve the original mutex,
+thread creation and shutdown joins in native/threaded profiles. Keep the actual
+private owner in a staged header shared by production and its observer rather
+than copying an implementation into a fixture. Adapt move-only compiler,
+diagnostic, controller and advisory-lock captures to TaskGroup's copyable
+function with one shared owning callable. Check reentrant capture cleanup,
+service-owned locks outliving temporary cache objects and lock/capture lifetime
+through the existing interrupted POSIX sleep. WAST owns those assertions;
+full worker source compiles establish declaration coverage, not completed
+dependency scanning. See [module task ownership](../src/system-tests/clang/module-tasks/README.md).
+
+For LLD's diagnostic owner, adapt the mutex only under that same explicit
+profile and let lock guards deduce its actual type. Keep native/threaded
+standard synchronization. A localization-disabled libc++ can omit `std::regex`
+entirely: use LLVM's already built regex implementation privately for this
+guest path. Translate ECMAScript character classes and noncapturing groups to
+POSIX ERE with explicit capture indices; exclude CR/newline where native `.`
+would not match them, and anchor patterns used with `regex_match`. Check exact
+location prefixes, multiline separation and duplicate splitting in WAST rather
+than merely checking that the alternative compiles.
+For full-string validators, also compare the captured full-match length with
+the original string length: anchors alone must not accept a prefix before an
+embedded NUL or trailing newline. Compare real guest results with the original
+native std::regex implementation, including all byte values for narrow character
+ranges. `src/system-tests/clang/spirv-name` checks the actual Driver helper.
+
+Link LLD's real context and CodeGen/MC option initialization when testing
+fatal diagnostics; do not stub context methods. Verify actual FileOutputBuffer
+discard separately from memory lifetime, recover through LLVM's established
+CrashRecoveryContext path, and test ordinary `_exit` in real guest children.
+Managed shutdown, ordinary static callbacks and context cleanup have different
+exit rules. A yielding cleanup callback must resume after arena destruction
+with the context cleared. See the [LLD diagnostic fixture](../src/system-tests/clang/lld-diagnostics/README.md).
+
+LLD's `unlinkAsync` is an optional output-removal optimization. In the explicit
+disabled-thread guest, reuse its upstream one-thread fallback and let the
+ordinary output writer replace the destination; a requested strategy count
+cannot create a thread capability. Keep native/threaded detached-close behavior.
+Link the real Filesystem and FileOutputBuffer owners to verify preflight leaves
+the original inode intact, commit removes its name while retained descriptors
+still read old bytes, and destruction/discard removes only temporary files.
+Separate mapped-memory lifetime from temporary-file lifetime. Existing shared
+sleep can interrupt this ownership interval; no new scheduler is required.
+Exercise ordinary and LTO stream buffering, seek/read/write and device fallback
+through those owners. See [LLD filesystem ownership](../src/system-tests/clang/lld-filesystem/README.md).
+
+Public pointer-format macros must follow the compiler's actual pointer integer
+aliases. A 32-bit pointer typedef can be `long`, while `uint32_t` is `int`, so
+copying `PRIx32` into `PRIxPTR` is not sufficient. Use the compiler's matching
+format definitions alongside its `intptr_t`/`uintptr_t` aliases and check real
+C/C++ variadic calls with high bits and a following 64-bit argument. Also run
+the upstream formatter that exposed the missing macro, rather than only a
+header preprocessing check.
+
+For an LLVM error-owner port, retain the real optional Error, executor and
+payload lifetime. Centralize shared production aggregation under a guard whose
+type follows the owner's field; preserve standard native/threaded locks. Test
+queued captures, nested submissions, joined-error order, errors transferred
+past backend destruction and reentrant cleanup while the owner is still live.
+Suspend a real queued callback through the existing interrupted sleep controls
+with both captures and errors alive. The
+[ThinLTO error fixture](../src/system-tests/clang/lto-errors/README.md) uses the
+actual base owner and both production aggregation callers; it does not establish
+bitcode compilation or automatic draining of an unwaited backend.
+
+Use upstream constructors and generated options in source-backed observers.
+Compile the actual owning sources and let section collection retain their
+required initialization; do not supply empty constructor stubs. Check data
+imports as well as function imports: an unresolved `GOT.mem` options singleton
+can remain even when every C++ function resolves, and the guest loader correctly
+rejects it. For integer-only profile context formatting unavailable through
+guest stringstreams, use LLVM's existing owning raw string stream and verify
+exact binary bytes, full-width integers and returned-string lifetime. Preserve
+the native/threaded stream paths and keep broader floating formatting separate.
+
+Large generated LLVM option switches can exceed small evaluator control bounds
+even when their Wasm is valid. Keep the decoder, validator, executor, clone and
+continuation capacity coordinated through `EXECUTION_MAX_CONTROL_DEPTH` in
+`src/config.h`. Measure the actual source-backed artifact before adjusting the
+bound. The fixed 512- and 1024-block `control-depth.wast` regressions use standard binary
+WAST to separate evaluator control depth from text-parser nesting, then checks
+deep branches, `br_table`, early return and independent active caller/callee
+control stacks. Resource-limit rejection remains bounded.
+The Clang AST fixture reaches 528 nested blocks; its source-backed inventory
+motivates the current 1024 bound. The native WAST context owns a driver with
+about 8.5 MiB of inline continuation frames at this bound. Allocate that context
+on the heap and release it after driver/parser cleanup, including for scripts
+that supply an external invocation callback. The native session and checkpoint
+owners already use heap allocation; the browser driver uses static storage.
+
+Large source-backed fixtures can expose runtime allocation cost before guest
+execution. Profile the production browser engine before changing memory caps or
+adding code caches. Its private host allocator keeps free blocks in size bins,
+physical previous/next links for coalescing, and a tail pointer for append and
+in-place growth. Allocation searches free blocks rather than every live module
+buffer; splitting and coalescing must update both structures. Free tails can
+grow without wasting an earlier free span. Overflow or memory-growth failure
+must preserve the old allocation and its bytes.
+
+`make -C src/html-rt browser-allocator` runs this actual allocator with native
+ASan/UBSan and a bounded-memory adapter; host libc allocation remains separate.
+It checks alignment, fragmentation, coalescing, realloc/calloc, retained peers,
+and failed growth. This is a private runtime ownership test, alongside WAST
+checks through the packaged production worker; it cannot be replaced by guest
+libc allocator tests, which exercise a different allocator.
+Avoid copying an entire parsed `wast_group` onto the C stack to substitute a
+resolved module: it is about 3 MiB at the current AST limits. Both WAST handlers
+pass the module and raw-source views directly to the shared encoder. Preserve
+binary/quoted-source handling and module-definition resolution while eliminating
+the temporary copy; do not raise the host stack limit to hide the problem.
+
+When invoking selected generated CMake object/PCH rules directly, first run
+that component's generated `depend` target in a separate Make invocation.
+The object build then reads the refreshed header dependencies. Skipping this
+normal CMake step can retain a stale PCH after an SDK edit. Build required
+generated headers through their actual targets as well. Staged upstream trees
+without `.git` can discover the containing repository: pass LLVM's forced VCS
+revision/repository options from the checked-out dependency when configuring
+native generators and the guest compiler.
+
+`LLVM_TARGETS_TO_BUILD=WebAssembly` selects LLVM code generators, not LLD
+linker drivers. Scope guest driver selection explicitly in both CMake library
+closure/aliases and the entrypoint table; keep the native default untouched.
+Inspect generated link recipes and actual object references to confirm that
+selection. Those checks do not establish final executable dispatch or linking.
+
+Audit included headers as well as source-local threaded guards. Parallel.cpp
+guards its executor fields, but Parallel.h originally named a standard mutex
+and condition variable in its private Latch unconditionally. The explicit
+disabled-thread guest boundary keeps an atomic count and checks completion;
+TaskGroup already executes callbacks synchronously in that profile. Reject
+pending waits/destruction and count wrap through real guest abort even under
+`NDEBUG`. Preserve native/threaded blocking synchronization. The source-backed
+observer in `src/system-tests/clang/parallel` tests actual TaskGroup/scalar
+algorithms, capture lifetime and nested calls. Each invalid latch operation
+runs in a real guest child; WAST checks SIGABRT wait status and parent survival
+through native, sanitized and packaged browser runtimes. This compiler-local
+profile does not change engine/kernel concurrent scheduling.
+
+Preserve static ownership when adapting an LLVM profiler mutex. TimeProfiler's
+guest registry selects its actual counted lock type, and scoped guards derive
+their type from that field; native/threaded branches keep standard mutexes.
+Its function-local vector still requires real `__cxa_atexit`. Do not replace
+that registry with a leaked allocation, suppress static destructors or claim
+full lifecycle acceptance from entry-storage tests. The observer in
+`src/system-tests/clang/time-profiler` includes actual source types and checks
+owning names/metadata, instant snapshots and moves with current C++ archives.
+Flame-graph helpers truncate each time point to microseconds before subtraction;
+truncating the duration instead changes fractional-boundary results. Check
+negative and full-width timestamps explicitly. Unused global paths are discarded
+by normal section collection; compile the complete source separately. Accept
+global initialization, aggregation, finish/cleanup and JSON output through the
+separate public-API observer linked against the actual Support archive. Its
+six real usleep waits use existing injected clock controls in both runtimes,
+so WAST compares exact JSON bytes without host timing tolerances. Check nested
+same-name totals, async pairs, instant granularity, owning escaped metadata,
+negative cross-instance timestamps and full-width realtime. Compare raw-stream
+output with actual preferred/fallback/default file writers and their errors.
+Delegate allocation observers to the real allocator and use an earlier C
+atexit reporter to check that the actual static vector releases its backing
+allocation once. Sequential finished instances exercise this disabled-thread
+compiler profile; they do not establish concurrent LLVM thread profiling. See
+the [profiler fixture](../src/system-tests/clang/time-profiler/README.md).
+
+The observer in `src/system-tests/clang/synchronization` executes the actual
+generic PerThreadAllocator, LLVM's out-of-line atomic ID function and current
+C++ archives with an aligned observer allocator. WAST checks cache/move
+ownership, forwarding and local destruction. It now retains normal static
+registration flags, as does the optional-query fixture's real system_error.cpp.
+The [shutdown fixture](../src/system-tests/clang/shutdown/README.md) verifies
+compiler-generated globals/local statics, C callbacks, selective/reentrant
+finalization and actual cache backing-allocation release. Its malloc/free
+observers delegate to real allocation; registration flags and registry ownership
+stay intact. Check exact traces and statuses from WAST after each exit mode,
+including a callback using the existing sleep continuation. Never accept a
+registration acknowledgement as proof that a callback ran.
+
+Retire registrations before calling them and repeat list selection afterwards
+so recursive finalization and new callbacks cannot duplicate an entry. Keep C
+and C++ callback signatures distinct for Wasm indirect calls. Store registrations
+in the shared guest libc allocation domain, not a host dispatcher. Exec's
+post-commit allocator bootstrap must discard old callback nodes without freeing
+or invoking them in the new heap. A rejected preflight must retain the old list;
+fork uses the existing private clone graph. The shutdown regression first caught
+an ASan use-after-free when a replacement program inherited a destructor from
+its freed predecessor. Explicit DSO tokens do not prove automatic dlclose
+finalization, concurrent registration or buffered stream flushing.
+
+Audit the actual formatter provider before replacing a missing C++ stream.
+The guest narrow `snprintf` currently lacks floating conversions, and LLVM's
+raw double stream uses exponent formatting. Neither reproduces Mustache's
+default six-significant-digit general formatting. The explicit guest numeric
+helper instead calls the real exact wide formatter, bounds/checks its ASCII
+result and returns an owning string; native LLVM retains its original stream.
+`src/system-tests/clang/mustache` checks explicit text/length/terminators for
+37 binary64 bit patterns and complete byte agreement with independently run
+native classic-locale streams. Both observers record results; WAST owns all
+assertions. The fixture also checks heap-backed concatenation, copy/move
+identity, mutation isolation and substring lifetime using current C++ archives.
+Compile the whole actual source separately and keep full template rendering,
+general narrow floating printf and C++ startup/static exit acceptance distinct.
+
+LLVM's managed registry is distinct from C++ static-exit registration. Its
+global `ManagedStatic` handles are trivially destructible and construct their
+objects lazily; explicit `llvm_shutdown()` destroys registrations in reverse
+order. Nested constructors register dependencies before their owners, so an
+owner's destructor can still use its dependency. Adapt the unavailable recursive
+mutex only under the explicit disabled-thread guest profile, retaining the
+native/threaded standard backend and upstream registry code. The source-backed
+observer in `src/system-tests/clang/managed-static` checks repeated empty
+shutdown, reuse, custom/array deleters and claimed-object lifetime with normal
+static-registration flags. A claim transfers the object's lifetime but leaves
+its registration until shutdown; do not reconstruct the handle before that
+cleanup. These checks do not implement `__cxa_atexit` or establish full C++
+startup/shutdown.
+
+LLVM's ThreadPoolInterface also names futures even for SingleThreadExecutor.
+Its guest-only LLVM-owned result retains a shared deferred callable and value,
+reference or void storage. Submission/destruction do not execute it; wait/get
+or the executor's queued thunk execute once. Keep native/threaded standard
+futures and avoid types in `std`. The actual source-backed observer in
+`src/system-tests/clang/thread-pool` verifies move-only capture/result lifetime,
+aligned storage, shared references, recursive submissions and draining on
+destruction. Preserve upstream queue semantics: a single-thread group wait
+drains all groups, while a future get may force its task before earlier queued
+tasks. Its later queued thunk must not execute it again. This disabled-exception
+profile does not supply timed waits or exception transport. Link-time optimization
+of actual ThreadPool/Threading sources removes unused diagnostic paths without
+substituting providers; test normal and sanitized engines plus production Bash.
+
+LLVM's disabled-thread guest ExponentialBackoff uses a private LLVM-owned
+generator and POSIX deadline helper; native/threaded profiles retain their
+standard random/thread backends. Keep the upstream uniform distribution,
+exponential multiplier and caps. The current shared `getrandom` provider supplies
+process-local xorshift compatibility bytes, suitable only for non-security
+jitter; do not infer OS entropy or enable libc++ random-device support from it.
+The helper calls actual shared `nanosleep`, yielding through the kernel's timed
+readiness ABI. Recompute the remaining interval from the monotonic deadline
+after EINTR: the current libc remainder does not accurately describe time left.
+Other wait failures and failed random reads terminate through real guest abort.
+
+Compile actual `ExponentialBackoff.cpp` with current C++ archives and the
+production CRT/libc. The observer in `src/system-tests/clang/backoff` records
+values only; WAST checks range/variation, expired timeouts and a live minimum
+sleep. Its controlled scenario advances the injected monotonic clock early,
+interrupts a wait and checks exact intervals plus the final deadline clamp.
+Verify both raw native/browser API sessions and the packaged production worker;
+controlled-clock assertions require that harness rather than standalone live
+execution. Keep private helper headers in production build dependencies, and
+compile native/threaded declaration branches separately. This boundary does
+not establish complete LockFileManager ownership or compiler acceptance.
+
+When a guest LLVM caller uses `getsid` only as a process-existence query, use a
+positive-PID `kill(pid, 0)` adaptation under the explicit guest option; keep
+native source on its original path. Check the complete error boundary: public
+errno constants, libc++'s `std::errc`, engine negative errno and guest `-1/errno`
+must agree. A missing public `ESRCH` can silently select libc++'s placeholder
+value rather than produce a compile error. Do not remove a lock on unrelated
+errors or infer remote process death from the local namespace. Propagate failed
+host identity during lock creation; unavailable identity during liveness checks
+requires a conservative answer. Do not add a fabricated session-ID provider.
+
+The observer in `src/system-tests/clang/lock-owner` executes the actual private
+LLVM helper and real guest imports. Keep assertions in WAST. Use two pipes to
+hold a child in READ, query it without interruption, release it and observe EOF
+from process exit. Query the still-allocated zombie before reaping; then verify
+its status and absence. Include blocked-pending signals and success with stale
+errno to distinguish a null query from delivery or an erroneous failure.
+Exercise identity failure through the actual provider rather than replacing its
+imports. Full source compilation verifies patch integration, but this helper
+fixture does not establish complete file-lock acquisition/cleanup or C++ startup.
+
+Keep public math constants separate from function availability. Guest
+`FP_ILOGB0` and `FP_ILOGBNAN` derive from `INT_MIN` and `INT_MAX`; they are
+integer constant expressions and do not imply an `ilogb` provider. LLVM's
+private APFloat helpers consume them in overlay mode. The compiled observer in
+`src/system-tests/clang/logb` uses the actual staged exponent helpers with
+APFloat's no-errno/no-exception configuration and volatile binary32/64/128
+inputs. Assert subnormal exponents and special-value sentinels in WAST without
+narrowing long double or substituting a host implementation. Check the actual
+source configuration before extending a private helper's error behavior.
+
+When refreshing staged patched source, preserve the previous timestamp only
+when the patched file is byte-identical. Changed files still invalidate their
+dependents; unrelated unchanged patches do not trigger broad header rebuilds.
+Keep applying the complete patch to a fresh staged copy with zero fuzz before
+comparing timestamps, and leave the submodule untouched.
+
+For LLVM's bare-Wasm endian fallback, keep the BSD `machine/endian.h` spelling
+in the guest compiler's private include directory. Include the existing public
+`endian.h` and alias its byte-order definitions rather than adding a second
+source of values. Apply that directory through `guest-toolchain.cmake`; native
+table generators and bootstrap libc++ use their own original header paths.
+Verify the real upstream `llvm/ADT/bit.h` with a compiled observer and WAST:
+check the native order, 16/32/64-bit swaps and actual stored bytes. Keep volatile
+inputs so the inline operations execute. This header compatibility does not
+select a POSIX backend or claim that the C++ runtime is fully usable.
+
+When enabling libc++ wide characters, audit the public C headers as well as
+the compiled providers. `wchar.h` must make `FILE` and `struct tm` visible
+before libc++ namespace imports, even when localization is disabled. Keep
+`wchar.h` and `wctype.h` declarations under consistent C linkage. libc++ supplies
+const-correct search overloads above the C ABI; verify both pointer forms.
+Check limit macros against the actual SDK typedefs too: Clang does not supply
+`__WCHAR_MIN__`, and its default signed `__WINT_TYPE__` does not describe the
+SDK's unsigned `wint_t`. Derive wchar minimum from the target maximum/sign and
+make wint bounds match the public type. Verify these macros through libc++
+include orders rather than assuming successful preprocessing expands them.
+Guest wchar values are signed four-byte elements: compare without subtraction
+overflow, keep memory counts in elements and choose overlap traversal by integer
+addresses. Zero counts must not touch either pointer. Check embedded NULs,
+signed extremes, search boundaries, returned pointers and canaries in package
+WAST against the installed library. Compiled `wstring_view`/character-traits
+observers establish only their exercised header/provider boundary. Do not use
+stale wide-disabled archives after a wide-enabled rebuild fails, or claim that
+header success establishes owning-string startup/runtime support. Resume the
+real runtime build to discover numeric/formatting and other actual dependencies.
+If a header observer needs libc++'s diagnostic-abort helper, compile the staged
+upstream `verbose_abort.cpp` into a fresh test object and retain its real
+shared-libc imports. Keep the library-build annotation flags and dependency
+tracking; supplying an abort stub would hide a genuine runtime dependency.
 
 ## Coreutils Cross-Build and Distribution
 
@@ -1008,7 +2116,7 @@ guest return value and errno separately for failed operations. Preserve the
 versioned import's negative-errno contract and perform libc's translation in
 the guest wrapper where needed. Check public stat fields at the documented
 Wasm32 offsets; keep private codec round trips, explicit byte-span bounds,
-seeded symlinks, mtime and snapshot ownership under direct C sanitizers until
+seeding ownership, mtime and snapshot ownership under direct C sanitizers until
 equivalent guest capabilities exist. Compare only the initialized pathname
 and terminator when inspecting getcwd buffers.
 
@@ -1021,6 +2129,83 @@ kernel with a non-NULL stack byte. Keep that byte separate from the owned heap
 buffer so ordinary cleanup never frees stack storage. Record existing import
 error conventions explicitly; raw kernel statuses and libc-translated errno
 must not be silently interchanged during fixture migration.
+
+Pipes start in blocking mode. An isolated language regression that expects
+EAGAIN must explicitly set `O_NONBLOCK` with `F_SETFL`; an empty blocking read
+belongs in the full process driver and must yield until data, EOF or a signal.
+Do not make guest semantics depend on whether a terminal was attached. Raw
+kernel blocking EAGAIN registers a wait; nonblocking EAGAIN does not. Guest
+adapters yield only for the registered wait. Keep `F_GETFL`/`F_SETFL` state on
+the shared OFD and `FD_CLOEXEC` on the descriptor. Check status changes through
+aliases and fork, immutable access mode, append placement, and both fixed and
+variadic import arguments. `src/system-tests/scheduling/pipe-modes.wast` checks
+restored blocking reads, EOF wakeup and append aliases; `cpu.wast` checks
+blocking transfer backpressure. Test closed descriptors owned by the fixture;
+initial stdio differs between language and production terminal contexts, and
+closing the WAST command's own input can disrupt handler completion.
+For terminal reads, copy the effective VMIN threshold into the READ wait record
+and honor it during registration and polling. An ordinary readiness query can
+report buffered bytes while that particular read still requires more; do not
+cancel its wait or expose raw EAGAIN. Nonblocking reads bypass that threshold.
+Native session input belongs to the terminal capability, so locate a surviving
+terminal alias before delivering host input or EOF; fd 0 may now name a pipe.
+Regular/directory descriptions are cloned to rebase namespace pointers. Retain
+their status object separately so `F_SETFL` changes remain visible across fork,
+release it on final description teardown, and reject saturated reference counts
+before publishing a clone. This does not establish shared regular-file seek
+cursors across fork; that remains a separate ownership change.
+
+Check WAST completion both as a forked command and after root Bash replaces
+itself with `exec wast`. Bash can also exec its final command implicitly.
+The root invocation must release the handler context and preserve success or
+failure status without entering the child-only notification/reap API. Retain
+an intentional failing report alongside the successful fixture to verify its
+diagnostic and nonzero status in native, sanitizer and packaged-worker runs.
+
+Hard-link aliases must retain the same inode object, rather than copying file
+bytes or treating an open-description reference count as `st_nlink`. Store
+regular-file attributes and symlink target bytes with the retained inode so
+chmod/write/truncate and an unlinked descriptor observe the same state. Allocate
+new inode numbers from a kernel-owned sequence shared by fork; deletion and
+child creation must not reuse existing identities. Rebase directory-description
+pointers into a cloned namespace, including descriptor aliases, before the
+parent can be destroyed. Keep the namespace's current link count separate from
+references held by fds, mappings and cloned kernels. The current clone/reap
+namespace model still needs immediate mutation visibility and deletion handling.
+
+Preserve existing wire records when adding metadata fields. `fstatat_v1` and
+`path_stat_v1` retain their 48-byte metadata record; `fstatat_v2` returns the
+existing 128-byte guest stat layout with namespace link counts. Validate the
+complete destination before copying a successful result, and leave it untouched
+on failure. The [hard-link fixture](../src/system-tests/clang/hardlink/README.md)
+checks both layouts and canaries in WAST, with ordinary-CRT C++ observations
+including fork/wait. Opaque inode ownership and clone teardown remain private
+sanitizer checks.
+
+Record locks must follow retained inode identity across independent opens,
+hard/symbolic links, rename/unlink and path reuse. Keep process lock ownership
+separate from fd/open-description ownership. Transactional clone teardown must
+preserve an owner's records; actual fork needs a fresh owner before publishing
+the child. An exec retains its owner, but closing any CLOEXEC descriptor releases
+all its records on that inode, even if another alias survives. Retain inode
+references for records and copied wait interests; release them on cancellation,
+exit and failed startup. Bound record admission/deadlock traversal through the
+shared config and prepare replacement/split/coalesced records before publishing.
+
+Use the existing SELECT wait record and polling scheduler for F_SETLKW. Save
+absolute byte ranges before yielding; SA_RESTART must preserve that range even
+when a signal handler changes the descriptor's offset. Revalidate the fd on
+resume, report EINTR without restart and detect process wait cycles as EDEADLK.
+Guest struct flock bytes and commands share `waste/abi/fcntl.h`. Shared libc
+reads pointers for record commands, integer arguments for descriptor commands,
+and no third argument for queries. Fixed `fcntl_v1`/legacy env calls receive
+the record pointer directly; compiled variadic calls pass a slot containing it
+through libc or `fcntl_varargs_v1`. Validate complete input/output spans before
+copying, including output crossing a protected page. The
+[record-lock fixture](../src/system-tests/clang/locks/README.md) checks actual
+LLVM blocking methods and ordinary processes in WAST; opaque owner/wait/refcount
+and admission invariants remain native sanitizer checks. Timed tryLockFile and
+full Path/C++ shutdown need separate acceptance.
 
 ## Test Boundary Selection
 
@@ -1144,6 +2329,30 @@ compatibility `env.fcntl` take a direct integer. Mistaking the pointer for an
 `F_DUPFD` minimum produces descriptor exhaustion during shell redirection.
 Verify guest redirection as well as lower-level VFS access.
 
+Check a public formatter declaration against both the provider's Wasm signature
+and real compiler-generated variadic calls. `vsnprintf.wast` covers bounded
+shared-libc output; `src/system-tests/clang/stdio` compiles C and C++ `<cstdio>`
+clients that record observations, with all assertions in WAST. Test count-only
+calls, truncation and exact fit, untouched canaries, errno and reusing the same
+`va_list` before reading its original first argument. Put libc++ headers before
+the guest C SDK headers so its `include_next` wrappers find the public ABI.
+Define public integer-format macros from the actual guest types: small unsigned
+fixed-width arguments promote to int, uint32_t uses unsigned int, and uint64_t
+uses unsigned long long. Verify the macros through compiled C/C++ calls, with
+zero/maximal values, high bits, mixed-width alignment, truncation and case
+selection; a header-only compile cannot check the shared formatter's ABI.
+Use the ordinary provider/import assignment for C++ namespace aliases: a late
+attribute redeclaration can leave `std::vsnprintf` bound to an earlier raw
+import. Explicit C linkage for a fixture main matches the C CRT under
+`-ffreestanding`; the full C++ driver entry and constructors still need separate
+startup acceptance. Do not infer complete printf conformance from this subset.
+`src/system-tests/clang/wide-format` adds real `<wchar.h>`/`<cwchar>` calls,
+including mixed 4/8/16-byte variadic arguments and direct `swprintf` calls.
+Keep the beginning of synthetic WAST argument areas aligned to the widest
+argument: an eight-byte-aligned area can pass double cases while every
+binary128 case reads the wrong bytes. Compiler observers only capture buffers,
+counts, errno and argument cursors; all output expectations remain in WAST.
+
 Function-table calls must retain exact Wasm signatures. Fix callback types in
 owned build inputs when adapting a package; do not weaken validation or patch
 compiled function indices in a launch script. Compiled guest ABI/layout probes and
@@ -1151,6 +2360,40 @@ shared native/browser read-to-prompt sessions cover different parts of this
 boundary; use both when changing it.
 
 ## Browser and Differential Testing
+
+When measuring a guest linker, distinguish LTO used to build the executable
+from LTO support compiled into it. The latter embeds LLVM's optimizer and code
+generator to turn bitcode inputs into objects. An ordinary Wasm object/archive
+linker can omit that support while still accepting code compiled with per-file
+optimization. Keep a separate comparison artifact, reject direct and archived
+bitcode explicitly, inspect the map after section collection, and test both
+successful linking and execution of the emitted module. See the
+[non-LTO LLD trial](../src/aux/clang/lld-no-lto.md). This does not remove the
+optimizer from Clang itself or implement deferred loading of LTO support.
+
+Guest linking must also produce the runtime's library namespaces. WASTE
+registers a `.so.wasm` provider under its basename without that suffix. The
+private LLD named-import profile resolves actual shared-provider symbols and
+signatures before assigning that module name to shared function imports.
+Fixed-address commands import process memory and can use this binding without
+PIE relocation globals. Verify that local definitions and raw kernel imports
+retain their existing bindings, reject incompatible provider signatures, and
+execute the emitted file without a host rewrite. The
+[SDK link fixture](../src/system-tests/clang/lld-link/README.md) tests this
+compiler/linker/runtime boundary; host-compiled inputs do not prove guest
+compiler execution.
+
+Keep a source-built guest compiler's resource headers separate from the host
+bootstrap header snapshot. Clang's upstream `core-resource-headers` and
+`webassembly-resource-headers` CMake install components provide the portable
+and Wasm-only headers without installing headers for unconfigured backends.
+Stage them under `build/`, derive the resource version from generated
+`clang/Basic/Version.inc`, and publish them through an explicit install target.
+Use Clang's ordinary sibling `clang.cfg` lookup for guest defaults; its
+`$`-prefixed options apply only to link actions. This keeps the guest CRT and
+shared-provider inputs out of `-c` and `-fsyntax-only` commands. Verify real
+guest compile/link/run behavior separately from file copying or host-driver
+configuration preflights. See the [Clang package](../src/aux/clang/README.md).
 
 After native gates pass, run focused WAST worker tests from their generated
 payload and exercise the unified offline Bash/test page:
@@ -1326,10 +2569,46 @@ Resolve the slot's owning process instance and validate `(i32) -> ()` before
 invocation. Table-free legacy WAT probes retain their local function-index ABI
 and 20-byte sigaction prefix; production C actions have flags at offset 20 in
 the 24-byte structure. Decode the entire input before aliased old-action writes.
+Public libc uses the fixed 24-byte `waste_kernel.sigaction_v1` boundary and
+translates negative kernel errors into -1/errno. Reject unknown flags and
+SIG_ERR before modifying old-action output or process state; support ordinary
+handlers and SA_RESTART without advertising siginfo callbacks or alternate
+stacks. Normalize legacy kernel SIG_IGN (-2) to the public C sentinel (one).
+Public `signal` installs a persistent restartable action instead of discarding
+registration. Application classification uses the capsule's inherited
+`is_application` flag: a fork owns its evaluator clone without retaining the
+parent's executable-image descriptor. Drain queued signals unblocked when a
+handler's mask is restored before returning to application code, iterating
+without growing the host callback stack and preserving any nonrestart decision.
 Handler traps, exits and guest longjmp propagate through ordinary C returns;
 restore action masks and callback policy on every path. Synchronous handler
 scopes suppress browser pump yields and explicitly reject blocking operations
 instead of leaving a second saved invocation to resume accidentally.
+
+Use one process-owned monotonic deadline for `alarm`, independent of a syscall
+wait. Reuse the existing scheduler's minimum-deadline query for native polling
+and browser wakeups, including an alarm while its process waits in READ/waitpid
+or another process is selected. Expiry queues SIGALRM once; masks/dispositions
+go through ordinary signal handling. Round fractional remaining seconds up and
+retain pending signals when replacing or cancelling an expired timer. Deliver
+pending unblocked signals before a successful application `sigprocmask` returns,
+using the ordinary synchronous delivery path. A deferred old notification can
+otherwise interrupt the next READ and hide that READ's intended alarm deadline.
+Clear only a fork child's alarm: generic clones also prepare image transactions and
+must retain the deadline. Exec retains it while resetting caught actions.
+
+Caught signals during CPU work use the same bounded opcode checks as default
+termination and cancellation. Invoke the ordinary handler with live evaluator
+frames, preserving the synchronous-callback guard. While restoring a saved
+blocking call chain, let the import own its EINTR/restart decision; do not
+consume its signal at an earlier caller opcode checkpoint. Keep unsigned
+alarm results separate from negative errors with the widened versioned ABI.
+The full upstream `Watchdog.cpp` fixture under `src/system-tests/clang/watchdog`
+checks ordinary libc, CPU work, fork/exec and concurrent timer delivery; its
+controlled WAST checks exact below/on-deadline behavior and masked pending
+signals through existing injected clocks. No host alarm or LLVM-local timer
+is needed. These probes do not establish the rest of POSIX timers or Clang
+execution acceptance.
 
 Public guest headers must expose the signals a package uses: omitting SIGWINCH
 caused Bash to compile out its resize handlers. Rebuild the package after header
@@ -1338,6 +2617,14 @@ shared `cli-runtime` probe tests real callbacks, ownership, masks and canaries
 against native and browser C builds. Default process termination must honor
 masks and preserve a signal wait status, independently of host cancellation.
 Exec drops caught actions and retains ignored actions and the process mask.
+Guest libc `abort()` calls the versioned `waste_kernel.abort_v1` operation.
+It unblocks SIGABRT, invokes a caught handler synchronously, and terminates
+with signal 6 if the handler returns or the signal is ignored. Recursive
+abort from a handler forces termination without invoking the handler again.
+The legacy `env.abort` import uses the same implementation. Preserve raw
+signal status for waitpid; never call host abort or terminate the browser.
+`src/system-tests/abort` captures compiled C handler/fork observations and
+asserts them in WAST from the surviving Bash on both runtimes.
 Stop/continue lifecycle states and asynchronous caught handlers during CPU-only
 work still require implementation beyond runnable process selection.
 
@@ -1445,3 +2732,15 @@ the ordinary table export metadata. Test both address widths with indirect
 calls, then import the exported table from a second module to verify aliasing
 and shared contents. `tests/test-suite-exported-table-shorthand.wast` covers
 these paths in native C and the production browser runtime.
+
+When increasing the control nesting bound, keep the validator's temporary
+control workspace off the C stack. Size its owned heap buffer to the smaller
+of the function's instruction count and the configured depth, plus the outer
+control. Initialize each entered frame and free the workspace on every outcome.
+A large fixed stack array can break ordinary browser Bash startup before the
+deep regression runs, even when the native tests pass. Check production-worker
+startup as well as deep execution, invalid bodies and the resource rejection.
+Indexed reference encodings must also leave disjoint ranges for real nullable
+and non-null references, parser-only recursive fixups and validation bottom;
+check high GC indices and typed function references after widening the type
+capacity. Resource limits do not make otherwise valid Wasm malformed.

@@ -1,0 +1,121 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/child-deadline-controlled.wasm",
+      "source": "build/system-tests/clang/child-deadline/controlled.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/child-deadline-controlled.wast",
+      "source": "src/system-tests/clang/child-deadline/controlled.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/child-deadline-controlled.wasm > /tmp/child-deadline-controlled.bin; printf '%s\\n' \"$?\" > /tmp/child-deadline-controlled-status.txt; /bin/wast --verbose /tmp/child-deadline-controlled.wast; printf '__CHILD_DEADLINE_CONTROLLED_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__CHILD_DEADLINE_1__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 42999999999,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 43000000000
+    },
+    {
+      "after": "__CHILD_DEADLINE_2__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 43999999999,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 44000000000
+    },
+    {
+      "after": "__CHILD_DEADLINE_RETRY__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 45999999999,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 46000000000
+    },
+    {
+      "after": "__CHILD_DEADLINE_3__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 47000000000,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 48999999999,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 49000000000
+    },
+    {
+      "after": "__CHILD_DEADLINE_4__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 50000000000,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 51000000000
+    },
+    {
+      "after": "__CHILD_DEADLINE_5__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 52000000000
+    },
+    {
+      "after": "__CHILD_DEADLINE_6__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 52999999999,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 53000000000
+    },
+    {
+      "after": "__CHILD_DEADLINE_CLEANUP__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 54000000000,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 55000000000
+    },
+    {
+      "after": "__CHILD_DEADLINE_CONTROLLED_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "WAST: 62 PASS, 0 FAIL, 62 total",
+    "__CHILD_DEADLINE_CONTROLLED_0__\r\n"
+  ],
+  "assertions": 63,
+  "exitStatus": 0,
+  "clockMonotonicNs": 42000000000
+}

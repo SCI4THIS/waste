@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/dwarf-verifier.wasm",
+      "source": "build/system-tests/clang/dwarf-verifier/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/dwarf-verifier.wast",
+      "source": "src/system-tests/clang/dwarf-verifier/dwarf-verifier.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/dwarf-verifier.wasm > /tmp/dwarf-verifier.bin; printf '%s\\n' \"$?\" > /tmp/dwarf-verifier-status.txt; /bin/wast --verbose /tmp/dwarf-verifier.wast; DWARF_RESULT=$?; printf '__DWARF_VERIFIER_%s__\\n' \"$DWARF_RESULT\"\n"
+    },
+    {
+      "after": "__DWARF_VERIFIER_",
+      "text": "exit \"$DWARF_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "__DWARF_VERIFIER_0__\r\n",
+    "WAST: 35 PASS, 0 FAIL, 35 total"
+  ],
+  "assertions": 36,
+  "exitStatus": 0
+}

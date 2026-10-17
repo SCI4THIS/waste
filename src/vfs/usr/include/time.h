@@ -7,7 +7,12 @@
 #include <stddef.h>
 
 typedef long clock_t;
+typedef int clockid_t;
 typedef void *timezone_t;
+
+/* Supported read-only clock IDs; no POSIX timer capability is implied. */
+#define CLOCK_REALTIME 0
+#define CLOCK_MONOTONIC 1
 
 struct tm {
   int tm_sec;
@@ -27,6 +32,9 @@ struct timespec {
 };
 
 #define TIME_UTC 1
+#ifdef __cplusplus
+extern "C" {
+#endif
 static inline int timespec_getres(struct timespec *resolution, int base)
 {
   if (base != TIME_UTC)
@@ -39,6 +47,7 @@ static inline int timespec_getres(struct timespec *resolution, int base)
 }
 
 time_t time(time_t *);
+int clock_gettime(clockid_t, struct timespec *);
 clock_t clock(void) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 int nanosleep(const struct timespec *, struct timespec *);
 struct tm *gmtime(const time_t *);
@@ -55,4 +64,7 @@ void tzfree(timezone_t);
 size_t strftime_z(timezone_t, char *, size_t, const char *, const struct tm *);
 size_t strftime(char *, size_t, const char *, const struct tm *);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

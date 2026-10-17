@@ -25,7 +25,9 @@ fi
 set -- --vfs-root "$VFS_ROOT" --result-file "$TEST_RUN/results.json" \
   --timeout-ms "${WASTE_TEST_TIMEOUT_MS:-60000}"
 for TEST_FILE in "${TEST_FILES[@]}"; do
-  TEST_GUEST="/tmp/aux-tests/$TEST_NAME/$(basename -- "$TEST_FILE")"
+  # Explicit file staging does not create directories. Use the existing /tmp
+  # namespace so component resolution can reach every staged test.
+  TEST_GUEST="/tmp/aux-$TEST_NAME-$(basename -- "$TEST_FILE")"
   set -- "$@" --stage-file "$TEST_GUEST" 644 "$TEST_FILE"
   printf 'printf "%%s\\n" %q\n/bin/wast --verbose %q || status=1\n' \
     "$(basename -- "$TEST_FILE")" "$TEST_GUEST" >> "$TEST_COMMANDS"

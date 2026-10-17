@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/logb.wasm",
+      "source": "build/system-tests/clang/logb/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/logb.wast",
+      "source": "src/system-tests/clang/logb/logb.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/logb.wasm > /tmp/logb.bin; printf '%s\\n' \"$?\" > /tmp/logb-status.txt; /bin/wast --verbose /tmp/logb.wast; printf '__LOGB_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__LOGB_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__LOGB_0__\r\n",
+    "WAST: 131 PASS, 0 FAIL, 131 total"
+  ],
+  "assertions": 132,
+  "exitStatus": 0
+}

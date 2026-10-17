@@ -18,6 +18,15 @@ i32 nanosleep(const WasteTimespec *requested, WasteTimespec *remaining) {
   return pselect(0, 0, 0, 0, requested, 0);
 }
 
+/* Legacy POSIX microsecond sleep. Zero has no effect; larger intervals belong
+ * in nanosleep. Propagate interruption through the existing timed wait. */
+i32 usleep(u32 microseconds) {
+  if (microseconds >= 1000000) { *__errno_location() = 22; return -1; }
+  if (!microseconds) return 0;
+  const WasteTimespec requested = {0, (i32)(microseconds * 1000), 0};
+  return nanosleep(&requested, 0);
+}
+
 typedef struct WasteTm{i32 sec,min,hour,mday,mon,year,wday,yday,isdst;}WasteTm;
 typedef struct WasteTimeval{i64 sec;i32 usec,padding;}WasteTimeval;
 extern i32 waste_kernel_realtime_v1(i64 *seconds, i32 *nanoseconds)

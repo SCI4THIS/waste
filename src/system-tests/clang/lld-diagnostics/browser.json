@@ -1,0 +1,39 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/lld-diagnostics.wasm",
+      "source": "build/system-tests/clang/lld-diagnostics/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/lld-diagnostics.wast",
+      "source": "src/system-tests/clang/lld-diagnostics/diagnostics.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/lld-diagnostics.wasm > /tmp/lld-diagnostics.bin; printf '%s\\n' \"$?\" > /tmp/lld-diagnostics-status.txt; /bin/wast --verbose /tmp/lld-diagnostics.wast; LLD_STATUS=$?; printf '__LLD_RESULT_%s__\\n' \"$LLD_STATUS\"\n"
+    },
+    {
+      "after": "__LLD_CLEANUP__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 42001000000
+    },
+    {
+      "after": "__LLD_RESULT_",
+      "text": "exit \"$LLD_STATUS\"\n"
+    }
+  ],
+  "contains": [
+    "__LLD_RESULT_0__\r\n",
+    "WAST: 90 PASS, 0 FAIL, 90 total"
+  ],
+  "assertions": 91,
+  "exitStatus": 0,
+  "clockRealtimeNs": "4294967296123456789",
+  "clockMonotonicNs": 42000000000
+}

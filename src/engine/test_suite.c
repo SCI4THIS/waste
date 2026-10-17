@@ -40,6 +40,8 @@ static int asset_decode(json_view object, waste_suite_asset *asset) {
 
 static int test_decode(json_view object, waste_suite_test *test) {
     json_view spec, assets;
+    /* Source identity/group survive distribution moves (for example html-rt).
+     * Validate the mounted path independently within the owned test tree. */
     if (!field(object, "id", test->identity, sizeof(test->identity)) ||
         !canonical(test->identity, 0) ||
         !field(object, "group", test->group, sizeof(test->group)) ||
@@ -47,7 +49,7 @@ static int test_decode(json_view object, waste_suite_test *test) {
         !field(object, "path", test->path, sizeof(test->path)) ||
         strncmp(test->path, WASTE_SUITE_TEST_PREFIX,
                 sizeof(WASTE_SUITE_TEST_PREFIX) - 1u) ||
-        strcmp(test->path + sizeof(WASTE_SUITE_TEST_PREFIX) - 1u, test->identity) ||
+        !canonical(test->path, 1) ||
         !boolean(object, "unsupported", &test->unsupported) ||
         !boolean(object, "expectFailure", &test->expect_failure) ||
         !member(object, "executionSpec", &spec) ||

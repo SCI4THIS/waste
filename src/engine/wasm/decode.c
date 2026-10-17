@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { WASM_DECODE_MAX_IMPORTS = 8192 };
+enum { WASM_DECODE_MAX_IMPORTS = WASM_MAX_IMPORTS };
 
 static wasm_decode_status decode_fail(wasm_decode_error *error,
                                       wasm_decode_status status,

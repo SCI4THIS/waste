@@ -4,17 +4,20 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "../../../config.h"
+#include "../../../vfs/usr/include/waste/abi/posix.h"
 
 /* POSIX values used by the engine-owned pathname boundary.  They are kept
  * here, rather than taking host errno values, so native and Wasm runtimes
  * expose the same contract. */
 #define POSIX_EFAULT  14
+#define POSIX_EPERM    1
 #define POSIX_ENOENT   2
 #define POSIX_EACCES  13
 #define POSIX_ENOTDIR 20
 #define POSIX_EISDIR  21
 #define POSIX_ERANGE  34
 #define POSIX_ELOOP   40
+#define POSIX_ENAMETOOLONG 36
 #define POSIX_ENOTEMPTY 39
 #define POSIX_ESPIPE   29
 #define POSIX_ENOSYS  38
@@ -22,6 +25,7 @@
 #define POSIX_EOPNOTSUPP 95
 #define POSIX_AT_FDCWD (-100)
 #define POSIX_AT_SYMLINK_NOFOLLOW 0x100
+#define POSIX_AT_SYMLINK_FOLLOW 0x400
 
 #define POSIX_PATH_MAX 4096
 /* This is a bounded in-engine inode table, not a package manifest limit.
@@ -44,9 +48,10 @@
 
 typedef enum {
     POSIX_NODE_NONE = 0,
-    POSIX_NODE_REGULAR = 1,
-    POSIX_NODE_DIRECTORY = 2,
-    POSIX_NODE_SYMLINK = 3,
+    POSIX_NODE_REGULAR = WASTE_NODE_REGULAR,
+    POSIX_NODE_DIRECTORY = WASTE_NODE_DIRECTORY,
+    POSIX_NODE_SYMLINK = WASTE_NODE_SYMLINK,
+    POSIX_NODE_NULL = WASTE_NODE_NULL,
 } posix_node_kind;
 
 /* Pointer-free metadata used between the kernel and libc.  The record is
@@ -133,8 +138,19 @@ int posix_kernel_path_add_data(struct posix_kernel *kernel, const char *path,
 int posix_kernel_path_add_symlink(struct posix_kernel *kernel, const char *path,
                                   const posix_path_metadata *metadata,
                                   const char *target);
+int posix_kernel_symlinkat(struct posix_kernel *kernel,
+                           const uint8_t *target, size_t target_length,
+                           int directory, const uint8_t *path, size_t length);
+int posix_kernel_linkat(struct posix_kernel *kernel,
+                        int old_directory, const uint8_t *old_path, size_t old_length,
+                        int new_directory, const uint8_t *new_path, size_t new_length,
+                        int flags);
 int posix_kernel_getcwd(const struct posix_kernel *kernel, char *buffer,
                         size_t capacity);
+/* Resolve one existing namespace entry. Success returns the path length
+ * excluding NUL; failure leaves the destination untouched. */
+int posix_kernel_realpath(struct posix_kernel *kernel, const uint8_t *path,
+                          size_t length, char *buffer, size_t capacity);
 int posix_kernel_path_mkdir(struct posix_kernel *kernel, const uint8_t *path,
                             size_t length, int mode);
 int posix_kernel_path_unlink(struct posix_kernel *kernel, const uint8_t *path,
@@ -159,6 +175,9 @@ int posix_kernel_path_stat(struct posix_kernel *kernel, const uint8_t *path,
 int posix_kernel_fstatat(struct posix_kernel *kernel, int directory,
                          const uint8_t *path, size_t length, int flags,
                          posix_path_metadata *metadata);
+int posix_kernel_fstatat_nlink(struct posix_kernel *kernel, int directory,
+                               const uint8_t *path, size_t length, int flags,
+                               posix_path_metadata *metadata, uint32_t *links);
 int posix_kernel_path_access(struct posix_kernel *kernel, const uint8_t *path,
                              size_t length, int mode, int flags);
 /* Copy one resolved executable regular file into an owned snapshot. The
@@ -177,5 +196,15 @@ int posix_kernel_path_read_snapshot(struct posix_kernel *kernel,
                                     size_t maximum_size, uint8_t **data_out,
                                     size_t *length_out,
                                     posix_path_metadata *metadata_out);
+
+/* Capture the resolved namespace path together with one loader snapshot. The
+ * path belongs to the loaded image even if cwd or the namespace later changes.
+ * executable selects execute permission; otherwise require read permission. */
+int posix_kernel_path_image_snapshot(struct posix_kernel *kernel,
+                                     const uint8_t *path, size_t length,
+                                     size_t maximum_size, int executable,
+                                     uint8_t **data_out, size_t *length_out,
+                                     posix_path_metadata *metadata_out,
+                                     char *resolved_path, size_t path_capacity);
 
 #endif /* WASTE_POSIX_PATH_H */

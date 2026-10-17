@@ -33,7 +33,7 @@ BLESSED_SYMLINKS = {
     "/root/test/wasm-spec/custom": "submodules/wasm-spec/test/custom",
 }
 COREUTILS = "true false pwd echo printf basename dirname cat chmod wc ls date sleep".split()
-COMMANDS = COREUTILS + ["bash", "vim", "rogue", "ldd", "upload", "download", "waste-probe"]
+COMMANDS = COREUTILS + ["bash", "vim", "clang", "wasm-ld", "rogue", "ldd", "upload", "download", "waste-probe"]
 OPTIONAL_COMMANDS = ["waste-test"]
 BIN_COMMANDS = {"waste-probe", "waste-test"}
 COMPONENTS = COMMANDS + OPTIONAL_COMMANDS + ["libncurses", "libc", "launch", "app"]
@@ -172,7 +172,7 @@ def load(root):
     for path in ("/bin", "/root", "/tmp"):
         entries.setdefault(path, dict(path=path, kind=2, mode=0o777 if path == "/tmp" else 0o755,
                                      uid=0, gid=0, size=0, mtime_sec=0, mtime_nsec=0, role="directory"))
-    for path in ("/bin/wat", "/bin/wast"):
+    for path in ("/bin/wasm", "/bin/wat", "/bin/wast"):
         entries.setdefault(path, dict(path=path, kind=1, mode=0o755, uid=0, gid=0, size=0,
                                      mtime_sec=0, mtime_nsec=0, role="interpreter"))
     ordered = sorted(entries.values(), key=lambda e: (e["path"].count("/"), e["path"]))

@@ -2,17 +2,18 @@
 #define WASTE_RUNTIME_INTERNAL_H
 
 #include "engine_internal.h"
+#include "../config.h"
 
 #include <stdint.h>
 
 enum {
-    EXEC_MAX_TYPES = 128,
-    EXEC_MAX_FUNCS = 8192,
+    EXEC_MAX_TYPES = WASM_MAX_TYPES,
+    EXEC_MAX_FUNCS = WASM_MAX_FUNCTIONS,
     EXEC_MAX_EXPORTS = 65536,
     EXEC_MAX_NAME = WAST_MAX_EXPORT_NAME,
     EXEC_MAX_STACK = 256,
     EXEC_MAX_LOCALS = WAST_MAX_LOCALS,
-    EXEC_MAX_CONTROL = 256,
+    EXEC_MAX_CONTROL = EXECUTION_MAX_CONTROL_DEPTH,
     EXEC_MAX_CALL_DEPTH = 256,
     EXEC_MAX_CALL_ARGS = 256,
     EXEC_MAX_GLOBALS = 2048,
@@ -47,17 +48,32 @@ typedef struct {
     uint32_t opcode;
     uint32_t simd_op;
     uint32_t u32_imm;
-    uint64_t u64_imm;
-    uint32_t memory_index;
-    uint32_t source_memory_index;
-    uint32_t alignment;
-    uint32_t lane_index;
-    wasm_v128 v128_imm;
-    int32_t block_type_index;
-    wasm_valtype block_result_type;
-    uint8_t has_block_result_type;
-    exec_catch *catches;
-    uint32_t catch_count;
+    /* The opcode/subopcode selects one payload. Catch pointers are owned only
+       by try_table (0x1f); other payloads must never be inspected as pointers. */
+    union {
+        struct {
+            uint64_t u64_imm;
+            uint32_t memory_index;
+            uint32_t source_memory_index;
+            uint32_t alignment;
+            uint32_t lane_index;
+        };
+        struct {
+            int32_t block_type_index;
+            wasm_valtype block_result_type;
+            exec_catch *catches;
+            uint32_t catch_count;
+            uint8_t has_block_result_type;
+            uint8_t block_param_count;
+            uint8_t block_result_count;
+        };
+        struct {
+            int32_t heap_type;
+            int32_t target_heap_type;
+            uint32_t cast_flags;
+        };
+        wasm_v128 v128_imm;
+    };
 
     /* Filled exactly once by wasm_validate_function, then read-only. */
     uint32_t validation_flags;
@@ -97,12 +113,23 @@ typedef struct {
 
 typedef struct {
     uint32_t type_index;
-    wasm_valtype locals[EXEC_MAX_LOCALS];
+    wasm_valtype *locals;
     uint32_t local_count;
     exec_instr *code;
     uint32_t code_size;
+    /* Owned by the shared static module until first materialization. All
+     * bodies are validated at load time; decoded code is published once,
+     * synchronously before entering a frame, and retained for owner lifetime. */
+    uint8_t *encoded_body;
+    uint32_t encoded_body_size;
     uint8_t validated;
 } exec_func;
+
+void exec_dispose_function_code(exec_func *function);
+void exec_dispose_function(exec_func *function);
+exec_status exec_materialize_function(waste_exec_engine *engine,
+                                      uint32_t defined_index,
+                                      exec_error *error);
 
 typedef struct {
     char name[EXEC_MAX_NAME];
@@ -126,6 +153,8 @@ typedef struct exec_control {
 
 typedef struct exec_jump_snapshot {
     uint8_t valid;
+    uint8_t has_signal_mask;
+    posix_sigset signal_mask;
     uint32_t environment;
     uint32_t token;
     uint32_t stack_pointer_global;
@@ -186,6 +215,13 @@ enum {
     EXEC_CONTINUATION_CONSUMED = 2
 };
 
+typedef struct {
+    exec_host_func function;
+    void *host_data;
+    uint32_t type_index;
+    exec_host_control control;
+} exec_function_import;
+
 struct waste_exec_engine {
     /* Cloned process engines share immutable decoded code/type/export tables;
      * static_ref_count keeps those tables alive until the last clone is
@@ -198,10 +234,7 @@ struct waste_exec_engine {
     exec_func *funcs;
     uint32_t func_count;
     uint32_t import_func_count;
-    uint32_t import_func_types[EXEC_MAX_FUNCS];
-    exec_host_func import_funcs[EXEC_MAX_FUNCS];
-    void *import_host_data[EXEC_MAX_FUNCS];
-    exec_host_control import_controls[EXEC_MAX_FUNCS];
+    exec_function_import *function_imports;
     exec_export *exports;
     uint32_t export_count;
     exec_global *globals[EXEC_MAX_GLOBALS];
@@ -228,7 +261,7 @@ struct waste_exec_engine {
     uint32_t declared_data_count;
     uint8_t has_data_count;
     uint8_t uses_data_count_instruction;
-    uint8_t declared_funcs[EXEC_MAX_FUNCS];
+    uint8_t *declared_funcs;
     exec_table_element *elem_values[WAST_MAX_ELEM_SEGS];
     uint32_t elem_lengths[WAST_MAX_ELEM_SEGS];
     wasm_valtype elem_types[WAST_MAX_ELEM_SEGS];
@@ -338,6 +371,10 @@ exec_status exec_memory_read_backing(const exec_memory *memory,
 exec_status exec_memory_write(exec_memory *memory, uint64_t offset,
                               const void *source, size_t length,
                               exec_error *error);
+/* Validate and prepare private backing before an irreversible kernel action.
+ * Preserves bytes and dirty bits; repeat on resume, retaining no guest pointer. */
+exec_status exec_memory_prepare_write(exec_memory *memory, uint64_t offset,
+                                      size_t length, exec_error *error);
 exec_status exec_memory_copy(exec_memory *destination, uint64_t destination_offset,
                              const exec_memory *source, uint64_t source_offset,
                              size_t length, exec_error *error);

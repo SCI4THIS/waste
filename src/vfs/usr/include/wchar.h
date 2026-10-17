@@ -4,7 +4,11 @@
 #include <waste/abi/availability.h>
 
 #include <stddef.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <uchar.h>
+
+struct tm;
 
 #ifndef WCHAR_MIN
 # define WCHAR_MIN (-2147483647 - 1)
@@ -14,8 +18,32 @@
 # define WEOF ((wint_t)-1)
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 size_t wcslen(const wchar_t *);
+int swprintf(wchar_t *, size_t, const wchar_t *, ...);
+int vswprintf(wchar_t *, size_t, const wchar_t *, va_list);
+long wcstol(const wchar_t *, wchar_t **, int);
+unsigned long wcstoul(const wchar_t *, wchar_t **, int);
+long long wcstoll(const wchar_t *, wchar_t **, int);
+unsigned long long wcstoull(const wchar_t *, wchar_t **, int);
+float wcstof(const wchar_t *, wchar_t **);
+double wcstod(const wchar_t *, wchar_t **);
+long double wcstold(const wchar_t *, wchar_t **);
+int wcscmp(const wchar_t *, const wchar_t *);
+int wcsncmp(const wchar_t *, const wchar_t *, size_t);
+int wcscoll(const wchar_t *, const wchar_t *);
+wchar_t *wcschr(const wchar_t *, wchar_t);
+wchar_t *wcsrchr(const wchar_t *, wchar_t);
+wchar_t *wcspbrk(const wchar_t *, const wchar_t *);
+wchar_t *wcsstr(const wchar_t *, const wchar_t *);
 wchar_t *wmemchr(const wchar_t *, wchar_t, size_t);
+int wmemcmp(const wchar_t *, const wchar_t *, size_t);
+wchar_t *wmemcpy(wchar_t *, const wchar_t *, size_t);
+wchar_t *wmemmove(wchar_t *, const wchar_t *, size_t);
+wchar_t *wmemset(wchar_t *, wchar_t, size_t);
 wchar_t *wmempcpy(wchar_t *, const wchar_t *, size_t) WASTE_UNAVAILABLE("Package-owned gnulib API; not provided by WASTE guest libc");
 wchar_t *wcscat(wchar_t *, const wchar_t *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 int wcwidth(wchar_t);
@@ -32,8 +60,8 @@ int iswpunct(wint_t);
 int iswxdigit(wint_t);
 int iswspace(wint_t) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 int iswupper(wint_t);
-int towlower(wint_t);
-int towupper(wint_t);
+wint_t towlower(wint_t);
+wint_t towupper(wint_t);
 size_t mbrtowc(wchar_t *, const char *, size_t, mbstate_t *);
 int mbtowc(wchar_t *, const char *, size_t);
 int mblen(const char *, size_t);
@@ -41,5 +69,9 @@ size_t mbsrtowcs(wchar_t *, const char **, size_t, mbstate_t *);
 size_t wcrtomb(char *, wchar_t, mbstate_t *);
 wint_t btowc(int);
 int wctob(wint_t);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

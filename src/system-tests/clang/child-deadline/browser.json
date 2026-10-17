@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/child-deadline.wasm",
+      "source": "build/system-tests/clang/child-deadline/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/child-deadline.wast",
+      "source": "src/system-tests/clang/child-deadline/child-deadline.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/child-deadline.wasm > /tmp/child-deadline.bin; printf '%s\\n' \"$?\" > /tmp/child-deadline-status.txt; /bin/wast --verbose /tmp/child-deadline.wast; printf '__CHILD_DEADLINE_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__CHILD_DEADLINE_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "WAST: 107 PASS, 0 FAIL, 107 total",
+    "__CHILD_DEADLINE_0__\r\n"
+  ],
+  "assertions": 108,
+  "exitStatus": 0
+}

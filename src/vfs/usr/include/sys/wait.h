@@ -9,8 +9,14 @@
 #define WUNTRACED 2
 #define WCONTINUED 8
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 int waitpid(pid_t, int *, int);
-pid_t wait(int *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
+pid_t wait(int *);
+#ifdef __cplusplus
+}
+#endif
 
 #define WIFEXITED(status) (((status) & 0x7f) == 0)
 #define WEXITSTATUS(status) (((status) >> 8) & 0xff)

@@ -1,4 +1,5 @@
 #include "store.h"
+#include "../src/vfs/usr/include/waste/abi/mman.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,7 +66,97 @@ static void check(int condition, const char *message) {
     }
 }
 
+/* Private ownership and host-signal routing cannot be selected by a guest
+ * syscall. Public session behavior is asserted in clang/session/session.wast. */
+static void test_session_terminal_ownership(void) {
+    native_store store;
+    memset(&store, 0, sizeof(store));
+    store.kernel = posix_kernel_create(1);
+    check(store.kernel != NULL, "allocate session terminal owner");
+    if (!store.kernel) return;
+    store.processes[0].used = 1;
+    store.processes[0].pid = store.active_pid = 1;
+    store.processes[0].kernel = store.kernel;
+    store.process_count = 1;
+    store.next_pid = 2;
+    posix_kernel *parent = store.kernel;
+    posix_ofd *terminal = parent->fds[2].ofd;
+    int child = 0, status = 0;
+    check(native_store_fork_process(&store, &child) == 0 &&
+          native_store_set_active_process(&store, child) == 0,
+          "fork retains session terminal owner");
+    posix_kernel *detached = store.kernel;
+    int refs = terminal->ref_count;
+    check(native_store_setsid(&store) == child &&
+          detached->fds[2].ofd == terminal && terminal->ref_count == refs &&
+          terminal->terminal.controlling_session_id == 1 &&
+          terminal->terminal.foreground_pgid == 1,
+          "detachment keeps shared terminal identity and references");
+    check(posix_kernel_terminal_session(detached, 2) == -POSIX_ENOTTY &&
+          posix_kernel_isatty(detached, 2) &&
+          posix_kernel_terminal_session(parent, 2) == 1,
+          "descriptor capability and controlling ownership are independent");
+    /* Force a private group-ID collision: host routing must still use the
+     * device's session, rather than the currently selected process kernel. */
+    posix_kernel_setpgid(detached, 1);
+    posix_kernel_signal_set_disposition(parent, 2, POSIX_SIGNAL_HANDLER);
+    posix_kernel_signal_set_disposition(detached, 2, POSIX_SIGNAL_HANDLER);
+    check(native_store_signal_foreground(&store, 2) == 1 &&
+          posix_kernel_signal_interrupt(detached) == 0 &&
+          posix_kernel_signal_interrupt(parent) == -POSIX_EINTR,
+          "host foreground signal excludes detached session even with group collision");
+    posix_termios mode;
+    posix_kernel_tcgetattr(parent, 2, &mode);
+    mode.lflag |= POSIX_TERMIOS_LFLAG_ISIG;
+    posix_kernel_tcsetattr(parent, 2, &mode);
+    uint8_t interrupt = 3;
+    check(posix_kernel_terminal_enqueue(detached, 2, &interrupt, 1) == 0 &&
+          posix_kernel_signal_interrupt(detached) == 0 &&
+          posix_kernel_signal_interrupt(parent) == -POSIX_EINTR,
+          "detached alias queues terminal interrupt for controlling session");
+    posix_kernel_close_all_fds(detached);
+    check(terminal->ref_count == refs - 3 &&
+          native_store_signal_foreground(&store, 2) == 1 &&
+          posix_kernel_signal_interrupt(detached) == 0 &&
+          posix_kernel_signal_interrupt(parent) == -POSIX_EINTR,
+          "closed detached aliases retain host routing through parent device");
+    check(native_store_exit_process(&store, 0) == 0 &&
+          native_store_set_active_process(&store, 1) == 0 &&
+          native_store_wait_process(&store, child, 0, &status) == child &&
+          terminal->ref_count == refs - 3,
+          "reap releases detached aliases without revoking parent terminal");
+    /* Another allocated process group also prevents setsid, even when the
+     * caller itself is not a group leader. Check the transaction is atomic. */
+    check(native_store_fork_process(&store, &child) == 0 &&
+          posix_kernel_setpgid(parent, child) == child &&
+          native_store_set_active_process(&store, child) == 0,
+          "prepare cross-process session-group collision");
+    check(native_store_setsid(&store) == -POSIX_EPERM &&
+          store.kernel->session_id == 1 &&
+          store.kernel->has_controlling_terminal,
+          "existing group ID rejects session creation without ownership change");
+    native_store_exit_process(&store, 0);
+    native_store_set_active_process(&store, 1);
+    native_store_wait_process(&store, child, 0, &status);
+    posix_kernel_setpgid(parent, 1);
+    check(native_store_fork_process(&store, &child) == 0 &&
+          native_store_set_active_process(&store, child) == 0 &&
+          native_store_setsid(&store) == child,
+          "prepare detached child without surviving terminal aliases");
+    detached = store.kernel;
+    posix_kernel_close_all_fds(detached);
+    posix_kernel_signal_set_disposition(parent, 2, POSIX_SIGNAL_DEFAULT);
+    check(native_store_signal_foreground(&store, 2) == 1 &&
+          store.processes[0].zombie && !parent->fds[2].ofd &&
+          posix_kernel_signal_interrupt(detached) == 0,
+          "foreground delivery safely releases the last controlling-device alias");
+    native_store_exit_process(&store, 0);
+    posix_kernel_destroy(detached);
+    posix_kernel_destroy(parent);
+}
+
 int main(void) {
+    test_session_terminal_ownership();
     native_store store;
     memset(&store, 0, sizeof(store));
     store.kernel = posix_kernel_create(0);
@@ -788,6 +879,42 @@ int main(void) {
         check(exec_memory_mark_shared_pages(parent_private, 1, 1, NULL) ==
                   EXEC_OK,
               "file-style shared mapping marks materialized pages shared");
+        {
+            exec_memory_page *page = parent_private->page_data[1];
+            uint32_t refs = page->refs;
+            uint32_t regions = parent_capsule->region_count;
+            uint32_t mappings = parent_private->mapping_count;
+            check(native_process_capsule_advise_range(
+                      parent_capsule, mapped_address, 1,
+                      POSIX_MADV_DONTNEED) == 0 &&
+                  parent_private->page_data[1] == page &&
+                  page->refs == refs &&
+                  exec_memory_page_is_dirty(parent_private, 1) &&
+                  parent_capsule->region_count == regions &&
+                  parent_private->mapping_count == mappings,
+                  "advice preserves page identity, references, dirty state and VMAs");
+            check(native_process_capsule_mprotect_range(
+                      parent_capsule, mapped_address, 1, 0) == 0 &&
+                  native_process_capsule_advise_range(
+                      parent_capsule, mapped_address, 1,
+                      POSIX_MADV_WILLNEED) == 0 &&
+                  parent_private->page_data[1] == page &&
+                  parent_private->page_protection[1] == 0 &&
+                  native_process_capsule_mprotect_range(
+                      parent_capsule, mapped_address, 1,
+                      EXEC_MEMORY_PROT_READ | EXEC_MEMORY_PROT_WRITE) == 0,
+                  "advice validates inaccessible pages without materializing or granting access");
+            check(native_process_capsule_advise_range(
+                      NULL, mapped_address, 1, POSIX_MADV_NORMAL) == -POSIX_EINVAL &&
+                  native_process_capsule_advise_range(
+                      parent_capsule, mapped_address, UINT64_MAX,
+                      POSIX_MADV_NORMAL) == -POSIX_EINVAL &&
+                  native_process_capsule_advise_range(
+                      parent_capsule, UINT64_MAX - (EXEC_PAGE_SIZE - 1),
+                      EXEC_PAGE_SIZE, POSIX_MADV_NORMAL) == -POSIX_ENOMEM &&
+                  parent_private->page_data[1] == page && page->refs == refs,
+                  "invalid and overflowing advice preserves opaque ownership");
+        }
         {
             const uint8_t mapping_byte = 0x5a;
             posix_path_metadata mapping_metadata = {

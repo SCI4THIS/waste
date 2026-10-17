@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <waste/abi/mman.h>
 
 /* Current interpreter adapter uses an i64 offset, independently of the
  * legacy 32-bit off_t used by libc lseek/fseeko. No host mmap ABI is reused. */
@@ -20,10 +21,19 @@
 #define MS_ASYNC 1
 #define MS_INVALIDATE 2
 #define MS_SYNC 4
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void *mmap(void *, size_t, int, int, int, int64_t);
 int munmap(void *, size_t);
 int mprotect(void *, size_t, int);
 int msync(void *, size_t, int);
+int posix_madvise(void *, size_t, int);
 int shm_open(const char *, int, mode_t);
 int shm_unlink(const char *);
+
+#ifdef __cplusplus
+}
+#endif
 #endif

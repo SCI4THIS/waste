@@ -1,0 +1,37 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/platform.wasm",
+      "source": "build/system-tests/clang/platform/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/platform.wast",
+      "source": "src/system-tests/clang/platform/platform.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/platform-library.so.wasm",
+      "source": "build/system-tests/clang/platform/library.so.wasm",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/platform.wasm > /tmp/platform.bin; printf '%s\\n' \"$?\" > /tmp/platform-status.txt; /bin/wast --verbose /tmp/platform.wast; printf '__PLATFORM_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__PLATFORM_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__PLATFORM_0__\r\n",
+    "WAST: 81 PASS, 0 FAIL, 81 total"
+  ],
+  "assertions": 82,
+  "exitStatus": 0
+}

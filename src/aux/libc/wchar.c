@@ -117,12 +117,64 @@ u32 wcsrtombs(char *destination, const u32 **source, u32 capacity, void *state) 
 }
 
 u32 wcslen(const u32 *text) { u32 n = 0; while (text[n]) n++; return n; }
-i32 wcscmp(const u32 *a, const u32 *b) { while (*a && *a == *b) { a++; b++; } return *a < *b ? -1 : *a > *b; }
-i32 wcsncmp(const u32 *a, const u32 *b, u32 n) { while (n && *a && *a == *b) { a++; b++; n--; } return !n ? 0 : *a < *b ? -1 : *a > *b; }
-i32 wcscoll(const u32 *a, const u32 *b) { return wcscmp(a, b); }
+i32 wcscmp(const i32 *a, const i32 *b) { while (*a && *a == *b) { a++; b++; } return *a < *b ? -1 : *a > *b; }
+i32 wcsncmp(const i32 *a, const i32 *b, u32 n) { while (n && *a && *a == *b) { a++; b++; n--; } return !n ? 0 : *a < *b ? -1 : *a > *b; }
+i32 wcscoll(const i32 *a, const i32 *b) { return wcscmp(a, b); }
 i32 strcoll(const char *a, const char *b) { return c_compare(a, b); }
 u32 *wcschr(const u32 *text, u32 value) { while (*text && *text != value) text++; return *text == value ? (u32 *)text : 0; }
+u32 *wcsrchr(const u32 *text, u32 value) {
+  const u32 *found = 0;
+  do { if (*text == value) found = text; } while (*text++);
+  return (u32 *)found;
+}
+u32 *wcspbrk(const u32 *text, const u32 *accepted) {
+  for (; *text; text++) {
+    for (const u32 *at = accepted; *at; at++) {
+      if (*at == *text) return (u32 *)text;
+    }
+  }
+  return 0;
+}
+u32 *wcsstr(const u32 *text, const u32 *needle) {
+  if (!*needle) return (u32 *)text;
+  for (; *text; text++) {
+    u32 at = 0;
+    while (needle[at] && text[at] == needle[at]) at++;
+    if (!needle[at]) return (u32 *)text;
+  }
+  return 0;
+}
 u32 *wmemchr(const u32 *text, u32 value, u32 n) { while (n--) { if (*text == value) return (u32 *)text; text++; } return 0; }
+
+/* The guest wchar_t is signed i32. Compare elements, not their bytes or a
+   subtracting result that could overflow. Counts are in wide elements. */
+i32 wmemcmp(const i32 *a, const i32 *b, size_t count) {
+  for (size_t at = 0; at < count; at++) {
+    if (a[at] != b[at]) return a[at] < b[at] ? -1 : 1;
+  }
+  return 0;
+}
+
+i32 *wmemcpy(i32 *destination, const i32 *source, size_t count) {
+  for (size_t at = 0; at < count; at++) destination[at] = source[at];
+  return destination;
+}
+
+i32 *wmemmove(i32 *destination, const i32 *source, size_t count) {
+  /* Integer addresses avoid relational comparisons between unrelated C
+     objects. Reverse traversal preserves overlapping higher destinations. */
+  if ((size_t)destination > (size_t)source) {
+    while (count) { count--; destination[count] = source[count]; }
+  } else {
+    for (size_t at = 0; at < count; at++) destination[at] = source[at];
+  }
+  return destination;
+}
+
+i32 *wmemset(i32 *destination, i32 value, size_t count) {
+  for (size_t at = 0; at < count; at++) destination[at] = value;
+  return destination;
+}
 u32 *wcsdup(const u32 *text) { u32 n = wcslen(text) + 1, *copy = malloc(n * 4); if (copy) bytes_copy(copy, text, n * 4); return copy; }
 
 i32 iscntrl(i32 c) { return (c >= 0 && c < 32) || c == 127; }

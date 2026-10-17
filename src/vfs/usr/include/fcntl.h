@@ -4,6 +4,22 @@
 #include <waste/abi/availability.h>
 
 #include <sys/types.h>
+#include <waste/abi/fcntl.h>
+
+#define F_GETLK WASTE_F_GETLK
+#define F_SETLK WASTE_F_SETLK
+#define F_SETLKW WASTE_F_SETLKW
+#define F_RDLCK WASTE_F_RDLCK
+#define F_WRLCK WASTE_F_WRLCK
+#define F_UNLCK WASTE_F_UNLCK
+
+struct flock {
+    short l_type;
+    short l_whence;
+    off_t l_start;
+    off_t l_len;
+    pid_t l_pid;
+};
 
 #define O_RDONLY 0
 #define O_BINARY 0
@@ -22,12 +38,12 @@
 #define O_NOCTTY 0400000
 #define O_NOFOLLOW 01000000
 #define O_CLOEXEC 02000000
-#define F_DUPFD_CLOEXEC 1030
-#define F_GETFL 3
-#define F_SETFL 4
-#define F_DUPFD 0
-#define F_GETFD 1
-#define F_SETFD 2
+#define F_DUPFD_CLOEXEC WASTE_F_DUPFD_CLOEXEC
+#define F_GETFL WASTE_F_GETFL
+#define F_SETFL WASTE_F_SETFL
+#define F_DUPFD WASTE_F_DUPFD
+#define F_GETFD WASTE_F_GETFD
+#define F_SETFD WASTE_F_SETFD
 #define FD_CLOEXEC 1
 #define POSIX_FADV_NORMAL 0
 #define POSIX_FADV_RANDOM 1
@@ -36,10 +52,14 @@
 #define POSIX_FADV_DONTNEED 4
 #define POSIX_FADV_NOREUSE 5
 #define AT_SYMLINK_NOFOLLOW 0x100
-#define AT_SYMLINK_FOLLOW 0
+#define AT_SYMLINK_FOLLOW 0x400
 #define AT_FDCWD (-100)
 #define AT_EACCESS 0x200
 #define AT_REMOVEDIR 0x200
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 int open(const char *, int, ...);
 int creat(const char *, unsigned int) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
@@ -49,5 +69,9 @@ int fcntl(int, int, ...);
 int fchmodat(int, const char *, unsigned int, int);
 int fchownat(int, const char *, unsigned int, unsigned int, int) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 int posix_fadvise(int, off_t, off_t, int);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

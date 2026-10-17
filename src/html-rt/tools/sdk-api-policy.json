@@ -11,27 +11,34 @@
     },
     {
       "reason": "No WASTE runtime provider; declaration only, not a supported guest capability",
-      "names": "__freadahead __freading __fwriting clock creat difftime exp fchownat freopen fscanf futimesat getchar inet_addr inet_aton inet_ntop inet_pton iswalpha iswblank iswcntrl iswdigit iswspace link log pause posix_spawn posix_spawn_file_actions_addclose posix_spawn_file_actions_adddup2 posix_spawn_file_actions_addopen posix_spawn_file_actions_destroy posix_spawn_file_actions_init posix_spawnattr_destroy posix_spawnattr_getflags posix_spawnattr_getsigdefault posix_spawnattr_getsigmask posix_spawnattr_init posix_spawnattr_setflags posix_spawnattr_setsigdefault posix_spawnattr_setsigmask posix_spawnp pow pthread_cond_broadcast pthread_cond_destroy pthread_cond_init pthread_cond_signal pthread_cond_wait pthread_create pthread_getspecific pthread_join pthread_key_create pthread_key_delete pthread_mutex_timedlock pthread_mutexattr_destroy pthread_mutexattr_init pthread_mutexattr_settype pthread_once pthread_rwlock_destroy pthread_rwlock_init pthread_rwlock_rdlock pthread_rwlock_unlock pthread_rwlock_wrlock pthread_rwlockattr_destroy pthread_rwlockattr_init pthread_rwlockattr_setkind_np pthread_self pthread_setspecific pthread_sigmask putenv readlinkat renameat rewinddir sched_get_priority_max sched_get_priority_min sched_yield strtoul symlink symlinkat tdelete tdestroy tfind tsearch twalk unlinkat utime vfork vfscanf wait wcscat"
-    },
-    {
-      "reason": "Browser abort adapter returns normally; no terminating guest implementation",
-      "names": "abort"
+      "names": "__freadahead __freading __fwriting clock creat difftime exp fchownat freopen fscanf futimesat getchar inet_addr inet_aton inet_ntop inet_pton iswalpha iswblank iswcntrl iswdigit iswspace log pause posix_spawn posix_spawn_file_actions_addclose posix_spawn_file_actions_adddup2 posix_spawn_file_actions_addopen posix_spawn_file_actions_destroy posix_spawn_file_actions_init posix_spawnattr_destroy posix_spawnattr_getflags posix_spawnattr_getsigdefault posix_spawnattr_getsigmask posix_spawnattr_init posix_spawnattr_setflags posix_spawnattr_setsigdefault posix_spawnattr_setsigmask posix_spawnp pow pthread_cond_broadcast pthread_cond_destroy pthread_cond_init pthread_cond_signal pthread_cond_wait pthread_create pthread_getspecific pthread_join pthread_key_create pthread_key_delete pthread_mutex_timedlock pthread_mutexattr_destroy pthread_mutexattr_init pthread_mutexattr_settype pthread_once pthread_rwlock_destroy pthread_rwlock_init pthread_rwlock_rdlock pthread_rwlock_unlock pthread_rwlock_wrlock pthread_rwlockattr_destroy pthread_rwlockattr_init pthread_rwlockattr_setkind_np pthread_self pthread_setspecific pthread_sigmask putenv readlinkat renameat rewinddir sched_get_priority_max sched_get_priority_min sched_yield tdelete tdestroy tfind tsearch twalk unlinkat utime vfork vfscanf wcscat"
     }
   ],
   "capability_notes": {
+    "floating_point_classification": "Type-preserving single-evaluation C macros and libc++ overloads classify binary32/binary64/binary128 values. Shared binary128 comparison helpers inspect both words, including NaNs and signed zero; other quad arithmetic/conversion helpers still narrow through double and do not provide general binary128 precision. Existing unsupported math functions remain unavailable.",
+    "integer_conversion": "C-locale strtol/strtoul and wcstol/wcstoul (32-bit long), strtoll/strtoull/strtoimax/strtoumax and their wide counterparts (64-bit). One checked parser reads full byte/wchar elements without transcoding or narrowing wide input. ASCII whitespace/digits, bases 2..36 and octal/hex auto-detection; no binary prefix or Unicode classification. Invalid bases return EINVAL; overflow saturates with ERANGE while consuming all digits. No conversion leaves endptr at the original input; other successful conversions preserve errno. Wide endptr offsets count wchar_t elements.",
+    "floating_point_environment": "Fixed Wasm round-to-nearest arithmetic, FE_ALL_EXCEPT=0 and no host floating-point state. Empty exception/default-environment operations succeed; unsupported modes, flags and malformed saved environments fail. No dynamic rounding or sticky exception support.",
+    "resources": "Public time64 timeval-based rusage. Guest CPU accounting is unavailable: getrusage returns -1/ENOSYS for SELF/CHILDREN, -1/EINVAL otherwise, without accessing output. Resource-limit storage is the existing libc compatibility facade; kernel enforcement is not claimed.",
     "default": "Existing partial WASTE application ABI; availability and Wasm signatures do not imply full C/POSIX conformance.",
     "locale": "Fixed C.UTF-8 facade; setlocale ignores the requested locale/category, uselocale is a compatibility stub. No locale object lifecycle API.",
-    "wide_characters": "Existing limited classification/conversion subset; no claim of complete Unicode classification or stateful encodings.",
+    "wide_characters": "Signed 32-bit wchar_t memory comparison/copy/move/fill and NUL-terminated length/comparison/search, including reverse, set and substring searches. Memory counts are wide elements and searches/compares preserve embedded NUL handling. Existing limited classification/UTF-8 conversion subset remains; no complete Unicode classification, stateful encoding or wide stream formatted IO claim.",
     "stdio": "Guest-owned opaque FILE; formatting/scanning implement the existing subset, not all standard conversions.",
-    "filesystem": "Engine-owned in-memory namespace and descriptors; adapters enforce their supported flags and errno. No host filesystem access.",
+    "filesystem": "Engine-owned in-memory namespace, retained hard-link inodes, symbolic links and descriptors; adapters enforce supported flags and errno. Link counts describe each cloned namespace, reconciled at reap; immediate cross-process namespace visibility and deletion reconciliation remain pending. No host filesystem access.",
     "threads": "Guest mutex helpers are single-threaded compatibility stubs; pthread creation, conditions, rwlocks and TLS APIs are unavailable.",
     "network": "Current syscall wrappers are unsupported without a capability provider; no raw socket or DNS capability is added by headers.",
-    "processes": "Existing browser engine fork/exec/wait model; native guest execution parity remains Stage 6. posix_spawn and vfork unavailable.",
+    "processes": "Shared engine fork/exec/wait scheduling in both runtimes. execv uses the current guest environ and exact path; wait selects any child through waitpid(-1, ..., 0). waste_waitpid_until uses an absolute monotonic deadline, existing signal/restart state and readiness scheduling; expiry leaves the child alive. Invalid exec pointers and wait output buffers return EFAULT without replacement/reaping. Actual LLVM finite Wait/ExecuteAndWait use the same deadline API, preserving application alarms; polling expiry retains the child and ordinary expiry kills/reaps the exact target. posix_spawn, vfork, child CPU accounting, memory budgets and CPU affinity remain unavailable.",
     "dynamic_loading": "Existing engine-owned handles and installed Wasm DSO loader; no native host-library loading.",
     "mapping": "Existing engine mappings, i64 offsets and bounded permissions; MAP_FIXED unsupported. No claim of host mmap semantics.",
     "ncurses": "Configured pinned DSO, unsigned four-byte NCURSES_BOOL. Missing optional/debug/SP entry points are compile-time unavailable.",
-    "assert": "Default assert uses compiler trap; no diagnostic text or SIGABRT delivery. NDEBUG omits evaluation. Legacy package abort remains unchanged.",
-    "signals": "Engine-owned 128-bit signal sets, block/unblock/setmask and blocked-pending queries; SIGKILL/SIGSTOP cannot be blocked. Caught handlers are serviced at the existing pselect boundary, whose handler slot uses an engine function index; arbitrary compiled C function-pointer and sigaction flag conformance is not established."
+    "assert": "Default assert uses compiler trap; no diagnostic text or SIGABRT delivery. NDEBUG omits evaluation.",
+    "abort": "Guest libc calls waste_kernel.abort_v1. SIGABRT terminates the guest, including ignored/blocked signals and returning handlers; waitpid records signal 6. A caught handler runs synchronously and may not suspend. Host runtime and parent remain alive.",
+    "exit": "Shared guest libc retains allocation-backed C atexit and C++ __cxa_atexit registrations, retires callbacks before invocation and finalizes in reverse order. __cxa_finalize(dso) selects matching entries; callbacks may use ordinary evaluator yields. Normal exit finalizes then requests fflush and immediate kernel termination. Successful exec discards registrations through the existing allocator bootstrap; rejected exec preserves them and fork clones private state. _Exit and signal termination bypass callbacks. Automatic C++ DSO finalization on dlclose, concurrent registration and buffered flush conformance are not established.",
+    "clocks": "clock_gettime reads CLOCK_REALTIME and CLOCK_MONOTONIC through injected kernel callbacks. Invalid destinations return EFAULT, unsupported IDs EINVAL, absent callbacks ENOSYS. No CPU clocks, setters or POSIX timer suite are advertised. Public alarm uses one process-owned monotonic deadline through waste_kernel.alarm_v1 (i32 seconds, i64 remaining/error); expiry queues SIGALRM, fork clears the child timer and exec preserves it. Replacement/cancellation round remaining seconds up; cancellation retains pending signals.",
+    "signals": "Engine-owned 128-bit signal sets and process dispositions; compiled ordinary C handlers use the shared function table, while table-free legacy WAT handlers retain their local-index ABI. Public sigaction uses the fixed 24-byte waste_kernel.sigaction_v1 boundary and returns -1/errno; signal installs a persistent SA_RESTART handler. Unsupported action flags return EINVAL without changing state or output. SIGKILL/SIGSTOP cannot be blocked or caught. Delivery uses existing self-signal, read, pselect, wait and bounded opcode boundaries; handlers may not suspend. siginfo callbacks, alternate stacks and machine fault contexts are unavailable. kill(pid, 0) queries allocated processes including zombies, with ESRCH after reap; all-process broadcast and full permission/job-control semantics remain outside this verified boundary.",
+    "floating_conversion": "C-locale narrow/wide strtof/strtod/strtold and wcstof/wcstod/wcstold. Decimal/hex ASCII grammar, optional valid exponents, infinity and canonical quiet NaN; wide input retains complete wchar values. Bounded integer ratios round directly to binary32/64/128, nearest ties-to-even, without a double intermediate. Overflow returns signed infinity/ERANGE; inexact tiny results set ERANGE, exact subnormals preserve errno. No conversion returns positive zero with the original endptr. Successful conversion preserves errno. Accepted NaN payload spellings map to a canonical value; no Unicode classification, alternate locales or dynamic rounding support.",
+    "wide_formatting": "Bounded swprintf/vswprintf count signed four-byte wchar elements. Integer flags/lengths, pointer/count conversions, full wide strings/characters and fixed UTF-8 strings; width/precision count output elements. f/F/e/E/g/G/a/A format exact binary64/128 encodings with integer decimal/hex digits and nearest ties-to-even, without double narrowing of long double. Success preserves errno; nonzero capacity receives a terminated prefix. Insufficient/zero capacity returns -1/EOVERFLOW, invalid format syntax returns EINVAL, invalid UTF-8 returns EILSEQ. No positional arguments, grouping, alternate locale or stateful encoding. Narrow printf floating output and wide stream IO remain unimplemented.",
+    "non_local_jumps": "Engine-owned copyable evaluator checkpoints, with direct caller imports and exported mutable i32 __stack_pointer. setjmp/longjmp and sigsetjmp/siglongjmp normalize a zero jump value to one and reject inactive tokens. Nonzero sigsetjmp save_mask flags retain and restore the process kernel mask with the checkpoint; zero flags leave mask changes intact. No native machine context or Asyncify.",
+    "randomness": "Current getrandom supplies process-local xorshift compatibility PRNG bytes, not operating-system entropy or cryptographically secure randomness. Flags are ignored. Suitable only for non-security jitter; availability does not establish full getrandom semantics."
   },
   "browser_adapter_review": {
     "prefer_over_module": [],
@@ -65,19 +72,17 @@
           127
         ]
       },
-      "_exit": {
+      "_Exit": {
         "params": [
           127
         ],
         "results": []
       },
-      "atexit": {
+      "_exit": {
         "params": [
           127
         ],
-        "results": [
-          127
-        ]
+        "results": []
       },
       "close": {
         "params": [
@@ -364,13 +369,50 @@
         "results": [
           127
         ]
+      },
+      "sigsetjmp": {
+        "params": [
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
+      },
+      "siglongjmp": {
+        "params": [
+          127,
+          127
+        ],
+        "results": []
+      },
+      "longjmp": {
+        "params": [
+          127,
+          127
+        ],
+        "results": []
+      },
+      "posix_madvise": {
+        "params": [
+          127,
+          127,
+          127
+        ],
+        "results": [
+          127
+        ]
       }
     }
   },
   "compatibility_stubs": [
     {
-      "names": "atexit sleep",
-      "behavior": "Browser compatibility no-op returning zero; no callback registration, delay or signal-set state."
+      "names": "utimensat futimens",
+      "behavior": "Shared guest libc returns -1 with ENOSYS; timestamp mutation is unavailable. Function presence does not imply mutation support."
+    },
+    {
+      "names": "sleep",
+      "behavior": "Legacy browser compatibility no-op; production libc sleep uses engine-owned timed waits."
     },
     {
       "names": "fchmod",
@@ -387,10 +429,6 @@
     {
       "names": "uselocale",
       "behavior": "Fixed locale compatibility facade; no locale switch."
-    },
-    {
-      "names": "sigaction",
-      "behavior": "Browser handles handler/mask prefix; sa_flags not implemented."
     }
   ]
 }

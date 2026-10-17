@@ -1,6 +1,7 @@
 #include "process_driver.h"
 #include "runtime_internal.h"
 #include "instantiate.h"
+#include "guest_posix.h"
 #include "../config.h"
 #include "lib/include/kernel.h"
 #include <stdlib.h>
@@ -167,6 +168,7 @@ static exec_status process_restore_fork_parent(native_process_capsule *parent,
 
 static int process_wait_ready(native_store *store, native_process *process) {
     native_process_capsule *capsule = &process->capsule;
+    posix_kernel_alarm_poll(process->kernel);
     if (capsule->wait_reason == EXEC_YIELD_NONE) return 1;
     if (capsule->wait_reason == EXEC_YIELD_WAITPID) {
         int children = 0;
@@ -183,7 +185,9 @@ static int process_wait_ready(native_store *store, native_process *process) {
             if (process->kernel->pending_signals.words[i] &
                 ~process->kernel->signal_mask.words[i]) return 1;
         }
-        return 0;
+        return process->kernel->wait.active &&
+               process->kernel->wait.has_deadline &&
+               posix_kernel_wait_poll(process->kernel) != POSIX_WAIT_BLOCKED;
     }
     if (capsule->wait_reason == EXEC_YIELD_READ ||
         capsule->wait_reason == EXEC_YIELD_SELECT)
@@ -210,11 +214,19 @@ int native_process_driver_wait_timeout(native_store *store, uint64_t *nanosecond
         if (!process->used || process->zombie || !process->kernel) continue;
         posix_kernel *kernel = process->kernel;
         posix_wait_record *wait = &kernel->wait;
-        if (!wait->active || !wait->has_deadline || !kernel->clock_now) continue;
+        if (!kernel->clock_now) continue;
         uint64_t now = kernel->clock_now(kernel->clock_data);
-        uint64_t remaining = wait->deadline_ns > now ? wait->deadline_ns - now : 0;
-        if (remaining < earliest) earliest = remaining;
-        found = 1;
+        if (wait->active && wait->has_deadline) {
+            uint64_t remaining = wait->deadline_ns > now ? wait->deadline_ns - now : 0;
+            if (remaining < earliest) earliest = remaining;
+            found = 1;
+        }
+        if (kernel->alarm_active) {
+            uint64_t remaining = kernel->alarm_deadline_ns > now ?
+                kernel->alarm_deadline_ns - now : 0;
+            if (remaining < earliest) earliest = remaining;
+            found = 1;
+        }
     }
     if (found && nanoseconds) *nanoseconds = earliest;
     return found;
@@ -224,7 +236,7 @@ int native_process_driver_wait_timeout(native_store *store, uint64_t *nanosecond
  * publish the earliest deadline (or an input wait) to the platform adapter. */
 static int process_schedule(native_process_driver *driver, native_store *store,
                             int prefer_current, exec_error *error) {
-    int current = 0, blocked = -1, input = -1;
+    int current = 0, blocked = -1, input = -1, blocked_has_deadline = 0;
     uint64_t deadline = UINT64_MAX;
     for (int i = 0; i < NATIVE_PROCESS_MAX; i++)
         if (store->processes[i].used && store->processes[i].pid == store->active_pid)
@@ -246,7 +258,11 @@ static int process_schedule(native_process_driver *driver, native_store *store,
             return 1;
         }
         if (capsule->wait_reason != EXEC_YIELD_READ &&
-            capsule->wait_reason != EXEC_YIELD_SELECT) continue;
+            capsule->wait_reason != EXEC_YIELD_SELECT &&
+            !(capsule->wait_reason == EXEC_YIELD_WAITPID &&
+              (process->kernel->alarm_active ||
+               (process->kernel->wait.active &&
+                process->kernel->wait.has_deadline)))) continue;
         posix_wait_record *wait = &process->kernel->wait;
         if (wait->active) {
             for (int fd = 0; fd < POSIX_KERNEL_FD_MAX; fd++) {
@@ -258,10 +274,19 @@ static int process_schedule(native_process_driver *driver, native_store *store,
                 }
             }
         }
-        if (blocked < 0 || (wait->active && wait->has_deadline &&
-                            wait->deadline_ns < deadline)) {
+        uint64_t next = wait->active && wait->has_deadline ?
+            wait->deadline_ns : UINT64_MAX;
+        int has_deadline = (wait->active && wait->has_deadline) ||
+            process->kernel->alarm_active;
+        if (process->kernel->alarm_active && process->kernel->alarm_deadline_ns < next)
+            next = process->kernel->alarm_deadline_ns;
+        /* UINT64_MAX is also a valid saturated deadline. Prefer its timer
+         * over an indefinite wait that uses the same comparison sentinel. */
+        if (blocked < 0 || next < deadline ||
+            (next == deadline && has_deadline && !blocked_has_deadline)) {
             blocked = i;
-            deadline = wait->active && wait->has_deadline ? wait->deadline_ns : UINT64_MAX;
+            deadline = next;
+            blocked_has_deadline = has_deadline;
         }
     }
     if (input >= 0) blocked = input;
@@ -276,6 +301,8 @@ static int process_schedule(native_process_driver *driver, native_store *store,
         process->capsule.root_func_idx, process->capsule.root_args,
         process->capsule.root_arg_count);
     driver->selection.wait_reason = process->capsule.wait_reason;
+    if (driver->selection.wait_reason == EXEC_YIELD_WAITPID)
+        driver->selection.wait_reason = EXEC_YIELD_SELECT;
     error->status = EXEC_YIELD;
     error->yield_reason = driver->selection.wait_reason;
     return 0;
@@ -526,8 +553,8 @@ static int process_copy_vector(char **destination, const char *const *source,
     for (uint32_t i = 0; i < count; i++) {
         if (!source[i]) return 0;
         size_t length = 0;
-        while (length < NATIVE_EXEC_BYTES_MAX - *total && source[i][length]) length++;
-        if (length == NATIVE_EXEC_BYTES_MAX - *total) return 0;
+        while (length < PROCESS_EXEC_MAX_BYTES - *total && source[i][length]) length++;
+        if (length == PROCESS_EXEC_MAX_BYTES - *total) return 0;
         destination[i] = malloc(length + 1);
         if (!destination[i]) return 0;
         memcpy(destination[i], source[i], length + 1);
@@ -750,6 +777,7 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
     if (!driver || !store || !error || arg_count < 0 || arg_count > WAST_MAX_ARGS ||
         (arg_count && !args))
         return exec_fail(error, EXEC_ERROR_TRAP, "invalid process invocation");
+    store->execution_control.signal_deliver = guest_posix_poll_signal;
     process_driver_select(driver, store, engine, func_idx, args, arg_count);
     waste_exec_engine *active_engine = engine;
     uint32_t active_func_idx = func_idx;
@@ -831,7 +859,17 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
                 handler_exit_code = native_process_handler_default_exit_code(
                     handler_status, handler_exit_code);
                 error->exit_code = handler_exit_code;
-                if ((error->signal ?
+                if (native_store_getpid(store) == 1) {
+                    /* A root exec (including Bash's last-command optimization)
+                     * has no parent waiting for a handler result. Release its
+                     * handler context and return the root exit through the
+                     * invocation driver, rather than the child reap API. */
+                    native_process_capsule *root = native_store_active_capsule(store);
+                    if (!root)
+                        return exec_fail(error, EXEC_ERROR_TRAP,
+                                         "missing root WAST handler capsule");
+                    native_process_capsule_clear_handler(root);
+                } else if ((error->signal ?
                     native_store_complete_process_handler_signal(
                         store, handler_status, error->signal) :
                     native_store_complete_process_handler(
@@ -948,10 +986,12 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
                 /* These mounted interpreter commands are valid entrypoints;
                  * their arguments failed preflight. ENOEXEC would make Bash
                  * reinterpret their empty synthetic nodes as shell scripts. */
-                store->exec_request.failure_errno =
-                    strcmp(store->exec_request.path, "/bin/wat") == 0 ||
-                    strcmp(store->exec_request.path, "/bin/wast") == 0 ?
-                        POSIX_EINVAL : POSIX_ENOEXEC;
+                if (!store->exec_request.failure_errno)
+                    store->exec_request.failure_errno =
+                        strcmp(store->exec_request.path, "/bin/wasm") == 0 ||
+                        strcmp(store->exec_request.path, "/bin/wat") == 0 ||
+                        strcmp(store->exec_request.path, "/bin/wast") == 0 ?
+                            POSIX_EINVAL : POSIX_ENOEXEC;
                 native_store_abort_process_exec(store);
                 continue;
             }

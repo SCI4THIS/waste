@@ -1,0 +1,17 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "events": [
+    {
+      "after": "# ",
+      "text": "exec wast --verbose /root/test/html-rt/report.fail.wast\n"
+    }
+  ],
+  "contains": ["WAST: 2 PASS, 1 FAIL, 3 total"],
+  "assertions": 4,
+  "expectedPassed": 3,
+  "expectedHandlerError": "result mismatch for one (actual 1, expected 2)",
+  "expectedError": "result mismatch for one (actual 1, expected 2)",
+  "exitStatus": 1,
+  "processes": 0
+}

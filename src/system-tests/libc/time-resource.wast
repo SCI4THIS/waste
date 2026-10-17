@@ -24,10 +24,13 @@
     i32.const 7 i32.const 181016 call $getrlimit i32.eqz i32.and
     i32.const 181016 i64.load i64.const 32 i64.eq i32.and
     i32.const 181024 i64.load i64.const 64 i64.eq i32.and
-    i32.const 0 i32.const 181040 call $getrusage i32.eqz i32.and
-    i32.const 181040 i64.load i64.eqz i32.and
+    i32.const 181040 i64.const 0x123456789abcdef0 i64.store
+    i32.const 0 i32.const 181040 call $getrusage i32.const -1 i32.eq i32.and
+    call $errno_location i32.load i32.const 38 i32.eq i32.and
+    i32.const 181040 i64.load i64.const 0x123456789abcdef0 i64.eq i32.and
     i64.const 4096 call $setdtablesize i32.const 4096 i32.eq i32.and
-    i32.const 0 call $sysconf i32.const 1024 i32.eq i32.and
+    i32.const -1 call $sysconf i32.const -1 i32.eq i32.and
+    call $errno_location i32.load i32.const 22 i32.eq i32.and
     i32.const 180041 i32.const 0 call $pathconf i32.const 255 i32.eq i32.and
     i32.const 0 i32.const 181200 i32.const 32 call $confstr i32.const 14 i32.eq i32.and)
 

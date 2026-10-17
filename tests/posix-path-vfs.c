@@ -179,6 +179,71 @@ int main(void) {
     memset(overlong, 'x', sizeof(overlong));
     CHECK(posix_kernel_path_stat(first, (const uint8_t *)overlong,
                                  sizeof(overlong), 1, &actual) == -POSIX_EINVAL);
+
+    /* Guest identity calls do not inject kernel credentials. Keep directory
+     * search authorization and span/capacity guards at this private boundary;
+     * canonical lookup and public buffer ownership are exercised in WAST. */
+    posix_path_metadata owner_directory = directory;
+    owner_directory.uid = 1000;
+    owner_directory.gid = 100;
+    owner_directory.mode = 0700;
+    CHECK(posix_kernel_path_add(first, "/restricted", &owner_directory) == 0);
+    CHECK(posix_kernel_path_add(first, "/restricted/file", &regular) == 0);
+    char canonical[POSIX_PATH_NODE_NAME_MAX];
+    memset(canonical, '!', sizeof(canonical));
+    posix_kernel_set_credentials(first, 1000, 200);
+    CHECK(posix_kernel_realpath(first, (const uint8_t *)"/restricted/file", 16,
+                               canonical, sizeof(canonical)) == 16);
+    CHECK(strcmp(canonical, "/restricted/file") == 0);
+    posix_kernel_set_credentials(first, 2000, 100);
+    memset(canonical, '!', sizeof(canonical));
+    CHECK(posix_kernel_realpath(first, (const uint8_t *)"/restricted/file", 16,
+                               canonical, sizeof(canonical)) == -POSIX_EACCES);
+    CHECK(canonical[0] == '!' && canonical[sizeof(canonical) - 1] == '!');
+    /* Owner permissions take priority even when the owner's group could search. */
+    owner_directory.mode = 0010;
+    CHECK(posix_kernel_path_add(first, "/restricted", &owner_directory) == 0);
+    posix_kernel_set_credentials(first, 1000, 100);
+    CHECK(posix_kernel_realpath(first, (const uint8_t *)"/restricted/file", 16,
+                               canonical, sizeof(canonical)) == -POSIX_EACCES);
+    posix_kernel_set_credentials(first, 2000, 100);
+    CHECK(posix_kernel_realpath(first, (const uint8_t *)"/restricted/file", 16,
+                               canonical, sizeof(canonical)) == 16);
+    posix_kernel_set_credentials(first, 2000, 200);
+    CHECK(posix_kernel_realpath(first, (const uint8_t *)"/restricted/file", 16,
+                               canonical, sizeof(canonical)) == -POSIX_EACCES);
+    owner_directory.mode = 0001;
+    CHECK(posix_kernel_path_add(first, "/restricted", &owner_directory) == 0);
+    CHECK(posix_kernel_realpath(first, (const uint8_t *)"/restricted/file", 16,
+                               canonical, sizeof(canonical)) == 16);
+    owner_directory.mode = 0000;
+    CHECK(posix_kernel_path_add(first, "/restricted", &owner_directory) == 0);
+    CHECK(posix_kernel_realpath(first, (const uint8_t *)"/restricted/../data", 19,
+                               canonical, sizeof(canonical)) == -POSIX_EACCES);
+    CHECK(posix_kernel_realpath(first, (const uint8_t *)"/restricted/", 12,
+                               canonical, sizeof(canonical)) == -POSIX_EACCES);
+    CHECK(posix_kernel_realpath(first, (const uint8_t *)"/restricted", 11,
+                               canonical, sizeof(canonical)) == 11);
+    posix_kernel_set_credentials(first, 0, 0);
+    CHECK(posix_kernel_realpath(first, (const uint8_t *)"/restricted/file", 16,
+                               canonical, sizeof(canonical)) == 16);
+    CHECK(posix_kernel_realpath(second, (const uint8_t *)"/restricted/file", 16,
+                               canonical, sizeof(canonical)) == -POSIX_ENOENT);
+    CHECK(posix_kernel_getcwd(first, cwd, sizeof(cwd)) == 0 && strcmp(cwd, "/") == 0);
+    memset(canonical, '!', sizeof(canonical));
+    CHECK(posix_kernel_realpath(NULL, (const uint8_t *)"/", 1,
+                               canonical, sizeof(canonical)) == -POSIX_EFAULT);
+    CHECK(posix_kernel_realpath(first, NULL, 1,
+                               canonical, sizeof(canonical)) == -POSIX_EFAULT);
+    CHECK(posix_kernel_realpath(first, (const uint8_t *)"/", 1,
+                               NULL, sizeof(canonical)) == -POSIX_EFAULT);
+    CHECK(posix_kernel_realpath(first, (const uint8_t *)"/", SIZE_MAX,
+                               canonical, sizeof(canonical)) == -POSIX_ENAMETOOLONG);
+    CHECK(posix_kernel_realpath(first, (const uint8_t *)"/\0x", 3,
+                               canonical, sizeof(canonical)) == -POSIX_EINVAL);
+    CHECK(posix_kernel_realpath(first, (const uint8_t *)"/", 1,
+                               canonical, 1) == -POSIX_ERANGE);
+    CHECK(canonical[0] == '!' && canonical[sizeof(canonical) - 1] == '!');
     posix_kernel_destroy(first);
     posix_kernel_destroy(second);
     printf("POSIX path VFS: %d checks, %d failures\n", checks, failures);

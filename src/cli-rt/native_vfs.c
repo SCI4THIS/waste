@@ -210,6 +210,7 @@ int native_vfs_load_at(int root_fd, waste_vfs *vfs, char *error, size_t capacity
         if (!status) status = add_virtual(&reader, "/root", 1, 0755);
         if (!status) status = add_virtual(&reader, "/tmp", 1, 0777);
         if (!status) status = add_virtual(&reader, "/bin/wat", 0, 0755);
+        if (!status) status = add_virtual(&reader, "/bin/wasm", 0, 0755);
         if (!status) status = add_virtual(&reader, "/bin/wast", 0, 0755);
     }
     if (fd >= 0) sys_close(fd);

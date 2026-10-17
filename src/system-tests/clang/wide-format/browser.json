@@ -1,0 +1,48 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/wide-format-c.wasm",
+      "source": "build/system-tests/clang/wide-format/probe-c.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/wide-format-cxx.wasm",
+      "source": "build/system-tests/clang/wide-format/probe-cxx.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/wide-format.wast",
+      "source": "src/system-tests/clang/wide-format/wide-format.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/wide-format-provider.wast",
+      "source": "src/aux/libc/tests/wide-format.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/wide-format-c.wasm > /tmp/wide-format-c.bin; printf '%s\\n' \"$?\" > /tmp/wide-format-c-status.txt; /tmp/wide-format-cxx.wasm > /tmp/wide-format-cxx.bin; printf '%s\\n' \"$?\" > /tmp/wide-format-cxx-status.txt; /bin/wast --verbose /tmp/wide-format.wast; printf '__WIDE_FORMAT_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__WIDE_FORMAT_0__\r\n",
+      "text": "/bin/wast --verbose /tmp/wide-format-provider.wast; printf '__WIDE_PROVIDER_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__WIDE_PROVIDER_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__WIDE_FORMAT_0__\r\n",
+    "__WIDE_PROVIDER_0__\r\n",
+    "WAST: 21 PASS, 0 FAIL, 21 total",
+    "WAST: 87 PASS, 0 FAIL, 87 total"
+  ],
+  "assertions": 109,
+  "exitStatus": 0
+}

@@ -3,6 +3,7 @@
 
 #include "select.h"
 #include "path.h"
+#include "../../../vfs/usr/include/waste/abi/fcntl.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -10,6 +11,8 @@
 /* --- Constants --- */
 
 #define POSIX_SHM_NAME_MAX      128
+#define POSIX_CLOCK_REALTIME      0
+#define POSIX_CLOCK_MONOTONIC     1
 #define POSIX_SHM_OBJECT_MAX     64
 #define POSIX_PIPE_CAPACITY    4096
 #define POSIX_TERMINAL_INPUT_CAPACITY TERMINAL_INPUT_CAPACITY
@@ -39,8 +42,10 @@
 #define POSIX_TCIOFF 2
 #define POSIX_TCION 3
 #define POSIX_SIGWINCH 28
+#define POSIX_SIGABRT 6
 #define POSIX_SIGBUS 7
 #define POSIX_SIGKILL 9
+#define POSIX_SIGALRM 14
 #define POSIX_SIGSTOP 19
 #define POSIX_SIG_DFL UINT32_C(0)
 #define POSIX_SIG_IGN UINT32_C(0xfffffffe)
@@ -82,9 +87,11 @@ typedef struct {
 #define POSIX_E2BIG    7
 #define POSIX_ENOEXEC  8
 #define POSIX_EINTR    4
+#define POSIX_ESRCH    3
 #define POSIX_ENOMEM  12
 #define POSIX_EAGAIN  11
 #define POSIX_EINVAL  22
+#define POSIX_ENOTTY  25
 #define POSIX_EMFILE  24
 #define POSIX_EPIPE   32
 #define POSIX_ECHILD  10
@@ -93,15 +100,26 @@ typedef struct {
 #define POSIX_EEXIST  17
 #define POSIX_EBUSY   16
 #define POSIX_ENOSYS  38
+#define POSIX_EDEADLK 35
+#define POSIX_ENOLCK 37
+#define POSIX_EOVERFLOW 75
+#define POSIX_F_GETLK WASTE_F_GETLK
+#define POSIX_F_SETLK WASTE_F_SETLK
+#define POSIX_F_SETLKW WASTE_F_SETLKW
+#define POSIX_F_RDLCK WASTE_F_RDLCK
+#define POSIX_F_WRLCK WASTE_F_WRLCK
+#define POSIX_F_UNLCK WASTE_F_UNLCK
 #define POSIX_WNOHANG 1
 #define POSIX_WUNTRACED 2
 #define POSIX_WCONTINUED 8
 #define POSIX_TIOCGWINSZ 0x5413u
 #define POSIX_TIOCSWINSZ 0x5414u
-#define POSIX_F_DUPFD 0
-#define POSIX_F_GETFD 1
-#define POSIX_F_SETFD 2
-#define POSIX_F_DUPFD_CLOEXEC 1030
+#define POSIX_F_DUPFD WASTE_F_DUPFD
+#define POSIX_F_GETFD WASTE_F_GETFD
+#define POSIX_F_SETFD WASTE_F_SETFD
+#define POSIX_F_GETFL WASTE_F_GETFL
+#define POSIX_F_SETFL WASTE_F_SETFL
+#define POSIX_F_DUPFD_CLOEXEC WASTE_F_DUPFD_CLOEXEC
 #define POSIX_FD_CLOEXEC 1
 #define POSIX_O_WRONLY 1
 #define POSIX_O_RDWR 2
@@ -131,17 +149,36 @@ typedef enum {
     POSIX_OFD_DIRECTORY,
     /* Bounded input queue/output capability supplied by an embedding runtime. */
     POSIX_OFD_STREAM,
+    POSIX_OFD_NULL,
 } posix_ofd_kind;
 
 typedef struct posix_kernel_path_node posix_kernel_path_node;
 typedef struct posix_file_object posix_file_object;
+typedef struct posix_record_lock posix_record_lock;
+typedef struct posix_lock_owner posix_lock_owner;
+
+typedef struct {
+    int type, whence;
+    int64_t start, length;
+    int pid;
+} posix_flock;
 
 struct posix_file_object {
     uint8_t *data;
     size_t data_capacity;
     uint32_t refs;
     uint64_t inode;
+    /* Shared inode attributes survive pathname removal and descriptor use.
+     * Symlink objects own a NUL-terminated target in data. */
+    posix_path_metadata metadata;
+    posix_record_lock *locks;
+    uint32_t lock_count;
 };
+
+typedef struct {
+    uint32_t refs;
+    uint64_t next;
+} posix_inode_sequence;
 
 typedef struct {
     char name[POSIX_SHM_NAME_MAX];
@@ -167,9 +204,17 @@ typedef struct posix_pipe {
 } posix_pipe;
 
 /* Open file description — shared across dup'd descriptors. */
+typedef struct {
+    uint32_t refs;
+    int flags; /* access mode and mutable O_APPEND/O_NONBLOCK */
+} posix_ofd_status;
+
 typedef struct posix_ofd {
     posix_ofd_kind kind;
     int ref_count;     /* number of fd entries pointing here */
+    /* Namespace rebasing can clone a regular/directory description. Retain
+     * its status independently so fork still shares F_GETFL/F_SETFL state. */
+    posix_ofd_status *status;
     /* Opaque platform capability IDs; never host descriptor numbers. */
     int input_handle, output_handle;
     uint32_t stream_mode;
@@ -182,6 +227,7 @@ typedef struct posix_ofd {
             posix_termios termios;
             posix_winsize winsize;
             int foreground_pgid;
+            int controlling_session_id;
             posix_sigset pending_signals;
         } terminal;
         struct {
@@ -190,12 +236,18 @@ typedef struct posix_ofd {
             size_t offset;
             int readable;
             int writable;
-            int append;
         } regular;
         struct {
             posix_kernel_path_node *node;
             int index;
         } directory;
+        /* No namespace pointer or byte backing: dup/fork share this retained
+         * inode and access mode, including after rename/unlink. */
+        struct {
+            posix_file_object *file;
+            int readable;
+            int writable;
+        } null_device;
         posix_pipe *pipe;
     };
 } posix_ofd;
@@ -210,7 +262,6 @@ struct posix_kernel_path_node {
     char path[POSIX_PATH_NODE_NAME_MAX];
     posix_path_metadata metadata;
     posix_file_object *file;
-    char *link_target;
 };
 
 typedef uint64_t (*posix_clock_now_fn)(void *data);
@@ -220,6 +271,7 @@ typedef struct {
     int active;
     uint64_t generation;
     int nfds;
+    int read_minimum; /* terminal READ threshold; SELECT keeps ordinary readiness */
     posix_fd_set readfds;
     posix_fd_set writefds;
     posix_fd_set exceptfds;
@@ -228,6 +280,10 @@ typedef struct {
     int has_signal_mask;
     posix_sigset saved_mask;
     posix_sigset temporary_mask;
+    /* Owned inode reference and normalized byte interests, never guest memory. */
+    posix_file_object *lock_file;
+    uint64_t lock_start, lock_end;
+    int lock_type, lock_fd;
 } posix_wait_record;
 
 /* Per-sandbox kernel. */
@@ -238,11 +294,18 @@ typedef struct posix_kernel {
     void *clock_data;
     posix_clock_now_fn realtime_now;
     void *realtime_data;
+    /* One process-owned alarm, independent of a blocking syscall's wait. */
+    int alarm_active;
+    uint64_t alarm_deadline_ns;
     posix_sigset signal_mask;
     posix_sigset pending_signals;
     /* Signal consumed by the most recent interrupted wait, if any. */
     int delivered_signal;
+    /* Suppress recursive handler invocation during guest abort. */
+    int aborting;
     int process_group_id;
+    int session_id;
+    int has_controlling_terminal;
     uint32_t uid;
     uint32_t gid;
     uint32_t creation_mask;
@@ -253,7 +316,9 @@ typedef struct posix_kernel {
     char cwd[POSIX_PATH_NODE_NAME_MAX];
     posix_kernel_path_node path_nodes[POSIX_PATH_NODE_MAX];
     int path_node_count;
+    posix_inode_sequence *inode_sequence;
     posix_shm_namespace *shm_namespace;
+    posix_lock_owner *lock_owner;
 } posix_kernel;
 
 /* --- Lifecycle --- */
@@ -286,6 +351,9 @@ int posix_kernel_umask(posix_kernel *kernel, int mask);
 /* Clone a process kernel.  Descriptor entries are copied while preserving
    shared open-file descriptions and pipe endpoint identity. */
 posix_kernel *posix_kernel_clone(const posix_kernel *kernel);
+/* Transactional kernel clones share identity. Fork assigns a fresh owner
+ * before publishing the child, so it cannot inherit or release parent locks. */
+int posix_kernel_set_lock_pid(posix_kernel *kernel, int pid);
 
 /* Publish pathname and file-metadata changes made by a fork child into the
    parent's shared filesystem view before the child is reaped. Descriptor,
@@ -310,6 +378,13 @@ void posix_kernel_set_realtime_clock(posix_kernel *kernel,
                                      posix_clock_now_fn realtime_now,
                                      void *realtime_data);
 uint64_t posix_kernel_realtime_now(const posix_kernel *kernel);
+/* Read a supported clock, returning -EINVAL/-ENOSYS when unavailable. */
+int posix_kernel_clock_now(const posix_kernel *kernel, int clock_id,
+                           uint64_t *nanoseconds);
+/* Unsigned remaining seconds or negative errno; zero cancels. Expiry queues
+ * SIGALRM through ordinary disposition/mask handling, exactly once. */
+int64_t posix_kernel_alarm(posix_kernel *kernel, uint32_t seconds);
+void posix_kernel_alarm_poll(posix_kernel *kernel);
 
 /* Poll/cancel the pointer-free wait record. */
 int posix_kernel_wait_poll(posix_kernel *kernel);
@@ -320,6 +395,11 @@ void posix_kernel_cancel_wait(posix_kernel *kernel);
 /* Register a descriptor-read wait without retaining guest pointers.  Returns
    zero when readable now, or -POSIX_EAGAIN after registration. */
 int posix_kernel_wait_read(posix_kernel *kernel, int fd);
+
+/* Register an absolute monotonic deadline using the ordinary wait record.
+ * Returns zero when expired, -EAGAIN when registered, or -ENOSYS without a
+ * clock. Child readiness and signal delivery belong to the process adapter. */
+int posix_kernel_wait_until(posix_kernel *kernel, uint64_t deadline_ns);
 
 /* Per-sandbox signal state.  Signal numbers are one-based POSIX numbers. */
 void posix_kernel_set_signal_mask(posix_kernel *kernel,
@@ -353,6 +433,9 @@ void posix_kernel_signal_leave_handler(posix_kernel *kernel,
                                        const posix_sigset *saved_mask);
 int posix_kernel_getpgid(const posix_kernel *kernel);
 int posix_kernel_setpgid(posix_kernel *kernel, int pgid);
+/* Process-table checks precede this allocation-free session transition. */
+int posix_kernel_create_session(posix_kernel *kernel, int pid);
+int posix_kernel_terminal_session(const posix_kernel *kernel, int fd);
 int posix_kernel_terminal_get_foreground_pgid(const posix_kernel *kernel,
                                               int fd);
 int posix_kernel_terminal_set_foreground_pgid(posix_kernel *kernel, int fd,
@@ -431,9 +514,15 @@ int posix_kernel_fchdir(posix_kernel *kernel, int fd);
 int posix_kernel_dup2(posix_kernel *kernel, int oldfd, int newfd);
 int posix_kernel_get_cloexec(const posix_kernel *kernel, int fd);
 int posix_kernel_set_cloexec(posix_kernel *kernel, int fd, int enabled);
+int posix_kernel_get_status_flags(const posix_kernel *kernel, int fd);
+int posix_kernel_set_status_flags(posix_kernel *kernel, int fd, int flags);
+/* F_GETLK/F_SETLK/F_SETLKW. Blocking contention registers the existing wait
+ * record and returns -EAGAIN; cancellation/signal delivery uses that record. */
+int posix_kernel_record_lock(posix_kernel *kernel, int fd, int command,
+                              posix_flock *lock);
 void posix_kernel_close_on_exec(posix_kernel *kernel);
 
-/* --- I/O (non-blocking) --- */
+/* --- I/O (negative errno; blocking EAGAIN registers a resumable wait) --- */
 
 /* Read up to count bytes from fd.  Returns bytes read (> 0), 0 at EOF,
    or negative errno (-POSIX_EBADF, -POSIX_EAGAIN). */
@@ -457,6 +546,10 @@ int posix_kernel_file_retain(posix_kernel *kernel, int fd,
                              posix_file_object **object_out,
                              int *writable_out);
 void posix_file_object_retain(posix_file_object *object);
+/* Count directory entries in this kernel's namespace, excluding fd, mapping
+ * and fork references. Namespace reconciliation remains explicit at wait. */
+uint32_t posix_kernel_file_link_count(const posix_kernel *kernel,
+                                      const posix_file_object *object);
 void posix_kernel_file_release(posix_file_object *object);
 int posix_kernel_file_write_object(posix_kernel *kernel,
                                    posix_file_object *object,

@@ -1,0 +1,20 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /root/test/aux/libc/modf.wast; MODF_STATUS=$?; printf '__PROFILER_MODF_%s__\\n' \"$MODF_STATUS\"\n"
+    },
+    {
+      "after": "__PROFILER_MODF_",
+      "text": "exit \"$MODF_STATUS\"\n"
+    }
+  ],
+  "contains": [
+    "WAST: 20 PASS, 0 FAIL, 20 total",
+    "__PROFILER_MODF_0__\r\n"
+  ],
+  "assertions": 21,
+  "exitStatus": 0
+}

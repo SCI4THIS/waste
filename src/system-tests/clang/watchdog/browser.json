@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/watchdog.wasm",
+      "source": "build/system-tests/clang/watchdog/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/watchdog.wast",
+      "source": "src/system-tests/clang/watchdog/watchdog.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/watchdog.wasm > /tmp/watchdog.bin; printf '%s\\n' \"$?\" > /tmp/watchdog-status.txt; /bin/wast --verbose /tmp/watchdog.wast; printf '__WATCHDOG_WATCHDOG_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__WATCHDOG_WATCHDOG_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "WAST: 65 PASS, 0 FAIL, 65 total",
+    "__WATCHDOG_WATCHDOG_0__\r\n"
+  ],
+  "assertions": 66,
+  "exitStatus": 0
+}

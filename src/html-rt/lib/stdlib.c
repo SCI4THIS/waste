@@ -78,7 +78,6 @@ char *getenv(const char *name) { (void)name; return (void *)0; }
 _Noreturn void exit(int status) { (void)status; __builtin_trap(); }
 _Noreturn void _exit(int status) { exit(status); }
 _Noreturn void abort(void) { __builtin_trap(); }
-int atexit(void (*callback)(void)) { (void)callback; return 0; }
 #endif
 
 /* ---- Freestanding heap allocator ---- */
@@ -87,15 +86,45 @@ static uintptr_t heap_cursor;
 
 typedef struct heap_block {
     size_t size;
-    struct heap_block *next;
+    struct heap_block *next, *previous;
     uint32_t is_free;
-    uint32_t reserved;
 } heap_block;
 
-static heap_block *heap_blocks;
+/* Headers and the smallest payload both preserve 16-byte alignment. Free-list
+ * links occupy only free payloads, so live allocations carry no search links. */
+_Static_assert(sizeof(heap_block) % 16u == 0, "aligned heap header");
+typedef struct { heap_block *next, *previous; } heap_free_links;
+static heap_block *heap_last;
+static heap_block *heap_bins[sizeof(size_t) * 8u];
 
 static size_t heap_align(size_t size) {
     return (size + 15u) & ~(size_t)15u;
+}
+
+static unsigned heap_bin(size_t size) {
+    unsigned bin = 0;
+    while (size >>= 1u) ++bin;
+    return bin;
+}
+
+static heap_free_links *heap_links(heap_block *block) {
+    return (heap_free_links *)(block + 1);
+}
+
+static void heap_insert_free(heap_block *block) {
+    unsigned bin = heap_bin(block->size);
+    heap_free_links *links = heap_links(block);
+    links->previous = (void *)0;
+    links->next = heap_bins[bin];
+    if (links->next) heap_links(links->next)->previous = block;
+    heap_bins[bin] = block;
+}
+
+static void heap_remove_free(heap_block *block) {
+    heap_free_links *links = heap_links(block);
+    if (links->previous) heap_links(links->previous)->next = links->next;
+    else heap_bins[heap_bin(block->size)] = links->next;
+    if (links->next) heap_links(links->next)->previous = links->previous;
 }
 
 static int heap_ensure(uintptr_t limit) {
@@ -107,50 +136,70 @@ static int heap_ensure(uintptr_t limit) {
     return __builtin_wasm_memory_grow(0, pages) != (size_t)-1;
 }
 
+/* The caller removes the next free block from its size bin before joining. */
+static void heap_join_next(heap_block *block) {
+    heap_block *next = block->next;
+    block->size += sizeof(heap_block) + next->size;
+    block->next = next->next;
+    if (block->next) block->next->previous = block;
+    else heap_last = block;
+}
+
 static void heap_split(heap_block *block, size_t size) {
-    const size_t header_size = heap_align(sizeof(heap_block));
-    if (block->size < size + header_size + 16u) return;
-    heap_block *rest =
-        (heap_block *)((unsigned char *)(block + 1) + size);
-    rest->size = block->size - size - header_size;
+    if (block->size - size < sizeof(heap_block) + 16u) return;
+    heap_block *rest = (heap_block *)((unsigned char *)(block + 1) + size);
+    rest->size = block->size - size - sizeof(heap_block);
     rest->next = block->next;
+    rest->previous = block;
     rest->is_free = 1;
-    rest->reserved = 0;
+    if (rest->next) rest->next->previous = rest;
+    else heap_last = rest;
     block->size = size;
     block->next = rest;
+    if (rest->next && rest->next->is_free) {
+        heap_remove_free(rest->next);
+        heap_join_next(rest);
+    }
+    heap_insert_free(rest);
 }
 
 void *malloc(size_t size) {
-    const size_t header_size = heap_align(sizeof(heap_block));
     if (size == 0) size = 1;
     if (size > (size_t)-1 - 15u) return (void *)0;
     size = heap_align(size);
-    for (heap_block *block = heap_blocks; block; block = block->next) {
-        if (block->is_free && block->size >= size) {
+    for (unsigned bin = heap_bin(size); bin < sizeof(heap_bins) / sizeof(*heap_bins); ++bin) {
+        for (heap_block *block = heap_bins[bin]; block; block = heap_links(block)->next) {
+            if (block->size < size) continue;
+            heap_remove_free(block);
             heap_split(block, size);
             block->is_free = 0;
             return block + 1;
         }
     }
+    /* Reuse the free tail before reserving a second, larger block after it. */
+    if (heap_last && heap_last->is_free &&
+        size <= (uintptr_t)-1 - (uintptr_t)(heap_last + 1) &&
+        heap_ensure((uintptr_t)(heap_last + 1) + size)) {
+        heap_remove_free(heap_last);
+        heap_last->size = size;
+        heap_last->is_free = 0;
+        heap_cursor = (uintptr_t)(heap_last + 1) + size;
+        return heap_last + 1;
+    }
     if (heap_cursor == 0) heap_cursor = (uintptr_t)&__heap_base;
     uintptr_t start = (heap_cursor + 15u) & ~(uintptr_t)15u;
-    if (start > (uintptr_t)-1 - header_size ||
-        size > (uintptr_t)-1 - start - header_size)
+    if (start > (uintptr_t)-1 - sizeof(heap_block) ||
+        size > (uintptr_t)-1 - start - sizeof(heap_block))
         return (void *)0;
-    uintptr_t limit = start + header_size + size;
+    uintptr_t limit = start + sizeof(heap_block) + size;
     if (!heap_ensure(limit)) return (void *)0;
     heap_block *block = (heap_block *)start;
     block->size = size;
     block->next = (void *)0;
+    block->previous = heap_last;
     block->is_free = 0;
-    block->reserved = 0;
-    if (!heap_blocks) {
-        heap_blocks = block;
-    } else {
-        heap_block *last = heap_blocks;
-        while (last->next) last = last->next;
-        last->next = block;
-    }
+    if (heap_last) heap_last->next = block;
+    heap_last = block;
     heap_cursor = limit;
     return block + 1;
 }
@@ -185,20 +234,19 @@ void *reallocarray(void *pointer, size_t count, size_t size) {
 
 void free(void *ptr) {
     if (!ptr) return;
-    const size_t header_size = heap_align(sizeof(heap_block));
     heap_block *block = (heap_block *)ptr - 1;
     block->is_free = 1;
-    while (block->next && block->next->is_free) {
-        block->size += header_size + block->next->size;
-        block->next = block->next->next;
+    if (block->next && block->next->is_free) {
+        heap_remove_free(block->next);
+        heap_join_next(block);
     }
-    heap_block *previous = (void *)0;
-    for (heap_block *at = heap_blocks; at && at != block; at = at->next)
-        previous = at;
-    if (previous && previous->is_free) {
-        previous->size += header_size + block->size;
-        previous->next = block->next;
+    if (block->previous && block->previous->is_free) {
+        heap_block *previous = block->previous;
+        heap_remove_free(previous);
+        heap_join_next(previous);
+        block = previous;
     }
+    heap_insert_free(block);
 }
 
 /* Forward declaration for use by realloc */
@@ -207,7 +255,7 @@ void *memcpy(void *dst, const void *src, size_t n);
 void *realloc(void *ptr, size_t size) {
     if (!ptr) return malloc(size);
     if (size == 0) { free(ptr); return (void *)0; }
-    const size_t header_size = heap_align(sizeof(heap_block));
+    if (size > (size_t)-1 - 15u) return (void *)0;
     heap_block *block = (heap_block *)ptr - 1;
     size_t aligned = heap_align(size);
     if (block->size >= aligned) {
@@ -215,15 +263,22 @@ void *realloc(void *ptr, size_t size) {
         return ptr;
     }
     if (block->next && block->next->is_free &&
-        block->size + header_size + block->next->size >= aligned) {
-        block->size += header_size + block->next->size;
-        block->next = block->next->next;
+        block->size + sizeof(heap_block) + block->next->size >= aligned) {
+        heap_remove_free(block->next);
+        heap_join_next(block);
         heap_split(block, aligned);
+        return ptr;
+    }
+    /* Growing the final live block needs no new search, copy or free. */
+    if (block == heap_last && aligned <= (uintptr_t)-1 - (uintptr_t)ptr &&
+        heap_ensure((uintptr_t)ptr + aligned)) {
+        heap_cursor = (uintptr_t)ptr + aligned;
+        block->size = aligned;
         return ptr;
     }
     void *fresh = malloc(size);
     if (!fresh) return (void *)0;
-    memcpy(fresh, ptr, block->size < size ? block->size : size);
+    memcpy(fresh, ptr, block->size);
     free(ptr);
     return fresh;
 }

@@ -1,0 +1,37 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/seed-file.wasm",
+      "source": "build/system-tests/clang/seed-file/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/seed-file-reference.bin",
+      "source": "build/system-tests/clang/seed-file/reference.bin",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/seed-file.wast",
+      "source": "src/system-tests/clang/seed-file/seed-file.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/seed-file.wasm > /tmp/seed-file.bin; printf '%s\\n' \"$?\" > /tmp/seed-file-status.txt; /bin/wast --verbose /tmp/seed-file.wast; SEED_FILE_RESULT=$?; printf \"__CLANG_SEED_FILE_%s__\\n\" \"$SEED_FILE_RESULT\"\n"
+    },
+    {
+      "after": "__CLANG_SEED_FILE_",
+      "text": "exit \"$SEED_FILE_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "WAST: 20 PASS, 0 FAIL, 20 total",
+    "__CLANG_SEED_FILE_0__\r\n"
+  ],
+  "assertions": 21,
+  "exitStatus": 0
+}

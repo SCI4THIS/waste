@@ -1,0 +1,37 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/program-execution.wasm",
+      "source": "build/system-tests/clang/program-execution/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/program-execution.wast",
+      "source": "src/system-tests/clang/program-execution/program-execution.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/program-execution-start.wat",
+      "source": "src/system-tests/clang/program-execution/start.wat",
+      "mode": 493
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/program-execution.wasm > /tmp/program-execution.bin; printf '%s\\n' \"$?\" > /tmp/program-execution-status.txt; /bin/wast --verbose /tmp/program-execution.wast; printf '__PROGRAM_EXECUTION_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__PROGRAM_EXECUTION_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "WAST: 394 PASS, 0 FAIL, 394 total",
+    "__PROGRAM_EXECUTION_0__\r\n"
+  ],
+  "assertions": 395,
+  "exitStatus": 0
+}

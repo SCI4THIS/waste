@@ -1,0 +1,261 @@
+;; Actual staged LLVM Wait observations; WAST owns runtime expectations.
+(module $argument-limits
+  (import "waste-runtime" "memory" (memory 4))
+  (import "libc" "open" (func $open (param i32 i32 i32) (result i32)))
+  (import "env" "read" (func $read (param i32 i32 i32) (result i32)))
+  (import "waste_kernel" "exec_limits_v1" (func $limits (param i32 i32) (result i32)))
+  (import "libc" "close" (func $close (param i32) (result i32)))
+  (data (i32.const 180000) "/tmp/argument-limits.bin\00")
+  (data (i32.const 180064) "/tmp/argument-limits-status.txt\00")
+  (func $capture (param $path i32) (param $output i32) (param $count i32) (result i32)
+    (local $fd i32) (local $bytes i32)
+    local.get $path i32.const 0 i32.const 0 call $open local.set $fd
+    local.get $fd local.get $output local.get $count call $read local.set $bytes
+    local.get $fd call $close drop
+    local.get $bytes)
+  (func (export "capture") (result i32)
+    i32.const 180000 i32.const 182000 i32.const 4096 call $capture)
+  (func (export "exit-status") (result i32)
+    i32.const 180064 i32.const 190000 i32.const 8 call $capture i32.const 2 i32.eq
+    i32.const 190000 i32.load16_u i32.const 0x0a30 i32.eq i32.and)
+  (func (export "equal") (param $first i32) (param $second i32) (result i32)
+    local.get $first call $value local.get $second call $value i64.eq)
+  (func (export "relative") (param $index i32) (param $base i32) (param $extra i64) (result i32)
+    local.get $index call $value local.get $base call $value local.get $extra i64.add i64.eq)
+  (func $value (export "value") (param $index i32) (result i64)
+    i32.const 182000 local.get $index i32.const 8 i32.mul i32.add i64.load)
+  (func (export "env-bytes") (param $index i32) (result i32)
+    local.get $index call $value i32.const 3 call $value i64.const 3 i64.mul
+    i64.const 32 i64.add i64.eq)
+  (func (export "query-canaries") (result i32)
+    ;; Wrong size rejects before writing, including unaligned destinations.
+    i32.const 190101 i64.const 0x1122334455667788 i64.store
+    i32.const 190109 i32.const 0x12345678 i32.store
+    i32.const 190101 i32.const 11 call $limits i32.const -22 i32.eq
+    i32.const 190101 i64.load i64.const 0x1122334455667788 i64.eq i32.and
+    i32.const 190109 i32.load i32.const 0x12345678 i32.eq i32.and
+    i32.const 0 i32.const 12 call $limits i32.const -14 i32.eq i32.and
+    ;; A tail crossing memory bounds must preserve even its valid prefix.
+    memory.size i32.const 16 i32.shl i32.const 8 i32.sub
+    i64.const 0x1122334455667788 i64.store
+    memory.size i32.const 16 i32.shl i32.const 8 i32.sub
+    i32.const 12 call $limits i32.const -14 i32.eq i32.and
+    memory.size i32.const 16 i32.shl i32.const 8 i32.sub
+    i64.load i64.const 0x1122334455667788 i64.eq i32.and
+    ;; Query and observer values derive from the same engine, no test budget.
+    i32.const 190101 i32.const 12 call $limits i32.eqz i32.and
+    i32.const 190101 i32.load i64.extend_i32_u i32.const 2 call $value i64.eq i32.and
+    i32.const 190105 i32.load i64.extend_i32_u i32.const 3 call $value i64.eq i32.and
+    i32.const 190109 i32.load i64.extend_i32_u i32.const 4 call $value i64.eq i32.and))
+
+(assert_return (invoke $argument-limits "capture") (i32.const 1488))
+(assert_return (invoke $argument-limits "exit-status") (i32.const 1))
+(assert_return (invoke $argument-limits "query-canaries") (i32.const 1))
+;; Public query and sysconf, errno preservation and failures
+(assert_return (invoke $argument-limits "value" (i32.const 0)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 1)) (i64.const 73))
+(assert_return (invoke $argument-limits "relative" (i32.const 5) (i32.const 4) (i64.const 0)) (i32.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 6)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 7)) (i64.const -1))
+(assert_return (invoke $argument-limits "value" (i32.const 8)) (i64.const 14))
+(assert_return (invoke $argument-limits "value" (i32.const 9)) (i64.const -1))
+(assert_return (invoke $argument-limits "value" (i32.const 10)) (i64.const 22))
+
+;; Argument longer than pathname limit
+(assert_return (invoke $argument-limits "value" (i32.const 11)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 12)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 13)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 14)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 15)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 16)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 17)) (i64.const 32))
+(assert_return (invoke $argument-limits "value" (i32.const 18)) (i64.const 3))
+(assert_return (invoke $argument-limits "value" (i32.const 19)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 20)) (i64.const 1057))
+(assert_return (invoke $argument-limits "value" (i32.const 21)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 22)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 23)) (i64.const 10752))
+
+;; Exact argv count
+(assert_return (invoke $argument-limits "value" (i32.const 24)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 25)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 26)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 27)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 28)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 29)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 30)) (i64.const 32))
+(assert_return (invoke $argument-limits "relative" (i32.const 31) (i32.const 2) (i64.const 0)) (i32.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 32)) (i64.const 0))
+(assert_return (invoke $argument-limits "relative" (i32.const 33) (i32.const 2) (i64.const 30)) (i32.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 34)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 35)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 36)) (i64.const 10752))
+
+;; One excessive argv entry
+(assert_return (invoke $argument-limits "value" (i32.const 37)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 38)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 39)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 40)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 41)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 42)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 43)) (i64.const 32))
+(assert_return (invoke $argument-limits "value" (i32.const 44)) (i64.const -1))
+(assert_return (invoke $argument-limits "value" (i32.const 45)) (i64.const 7))
+(assert_return (invoke $argument-limits "value" (i32.const 46)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 47)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 48)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 49)) (i64.const 16896))
+
+;; Exact environment count
+(assert_return (invoke $argument-limits "value" (i32.const 50)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 51)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 52)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 53)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 54)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 55)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 56)) (i64.const 32))
+(assert_return (invoke $argument-limits "value" (i32.const 57)) (i64.const 2))
+(assert_return (invoke $argument-limits "relative" (i32.const 58) (i32.const 3) (i64.const 0)) (i32.const 1))
+(assert_return (invoke $argument-limits "env-bytes" (i32.const 59)) (i32.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 60)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 61)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 62)) (i64.const 10752))
+
+;; One excessive environment entry
+(assert_return (invoke $argument-limits "value" (i32.const 63)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 64)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 65)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 66)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 67)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 68)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 69)) (i64.const 32))
+(assert_return (invoke $argument-limits "value" (i32.const 70)) (i64.const -1))
+(assert_return (invoke $argument-limits "value" (i32.const 71)) (i64.const 7))
+(assert_return (invoke $argument-limits "value" (i32.const 72)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 73)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 74)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 75)) (i64.const 16896))
+
+;; Exact mixed argv/environment byte budget
+(assert_return (invoke $argument-limits "value" (i32.const 76)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 77)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 78)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 79)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 80)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 81)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 82)) (i64.const 32))
+(assert_return (invoke $argument-limits "value" (i32.const 83)) (i64.const 3))
+(assert_return (invoke $argument-limits "value" (i32.const 84)) (i64.const 1))
+(assert_return (invoke $argument-limits "relative" (i32.const 85) (i32.const 4) (i64.const 0)) (i32.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 86)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 87)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 88)) (i64.const 10752))
+
+;; One excessive argv byte
+(assert_return (invoke $argument-limits "value" (i32.const 89)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 90)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 91)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 92)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 93)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 94)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 95)) (i64.const 32))
+(assert_return (invoke $argument-limits "value" (i32.const 96)) (i64.const -1))
+(assert_return (invoke $argument-limits "value" (i32.const 97)) (i64.const 7))
+(assert_return (invoke $argument-limits "value" (i32.const 98)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 99)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 100)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 101)) (i64.const 16896))
+
+;; Exact environment byte budget
+(assert_return (invoke $argument-limits "value" (i32.const 102)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 103)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 104)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 105)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 106)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 107)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 108)) (i64.const 32))
+(assert_return (invoke $argument-limits "value" (i32.const 109)) (i64.const 2))
+(assert_return (invoke $argument-limits "value" (i32.const 110)) (i64.const 1))
+(assert_return (invoke $argument-limits "relative" (i32.const 111) (i32.const 4) (i64.const 0)) (i32.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 112)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 113)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 114)) (i64.const 10752))
+
+;; Empty environment entry after exhausted budget
+(assert_return (invoke $argument-limits "value" (i32.const 115)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 116)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 117)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 118)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 119)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 120)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 121)) (i64.const 32))
+(assert_return (invoke $argument-limits "value" (i32.const 122)) (i64.const -1))
+(assert_return (invoke $argument-limits "value" (i32.const 123)) (i64.const 7))
+(assert_return (invoke $argument-limits "value" (i32.const 124)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 125)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 126)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 127)) (i64.const 16896))
+
+;; Environment changed after a successful fit
+(assert_return (invoke $argument-limits "value" (i32.const 128)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 129)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 130)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 131)) (i64.const 73))
+(assert_return (invoke $argument-limits "value" (i32.const 132)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 133)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 134)) (i64.const 32))
+(assert_return (invoke $argument-limits "value" (i32.const 135)) (i64.const -1))
+(assert_return (invoke $argument-limits "value" (i32.const 136)) (i64.const 7))
+(assert_return (invoke $argument-limits "value" (i32.const 137)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 138)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 139)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 140)) (i64.const 16896))
+
+;; Partial argv and environment copies followed by EFAULT
+(assert_return (invoke $argument-limits "value" (i32.const 141)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 142)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 143)) (i64.const 32))
+(assert_return (invoke $argument-limits "value" (i32.const 144)) (i64.const -1))
+(assert_return (invoke $argument-limits "value" (i32.const 145)) (i64.const 14))
+(assert_return (invoke $argument-limits "value" (i32.const 146)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 147)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 148)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 149)) (i64.const 16896))
+(assert_return (invoke $argument-limits "value" (i32.const 150)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 151)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 152)) (i64.const 32))
+(assert_return (invoke $argument-limits "value" (i32.const 153)) (i64.const -1))
+(assert_return (invoke $argument-limits "value" (i32.const 154)) (i64.const 14))
+(assert_return (invoke $argument-limits "value" (i32.const 155)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 156)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 157)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 158)) (i64.const 16896))
+
+;; WAT interpreter expansion at count and byte boundaries
+(assert_return (invoke $argument-limits "value" (i32.const 159)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 160)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 161)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 162)) (i64.const -99))
+(assert_return (invoke $argument-limits "value" (i32.const 163)) (i64.const -99))
+(assert_return (invoke $argument-limits "value" (i32.const 164)) (i64.const -99))
+(assert_return (invoke $argument-limits "value" (i32.const 165)) (i64.const -99))
+(assert_return (invoke $argument-limits "value" (i32.const 166)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 167)) (i64.const 10752))
+(assert_return (invoke $argument-limits "value" (i32.const 168)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 169)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 170)) (i64.const 32))
+(assert_return (invoke $argument-limits "value" (i32.const 171)) (i64.const -1))
+(assert_return (invoke $argument-limits "value" (i32.const 172)) (i64.const 7))
+(assert_return (invoke $argument-limits "value" (i32.const 173)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 174)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 175)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 176)) (i64.const 16896))
+(assert_return (invoke $argument-limits "value" (i32.const 177)) (i64.const 0))
+(assert_return (invoke $argument-limits "value" (i32.const 178)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 179)) (i64.const 32))
+(assert_return (invoke $argument-limits "value" (i32.const 180)) (i64.const -1))
+(assert_return (invoke $argument-limits "value" (i32.const 181)) (i64.const 7))
+(assert_return (invoke $argument-limits "value" (i32.const 182)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 183)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 184)) (i64.const 1))
+(assert_return (invoke $argument-limits "value" (i32.const 185)) (i64.const 16896))

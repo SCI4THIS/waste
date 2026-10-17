@@ -7,6 +7,10 @@
 
 typedef unsigned int wctype_t;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 wctype_t wctype(const char *);
 int iswctype(wint_t, wctype_t);
 int iswalnum(wint_t);
@@ -18,7 +22,11 @@ int iswlower(wint_t);
 int iswprint(wint_t);
 int iswspace(wint_t) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 int iswupper(wint_t);
-int towlower(wint_t);
-int towupper(wint_t);
+wint_t towlower(wint_t);
+wint_t towupper(wint_t);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -193,6 +193,34 @@ exec_status exec_memory_read_backing(const exec_memory *memory,
     return EXEC_OK;
 }
 
+exec_status exec_memory_prepare_write(exec_memory *memory, uint64_t offset,
+                                      size_t length, exec_error *error) {
+    exec_status status = memory_range(memory, offset, length, NULL, error);
+    if (status != EXEC_OK) return status;
+    if (memory->access_check) {
+        status = (exec_status)memory->access_check(
+            memory, offset, length, EXEC_MEMORY_PROT_WRITE,
+            memory->access_check_context, error);
+        if (status != EXEC_OK) return status;
+    }
+    status = memory_permissions(memory, offset, length, EXEC_MEMORY_PROT_WRITE,
+                                error);
+    if (status != EXEC_OK || !length) return status;
+    uint64_t first = offset / EXEC_PAGE_SIZE;
+    uint64_t last = (offset + length - 1) / EXEC_PAGE_SIZE;
+    for (uint64_t page = first; page <= last; page++) {
+        if (!memory->page_data[page]) {
+            memory->page_data[page] = allocate_memory_page();
+            if (!memory->page_data[page])
+                return exec_fail(error, EXEC_ERROR_TRAP,
+                                 "memory page allocation failed");
+        }
+        status = detach_memory_page(memory, page, error);
+        if (status != EXEC_OK) return status;
+    }
+    return EXEC_OK;
+}
+
 exec_status exec_memory_write(exec_memory *memory, uint64_t offset,
                               const void *source, size_t length,
                               exec_error *error) {
@@ -337,6 +365,13 @@ exec_status exec_memory_resize_pages(exec_memory *memory, uint64_t pages,
         pages > SIZE_MAX / sizeof(*grown))
         return exec_fail(error, EXEC_ERROR_TRAP, "memory page map too large");
     if (pages == memory->linear_pages) return EXEC_OK;
+    if (memory->process_virtual_memory) {
+        uint64_t checked_end = pages < memory->pages ? pages : memory->pages;
+        for (uint64_t page = memory->linear_pages; page < checked_end; page++)
+            if (exec_memory_page_is_mapped(memory, page))
+                return exec_fail(error, EXEC_ERROR_TRAP,
+                                 "linear growth overlaps a virtual mapping");
+    }
     if (pages <= memory->pages) {
         if (exec_memory_map_pages(memory, memory->linear_pages,
                                   pages - memory->linear_pages,

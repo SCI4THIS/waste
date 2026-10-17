@@ -10,6 +10,7 @@ typedef enum {
     /* Internal: instruction validated, continue to next instruction.
      * Only used by dispatch handlers; never escapes the validation loop. */
     WASM_VALIDATION_CONTINUE = 2,
+    WASM_VALIDATION_ALLOCATION_FAILED = 3,
 } wasm_validation_status;
 
 typedef struct {

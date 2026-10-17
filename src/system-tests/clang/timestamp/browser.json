@@ -1,0 +1,37 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/timestamp.wasm",
+      "source": "build/system-tests/clang/timestamp/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/timestamp-reference.bin",
+      "source": "build/system-tests/clang/timestamp/reference.bin",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/timestamp.wast",
+      "source": "src/system-tests/clang/timestamp/timestamp.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/timestamp.wasm > /tmp/timestamp.bin; printf '%s\\n' \"$?\" > /tmp/timestamp-status.txt; /bin/wast --verbose /tmp/timestamp.wast; TIMESTAMP_RESULT=$?; printf \"__CLANG_TIMESTAMP_%s__\\n\" \"$TIMESTAMP_RESULT\"\n"
+    },
+    {
+      "after": "__CLANG_TIMESTAMP_",
+      "text": "exit \"$TIMESTAMP_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "WAST: 15 PASS, 0 FAIL, 15 total",
+    "__CLANG_TIMESTAMP_0__\r\n"
+  ],
+  "assertions": 16,
+  "exitStatus": 0
+}

@@ -1,0 +1,27 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/null.wast",
+      "source": "src/system-tests/devices/null.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /tmp/null.wast; printf '__NULL_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__NULL_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "WAST: 67 PASS, 0 FAIL, 67 total",
+    "__NULL_0__\r\n"
+  ],
+  "assertions": 68,
+  "exitStatus": 0
+}

@@ -62,7 +62,8 @@ var WasteTestSuite = class {
         } else {
           worker.postMessage({type: "start", wasmBytes: this.wasmBytes,
             vfs: this.vfs, suite,
-            executionLimits: {timeoutMs, pumpQuantumMs: 10}});
+            executionLimits: {timeoutMs,
+              pumpQuantumMs: WASTE_CONFIG.EXECUTION_DEFAULT_PUMP_QUANTUM_MS}});
         }
       }).catch(error => complete(null, error));
     });

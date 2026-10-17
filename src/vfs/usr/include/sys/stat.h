@@ -85,6 +85,10 @@ _Static_assert(offsetof(struct stat, st_ctime_nsec) == 104, "stat ctime offset")
 #define S_ISGID 02000u
 #define S_ISVTX 01000u
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 int stat(const char *, struct stat *);
 int lstat(const char *, struct stat *);
 int fstat(int, struct stat *);
@@ -104,5 +108,9 @@ int mkfifo(const char *, unsigned int);
 int mkfifoat(int, const char *, unsigned int);
 int mknod(const char *, unsigned int, dev_t);
 int mknodat(int, const char *, unsigned int, dev_t);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -159,11 +159,11 @@ static int resolve_inline_functype(wast_script *script) {
     return 0;
 }
 
-/* Sentinel range for deferred rec-group forward references.
- * We use type indices WAST_MAX_TYPES - WAST_MAX_REC_FIXUPS .. WAST_MAX_TYPES-1
- * as temporary placeholders.  These are patched in the rec_item closing action
- * before anything else sees them. */
-#define REC_FIXUP_SENTINEL_BASE (WAST_MAX_TYPES - WAST_MAX_REC_FIXUPS)
+/* Parser-only placeholders live outside all real value-type ranges, so a
+ * deferred reference cannot alias an already resolved type in the group.
+ * The rec_item closing action replaces them before validation or encoding. */
+#define REC_FIXUP_NULL_BASE 0x4000
+#define REC_FIXUP_NONNULL_BASE 0x5000
 
 static wasm_valtype indexed_ref_type(wast_script *script, const char *name,
                                      int nullable) {
@@ -177,13 +177,12 @@ static wasm_valtype indexed_ref_type(wast_script *script, const char *name,
             WAT_STATE(rec_fixup_count) < WAST_MAX_REC_FIXUPS) {
             /* Queue a deferred fixup; use a sentinel index so the closing
              * action of rec_item can locate and patch every occurrence. */
-            uint32_t sentinel = REC_FIXUP_SENTINEL_BASE +
-                                (uint32_t)WAT_STATE(rec_fixup_count);
+            uint32_t fixup = (uint32_t)WAT_STATE(rec_fixup_count);
             rec_type_fixup *f = &WAT_STATE(rec_fixups)[WAT_STATE(rec_fixup_count)++];
             f->nullable = nullable;
             snprintf(f->name, WAST_MAX_EXPORT_NAME, "%s", name);
-            return (wasm_valtype)((nullable ? WASM_VALTYPE_TYPE_REF_NULL_BASE :
-                                  WASM_VALTYPE_TYPE_REF_BASE) + sentinel);
+            return (wasm_valtype)((nullable ? REC_FIXUP_NULL_BASE :
+                                  REC_FIXUP_NONNULL_BASE) + fixup);
         }
         if (!WAT_STATE(in_rec_group) &&
             (WAT_STATE(parsing_type_definition) || !name || name[0] != '$'))
@@ -4130,18 +4129,16 @@ rec_item:
             mod->types[i].rec_group_size = size;
         }
         /* Resolve deferred forward references within this rec group.
-         * Sentinels encode REC_FIXUP_SENTINEL_BASE + fixup_index as the
-         * type-ref index.  Scan all type slots in the group and replace
-         * any sentinel with the now-resolved real type index. */
+         * Scan all type slots in the group and replace parser-only
+         * placeholders with the now-resolved real type index. */
         for (int fx = 0; fx < WAT_STATE(rec_fixup_count); fx++) {
-            uint32_t sentinel = REC_FIXUP_SENTINEL_BASE + (uint32_t)fx;
             uint32_t resolved = resolve_type(script, WAT_STATE(rec_fixups)[fx].name);
             if (resolved == UINT32_MAX || resolved >= WAST_MAX_TYPES) {
                 report_validation_error(script, "unknown type in rec group");
                 resolved = 0;
             }
-            wasm_valtype old_null = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE + sentinel);
-            wasm_valtype old_nn   = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE + sentinel);
+            wasm_valtype old_null = (wasm_valtype)(REC_FIXUP_NULL_BASE + (uint32_t)fx);
+            wasm_valtype old_nn   = (wasm_valtype)(REC_FIXUP_NONNULL_BASE + (uint32_t)fx);
             wasm_valtype new_null = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_NULL_BASE + resolved);
             wasm_valtype new_nn   = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE + resolved);
             for (uint32_t ti = WAT_STATE(rec_group_start); ti < (uint32_t)mod->type_count; ti++) {

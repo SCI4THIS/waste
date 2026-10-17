@@ -83,7 +83,8 @@ vm.runInContext(page.read("root/app/worker.js").toString(), vm.createContext({se
   Number, String, Date, Error, setTimeout, clearTimeout, console,
   atob: value => Buffer.from(value, "base64").toString("binary")}));
 const wait = async predicate => {
-  const deadline = Date.now() + 60000;
+  const deadline = Date.now() +
+    (scenario.hostTimeoutMs ?? config.LEGACY_BROWSER_TIMEOUT_DEFAULT_MS);
   while (!predicate()) {
     if (done || controlFailure || Date.now() >= deadline)
       throw Error(JSON.stringify(controlFailure || done) + "\n" + output);

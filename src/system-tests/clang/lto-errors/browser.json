@@ -1,0 +1,44 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/lto-errors.wasm",
+      "source": "build/system-tests/clang/lto-errors/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/lto-errors.wast",
+      "source": "src/system-tests/clang/lto-errors/lto-errors.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/lto-errors.wasm > /tmp/lto-errors.bin; printf '%s\\n' \"$?\" > /tmp/lto-errors-status.txt; /bin/wast --verbose /tmp/lto-errors.wast; LTO_STATUS=$?; printf '__LTO_ERRORS_RESULT_%s__\\n' \"$LTO_STATUS\"\n"
+    },
+    {
+      "after": "__LTO_ERRORS_SLEEP__\r\n",
+      "waitKind": 2,
+      "signal": 10
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 42010000000
+    },
+    {
+      "after": "__LTO_ERRORS_RESULT_",
+      "text": "exit \"$LTO_STATUS\"\n"
+    }
+  ],
+  "contains": [
+    "__LTO_ERRORS_RESULT_0__\r\n",
+    "WAST: 171 PASS, 0 FAIL, 171 total"
+  ],
+  "assertions": 172,
+  "exitStatus": 0,
+  "clockRealtimeNs": "4294967296123456789",
+  "clockMonotonicNs": 42000000000
+}

@@ -50,6 +50,10 @@ ENGINE_HEADERS += native_vfs.h $(ENGINE_DIR)/lib/json.h $(ENGINE_DIR)/process_dr
 	$(ENGINE_DIR)/../config.h $(ENGINE_DIR)/lib/include/kernel.h \
 	$(ENGINE_DIR)/lib/include/path.h
 ENGINE_HEADERS += $(ENGINE_DIR)/wast/setup.h
+ENGINE_HEADERS += ../vfs/usr/include/waste/abi/mman.h
+ENGINE_HEADERS += ../vfs/usr/include/waste/abi/fcntl.h
+ENGINE_HEADERS += ../vfs/usr/include/waste/abi/resource.h
+ENGINE_HEADERS += ../vfs/usr/include/waste/abi/posix.h
 
 # System-libc runtime profile: one engine object set per optimization/sanitizer
 # ABI, shared by application frontends, session harness and batch companion.
@@ -279,6 +283,13 @@ $(SESSION_SAN_TARGET): $(SAN_OBJECT_DIR)/runtime/guest_session.o $(SAN_RUNTIME_O
 wasm: gen $(BUILD_DIR)/wasm test-suite $(BUILD_DIR)/native-corpus-expected-failures.txt
 wat: gen $(BUILD_DIR)/wat test-suite $(BUILD_DIR)/native-corpus-expected-failures.txt
 applications-native: wasm wat wast
+.PHONY: module-footprint module-footprint-sanitize
+module-footprint: gen $(BUILD_DIR)/module-footprint
+module-footprint-sanitize: gen $(BUILD_DIR)/module-footprint-sanitize
+$(BUILD_DIR)/module-footprint: $(NATIVE_OBJECT_DIR)/runtime/module_footprint.o $(NATIVE_ENGINE_OBJECTS) $(BUILD_DIR)/wast.tab.session.o $(BUILD_DIR)/wast.lex.session.o
+	$(CC) $(CFLAGS) $^ -lm -o $@
+$(BUILD_DIR)/module-footprint-sanitize: $(SAN_OBJECT_DIR)/runtime/module_footprint.o $(SAN_ENGINE_OBJECTS) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
+	$(CC) $(SAN_CFLAGS) $^ -lm -o $@
 applications-sanitize: gen $(BUILD_DIR)/wasm-sanitize $(BUILD_DIR)/wat-sanitize $(BUILD_DIR)/wast-sanitize test-suite-sanitize $(BUILD_DIR)/native-corpus-expected-failures.txt
 application-check: applications-native
 	python3 ../system-tests/cli-runtime/entrypoints/check.py
@@ -532,7 +543,8 @@ $(BUILD_DIR)/vfs-inventory-sanitize: native_vfs.c native_vfs.h $(ENGINE_DIR)/lib
 		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/select.c $(ENGINE_DIR)/lib/path.c -o $@
 
 $(POSIX_PATH_ABI_TEST_TARGET): ../../tests/posix-path-abi.c \
-		$(ENGINE_DIR)/lib/path.c $(ENGINE_DIR)/lib/include/path.h
+		$(ENGINE_DIR)/lib/path.c $(ENGINE_DIR)/lib/include/path.h \
+		../vfs/usr/include/waste/abi/posix.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
@@ -541,7 +553,8 @@ $(POSIX_PATH_ABI_TEST_TARGET): ../../tests/posix-path-abi.c \
 
 $(POSIX_PATH_VFS_TEST_TARGET): ../../tests/posix-path-vfs.c \
 		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/path.c \
-		$(ENGINE_DIR)/lib/include/kernel.h $(ENGINE_DIR)/lib/include/path.h
+		$(ENGINE_DIR)/lib/include/kernel.h $(ENGINE_DIR)/lib/include/path.h \
+		../vfs/usr/include/waste/abi/posix.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
@@ -585,7 +598,9 @@ posix-kernel: gen $(POSIX_KERNEL_TEST_TARGET) $(WAST_TARGET) $(SUITE_SAN_TARGET)
 $(POSIX_KERNEL_TEST_TARGET): ../../tests/posix-kernel.c \
 		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/select.c \
 		$(ENGINE_DIR)/lib/path.c $(ENGINE_DIR)/lib/include/kernel.h \
-		$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h
+		$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h \
+		../config.h ../vfs/usr/include/waste/abi/fcntl.h \
+		../vfs/usr/include/waste/abi/posix.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
@@ -606,7 +621,8 @@ posix-select: gen $(POSIX_SELECT_TEST_TARGET) $(WAST_TARGET) $(SUITE_SAN_TARGET)
 $(POSIX_SELECT_TEST_TARGET): ../../tests/posix-select.c \
 		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/select.c \
 		$(ENGINE_DIR)/lib/path.c $(ENGINE_DIR)/lib/include/kernel.h \
-		$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h
+		$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h \
+		../config.h ../vfs/usr/include/waste/abi/fcntl.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
@@ -657,7 +673,8 @@ posix-wait: gen $(POSIX_WAIT_TEST_TARGET) $(SESSION_SAN_TARGET)
 $(POSIX_WAIT_TEST_TARGET): ../../tests/posix-wait.c \
 		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/select.c \
 		$(ENGINE_DIR)/lib/path.c $(ENGINE_DIR)/lib/include/kernel.h \
-		$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h
+		$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h \
+		../config.h ../vfs/usr/include/waste/abi/fcntl.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
@@ -678,7 +695,8 @@ posix-signal: gen $(POSIX_SIGNAL_TEST_TARGET) $(WAST_TARGET) $(SUITE_SAN_TARGET)
 $(POSIX_SIGNAL_TEST_TARGET): ../../tests/posix-signal.c \
 		$(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/select.c \
 		$(ENGINE_DIR)/lib/path.c $(ENGINE_DIR)/lib/include/kernel.h \
-		$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h
+		$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h \
+		../config.h ../vfs/usr/include/waste/abi/fcntl.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -I$(ENGINE_DIR) \
@@ -896,12 +914,12 @@ process-lifecycle: $(PROCESS_LIFECYCLE_TEST_TARGET)
 	ASAN_OPTIONS=detect_leaks=0 $(PROCESS_LIFECYCLE_TEST_TARGET)
 
 $(PROCESS_LIFECYCLE_TEST_TARGET): ../../tests/c-engine-process-lifecycle.c \
-		$(ENGINE_SOURCES) $(ENGINE_HEADERS) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
+		$(SAN_ENGINE_OBJECTS) $(ENGINE_HEADERS) Makefile $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
 		-I$(ENGINE_DIR) -I$(ENGINE_DIR)/include -I$(WAST_GEN_DIR) \
-		../../tests/c-engine-process-lifecycle.c $(ENGINE_SOURCES) \
+		../../tests/c-engine-process-lifecycle.c $(SAN_ENGINE_OBJECTS) \
 		$(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O) -lm -o $@
 
 $(STORE_CHECKPOINT_TEST_TARGET): ../../tests/c-engine-store-checkpoint.c \

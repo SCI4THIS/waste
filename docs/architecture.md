@@ -95,6 +95,16 @@ Mounting uses current host modes and mtimes, guest root ownership, and inode IDs
 derived from sorted paths. Missing `/bin`, `/root` and `/tmp` are synthesized,
 as are `/bin/wat` and `/bin/wast` interpreter nodes when absent.
 
+Guest-created hard links share engine-owned inode contents and metadata, including
+symlink target bytes. Descriptor and mapping references retain that object after
+unlink; they do not increase `st_nlink`. Counts describe the current kernel's
+pathname table. Fork shares inode objects and their monotonic allocator, while
+its pathname table remains a clone reconciled at reap. Immediate cross-process
+namespace visibility and deletion reconciliation remain follow-ups. The original
+48-byte path-metadata imports remain stable; `fstatat_v2` returns the established
+128-byte guest stat layout with link counts. This does not change HTML transport
+or make guest writes persist into the host source tree.
+
 Guest public headers are authored in `src/vfs/usr/include`, with selected,
 licensed compiler-support snapshots in `usr/lib/waste/cc/include`. Sysroot and
 guest libc builds consume this same mounted tree without host header fallback.
@@ -118,6 +128,12 @@ and read consistency. Hashes verify a generated package's integrity; they do not
 compare edits against a stored approval ledger. Wasm validation occurs on load;
 explicit installers and ABI tests also validate their candidate modules.
 No custom filesystem bundle is generated.
+The shared kernel creates `/dev` and its `/dev/null` character device when a
+sandbox starts. Null reads return EOF; writes discard bytes without storage or
+runtime I/O. Its retained inode supplies stat and directory-entry metadata,
+while dup/fork share a stateless description with checked access directions.
+Path resolution, links, descriptor flags and readiness use the existing kernel
+operations. The device is synthesized independently of VFS transport files.
 The native option
 establishes mount parity; the private `guest-session` companion adds shared
 guest imports and concurrent fork/exec terminal sessions through the
@@ -178,6 +194,19 @@ Native pump checkpoints poll terminal input so Ctrl-C can interrupt a CPU-bound
 child. Canonical input, erase/kill and echo belong to the shared kernel; native
 and browser adapters transport the resulting bytes.
 
+Native Bash, the production browser worker and the browser suite use
+EXECUTION_DEFAULT_PUMP_QUANTUM_MS from src/config.h (16 ms). These checkpoints
+let the shared scheduler revisit a waiting parent's deadline while its child
+remains CPU-bound. Browser consumers receive the ordinary readiness notification
+when a pump resume reaches an external wait; timer scheduling and process
+selection remain in C.
+
+Executable image preparation, including module starts and startup hooks, is a
+synchronous transaction like shared-library loading. It defers cooperative pump
+yields while retaining timeout/cancellation polling, then restores the caller's
+pump quantum. Application execution resumes ordinary scheduling after commit;
+a pump checkpoint during loading must not become a spurious ENOEXEC.
+
 Caught input-wait signals are engine-owned. A blocking read consumes one
 unmasked pending signal; the guest adapter invokes its handler before returning
 EINTR or re-registering a READ with SA_RESTART. SELECT/pselect invoke the same
@@ -189,10 +218,55 @@ covers traps, exits and guest longjmp. Handlers execute synchronously, suppress
 browser pump yields and reject blocking calls rather than publishing a second
 suspended callback. Unblocked self-signals run before kill/raise returns, which
 allows Readline to forward a signal to the temporarily restored Bash handler.
-Caught asynchronous handlers run at input waits; default termination also runs
-at evaluator checkpoints. Exec resets caught actions while preserving ignored
+Public libc `sigaction` uses the fixed 24-byte versioned kernel ABI and
+translates errors to -1/errno. Unknown flags fail before output/state mutation;
+ordinary handlers and SA_RESTART are supported, while signal-info callbacks
+and alternate stacks remain unavailable. Public `signal` installs a persistent
+restartable action. Application semantics follow the capsule's inherited
+application flag, independently of executable-image descriptor ownership after
+fork. Pending signals unblocked by handler return are drained before user code
+resumes, retaining any nonrestart decision and avoiding host-stack growth.
+Caught asynchronous handlers run at input waits and bounded opcode checkpoints;
+default termination also runs at evaluator checkpoints. Exec resets caught actions while preserving ignored
 actions, masks and pending signals. Default notification signals are ignored;
 stop/continue job scheduling remains unsupported.
+
+Each process owns one monotonic alarm deadline alongside its independent syscall
+wait record. The scheduler publishes the earliest wait or alarm across live
+processes through its existing native poll/browser timer wake-up boundary.
+Expiry queues SIGALRM once and honors dispositions and masks; cancellation
+removes the timer without discarding a pending signal. Fork clears the child's
+timer, while exec and transactional image preparation preserve it. Public libc
+uses the versioned i32-seconds/i64-result boundary to distinguish every unsigned
+remaining value from negative errno. LLVM Watchdog calls this ordinary libc
+capability; it has no separate timer or scheduler.
+
+Shared-libc `waste_waitpid_until` uses an absolute monotonic nanosecond deadline
+through `waste_kernel.waitpid_until_v1`. The process adapter validates the entire
+status destination before reaping, registers the existing syscall wait record
+and yields WAITPID. The driver checks matching child exits, signals and expiry;
+when every process is blocked it publishes SELECT through the same native
+poll/browser timer boundary used by sleep. Ready children take precedence over
+expiry. Expiry returns zero and leaves the child alive; the caller owns any
+termination/retry policy. Caught signals obey SA_RESTART without extending the
+deadline. Return, error and interruption cancel the wait record while preserving
+the independent alarm. No guest pointer is retained across suspension.
+
+Actual guest LLVM Wait/ExecuteAndWait use this shared capability. Wait computes
+one absolute deadline with checked UINT64_MAX saturation; polling expiry leaves
+the child alive, while ordinary expiry kills and reaps only that child. The
+scheduler distinguishes a finite UINT64_MAX deadline from an indefinite wait.
+Application SIGALRM handlers, masks and timers remain independent. Requested
+child statistics, memory budgets and affinity still require shared providers.
+
+Null-signal PID queries inspect the engine process table without delivering a
+signal or changing waits, descriptors, masks or child status. An unreaped zombie
+still owns its PID; reaping removes it. Guest kill errors use `-1` and process
+errno (`ESRCH` for an absent PID), while private process helpers retain negative
+errno results. This does not grant access to host PIDs or establish cross-user
+permission/session semantics. Compiler lock-owner queries use only positive
+guest PIDs and retain locks conservatively for a different or unavailable host
+identity.
 
 Standalone production context comes from the shared C process driver: it
 creates the memory/table provider, loads mounted `/usr/lib/libc.so.wasm`, and
@@ -378,7 +452,11 @@ language conformance.
 
 The mounted manifest records identities, source/companion hashes, pinned upstream
 revision, grouping, runtime profiles and unsupported reasons. Provenance paths
-are not execution fallbacks. Runners read WAST and `.support` assets from the
+are not execution fallbacks. Source identities and groups remain stable when a
+distribution file moves, including browser fixtures under `/root/test/html-rt`.
+The shared decoder validates mounted paths independently as canonical paths
+within `/root/test/`; it does not require their suffix to equal the identity.
+Runners read WAST and `.support` assets from the
 validated installed directory or extracted browser package; declared `vfs-file`
 assets are copied to their guest paths before execution. The upstream test
 license is installed at `/usr/share/licenses/wasm-spec-tests/LICENSE`.
@@ -454,8 +532,15 @@ released or cached without invalidating an instance.
 
 ## Execution and Stop Model
 
-Function bodies are decoded into engine instructions and executed by a bounded
-frame-based interpreter.  Normal calls create frames.  Proper tail calls
+Every function body is validated at load time. The instance's shared static
+owner retains an owned encoded copy until first use, then materializes its
+decoded instructions before entering a frame. Decoding publishes a complete
+body synchronously and cannot yield or call imports. A failed materialization
+leaves the cold body intact. Decoded bodies stay alive until their last shared
+owner is released, including fork clones and active or yielded frames.
+
+The bounded frame-based interpreter executes those instructions. Normal calls
+create frames. Proper tail calls
 replace the active target, arguments, locals, and PC while preserving the
 original return continuation; they must not allocate per tail transfer.
 
@@ -467,7 +552,19 @@ them correctly.
 
 Guest `sigsetjmp` and `siglongjmp` do not use native C `setjmp` or `longjmp`.
 The engine records guest-visible jump environments as evaluator snapshots and
-performs non-local transfer through ordinary C returns.  Exception handling
+performs non-local transfer through ordinary C returns. The shared public
+`setjmp.h` preserves Bash's buffer layout and gives C/C++ callers returns-twice
+and noreturn declarations. Its `setjmp` macro keeps the checkpoint in the
+caller; the C-linkage `longjmp` import also supports libc++'s `std::longjmp`.
+Copied buffers retain opaque evaluator tokens; inactive tokens trap and a zero
+jump value becomes one. Callers must export their mutable i32 `__stack_pointer`.
+Nonzero `sigsetjmp` save flags also copy the active process signal mask into
+that snapshot. Matching-frame restoration cancels abandoned wait interests,
+including pselect's temporary mask, then restores the saved kernel mask.
+Zero save flags leave current mask changes intact. Continuation/fork copies
+retain the saved mask with the token; no host signal mask or kernel pointer is
+stored in the guest buffer.
+Exception handling
 likewise uses an explicit carrier containing runtime tag identity, payload,
 owner, and exception reference.
 
@@ -556,13 +653,33 @@ process group, session, lifecycle, current directory, descriptor table, signal
 state, and timers.  A thread owns evaluator and signal-mask state within that
 process.
 
-Descriptor entries refer to shared open-file descriptions.  Consequently,
-`dup`, `dup2`, inherited descriptors, file offsets, status flags, and pipe
-endpoint counts remain shared where POSIX requires.  Pipes have bounded buffers
+Descriptor aliases refer to shared open-file descriptions. `dup` and `dup2`
+therefore share file offsets and status flags. Inherited pipe descriptions and
+endpoint counts remain shared across fork; regular-file status sharing and the
+remaining seek-cursor limitation are described below. Pipes have bounded buffers
 and readiness waiters.  Empty reads, full writes, child waits, stopped
 processes, and deadlines leave the runnable queue instead of spinning through
 instruction quanta.  An unblocked signal wakes an affected waiter so the
 interrupted operation can return the correct result.
+
+`F_GETFL` reports access mode and open-file status; `F_SETFL` changes
+`O_NONBLOCK` and `O_APPEND` on the shared description while preserving access
+mode. `FD_CLOEXEC` remains local to each descriptor. A raw blocking kernel call
+returns EAGAIN with an active wait record, which the guest adapter turns into a
+READ/SELECT yield. Nonblocking empty reads and full pipe writes return EAGAIN
+without a wait record in both runtimes. Regular-file append placement uses the
+same shared status flags. Nonblocking terminal reads preserve canonical line
+boundaries and bypass VMIN/VTIME waiting in noncanonical mode.
+Regular/directory namespace clones retain the status object independently of
+their rebased description. Status changes therefore remain shared across fork;
+sharing their regular-file seek cursors remains a separate implementation gap.
+Blocking terminal READ records its requested minimum separately from ordinary
+SELECT readiness, so a partial VMIN buffer keeps the read suspended. The native
+session adapter resolves its terminal input capability through a surviving
+terminal alias when guest fd 0 is closed or replaced.
+When root Bash execs a WAST command, handler completion releases its context and
+returns through the root invocation driver. Child handlers retain their normal
+exit, notification and reap path; the root has no waiting parent.
 
 Every operation on an engine-owned descriptor, including `open`, `close`,
 `read`, `write`, and duplication, resolves through the active process kernel.
@@ -590,8 +707,20 @@ mtime. This fallback does not override metadata supplied by a mounted tree.
 The browser backend supplies that clock from `Date.now()`, while the engine
 retains no JavaScript dependency. Persistent storage, if enabled, is a mount
 backend rather than a replacement namespace in JavaScript. The terminal retains
-controlling-session, foreground-process-group, termios, and job-control state
-in the kernel; JavaScript renders output and delivers input events.
+controlling-session, foreground-process-group and termios state in the kernel;
+JavaScript renders output and delivers input events. Each process kernel also
+retains its SID and controlling-terminal ownership. Shared `setsid` validates
+the existing process groups before atomically creating a session/group with the
+caller's PID and clearing that ownership. It retains inherited terminal OFDs,
+whose original session and foreground group remain available to the parent.
+Fork inherits process identity/ownership; exec preserves them. Public session
+queries and `tcgetpgrp` use versioned shared-libc boundaries. Foreground host
+signals follow the device's session even when the selected process is detached
+and has closed its terminal aliases. Routing copies integer device identity
+before delivering signals that may release the final device reference;
+queued terminal interrupts cannot be consumed by another session. Controlling
+terminal acquisition, session-leader hangups and full orphan-group stop/continue
+semantics remain unsupported; this is not full POSIX job control.
 
 The offline Bash page follows the non-persistent default: each worker start
 creates a new sandbox kernel, imports a read-only copy of the embedded package
@@ -660,9 +789,21 @@ host buffer.
 All engine and runtime accesses use bounded memory operations. A missing page
 is not the same as an unmapped region, and a mapped `PROT_NONE` page is
 reserved but inaccessible. Mapping, unmapping, protection changes, and
-process-image replacement commit metadata only after validation succeeds. The
+process-image replacement commit metadata only after validation succeeds. Automatic mappings first reuse explicit holes inside the current linear
+extent, then select free high pages below the signed-pointer mmap ABI ceiling.
+They do not increase Wasm `memory.size`: libc must grow its linear heap before
+allocating there. `memory.grow` rejects a range that overlaps a virtual mapping
+rather than replacing its pages. The
 browser runtime follows these same rules and does not use host `mmap`,
 `SharedArrayBuffer`, or a JavaScript-owned process address space.
+
+`posix_madvise` uses a shared-libc wrapper and the engine-owned process mapping
+graph. Its versioned kernel provider returns positive error numbers directly,
+preserving errno. It accepts mapped but inaccessible pages and validates the
+entire rounded range without changing bytes, protections, dirty state or file
+backing. Hints require no additional work for resident or demand-zero pages;
+the destructive Linux `madvise` API remains unavailable. Public advice values
+come from the shared `waste/abi/mman.h` ABI header.
 
 ## Guest Libc
 
@@ -688,11 +829,64 @@ start options can specify binary/text format, a checked alternative entry,
 and readable interpreter input while subsequent guest exec retains execute
 permission checks. Memoryless modules without a startup hook do not require
 the C ABI startup block.
+The process capsule owns the resolved guest pathname captured with its loaded
+VFS image. Fork copies that identity; successful exec replaces it. The public
+shared-libc `waste_get_executable_path` API uses the bounded
+`waste_kernel.executable_path_v1` copy operation and is independent of argv, cwd,
+later rename/unlink and the calling shared library. It never exposes a host
+pathname. This loaded-image identity remains independent of later namespace
+changes; cross-fork shared regular-file offsets remain a separate capability.
+
+Symbolic links live in the engine-owned namespace. Shared-libc `symlink` and
+`symlinkat` call `waste_kernel.symlinkat_v1`, which validates both strings before
+publishing the copied target. Path operations and the loader share component
+resolution: relative targets start at the link's parent, intermediate links
+resolve before `..`, and traversal is bounded. Operations on link entries keep
+their final component, while stat/open/exec follow it. Guest-created links do
+not require a host filesystem or a separate browser link registry.
+
+Shared-libc `realpath` uses the same component resolver through
+`waste_kernel.realpath_v1`. It returns an existing entry's absolute canonical
+name, checks directory search permissions and publishes a bounded NUL-terminated
+copy. Failure leaves caller output untouched. Libc translates negative kernel
+errors, preserves errno on success and allocates an owned result when the caller
+passes NULL. Namespace output storage derives from `VFS_PATH_MAX_BYTES` in
+`src/config.h`; LLVM's private PATH_MAX adapter uses the same value. Public
+callers can use allocated results without requiring a public PATH_MAX constant.
+Kernel credential injection is covered privately; synchronization with guest
+identity setters remains pending.
+
+POSIX record locks belong to the engine's retained inode objects and process
+lock owners. Transactional kernel views retain an owner; actual fork assigns a
+fresh owner, and exec keeps it. Closing any descriptor for an inode releases
+that owner's records; process teardown also releases them. Read locks can
+coexist, write locks conflict, and ordinary I/O remains advisory. Range changes
+are prepared before publication, bounded by `POSIX_RECORD_LOCK_MAX` in
+`src/config.h`. Blocking locks retain normalized ranges and inode references
+in the existing kernel wait record; the shared SELECT scheduler resumes them
+after unlock/close/death or signal delivery. Both runtimes use this same state.
+Public wasm32 `struct flock` uses the shared `waste/abi/fcntl.h` layout, rather
+than a native host structure or browser registry.
+
 Initial startup and later exec share runtime initialization, which initializes
 the process-local libc allocator, environment and stdio before entering the
-CRT, which obtains streams through libc accessors. Initializers must have the
-expected signatures and complete successfully; traps, failure results and
-unsupported startup waits propagate to the caller. Named `libc` imports resolve
+CRT, which obtains streams through libc accessors. The CRT binds its three
+standard stream globals before invoking executable C++ constructors, then calls
+main with the engine-owned startup block. Constructors may use the existing
+sleep continuation just like main; no separate startup scheduler is needed.
+Normal `exit` runs the shared libc's allocation-backed C/C++ callback list in
+reverse registration order through ordinary guest indirect calls. Entries are
+retired before invocation, allowing recursive finalization, new registrations
+and existing sleep yields. `__cxa_finalize(dso)` selects matching registrations;
+`_Exit` and signal termination use immediate kernel termination. The existing
+allocator initialization discards old registrations only after exec commits,
+while fork inherits a private list through the usual process clone. Legacy
+`env` exit/registration imports use the same loaded libc when no explicit
+registered provider overrides them. Automatic C++ DSO cleanup on dlclose and
+concurrent callback registration remain separate loader/thread work.
+Initializers must have the expected signatures and complete successfully;
+traps, failure results and unsupported startup waits propagate to the caller.
+Named `libc` imports resolve
 through the process's loaded-library catalogue; production startup needs no
 `env` registration alias. Kernel imports use host adapters, and legacy fixtures
 may register their own aliases. Libraries share the process memory/table while
@@ -747,8 +941,10 @@ The virtual-memory ownership and fault rules above also apply at every import.
 
 Registered executable images use ABI version 1 and an exported `_start` entry
 of type `() -> ()`. The guest libc startup shim calls conventional
-`main(argc, argv, envp)` from that entry. Constructors run before the entry, and returning from
-the entry means exit status zero. Loader metadata records path, modes, ABI,
+`main(argc, argv, envp)` from that entry, or its two-argument variant. The CRT
+binds streams and invokes executable constructors before main. Returning from
+main passes its status through shared libc exit cleanup to the engine exit import; returning directly
+from a raw entry means exit status zero. Loader metadata records path, modes, ABI,
 module and entry information. Invalid modules, unsupported ABI/imports or
 missing entries are rejected before committing an `execve` replacement.
 
@@ -761,6 +957,12 @@ errno. Some legacy imports return raw errors or `-1`. Provider signatures and
 availability are maintained in [guest-sdk.md](guest-sdk.md).
 
 ### Startup block
+
+The kernel supplies virtual `/bin/wasm`, `/bin/wat` and `/bin/wast` commands in
+both runtimes. `/bin/wasm FILE [ARG...]` requires a readable binary, sets argv[0]
+to FILE and forwards the remaining arguments through the ordinary image startup
+path. It rejects text input and a missing operand. Direct execution still
+requires executable permissions; explicit interpreter input need not have them.
 
 The engine copies argument/environment strings and cwd into the replacement
 image before committing it. `waste_kernel.startup_v1() -> i32` returns the
@@ -782,6 +984,19 @@ Argument/environment vectors contain 32-bit pointers and end in zero. Storage
 lives at the top of the image's linear memory; pointers must refer to copied
 strings in that image, including the cwd independently of argv[0].
 
+`src/config.h` owns `PROCESS_EXEC_MAX_ARGS`, `PROCESS_EXEC_MAX_ENV` and
+`PROCESS_EXEC_MAX_BYTES`. Counts exclude NULL sentinels; bytes cover argv and
+environment strings including every terminating NUL. Pathname and pointer
+storage are separate. Initial launch, guest exec copying and WAT interpreter
+expansion enforce these bounds before image commitment. Excess returns E2BIG
+without replacing the old image or closing its close-on-exec descriptors.
+The 12-byte `waste_kernel.exec_limits_v1(output, size)` query writes three
+little-endian u32 fields: maximum arguments, environment entries and string
+bytes. Shared libc exposes `waste_get_exec_limits` and derives
+`sysconf(_SC_ARG_MAX)` from this query. LLVM's guest fit calculation uses the
+same limits and current environment; Args already contains argv[0]. The kernel
+rechecks at exec because the environment can change after a successful fit.
+
 ### Guest structure and timestamp layouts
 
 Guest structures are wire layouts, not the host compiler's C structures.
@@ -789,14 +1004,66 @@ Guest structures are wire layouts, not the host compiler's C structures.
 `d_type`, and `d_name` at byte offset 19, following the public Wasm32 guest ABI. The compact
 pathname metadata record is 48 bytes: kind/mode/uid/gid at offsets 0/4/8/12,
 signed size at 16, inode at 24, signed mtime seconds at 32, nanoseconds at 40.
-Guest `stat` expands it into the 128-byte public structure. Guest `time_t` is
+The kernel expands metadata into the 128-byte public structure for
+`fstatat_v2`, including namespace link counts; libc stat/lstat/fstatat use that
+versioned boundary. Legacy metadata imports remain unchanged. Guest `time_t` is
 signed 64-bit. Public headers and compiled guest ABI tests preserve these layouts.
+
+The compact record currently owns only modification time; stat expansion
+exposes that value for access/change time as well. Independent access/change
+mutation is unavailable, and shared libc's timestamp setters return ENOSYS.
+An exported setter or a successful symbol-presence probe does not establish
+mutation support.
 
 `waste_kernel.realtime_v1` writes epoch seconds/nanoseconds into guest memory;
 the browser derives realtime from `Date.now()`. Browser staging passes seconds
 as explicit low/high 32-bit words plus nanoseconds. `waste_wast_stage_mtime`
 applies source metadata to the last staged entry; `waste_wast_stage_build_mtime`
 supplies timestamps for synthetic runtime/interpreter nodes.
+
+Shared libc's `clock_gettime` uses `waste_kernel.clock_gettime_v1`, with guest
+clock IDs 0 (realtime) and 1 (monotonic). The kernel reads the injected UTC or
+deadline clock; platform adapters retain ownership of host clock access.
+The operation writes a 16-byte guest timespec: i64 seconds at 0, i32 nanoseconds
+at 8 and zero padding at 12. It validates the complete destination before
+writing; libc translates negative kernel errors into -1/errno. Missing clock
+callbacks return ENOSYS, unsupported IDs EINVAL and invalid destinations EFAULT.
+This read-only API does not advertise the broader POSIX timer suite.
+
+Shared-libc `usleep` is a microsecond adapter to the existing nanosleep/pselect
+deadline path. It uses the same engine SELECT continuation and native/browser
+deadline service as the sleep command. Zero returns immediately, intervals
+below one million microseconds yield, larger unsigned arguments return EINVAL,
+and caught signals return EINTR. No extra platform import or scheduler is used.
+
+Public `rusage` contains two time64 `timeval` records followed by fourteen
+wasm32 `long` counters, totaling 88 bytes. Neither runtime supplies guest CPU
+accounting. Shared libc and the legacy env adapter return -1/ENOSYS for
+SELF/CHILDREN and -1/EINVAL for invalid selectors, without accessing the
+output. LLVM's guest profile disables `HAVE_GETRUSAGE` and selects its existing
+wall-time/zero-CPU fallback. Resource-limit storage is a compatibility facade
+and does not enforce kernel limits. Shared `_Exit` delegates to the existing
+engine `_exit` path for termination, low-eight-bit status and descriptor
+teardown; the [static shutdown fixture](../src/system-tests/clang/shutdown/README.md)
+verifies normal C/C++ exit registration and finalization separately.
+
+Shared-libc `execv` passes the current guest `environ` to the existing execve
+boundary without PATH lookup. `wait` calls waitpid with PID -1/options zero.
+Before consuming child status, the engine validates the complete non-NULL
+destination and prepares lazy/copy-on-write backing without changing bytes
+or dirty flags. A bad destination returns -1/EFAULT and leaves the child
+reapable; NULL discards status. Each WAITPID resume revalidates the integer
+address through the existing memory protections and process scheduler.
+
+The guest LLVM Program adapter uses that waitpid boundary for indefinite waits
+and zero-time polling. It retains LLVM's child-status/error interpretation and
+indefinite EINTR retry. Positive timeouts call the shared absolute-deadline API,
+preserving the original deadline across signal retries. Polling expiry leaves
+the child alive; ordinary expiry kills and reaps only that target. Application
+SIGALRM state remains independent. Requested child statistics are explicitly
+unsupported before reaping; ExecuteAndWait checks statistics and clock
+availability before fork. Native LLVM keeps its existing wait4/alarm path.
+There is no separate compiler scheduler or fabricated CPU-accounting provider.
 
 ## Testing, Measurement, and Deployment Policy
 

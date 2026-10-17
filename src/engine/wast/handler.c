@@ -155,8 +155,18 @@ static exec_status handler_invoke(void *opaque, waste_exec_engine *engine,
     wast_process_handler *handler = opaque;
     /* Do not recursively enter the enclosing Bash process driver. This engine
      * retains its evaluator state, while the enclosing driver retains Bash. */
+    /* VM imports operate on the active process capsule. A WAST exec has no
+       executable image, so bind the assertion's engine for this invocation
+       without entering the process driver or changing the handler cursor. */
+    native_process_capsule *capsule = native_store_active_capsule(handler->store);
+    waste_exec_engine *saved_engine = capsule ? capsule->engine : NULL;
+    if (capsule) {
+        capsule->engine = engine;
+        (void)native_process_capsule_bind_memory(capsule);
+    }
     exec_status status = exec_invoke(engine, function, args, count,
                                      results, result_count, error);
+    if (capsule) capsule->engine = saved_engine;
     if (status == EXEC_ERROR_EXIT) {
         handler->stopped = 1;
         handler->exit_code = error->exit_code;
@@ -202,11 +212,9 @@ static void handler_module(wast_process_handler *handler, wast_group *group) {
         handler_result(handler, passed, "(module)", passed ? NULL : group->validation_error);
         return;
     }
-    wast_group encoded = *group;
-    encoded.module = *module;
     size_t size = 0;
     char message[256] = {0};
-    uint8_t *binary = encode_group_module(&encoded, &size, message);
+    uint8_t *binary = encode_module_source(module, &group->raw_module, &size, message);
     if (!binary) {
         int passed = group->has_module_assertion && group->module_assert_kind != WAST_ASSERT_TRAP;
         handler_result(handler, passed, "(module)", passed ? NULL : message);

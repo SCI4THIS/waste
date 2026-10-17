@@ -119,16 +119,39 @@ static int test_decoded_module_instances(const uint8_t *bytes, size_t size) {
         exec_free(second);
         return 0;
     }
-    /* Instances retain fully decoded state, not the module's owned bytes. */
+    /* Instances must own cold bodies independently of the decoder's bytes. */
     wasm_module_dispose(&module);
+    int cold_ok = first->func_count != 0;
+    for (uint32_t i = 0; i < first->func_count; i++)
+        cold_ok = cold_ok && first->funcs[i].validated &&
+                  first->funcs[i].encoded_body &&
+                  first->funcs[i].encoded_body_size &&
+                  !first->funcs[i].code && !first->funcs[i].code_size;
     waste_exec_engine *clone = NULL;
-    int clone_ok = exec_clone_engine(first, &clone, &error) == EXEC_OK;
+    int clone_ok = cold_ok &&
+                   exec_clone_engine(first, &clone, &error) == EXEC_OK;
     if (clone_ok) {
+        uint32_t add_index = 0;
+        clone_ok = exec_find_export(first, "add", &add_index, &error) == EXEC_OK &&
+                   add_index >= first->import_func_count;
+        if (clone_ok) {
+            add_index -= first->import_func_count;
+            clone_ok = clone->funcs == first->funcs &&
+                       run(clone, "add", 20, 22, 42, EXEC_OK);
+            exec_instr *shared_code = first->funcs[add_index].code;
+            clone_ok = clone_ok && shared_code &&
+                       !first->funcs[add_index].encoded_body &&
+                       !first->funcs[add_index].encoded_body_size &&
+                       !second->funcs[add_index].code &&
+                       second->funcs[add_index].encoded_body &&
+                       run(first, "add", 19, 23, 42, EXEC_OK) &&
+                       first->funcs[add_index].code == shared_code;
+        }
         exec_memory *source_memory = first->memories[0];
         exec_memory *clone_memory = clone->memories[0];
         uint8_t source_value = 0;
         uint8_t clone_value = 0x7b;
-        clone_ok = source_memory != clone_memory &&
+        clone_ok = clone_ok && source_memory != clone_memory &&
                    source_memory->page_data[0] != NULL &&
                    clone_memory->page_data[0] == source_memory->page_data[0] &&
                    source_memory->pages == 1 && clone_memory->pages == 1 &&
@@ -157,11 +180,11 @@ static int test_decoded_module_instances(const uint8_t *bytes, size_t size) {
          run(second, "size", 0, 0, 1, EXEC_OK) &&
          run(first, "load-data", 8, 0, 0x12345678, EXEC_OK) &&
          run(second, "load-data", 8, 0, 0x12345678, EXEC_OK);
-    /* A process clone owns the immutable decoded functions/types it shares;
-     * releasing the source instance must not leave the clone dangling. */
+    /* A clone keeps decoded and still-cold bodies alive after source release. */
     exec_free(first);
     first = NULL;
-    clone_ok = clone_ok && run(clone, "size", 0, 0, 1, EXEC_OK);
+    clone_ok = clone_ok && run(clone, "size", 0, 0, 1, EXEC_OK) &&
+               run(clone, "rotl", 1, 4, 16, EXEC_OK);
     exec_free(clone);
     ok = clone_ok && ok;
     if (!ok) fprintf(stderr, "decoded module instance isolation failed\n");

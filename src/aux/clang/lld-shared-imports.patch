@@ -1,0 +1,37 @@
+--- a/Driver.cpp
++++ b/Driver.cpp
+@@ -311,7 +311,14 @@
+   case file_magic::bitcode:
+   case file_magic::wasm_object: {
+     auto obj = createObjectFile(mbref, "", 0, inLib);
+-    if (ctx.arg.isStatic && isa<SharedFile>(obj)) {
++    // WASTE's fixed-address commands import process memory and named DSOs.
++    // Accept .so.wasm providers without requiring the PIE relocation ABI.
++    bool namedProvider = false;
++#if defined(LLD_WASTE_NAMED_IMPORTS)
++    namedProvider = ctx.arg.memoryImport.has_value() &&
++                    sys::path::filename(path).ends_with(".so.wasm");
++#endif
++    if (ctx.arg.isStatic && isa<SharedFile>(obj) && !namedProvider) {
+       error("attempted static link of dynamic object " + path);
+       break;
+     }
+--- a/InputFiles.cpp
++++ b/InputFiles.cpp
+@@ -448,6 +448,16 @@
+       switch (wasmSym.Info.Kind) {
+       case WASM_SYMBOL_TYPE_FUNCTION:
+         s = symtab->addSharedFunction(name, flags, this, wasmSym.Signature);
++#if defined(LLD_WASTE_NAMED_IMPORTS)
++        // The process loader registers a .so.wasm file under its basename
++        // without the suffix. Keep local definitions and the upstream ABI
++        // unchanged outside this guest-only profile.
++        if (auto *function = dyn_cast<SharedFunctionSymbol>(s)) {
++          StringRef provider = sys::path::filename(getName());
++          if (provider.ends_with(".so.wasm"))
++            function->importModule = provider.drop_back(8);
++        }
++#endif
+         break;
+       case WASM_SYMBOL_TYPE_DATA:
+         s = symtab->addSharedData(name, flags, this);

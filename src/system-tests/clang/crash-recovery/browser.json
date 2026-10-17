@@ -1,0 +1,33 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/crash-recovery.wasm",
+      "source": "build/system-tests/clang/crash-recovery/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/crash-recovery.wast",
+      "source": "src/system-tests/clang/crash-recovery/crash-recovery.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/crash-recovery.wasm > /tmp/crash-recovery.bin; printf '%s\\n' \"$?\" > /tmp/crash-recovery-status.txt; /bin/wast --verbose /tmp/crash-recovery.wast; printf '__CRASH_RECOVERY_%s__\\n' \"$?\"\n",
+      "drainTimers": true
+    },
+    {
+      "after": "__CRASH_RECOVERY_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "WAST: 125 PASS, 0 FAIL, 125 total",
+    "__CRASH_RECOVERY_0__\r\n"
+  ],
+  "assertions": 126,
+  "exitStatus": 0
+}

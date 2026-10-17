@@ -1,0 +1,51 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "hostTimeoutMs": 240000,
+  "executionLimits": {
+    "timeoutMs": 180000
+  },
+  "files": [
+    {
+      "path": "/tmp/wasm-ld",
+      "source": "build/aux/clang/wasm-ld-no-lto.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/link-entry.o",
+      "source": "build/system-tests/clang/lld-link/entry.o",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/link-answer.a",
+      "source": "build/system-tests/clang/lld-link/answer.a",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/lld-link.wast",
+      "source": "src/system-tests/clang/lld-link/link.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/lld-link-commands.sh",
+      "source": "src/system-tests/clang/lld-link/commands.sh",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": ". /tmp/lld-link-commands.sh; LLD_NO_LTO_RESULT=$?; printf \"__LLD_NO_LTO_%s__\\n\" \"$LLD_NO_LTO_RESULT\"\n"
+    },
+    {
+      "after": "__LLD_NO_LTO_",
+      "text": "exit \"$LLD_NO_LTO_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "WAST: 10 PASS, 0 FAIL, 10 total",
+    "__LLD_NO_LTO_0__\r\n"
+  ],
+  "assertions": 11,
+  "exitStatus": 0
+}

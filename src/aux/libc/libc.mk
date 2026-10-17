@@ -25,6 +25,8 @@ $(LIBC_BUILD)/objects/%.o: $(LIBC_DIR)/%.c $(LIBC_DIR)/include/helper.h $(LIBC_D
 	mkdir -p "$(@D)"
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIBC_CFLAGS) -MMD -MP -c "$<" -o "$@"
 
+$(LIBC_BUILD)/objects/stdio.o $(LIBC_BUILD)/objects/wide-format.o: $(LIBC_DIR)/include/format.h
+
 $(LIBC_OUTPUT): $(LIBC_OBJECTS) $(LIBC_DIR)/libc.mk $(LIBC_DIR)/sources.mk
 	$(WASM_LD) $(LDFLAGS) $(LIBC_LDFLAGS) -o "$@" $(foreach object,$(LIBC_OBJECTS),"$(object)")
 

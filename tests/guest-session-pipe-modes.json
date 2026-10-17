@@ -1,0 +1,10 @@
+{
+  "fixture": "src/system-tests/scheduling/pipe-modes.wast",
+  "events": [],
+  "assertions": 4,
+  "exited": false,
+  "exitStatus": 0,
+  "processes": 3,
+  "output": "",
+  "drainScheduling": true
+}

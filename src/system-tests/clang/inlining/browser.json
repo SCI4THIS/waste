@@ -1,0 +1,38 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/inlining.wasm",
+      "source": "build/system-tests/clang/inlining/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/inlining.wast",
+      "source": "src/system-tests/clang/inlining/inlining.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/narrow-floating-format.wast",
+      "source": "src/aux/libc/tests/narrow-floating-format.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /tmp/narrow-floating-format.wast; MATH_RESULT=$?; /tmp/inlining.wasm > /tmp/inlining.bin 2> /tmp/inlining-dump.txt; printf '%s\\n' \"$?\" > /tmp/inlining-status.txt; /bin/wast --verbose /tmp/inlining.wast; INLINING_RESULT=$?; if [ \"$MATH_RESULT\" -ne 0 ]; then INLINING_RESULT=$MATH_RESULT; fi; printf '__INLINING_%s__\\n' \"$INLINING_RESULT\"\n"
+    },
+    {
+      "after": "__INLINING_",
+      "text": "exit \"$INLINING_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "__INLINING_0__\r\n",
+    "WAST: 16 PASS, 0 FAIL, 16 total",
+    "WAST: 51 PASS, 0 FAIL, 51 total"
+  ],
+  "assertions": 68,
+  "exitStatus": 0
+}

@@ -1,6 +1,7 @@
 /* Browser interpreter POSIX stubs; guest wrappers live in src/aux/libc. */
 
 #include "../../aux/libc/include/helper.h"
+#include <waste/abi/fcntl.h>
 
 struct timespec { i64 tv_sec; long tv_nsec; };
 
@@ -45,12 +46,15 @@ char *getcwd(char *buffer, u32 capacity) {
   return result ? buffer : 0;
 }
 i32 fcntl(i32 fd, i32 cmd, ...) {
-  /* Extract the optional third argument from the va_list.  All fcntl
-   * commands that take an argument expect a single int. */
+  /* Keep record pointers distinct from integer flags and argument-free calls. */
   i32 arg = 0;
   __builtin_va_list ap;
   __builtin_va_start(ap, cmd);
-  arg = __builtin_va_arg(ap, i32);
+  if (cmd == WASTE_F_GETLK || cmd == WASTE_F_SETLK || cmd == WASTE_F_SETLKW)
+    arg = (i32)(u32)__builtin_va_arg(ap, void *);
+  else if (cmd == WASTE_F_DUPFD || cmd == WASTE_F_DUPFD_CLOEXEC ||
+           cmd == WASTE_F_SETFD || cmd == WASTE_F_SETFL)
+    arg = __builtin_va_arg(ap, i32);
   __builtin_va_end(ap);
   return env_result(waste_kernel_fcntl_v1(fd, cmd, arg));
 }

@@ -41,7 +41,7 @@ ROGUE_INPUTS := $(addprefix $(ROGUE_UPSTREAM)/,$(ROGUE_SOURCES) rogue.h extern.h
 ROGUE_PATCHES := $(ROGUE_DIR)/platform.patch $(ROGUE_DIR)/debug-dump.patch $(ROGUE_DIR)/rogue-waste.patch
 ROGUE_STAMP := $(ROGUE_BUILD)/src/.prepared
 ROGUE_OBJECTS := $(addprefix $(ROGUE_BUILD)/objects/,$(ROGUE_SOURCES:.c=.o))
-ROGUE_CFLAGS := -DHAVE_CONFIG_H -DWASTE_ROGUE_LEGACY_ABORT \
+ROGUE_CFLAGS := -DHAVE_CONFIG_H \
 	-include "$(ROGUE_DIR)/bool-fix.h" -include "$(ROGUE_DIR)/imports.h" \
 	-I"$(ROGUE_BUILD)/src" -Wno-unused-parameter -Wno-sign-compare \
 	-Wno-implicit-function-declaration -Wno-int-conversion -Wno-dangling-else \
@@ -133,6 +133,7 @@ include $(AUX_DIR)/coreutils/coreutils.mk
 include $(AUX_DIR)/libncurses/libncurses.mk
 include $(AUX_DIR)/bash/bash.mk
 include $(AUX_DIR)/vim/vim.mk
+include $(AUX_DIR)/clang/clang.mk
 
 $(BUILD_DIR)/sleep/nanosleep-runtime.o: $(AUX_DIR)/sleep/nanosleep-runtime.c $(SDK_HEADERS)
 	mkdir -p "$(@D)"

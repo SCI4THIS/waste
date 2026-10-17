@@ -100,6 +100,17 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
         assert result["tests"][1]["nativeReport"]["assertions"][0]["pass"] is False
     listed = run("--list", results=False)
     assert "SKIP legacy/skip.wast: unsupported syntax" in listed.stdout
+    # Distribution paths may move while source identities and groups remain
+    # stable, as browser fixtures relocated into /root/test/html-rt do.
+    moved = copy.deepcopy([definitions[0], definitions[6], definitions[7]])
+    for test, _ in moved:
+        test["path"] = "/root/test/html-rt/" + test["id"].replace("/", "-")
+    install(moved)
+    relocated = run()
+    assert [t["identity"] for t in relocated["tests"]] == [t["id"] for t, _ in moved]
+    assert [t["status"] for t in relocated["tests"]] == ["PASS", "SKIP", "SKIP"]
+    assert relocated["tests"][0]["passed"] == 3
+    assert len(run(moved[0][0]["path"])["tests"]) == 1
     # Imported memory aliases within a script; scheduling a different script
     # must allocate a fresh host memory, in either order and at either job count.
     memory_tests = definitions[4:6]
@@ -332,6 +343,7 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
         lambda m: m.update(format=2),
         lambda m: m.update(tests=m["tests"] * 2),
         lambda m: m["tests"][0].update(path="/root/test/../escape.wast"),
+        lambda m: m["tests"][0].update(path="/tmp/escape.wast"),
         lambda m: m["tests"][0].update(id="../escape.wast", path="/root/test/../escape.wast"),
         lambda m: m["tests"][0].update(unsupported="false"),
         lambda m: m["tests"][0].update(id="bad\0name"),
@@ -361,4 +373,9 @@ with tempfile.TemporaryDirectory(prefix="waste-native-suite-") as temporary:
     assert run()["tests"][0]["passed"] == 1
     install([entry("synthetic/i64-min.wast", (ROOT / "tests/test-suite-i64-min-literal.wast").read_bytes())])
     assert run()["tests"][0]["passed"] == 2
+    if len(sys.argv) > 2:
+        destination = Path(sys.argv[2])
+        saved = json.loads(destination.read_text())
+        saved.update(relocated=relocated)
+        destination.write_text(json.dumps(saved, indent=2) + "\n")
     print("PASS native suite selection, assertion reporting, XFAIL/XPASS/SKIP, isolation, timeout, cancellation and manifest rejection")

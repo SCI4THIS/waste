@@ -57,6 +57,7 @@ static const char *error_message(i32 error){
   switch(error){
     case 1:return "Operation not permitted";
     case 2:return "No such file or directory";
+    case 3:return "No such process";
     case 4:return "Interrupted system call";
     case 5:return "Input/output error";
     case 7:return "Argument list too long";

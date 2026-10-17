@@ -8,13 +8,21 @@
 #define VFS_PATH_MAX_BYTES 256
 
 /* Implementation resource limits, shared by C and generated host configuration. */
+#define WASM_MAX_TYPES 512
+#define WASM_MAX_FUNCTIONS 262144
+#define WASM_MAX_IMPORTS 8192
 #define WAST_MAX_DATA_SEGS 128
 #define WAST_MAX_ELEM_SEGS 128
 #define JSON_MAX_DEPTH 64
 #define EXECUTION_MAX_TIMEOUT_MS 3600000
 #define EXECUTION_MAX_PUMP_QUANTUM_MS 60000
+#define EXECUTION_DEFAULT_PUMP_QUANTUM_MS 16
+/* The linked guest Clang reaches 2205 explicit blocks (LLVM disassembly). */
+#define EXECUTION_MAX_CONTROL_DEPTH 4096
 #define TERMINAL_INPUT_CAPACITY 4096
 #define POSIX_KERNEL_FD_MAX 64
+/* Per-inode records and owners visited by record-lock deadlock detection. */
+#define POSIX_RECORD_LOCK_MAX 64
 #define SOURCE_SHEBANG_MAX_BYTES 4096
 
 /* Initial process resources, also used when no guest launcher is present. */
@@ -25,7 +33,13 @@
 #define NATIVE_SESSION_MAX_COMMANDS 1024
 #define NATIVE_STAGED_FILE_MAX 64
 #define NATIVE_HOST_IO_REPLY_MAX 16
-#define NATIVE_EXEC_BYTES_MAX (16 * 1024 * 1024)
+/* Source-built LLVM tools exceed 16 MiB even without their name section. */
+#define NATIVE_EXEC_BYTES_MAX (64 * 1024 * 1024)
+/* Exec vectors exclude their NULL slots. Bytes count argv + env strings,
+ * including every terminating NUL; vector storage and path are separate. */
+#define PROCESS_EXEC_MAX_ARGS 127
+#define PROCESS_EXEC_MAX_ENV 255
+#define PROCESS_EXEC_MAX_BYTES (128 * 1024)
 #define NATIVE_TERMINAL_COLUMNS 80
 #define NATIVE_TERMINAL_ROWS 24
 
@@ -43,6 +57,9 @@
 #define SUITE_GUEST_REPLY_MAX_BYTES (16 * 1024 * 1024)
 #define GUEST_TEST_MAX_MEMORY_BYTES (32 * 1024 * 1024)
 #define RENDER_TEST_REPLY_MAX_BYTES (64 * 1024)
+
+/* Browser interpreter memory grows on demand; this is a ceiling, not a reservation. */
+#define HTML_RUNTIME_MAX_MEMORY_BYTES (2ULL * 1024 * 1024 * 1024)
 
 /* Browser assertion records: one status byte, display name, error text. */
 #define BROWSER_RESULT_NAME_BYTES 63

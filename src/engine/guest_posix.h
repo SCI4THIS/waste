@@ -19,6 +19,7 @@ int guest_posix_host_resolver(const char *module, const char *name,
 /* Write host-owned report bytes through the active guest descriptor table. */
 int32_t guest_posix_write_bytes(native_store *, int32_t, const uint8_t *, uint32_t);
 int guest_posix_enqueue_input(native_store *, int, const uint8_t *, int);
+exec_status guest_posix_poll_signal(void *, const waste_exec_engine *, exec_error *);
 
 /* Bounded ABI helpers for platform-specific capabilities (e.g. file pickers). */
 exec_status guest_posix_memory(const waste_exec_engine *caller,

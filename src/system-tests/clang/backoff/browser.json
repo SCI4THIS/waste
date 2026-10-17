@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/backoff.wasm",
+      "source": "build/system-tests/clang/backoff/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/backoff.wast",
+      "source": "src/system-tests/clang/backoff/backoff.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/backoff.wasm > /tmp/backoff.bin; printf '%s\\n' \"$?\" > /tmp/backoff-status.txt; /bin/wast --verbose /tmp/backoff.wast; printf '__BACKOFF_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__BACKOFF_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__BACKOFF_0__\r\n",
+    "WAST: 12 PASS, 0 FAIL, 12 total"
+  ],
+  "assertions": 13,
+  "exitStatus": 0
+}

@@ -1,0 +1,41 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/unsafe-buffer.cpp",
+      "source": "src/system-tests/clang/unsafe-buffer/input.cpp",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/unsafe-buffer-setup.sh",
+      "source": "src/system-tests/clang/unsafe-buffer/setup.sh",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/unsafe-buffer.wast",
+      "source": "src/system-tests/clang/unsafe-buffer/unsafe-buffer.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": ". /tmp/unsafe-buffer-setup.sh; /bin/wast --verbose /tmp/unsafe-buffer.wast; UNSAFE_BUFFER_RESULT=$?; printf \"__UNSAFE_BUFFER_%s__\\n\" \"$UNSAFE_BUFFER_RESULT\"\n"
+    },
+    {
+      "after": "__UNSAFE_BUFFER_",
+      "text": "exit \"$UNSAFE_BUFFER_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "WAST: 13 PASS, 0 FAIL, 13 total",
+    "__UNSAFE_BUFFER_0__\r\n"
+  ],
+  "assertions": 14,
+  "exitStatus": 0,
+  "hostTimeoutMs": 240000,
+  "executionLimits": {
+    "timeoutMs": 180000
+  }
+}

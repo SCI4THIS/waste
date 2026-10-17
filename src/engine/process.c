@@ -1,4 +1,5 @@
 #include "store.h"
+#include "../vfs/usr/include/waste/abi/mman.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -720,15 +721,12 @@ int native_process_capsule_mmap_range(native_process_capsule *capsule,
     uint64_t page_count;
     uint64_t first_page = 0;
     uint64_t memory_limit;
-    uint64_t linear_limit;
     if (!capsule || !capsule->engine || !capsule->engine->memory ||
         !address_out || !native_process_capsule_page_range(length,
                                                            &page_count))
         return -POSIX_EINVAL;
     memory = capsule->engine->memory;
     memory_limit = memory->virtual_max_pages ? memory->virtual_max_pages :
-        (memory->is_64 ? EXEC_MEM64_MAX_PAGES : EXEC_MEM32_MAX_PAGES);
-    linear_limit = memory->has_max ? memory->max_pages :
         (memory->is_64 ? EXEC_MEM64_MAX_PAGES : EXEC_MEM32_MAX_PAGES);
     if (address) {
         if (address % EXEC_PAGE_SIZE ||
@@ -748,25 +746,44 @@ int native_process_capsule_mmap_range(native_process_capsule *capsule,
         }
     } else {
         int found = 0;
-        for (uint64_t candidate = 0;
-             candidate <= memory_limit - page_count; candidate++) {
-            if (native_process_capsule_region_is_reserved(
-                    capsule, candidate, page_count, NULL))
-                continue;
-            int free_range = 1;
-            uint64_t checked_end = candidate + page_count;
-            uint64_t checked_limit = checked_end < memory->pages ?
-                checked_end : memory->pages;
-            for (uint64_t page = candidate; page < checked_limit; page++) {
-                if (exec_memory_page_is_mapped(memory, page)) {
-                    free_range = 0;
-                    break;
+        /* Reuse explicit holes in the current linear extent first. Keep new
+           mappings above the growing heap, below the signed-pointer mmap ABI
+           ceiling. Mapping a file must not advance memory.size. */
+        uint64_t low_limit = memory->linear_pages < memory_limit ?
+            memory->linear_pages : memory_limit;
+        uint64_t high_limit = ((uint64_t)INT32_MAX + 1) / EXEC_PAGE_SIZE;
+        if (high_limit > memory_limit) high_limit = memory_limit;
+        for (int pass = 0; pass < 2 && !found; pass++) {
+            uint64_t limit = pass ? high_limit : low_limit;
+            if (page_count > limit) continue;
+            uint64_t candidate = pass ? limit - page_count : 0;
+            for (;;) {
+                if (pass && candidate < low_limit) break;
+                if (!native_process_capsule_region_is_reserved(
+                        capsule, candidate, page_count, NULL)) {
+                    int free_range = 1;
+                    uint64_t checked_end = candidate + page_count;
+                    uint64_t checked_limit = checked_end < memory->pages ?
+                        checked_end : memory->pages;
+                    for (uint64_t page = candidate; page < checked_limit; page++) {
+                        if (exec_memory_page_is_mapped(memory, page)) {
+                            free_range = 0;
+                            break;
+                        }
+                    }
+                    if (free_range) {
+                        first_page = candidate;
+                        found = 1;
+                        break;
+                    }
                 }
-            }
-            if (free_range) {
-                first_page = candidate;
-                found = 1;
-                break;
+                if (pass) {
+                    if (candidate == 0) break;
+                    candidate--;
+                } else {
+                    if (candidate == limit - page_count) break;
+                    candidate++;
+                }
             }
         }
         if (!found) return -POSIX_ENOMEM;
@@ -791,15 +808,6 @@ int native_process_capsule_mmap_range(native_process_capsule *capsule,
     }
     if (exec_memory_map_pages(memory, first_page, page_count, protection,
                               flags, NULL) != EXEC_OK) {
-        native_process_capsule_remove_last_mapping_region(
-            capsule, first_page, page_count);
-        return -POSIX_EINVAL;
-    }
-    if (first_page + page_count > memory->linear_pages &&
-        first_page + page_count <= linear_limit &&
-        exec_memory_promote_linear_pages(memory, first_page + page_count,
-                                         NULL) != EXEC_OK) {
-        (void)exec_memory_unmap_pages(memory, first_page, page_count, NULL);
         native_process_capsule_remove_last_mapping_region(
             capsule, first_page, page_count);
         return -POSIX_EINVAL;
@@ -957,6 +965,38 @@ int native_process_capsule_mprotect_range(native_process_capsule *capsule,
                0 : -POSIX_EINVAL;
 }
 
+int native_process_capsule_advise_range(const native_process_capsule *capsule,
+                                       uint64_t address, uint64_t length,
+                                       int advice) {
+    const exec_memory *memory;
+    uint64_t page_count, first_page;
+    switch (advice) {
+    case POSIX_MADV_NORMAL:
+    case POSIX_MADV_RANDOM:
+    case POSIX_MADV_SEQUENTIAL:
+    case POSIX_MADV_WILLNEED:
+    case POSIX_MADV_DONTNEED:
+        break;
+    default:
+        return -POSIX_EINVAL;
+    }
+    if (!capsule || !capsule->engine || !capsule->engine->memory ||
+        address % EXEC_PAGE_SIZE ||
+        !native_process_capsule_page_range(length, &page_count))
+        return -POSIX_EINVAL;
+    memory = capsule->engine->memory;
+    first_page = address / EXEC_PAGE_SIZE;
+    if (first_page >= memory->pages || page_count > memory->pages - first_page)
+        return -POSIX_ENOMEM;
+    for (uint64_t page = first_page; page < first_page + page_count; page++)
+        if (!exec_memory_page_is_mapped(memory, page))
+            return -POSIX_ENOMEM;
+    /* Pages are resident or demand-zero. Advisory optimization is optional;
+     * preserve bytes, dirty state, shared backing and permissions. PROT_NONE
+     * remains mapped, so validation must not read the advised memory. */
+    return 0;
+}
+
 int native_process_capsule_record_file_mapping(
     native_process_capsule *capsule, uint64_t address, uint64_t length,
     posix_file_object *file_object, uint64_t file_offset, int shared,
@@ -1039,6 +1079,8 @@ int native_process_capsule_clone(native_process_capsule *destination,
     for (int i = 0; i < source->root_arg_count && i < WAST_MAX_ARGS; i++)
         destination->root_args[i] = source->root_args[i];
     destination->generation = source->generation;
+    memcpy(destination->executable_path, source->executable_path,
+           sizeof(destination->executable_path));
     destination->virtual_page_limit = source->virtual_page_limit;
     destination->state = NATIVE_PROCESS_RUNNABLE;
     destination->pending_result = source->pending_result;
@@ -1181,6 +1223,34 @@ int native_store_getppid(const native_store *store) {
     return process ? process->ppid : -POSIX_EINVAL;
 }
 
+int native_store_getsid(const native_store *store, int pid) {
+    if (!store) return -POSIX_EINVAL;
+    const native_process *process = find_process_const(
+        store, pid == 0 ? store->active_pid : pid);
+    return process && process->kernel ? process->kernel->session_id : -POSIX_ESRCH;
+}
+
+int native_store_getpgid(const native_store *store, int pid) {
+    if (!store) return -POSIX_EINVAL;
+    const native_process *process = find_process_const(
+        store, pid == 0 ? store->active_pid : pid);
+    return process ? posix_kernel_getpgid(process->kernel) : -POSIX_ESRCH;
+}
+
+int native_store_setsid(native_store *store) {
+    native_process *process = active_process(store);
+    if (!process || !process->kernel) return -POSIX_ESRCH;
+    if (process->kernel->session_id == process->pid) return -POSIX_EPERM;
+    /* A group with this ID must not exist, including another allocated
+     * process's group. Validate everything before changing the active kernel. */
+    for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
+        const native_process *member = &store->processes[i];
+        if (member->used && posix_kernel_getpgid(member->kernel) == process->pid)
+            return -POSIX_EPERM;
+    }
+    return posix_kernel_create_session(process->kernel, process->pid);
+}
+
 int native_store_set_active_process(native_store *store, int pid) {
     native_process *process = find_process(store, pid);
     if (!process || process->zombie) return -POSIX_ECHILD;
@@ -1281,6 +1351,8 @@ int native_store_commit_process_image(native_store *store,
     posix_kernel_signal_exec(process->kernel);
     release_image(process->capsule.image);
     process->capsule.image = image;
+    memcpy(process->capsule.executable_path, image->path,
+           sizeof(process->capsule.executable_path));
     process->capsule.is_application = 1;
     process->capsule.engine = image->engine;
     process->capsule.engine_source = NULL;
@@ -1353,8 +1425,15 @@ int native_store_fork_process(native_store *store, int *pid_out) {
     if (slot < 0) return -POSIX_ENOMEM;
     posix_kernel *kernel = posix_kernel_clone(parent->kernel);
     if (!kernel) return -POSIX_ENOMEM;
+    /* Generic clones also stage exec transactions, which retain this timer.
+     * Only fork cancels the child's alarm; the parent's deadline is untouched. */
+    kernel->alarm_active = 0;
     if (store->next_pid <= 0) store->next_pid = 2;
     int pid = store->next_pid;
+    if (posix_kernel_set_lock_pid(kernel, pid) < 0) {
+        posix_kernel_destroy(kernel);
+        return -POSIX_ENOMEM;
+    }
     if (store->next_pid == INT32_MAX) store->next_pid = -1;
     else store->next_pid++;
     native_process *child = &store->processes[slot];
@@ -1533,9 +1612,15 @@ int native_store_exit_process(native_store *store, int status) {
 }
 
 int native_store_signal_process(native_store *store, int pid, int signal) {
+    if (!store || signal < 0 || signal > POSIX_SIGNAL_MAX)
+        return -POSIX_EINVAL;
     native_process *process = find_process(store, pid);
     posix_signal_disposition disposition;
-    if (!process || process->zombie || signal <= 0) return -POSIX_EINVAL;
+    if (!process) return -POSIX_ESRCH;
+    /* A null signal queries the allocated PID without changing pending signals,
+     * descriptors, waits or lifecycle state. Zombies still exist until reaped. */
+    if (signal == 0) return 0;
+    if (process->zombie) return -POSIX_ESRCH;
     int raised = posix_kernel_signal_raise(process->kernel, signal);
     if (raised) return raised;
     if (posix_kernel_signal_get_disposition(process->kernel, signal,
@@ -1577,20 +1662,46 @@ int native_store_terminate_process(native_store *store, int signal) {
 
 int native_store_signal_foreground(native_store *store, int signal) {
     if (!store || !store->kernel) return -POSIX_EINVAL;
-    for (int fd = 0; fd < POSIX_KERNEL_FD_MAX; fd++) {
-        posix_ofd *ofd = store->kernel->fds[fd].ofd;
-        if (ofd && ofd->kind == POSIX_OFD_TERMINAL)
-            return native_store_signal_process_group(store, ofd->terminal.foreground_pgid, signal);
+    /* An active detached child may redirect/close every terminal alias. The
+     * sandbox's controlling device still belongs to another process kernel. */
+    for (int view = -1; view < NATIVE_PROCESS_MAX; view++) {
+        const native_process *owner = view >= 0 ? &store->processes[view] : NULL;
+        const posix_kernel *kernel = view < 0 ? store->kernel :
+            owner->used && !owner->zombie ? owner->kernel : NULL;
+        if (!kernel || (view >= 0 && kernel == store->kernel)) continue;
+        for (int fd = 0; fd < POSIX_KERNEL_FD_MAX; fd++) {
+            posix_ofd *ofd = kernel->fds[fd].ofd;
+            if (ofd && ofd->kind == POSIX_OFD_TERMINAL) {
+                if (signal < 0 || signal > POSIX_SIGNAL_MAX) return -POSIX_EINVAL;
+                /* Delivery can terminate the owner and free its last device
+                 * alias. Retain only integer identity across that transition. */
+                const int sid = ofd->terminal.controlling_session_id;
+                const int pgid = ofd->terminal.foreground_pgid;
+                int delivered = 0;
+                for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
+                    native_process *process = &store->processes[i];
+                    if (!process->used || !process->kernel ||
+                        (process->zombie && signal != 0) ||
+                        process->kernel->session_id != sid ||
+                        posix_kernel_getpgid(process->kernel) != pgid)
+                        continue;
+                    if (native_store_signal_process(store, process->pid, signal) == 0)
+                        delivered++;
+                }
+                return delivered;
+            }
+        }
     }
     return native_store_signal_process(store, store->active_pid, signal);
 }
 
 int native_store_signal_process_group(native_store *store, int pgid, int signal) {
     int delivered = 0;
-    if (!store || pgid <= 0 || signal <= 0) return -POSIX_EINVAL;
+    if (!store || pgid <= 0 || signal < 0 || signal > POSIX_SIGNAL_MAX)
+        return -POSIX_EINVAL;
     for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
         native_process *process = &store->processes[i];
-        if (!process->used || process->zombie) continue;
+        if (!process->used || (process->zombie && signal != 0)) continue;
         if (posix_kernel_getpgid(process->kernel) != pgid) continue;
         /* Signal every live group member even if one member's disposition
          * forces an immediate exit; the exit zombies that process without

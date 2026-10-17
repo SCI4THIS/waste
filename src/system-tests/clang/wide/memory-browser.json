@@ -1,0 +1,27 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/wide-memory.wast",
+      "source": "src/aux/libc/tests/wide-memory.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /tmp/wide-memory.wast; printf '__WIDE_MEMORY_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__WIDE_MEMORY_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__WIDE_MEMORY_0__\r\n",
+    "WAST: 61 PASS, 0 FAIL, 61 total"
+  ],
+  "assertions": 62,
+  "exitStatus": 0
+}

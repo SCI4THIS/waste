@@ -1,0 +1,48 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/startup-two.wasm",
+      "source": "build/system-tests/clang/startup/probe-two.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/startup.wasm",
+      "source": "build/system-tests/clang/startup/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/startup.wast",
+      "source": "src/system-tests/clang/startup/startup.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/startup-input.txt",
+      "source": "src/system-tests/clang/startup/input.txt",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/startup-commands.sh",
+      "source": "src/system-tests/clang/startup/commands.sh",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": ". /tmp/startup-commands.sh; printf '__STARTUP_%s__\\n' \"$?\"\n",
+      "drainTimers": true
+    },
+    {
+      "after": "__STARTUP_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "WAST: 86 PASS, 0 FAIL, 86 total",
+    "__STARTUP_0__\r\n"
+  ],
+  "assertions": 173,
+  "exitStatus": 0
+}

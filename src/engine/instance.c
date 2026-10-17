@@ -13,6 +13,30 @@ exec_status exec_fail(exec_error *error, exec_status status, const char *msg) {
     return status;
 }
 
+void exec_dispose_function_code(exec_func *function) {
+    for (uint32_t i = 0; i < function->code_size; i++) {
+        exec_instr *instruction = &function->code[i];
+        if (instruction->opcode == 0x0e) {
+            uint32_t *depths;
+            memcpy(&depths, instruction->v128_imm.bytes, sizeof(depths));
+            free(depths);
+        }
+        if (instruction->opcode == 0x1f) free(instruction->catches);
+    }
+    free(function->code);
+    function->code = NULL;
+    function->code_size = 0;
+}
+
+void exec_dispose_function(exec_func *function) {
+    exec_dispose_function_code(function);
+    free(function->locals);
+    free(function->encoded_body);
+    function->locals = NULL;
+    function->encoded_body = NULL;
+    function->encoded_body_size = function->local_count = function->validated = 0;
+}
+
 void exec_free(waste_exec_engine *engine) {
     if (!engine) return;
     int free_static = !engine->shared_static;
@@ -39,24 +63,14 @@ void exec_free(waste_exec_engine *engine) {
     free(engine->gc_objects);
     free(engine->exception_objects);
     if (free_static)
-    for (uint32_t i = 0; i < engine->func_count; i++) {
-        if (engine->funcs[i].code) {
-            for (uint32_t j = 0; j < engine->funcs[i].code_size; j++) {
-                if (engine->funcs[i].code[j].opcode == 0x0e) {
-                    uint32_t *depths;
-                    memcpy(&depths, engine->funcs[i].code[j].v128_imm.bytes,
-                           sizeof(depths));
-                    free(depths);
-                }
-                free(engine->funcs[i].code[j].catches);
-            }
-        }
-        free(engine->funcs[i].code);
-    }
+    for (uint32_t i = 0; i < engine->func_count; i++)
+        exec_dispose_function(&engine->funcs[i]);
     if (free_static) {
         free(engine->types);
         free(engine->funcs);
         free(engine->exports);
+        free(engine->function_imports);
+        free(engine->declared_funcs);
     }
     for (uint32_t i = 0; i < engine->memory_count; i++)
         if (engine->owns_memories[i]) exec_memory_release(engine->memories[i]);
@@ -337,7 +351,7 @@ exec_status exec_get_func_type_index(const waste_exec_engine *engine,
         function >= engine->import_func_count + engine->func_count)
         return exec_fail(error, EXEC_ERROR_FORMAT, "invalid function index");
     *type_out = function < engine->import_func_count ?
-        engine->import_func_types[function] :
+        engine->function_imports[function].type_index :
         engine->funcs[function - engine->import_func_count].type_index;
     return EXEC_OK;
 }

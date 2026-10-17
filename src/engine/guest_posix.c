@@ -4,6 +4,7 @@
 #include "lib/include/select.h"
 #include "lib/include/path.h"
 #include "lib/include/sys/mman.h"
+#include "../vfs/usr/include/waste/abi/resource.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -98,7 +99,6 @@ static exec_status guest_posix_mmap(void *data, const wasm_value *args,
     uint64_t requested_length;
     int file_writable = 0;
     int status;
-    (void)error;
     if (!store || arg_count != 6 || args[1].i32 <= 0 ||
         args[0].i32 < 0 || args[5].i64 < 0 ||
         (args[5].i64 % EXEC_PAGE_SIZE) != 0 ||
@@ -410,6 +410,22 @@ static exec_status guest_posix_mprotect(void *data, const wasm_value *args,
     return guest_posix_result(status, results, result_count);
 }
 
+static exec_status guest_posix_posix_madvise(void *data, const wasm_value *args,
+                                            int arg_count, wasm_value *results,
+                                            int *result_count, exec_error *error,
+                                            const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    (void)error;
+    (void)caller;
+    if (!store || arg_count != 3)
+        return guest_posix_result(POSIX_EINVAL, results, result_count);
+    int status = native_process_capsule_advise_range(
+        native_store_active_capsule(store), (uint32_t)args[0].i32,
+        (uint32_t)args[1].i32, args[2].i32);
+    /* POSIX returns the error number directly and leaves errno unchanged. */
+    return guest_posix_result(-status, results, result_count);
+}
+
 static exec_status guest_posix_getpid(void *data, const wasm_value *args,
                                        int arg_count, wasm_value *results,
                                        int *result_count, exec_error *error,
@@ -467,8 +483,8 @@ static void guest_posix_set_errno(native_store *store,
     }
 }
 
-static int guest_posix_copy_guest_string(exec_memory *memory, uint32_t offset,
-                                          char **copy_out) {
+static int guest_posix_copy_guest_string_bounded(exec_memory *memory, uint32_t offset,
+                                          size_t capacity, char **copy_out) {
     size_t length = 0;
     uint64_t size;
     exec_error error = {0};
@@ -476,7 +492,7 @@ static int guest_posix_copy_guest_string(exec_memory *memory, uint32_t offset,
     size = memory->pages * UINT64_C(65536);
     if ((uint64_t)offset >= size) return POSIX_EFAULT;
     while ((uint64_t)offset + length < size &&
-           length < NATIVE_EXEC_PATH_MAX) {
+           length < capacity) {
         uint8_t byte;
         if (exec_memory_read(memory, (uint64_t)offset + length, &byte, 1,
                              &error) != EXEC_OK)
@@ -485,7 +501,7 @@ static int guest_posix_copy_guest_string(exec_memory *memory, uint32_t offset,
         length++;
     }
     if ((uint64_t)offset + length >= size) return POSIX_EFAULT;
-    if (length == NATIVE_EXEC_PATH_MAX) return POSIX_E2BIG;
+    if (length == capacity) return POSIX_E2BIG;
     *copy_out = (char *)malloc(length + 1);
     if (!*copy_out) return POSIX_ENOMEM;
     if (exec_memory_read(memory, offset, *copy_out, length, &error) != EXEC_OK) {
@@ -495,6 +511,12 @@ static int guest_posix_copy_guest_string(exec_memory *memory, uint32_t offset,
     }
     (*copy_out)[length] = '\0';
     return 0;
+}
+
+static int guest_posix_copy_guest_string(exec_memory *memory, uint32_t offset,
+                                         char **copy_out) {
+    return guest_posix_copy_guest_string_bounded(memory, offset,
+                                                NATIVE_EXEC_PATH_MAX, copy_out);
 }
 
 static int guest_posix_guest_path(const waste_exec_engine *caller,
@@ -520,47 +542,53 @@ static int guest_posix_guest_path(const waste_exec_engine *caller,
 static int guest_posix_copy_guest_vector(exec_memory *memory, uint32_t vector,
                                           char **items, uint32_t capacity,
                                           uint32_t *count_out,
-                                          int allow_null) {
+                                          int allow_null, size_t *remaining) {
     uint64_t size;
     uint32_t count = 0;
     if (!count_out || !items) return POSIX_EFAULT;
     *count_out = 0;
     if (vector == 0 && allow_null) return 0;
-    if (!memory) return POSIX_EFAULT;
+    if (!memory || vector == 0) return POSIX_EFAULT;
     size = memory->pages * UINT64_C(65536);
     for (;;) {
         uint64_t slot = (uint64_t)vector + (uint64_t)count * 4u;
         uint32_t pointer;
         char *copy = NULL;
         int status;
-        if (count >= capacity || slot + 4u > size) return POSIX_E2BIG;
+        if (count >= capacity) return POSIX_E2BIG;
+        if (slot + 4u > size) return POSIX_EFAULT;
         uint8_t pointer_bytes[4];
         exec_error error = {0};
         if (exec_memory_read(memory, slot, pointer_bytes,
                              sizeof(pointer_bytes), &error) != EXEC_OK)
-            return POSIX_E2BIG;
+            return POSIX_EFAULT;
         pointer = (uint32_t)pointer_bytes[0] |
                   ((uint32_t)pointer_bytes[1] << 8) |
                   ((uint32_t)pointer_bytes[2] << 16) |
                   ((uint32_t)pointer_bytes[3] << 24);
         if (pointer == 0) break;
-        status = guest_posix_copy_guest_string(memory, pointer, &copy);
+        if (count == capacity - 1u || !*remaining) return POSIX_E2BIG;
+        status = guest_posix_copy_guest_string_bounded(memory, pointer, *remaining, &copy);
         if (status != 0) return status;
         items[count++] = copy;
+        *remaining -= strlen(copy) + 1;
+        /* Partial copies must remain owned if a later slot fails. */
+        *count_out = count;
     }
     *count_out = count;
     return 0;
 }
 
 static void guest_posix_metadata_stat(const posix_path_metadata *metadata,
-                                       posix_guest_stat *stat) {
+                                       posix_guest_stat *stat, uint32_t links) {
     uint32_t type_mode = metadata->kind == POSIX_NODE_REGULAR ? 0100000u :
                          metadata->kind == POSIX_NODE_DIRECTORY ? 0040000u :
+                         metadata->kind == POSIX_NODE_NULL ? 0020000u :
                          metadata->kind == POSIX_NODE_SYMLINK ? 0120000u : 0;
     memset(stat, 0, sizeof(*stat));
     stat->st_ino = metadata->inode;
     stat->st_mode = metadata->mode | type_mode;
-    stat->st_nlink = metadata->kind == POSIX_NODE_DIRECTORY ? 2 : 1;
+    stat->st_nlink = links;
     stat->st_uid = metadata->uid;
     stat->st_gid = metadata->gid;
     stat->st_size = metadata->size;
@@ -813,9 +841,8 @@ static exec_status guest_posix_ftruncate(void *data, const wasm_value *args,
 
 /* C function pointers address the shared table. Table-free legacy WAT probes
  * retain their local function-index ABI; a bad table slot never falls back. */
-static exec_status guest_posix_deliver_signal(native_store *store,
-    const waste_exec_engine *caller, int *restart, exec_error *error) {
-    int signal = posix_kernel_signal_last_delivered(store->kernel);
+static exec_status guest_posix_handle_signal(native_store *store,
+    const waste_exec_engine *caller, int signal, int *restart, exec_error *error) {
     posix_signal_disposition disposition;
     uint32_t handler;
     *restart = 0;
@@ -824,7 +851,7 @@ static exec_status guest_posix_deliver_signal(native_store *store,
         return EXEC_OK;
     if (disposition != POSIX_SIGNAL_HANDLER) {
         native_process_capsule *capsule = native_store_active_capsule(store);
-        if (disposition == POSIX_SIGNAL_DEFAULT && capsule && capsule->image &&
+        if (disposition == POSIX_SIGNAL_DEFAULT && capsule && capsule->is_application &&
             signal != 17 && signal != 18 && signal != 23 && signal != POSIX_SIGWINCH) {
             exec_fail(error, EXEC_ERROR_EXIT, "process terminated by signal");
             error->signal = signal;
@@ -852,7 +879,7 @@ static exec_status guest_posix_deliver_signal(native_store *store,
     if (!target || function >= target->import_func_count + target->func_count)
         return exec_fail(error, EXEC_ERROR_TRAP, "invalid signal handler function");
     uint32_t type_index = function < target->import_func_count ?
-        target->import_func_types[function] :
+        target->function_imports[function].type_index :
         target->funcs[function - target->import_func_count].type_index;
     const exec_func_type *type = &target->types[type_index];
     if (type->param_count != 1 || type->params[0] != WASM_VALTYPE_I32 || type->result_count)
@@ -874,6 +901,43 @@ static exec_status guest_posix_deliver_signal(native_store *store,
     posix_kernel_signal_leave_handler(store->kernel, &saved_mask);
     if (status != EXEC_OK) posix_kernel_cancel_wait(store->kernel);
     return status;
+}
+
+static exec_status guest_posix_deliver_signal(native_store *store,
+    const waste_exec_engine *caller, int *restart, exec_error *error) {
+    int signal = posix_kernel_signal_last_delivered(store->kernel);
+    *restart = 1;
+    do {
+        int action_restart = 0;
+        exec_status status = guest_posix_handle_signal(store, caller, signal,
+                                                       &action_restart, error);
+        *restart &= action_restart;
+        if (status != EXEC_OK) return status;
+        /* A handler may queue its own blocked signal. Restoring its mask must
+         * deliver that signal before application code continues, including a
+         * default disposition restored by LLVM's terminating info handler.
+         * Iterate rather than accumulating host recursion. Legacy raw probes
+         * retain their one-notification-per-boundary convention. */
+        native_process_capsule *capsule = native_store_active_capsule(store);
+        if (!capsule || !capsule->is_application ||
+            !posix_kernel_signal_interrupt(store->kernel)) break;
+        signal = posix_kernel_signal_last_delivered(store->kernel);
+    } while (signal > 0);
+    return EXEC_OK;
+}
+
+exec_status guest_posix_poll_signal(void *data, const waste_exec_engine *caller,
+                                    exec_error *error) {
+    native_store *store = data;
+    native_process_capsule *capsule = native_store_active_capsule(store);
+    /* A resumed blocking import owns EINTR/restart semantics. Do not consume
+     * its signal while rebuilding the saved call chain above that import. */
+    if (!capsule || !capsule->is_application || store->kernel->wait.active ||
+        (caller->active_call_depth < EXEC_MAX_CALL_DEPTH &&
+         caller->yield_frames[caller->active_call_depth].valid) ||
+        !posix_kernel_signal_interrupt(store->kernel)) return EXEC_OK;
+    int restart;
+    return guest_posix_deliver_signal(store, caller, &restart, error);
 }
 
 static void guest_posix_echo(void *context, int fd, const uint8_t *bytes, int length) {
@@ -925,7 +989,7 @@ retry_read:
     if (store->kernel_terminal) {
         read_result = posix_kernel_read(store->kernel, args[0].i32,
                                         io_buffer, (int)count);
-        if (read_result == -POSIX_EAGAIN) {
+        if (read_result == -POSIX_EAGAIN && store->kernel->wait.active) {
             free(buffer);
             guest_platform_trace(store, "read-eagain");
             error->yield_reason = EXEC_YIELD_READ;
@@ -1071,6 +1135,58 @@ static exec_status guest_posix_realtime_v1(
     return guest_posix_result(0, results, result_count);
 }
 
+static exec_status guest_posix_clock_gettime_v1(
+        void *data, const wasm_value *args, int arg_count,
+        wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    uint8_t encoded[16] = {0};
+    uint64_t now;
+    int status;
+    (void)error;
+    if (arg_count != 2)
+        return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    status = posix_kernel_clock_now(store ? store->kernel : NULL,
+                                    args[0].i32, &now);
+    if (status != 0)
+        return guest_posix_result(status, results, result_count);
+    if (!caller || !caller->memory || args[1].i32 == 0)
+        return guest_posix_result(-POSIX_EFAULT, results, result_count);
+    /* Wasm32 timespec: signed seconds at 0, nanoseconds at 8, zero pad at 12.
+     * One bounded write validates the entire range/permissions before stores. */
+    guest_posix_le64(encoded, now / UINT64_C(1000000000));
+    guest_posix_le32(encoded + 8, (uint32_t)(now % UINT64_C(1000000000)));
+    if (!guest_posix_write_guest(caller->memory, (uint32_t)args[1].i32,
+                                 encoded, sizeof(encoded)))
+        return guest_posix_result(-POSIX_EFAULT, results, result_count);
+    return guest_posix_result(0, results, result_count);
+}
+
+static exec_status guest_posix_alarm_v1(void *data, const wasm_value *args,
+        int arg_count, wasm_value *results, int *result_count,
+        exec_error *error, const waste_exec_engine *caller) {
+    native_store *store = data;
+    (void)error; (void)caller;
+    int64_t result = arg_count == 1 ?
+        posix_kernel_alarm(store ? store->kernel : NULL, (uint32_t)args[0].i32) :
+        -POSIX_EINVAL;
+    results[0] = i64_value((uint64_t)result);
+    *result_count = 1;
+    return EXEC_OK;
+}
+
+static exec_status guest_posix_alarm(void *data, const wasm_value *args,
+        int arg_count, wasm_value *results, int *result_count,
+        exec_error *error, const waste_exec_engine *caller) {
+    native_store *store = data;
+    (void)error;
+    int64_t result = arg_count == 1 ?
+        posix_kernel_alarm(store ? store->kernel : NULL, (uint32_t)args[0].i32) :
+        -POSIX_EINVAL;
+    if (result < 0) { guest_posix_set_errno(store, caller, (int)-result); result = 0; }
+    return guest_posix_result((int32_t)(uint32_t)result, results, result_count);
+}
+
 static exec_status guest_posix_time(void *data, const wasm_value *args,
                                      int arg_count, wasm_value *results,
                                      int *result_count, exec_error *error,
@@ -1138,10 +1254,20 @@ static exec_status guest_posix_setpgid(void *data, const wasm_value *args,
         return guest_posix_result(-POSIX_EINVAL, results, result_count);
     target_pid = args[0].i32 == 0 ? native_store_getpid(store) : args[0].i32;
     for (int i = 0; i < NATIVE_PROCESS_MAX; i++) {
-        if (store->processes[i].used && store->processes[i].pid == target_pid)
+        if (store->processes[i].used && store->processes[i].pid == target_pid) {
+            if (store->processes[i].kernel->session_id != store->kernel->session_id)
+                return guest_posix_result(-POSIX_EPERM, results, result_count);
+            for (int j = 0; j < NATIVE_PROCESS_MAX; j++) {
+                const native_process *member = &store->processes[j];
+                if (member->used && member->kernel &&
+                    posix_kernel_getpgid(member->kernel) == args[1].i32 &&
+                    member->kernel->session_id != store->kernel->session_id)
+                    return guest_posix_result(-POSIX_EPERM, results, result_count);
+            }
             return guest_posix_result(posix_kernel_setpgid(
                                            store->processes[i].kernel,
                                            args[1].i32), results, result_count);
+        }
     }
     return guest_posix_result(-POSIX_EINVAL, results, result_count);
 }
@@ -1178,6 +1304,46 @@ static exec_status guest_posix_signal_result(native_store *store,
     if (value < 0) {
         guest_posix_set_errno(store, caller, -value);
         value = -1;
+    }
+    return guest_posix_result(value, results, result_count);
+}
+
+/* Versioned libc boundaries return negative POSIX errno. Historical env
+ * process-group probes retain their return convention independently. */
+static exec_status guest_posix_getsid_v1(void *data, const wasm_value *args,
+        int arg_count, wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    (void)error; (void)caller;
+    return guest_posix_result(arg_count == 1 ?
+        native_store_getsid(data, args[0].i32) : -POSIX_EINVAL, results, result_count);
+}
+
+static exec_status guest_posix_getpgid_v1(void *data, const wasm_value *args,
+        int arg_count, wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    (void)error; (void)caller;
+    return guest_posix_result(arg_count == 1 ?
+        native_store_getpgid(data, args[0].i32) : -POSIX_EINVAL, results, result_count);
+}
+
+static exec_status guest_posix_setsid_v1(void *data, const wasm_value *args,
+        int arg_count, wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    (void)error; (void)caller; (void)args;
+    return guest_posix_result(arg_count == 0 ?
+        native_store_setsid(data) : -POSIX_EINVAL, results, result_count);
+}
+
+static exec_status guest_posix_tcgetpgrp_v1(void *data, const wasm_value *args,
+        int arg_count, wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    native_store *store = data;
+    (void)error; (void)caller;
+    int value = -POSIX_EINVAL;
+    if (store && arg_count == 1) {
+        value = posix_kernel_terminal_session(store->kernel, args[0].i32);
+        if (value >= 0) value = posix_kernel_terminal_get_foreground_pgid(
+            store->kernel, args[0].i32);
     }
     return guest_posix_result(value, results, result_count);
 }
@@ -1262,6 +1428,9 @@ static exec_status guest_posix_sigismember(void *data, const wasm_value *args,
     return guest_posix_sigset_member(data, args, arg_count, results, result_count, caller, 0);
 }
 
+static exec_status guest_posix_self_signal(native_store *store,
+        const waste_exec_engine *caller, exec_error *error);
+
 static exec_status guest_posix_sigprocmask(void *data, const wasm_value *args,
         int arg_count, wasm_value *results, int *result_count, exec_error *error,
         const waste_exec_engine *caller) {
@@ -1299,6 +1468,12 @@ static exec_status guest_posix_sigprocmask(void *data, const wasm_value *args,
         }
         if (!status && args[1].i32) posix_kernel_set_signal_mask(store->kernel, &next);
     }
+    if (!status && args[1].i32) {
+        /* Newly unblocked pending signals must run before this call returns;
+         * otherwise a later READ incorrectly consumes the old notification. */
+        exec_status delivered = guest_posix_self_signal(store, caller, error);
+        if (delivered != EXEC_OK) return delivered;
+    }
     return guest_posix_signal_result(store, caller, status, results, result_count);
 }
 
@@ -1313,6 +1488,7 @@ static exec_status guest_posix_sigpending(void *data, const wasm_value *args,
     if (!store || !store->kernel || arg_count != 1) status = -POSIX_EINVAL;
     else if (!args[0].i32) status = -POSIX_EFAULT;
     else {
+        posix_kernel_alarm_poll(store->kernel);
         posix_kernel_get_signal_mask(store->kernel, &blocked);
         for (int signal = 1; signal <= POSIX_SIGNAL_MAX; signal++) {
             uint32_t bit = (uint32_t)(signal - 1);
@@ -1328,14 +1504,13 @@ static exec_status guest_posix_sigpending(void *data, const wasm_value *args,
     return guest_posix_signal_result(store, caller, status, results, result_count);
 }
 
-/* Stable guest sigaction prefix: handler pointer at offset zero, followed by
- * a fixed-width 128-bit mask. Flags remain outside this ABI prefix. */
 /* Compiled C actions use handler + 128-bit mask + flags. Table-free legacy
  * WAT probes retain their 20-byte prefix. Decode before writing aliased output. */
-static exec_status guest_posix_sigaction(void *data, const wasm_value *args,
+static exec_status guest_posix_sigaction_impl(void *data, const wasm_value *args,
                                           int arg_count, wasm_value *results,
                                           int *result_count, exec_error *error,
-                                          const waste_exec_engine *caller) {
+                                          const waste_exec_engine *caller,
+                                          int versioned) {
     native_store *store = data;
     if (!store || !store->kernel || arg_count != 3)
         return guest_posix_result(-POSIX_EINVAL, results, result_count);
@@ -1347,8 +1522,9 @@ static exec_status guest_posix_sigaction(void *data, const wasm_value *args,
         posix_kernel_signal_get_action_mask(store->kernel, signal, &old_mask))
         return guest_posix_result(-POSIX_EINVAL, results, result_count);
     uint8_t action[24] = {0}, old[24] = {0};
-    size_t size = caller->table_count ? sizeof(action) : 20;
+    size_t size = versioned || caller->table_count ? sizeof(action) : 20;
     exec_memory *memory = NULL;
+    (void)error;
     if (guest_posix_memory(caller, &memory, error) != EXEC_OK ||
         (action_ptr && !guest_posix_read_guest(memory, action_ptr, action, size)) ||
         (old_ptr && !guest_posix_read_guest(memory, old_ptr, old, size)))
@@ -1362,6 +1538,12 @@ static exec_status guest_posix_sigaction(void *data, const wasm_value *args,
             flags |= (uint32_t)action[20 + i] << (8u * i);
         }
         posix_sigset_decode(&mask, action + 4);
+        /* The kernel implements ordinary handlers and restartable reads.
+         * Reject unsupported flags before changing either output or state. */
+        if (flags & ~POSIX_SA_RESTART)
+            return guest_posix_result(-POSIX_EINVAL, results, result_count);
+        if (versioned && handler == UINT32_MAX)
+            return guest_posix_result(-POSIX_EINVAL, results, result_count);
         disposition = handler == POSIX_SIG_DFL ? POSIX_SIGNAL_DEFAULT :
             handler == POSIX_SIG_IGN || handler == 1 ? POSIX_SIGNAL_IGNORE : POSIX_SIGNAL_HANDLER;
         if ((signal == POSIX_SIGKILL || signal == POSIX_SIGSTOP) &&
@@ -1369,6 +1551,8 @@ static exec_status guest_posix_sigaction(void *data, const wasm_value *args,
             return guest_posix_result(-POSIX_EINVAL, results, result_count);
     }
     if (old_ptr) {
+        /* Legacy kernel/WAT SIG_IGN is -2; public C's sentinel is one. */
+        if (versioned && old_handler == POSIX_SIG_IGN) old_handler = 1;
         guest_posix_le32(old, old_handler);
         posix_sigset_encode(old + 4, &old_mask);
         guest_posix_le32(old + 20, store->kernel->signal_action_flags[signal]);
@@ -1382,6 +1566,22 @@ static exec_status guest_posix_sigaction(void *data, const wasm_value *args,
         store->kernel->signal_action_flags[signal] = flags;
     }
     return guest_posix_result(0, results, result_count);
+}
+
+static exec_status guest_posix_sigaction(void *data, const wasm_value *args,
+        int arg_count, wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    return guest_posix_sigaction_impl(data, args, arg_count, results,
+                                      result_count, error, caller, 0);
+}
+
+/* Fixed 24-byte C ABI, also for actions whose module has no function table.
+ * Like other versioned boundaries, failures are negative POSIX errno. */
+static exec_status guest_posix_sigaction_v1(void *data, const wasm_value *args,
+        int arg_count, wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    return guest_posix_sigaction_impl(data, args, arg_count, results,
+                                      result_count, error, caller, 1);
 }
 
 static exec_status guest_posix_isatty(void *data, const wasm_value *args,
@@ -1521,15 +1721,67 @@ static exec_status guest_posix_exit(void *data, const wasm_value *args,
     return EXEC_ERROR_EXIT;
 }
 
+static exec_status guest_posix_getrusage(void *data, const wasm_value *args,
+        int arg_count, wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    native_store *store = data;
+    (void)error;
+    int valid = arg_count == 2 && (args[0].i32 == WASTE_RUSAGE_SELF ||
+                                  args[0].i32 == WASTE_RUSAGE_CHILDREN);
+    /* No guest CPU-accounting capability. Match libc's unsupported contract
+     * without accessing the destination or reporting invented zero usage. */
+    guest_posix_set_errno(store, caller, valid ? POSIX_ENOSYS : POSIX_EINVAL);
+    return guest_posix_result(-1, results, result_count);
+}
+
 /* A self-directed unblocked signal must run before kill/raise returns. In
  * particular Readline restores the application's action only for that call. */
 static exec_status guest_posix_self_signal(native_store *store,
         const waste_exec_engine *caller, exec_error *error) {
     native_process_capsule *capsule = native_store_active_capsule(store);
-    if (!capsule || !capsule->image || !posix_kernel_signal_interrupt(store->kernel))
+    /* Fork retains application semantics while its evaluator clone owns the
+     * private image; the executable-image descriptor itself is not borrowed. */
+    if (!capsule || !capsule->is_application ||
+        !posix_kernel_signal_interrupt(store->kernel))
         return EXEC_OK;
     int restart = 0;
     return guest_posix_deliver_signal(store, caller, &restart, error);
+}
+
+/* abort must terminate even when SIGABRT is ignored, blocked, or a handler
+ * returns. Invoke a caught handler once, then force the default disposition.
+ * This terminates only the guest capsule; the runtime and parent stay alive. */
+static exec_status guest_posix_abort(void *data, const wasm_value *args,
+        int arg_count, wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    native_store *store = data;
+    (void)args; (void)results;
+    *result_count = 0;
+    if (!store || !store->kernel || arg_count != 0)
+        return exec_fail(error, EXEC_ERROR_TRAP, "invalid abort call");
+    posix_kernel *kernel = store->kernel;
+    posix_sigset mask;
+    posix_kernel_get_signal_mask(kernel, &mask);
+    mask.words[(POSIX_SIGABRT - 1) / 32] &=
+        ~(UINT32_C(1) << ((POSIX_SIGABRT - 1) % 32));
+    posix_kernel_set_signal_mask(kernel, &mask);
+    posix_kernel_signal_clear(kernel, POSIX_SIGABRT);
+    if (!kernel->aborting) {
+        kernel->aborting = 1;
+        int restart = 0;
+        exec_status status = guest_posix_handle_signal(store, caller,
+            POSIX_SIGABRT, &restart, error);
+        if (status != EXEC_OK) {
+            kernel->aborting = 0;
+            return status;
+        }
+    }
+    posix_kernel_signal_set_disposition(kernel, POSIX_SIGABRT, POSIX_SIGNAL_DEFAULT);
+    posix_kernel_signal_set_handler(kernel, POSIX_SIGABRT, 0);
+    exec_fail(error, EXEC_ERROR_EXIT, "process aborted by SIGABRT");
+    error->signal = POSIX_SIGABRT;
+    error->exit_code = 128 + POSIX_SIGABRT;
+    return EXEC_ERROR_EXIT;
 }
 
 static exec_status guest_posix_raise(void *data, const wasm_value *args,
@@ -1550,15 +1802,23 @@ static exec_status guest_posix_kill(void *data, const wasm_value *args,
         int arg_count, wasm_value *results, int *result_count, exec_error *error,
         const waste_exec_engine *caller) {
     native_store *store = data;
-    if (!store || arg_count != 2 || args[0].i32 == INT32_MIN)
+    if (!store || arg_count != 2)
         return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    if (args[0].i32 == INT32_MIN) {
+        guest_posix_set_errno(store, caller, POSIX_EINVAL);
+        return guest_posix_result(-1, results, result_count);
+    }
     int pid = args[0].i32, signal = args[1].i32, value;
     if (pid <= 0) {
         int group = pid == 0 ? posix_kernel_getpgid(store->kernel) : -pid;
         value = native_store_signal_process_group(store, group, signal);
-        value = value > 0 ? 0 : -POSIX_EINVAL;
+        value = value > 0 ? 0 : value < 0 ? value : -POSIX_ESRCH;
     } else value = native_store_signal_process(store, pid, signal);
-    if (!value) {
+    if (value < 0) {
+        guest_posix_set_errno(store, caller, -value);
+        return guest_posix_result(-1, results, result_count);
+    }
+    if (!value && signal != 0) {
         exec_status status = guest_posix_self_signal(store, caller, error);
         if (status != EXEC_OK) return status;
     }
@@ -1568,10 +1828,19 @@ static exec_status guest_posix_kill(void *data, const wasm_value *args,
 static exec_status guest_posix_killpg(void *data, const wasm_value *args,
         int arg_count, wasm_value *results, int *result_count, exec_error *error,
         const waste_exec_engine *caller) {
-    if (arg_count != 2 || args[0].i32 < 0)
+    if (arg_count != 2)
         return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    if (args[0].i32 < 0) {
+        guest_posix_set_errno((native_store *)data, caller, POSIX_EINVAL);
+        return guest_posix_result(-1, results, result_count);
+    }
     wasm_value values[2] = {i32_value((uint32_t)-args[0].i32), args[1]};
     return guest_posix_kill(data, values, 2, results, result_count, error, caller);
+}
+
+static uint32_t guest_posix_flock_word(const uint8_t *bytes) {
+    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
+           ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
 }
 
 static exec_status guest_posix_fcntl(void *data, const wasm_value *args,
@@ -1580,11 +1849,53 @@ static exec_status guest_posix_fcntl(void *data, const wasm_value *args,
                                       const waste_exec_engine *caller) {
     native_store *store = (native_store *)data;
     int fd, command, result = -POSIX_EINVAL;
-    (void)error; (void)caller;
     if (store && store->kernel && arg_count >= 2) {
         fd = args[0].i32;
         command = args[1].i32;
-        if ((command == POSIX_F_DUPFD ||
+        if ((command == POSIX_F_GETLK || command == POSIX_F_SETLK ||
+             command == POSIX_F_SETLKW) && arg_count >= 3) {
+            uint8_t bytes[WASTE_FLOCK_BYTES];
+            uint32_t pointer = (uint32_t)args[2].i32;
+            if (!pointer || !caller || !guest_posix_read_guest(caller->memory,
+                    pointer, bytes, sizeof(bytes))) {
+                if (command == POSIX_F_SETLKW) posix_kernel_cancel_wait(store->kernel);
+                result = -POSIX_EFAULT;
+            } else {
+                posix_flock lock = {
+                    (int16_t)((uint16_t)bytes[WASTE_FLOCK_TYPE_OFFSET] |
+                        ((uint16_t)bytes[WASTE_FLOCK_TYPE_OFFSET + 1] << 8)),
+                    (int16_t)((uint16_t)bytes[WASTE_FLOCK_WHENCE_OFFSET] |
+                        ((uint16_t)bytes[WASTE_FLOCK_WHENCE_OFFSET + 1] << 8)),
+                    (int32_t)guest_posix_flock_word(bytes + WASTE_FLOCK_START_OFFSET),
+                    (int32_t)guest_posix_flock_word(bytes + WASTE_FLOCK_LEN_OFFSET),
+                    (int32_t)guest_posix_flock_word(bytes + WASTE_FLOCK_PID_OFFSET)
+                };
+                do {
+                    result = posix_kernel_record_lock(store->kernel, fd, command, &lock);
+                    if (result != -POSIX_EINTR) break;
+                    int restart = 0;
+                    exec_status status = guest_posix_deliver_signal(store, caller, &restart, error);
+                    if (status != EXEC_OK) return status;
+                    if (!restart) break;
+                } while (1);
+                if (result == -POSIX_EAGAIN && command == POSIX_F_SETLKW) {
+                    error->status = EXEC_YIELD;
+                    error->yield_reason = EXEC_YIELD_SELECT;
+                    return EXEC_YIELD;
+                }
+                if (result >= 0 && command == POSIX_F_GETLK) {
+                    bytes[WASTE_FLOCK_TYPE_OFFSET] = (uint8_t)lock.type;
+                    bytes[WASTE_FLOCK_TYPE_OFFSET + 1] = (uint8_t)((unsigned)lock.type >> 8);
+                    bytes[WASTE_FLOCK_WHENCE_OFFSET] = (uint8_t)lock.whence;
+                    bytes[WASTE_FLOCK_WHENCE_OFFSET + 1] = (uint8_t)((unsigned)lock.whence >> 8);
+                    guest_posix_le32(bytes + WASTE_FLOCK_START_OFFSET, (uint32_t)lock.start);
+                    guest_posix_le32(bytes + WASTE_FLOCK_LEN_OFFSET, (uint32_t)lock.length);
+                    guest_posix_le32(bytes + WASTE_FLOCK_PID_OFFSET, (uint32_t)lock.pid);
+                    if (!guest_posix_write_guest(caller->memory, pointer, bytes, sizeof(bytes)))
+                        result = -POSIX_EFAULT;
+                }
+            }
+        } else if ((command == POSIX_F_DUPFD ||
              command == POSIX_F_DUPFD_CLOEXEC) && arg_count >= 3) {
             result = posix_kernel_dupfd(store->kernel, fd, args[2].i32,
                 command == POSIX_F_DUPFD_CLOEXEC);
@@ -1593,6 +1904,10 @@ static exec_status guest_posix_fcntl(void *data, const wasm_value *args,
         } else if (command == POSIX_F_SETFD && arg_count >= 3) {
             result = posix_kernel_set_cloexec(store->kernel, fd,
                                                args[2].i32);
+        } else if (command == POSIX_F_GETFL) {
+            result = posix_kernel_get_status_flags(store->kernel, fd);
+        } else if (command == POSIX_F_SETFL && arg_count >= 3) {
+            result = posix_kernel_set_status_flags(store->kernel, fd, args[2].i32);
         }
     }
     if (result < 0) {
@@ -1613,17 +1928,25 @@ static exec_status guest_posix_fcntl_varargs(
     int32_t argument = 0;
     int command;
     if (arg_count != 3 || !caller || !caller->memory) {
+        native_store *store = data;
+        if (store && store->kernel && arg_count >= 2 &&
+            args[1].i32 == POSIX_F_SETLKW) posix_kernel_cancel_wait(store->kernel);
         guest_posix_set_errno((native_store *)data, caller, POSIX_EFAULT);
         return guest_posix_result(-1, results, result_count);
     }
     command = args[1].i32;
     if (command == POSIX_F_DUPFD ||
-        command == POSIX_F_DUPFD_CLOEXEC || command == POSIX_F_SETFD) {
+        command == POSIX_F_DUPFD_CLOEXEC || command == POSIX_F_SETFD ||
+        command == POSIX_F_SETFL ||
+        command == POSIX_F_GETLK || command == POSIX_F_SETLK || command == POSIX_F_SETLKW) {
         uint8_t bytes[4];
         uint32_t pointer = (uint32_t)args[2].i32;
-        if (args[2].i32 < 0 ||
+        if (!pointer ||
             !guest_posix_read_guest(caller->memory, pointer, bytes,
                                     sizeof(bytes))) {
+            native_store *store = data;
+            if (store && store->kernel && command == POSIX_F_SETLKW)
+                posix_kernel_cancel_wait(store->kernel);
             guest_posix_set_errno((native_store *)data, caller, POSIX_EFAULT);
             return guest_posix_result(-1, results, result_count);
         }
@@ -1846,6 +2169,87 @@ static exec_status guest_posix_readdir(void *data, const wasm_value *args,
     return guest_posix_result(result, results, result_count);
 }
 
+/* Creation validates both strings before changing the namespace. Unlike the
+ * executable argv copier, this boundary accepts bounded POSIX input paths. */
+static int guest_posix_link_string(const waste_exec_engine *caller,
+                                   uint32_t offset, char *out, size_t *length) {
+    if (!caller || !caller->memory || !offset) return POSIX_EFAULT;
+    exec_error ignored = {0};
+    for (size_t i = 0; i < POSIX_PATH_MAX; i++) {
+        if (exec_memory_read(caller->memory, (uint64_t)offset + i,
+                             out + i, 1, &ignored) != EXEC_OK) return POSIX_EFAULT;
+        if (!out[i]) { *length = i; return 0; }
+    }
+    return POSIX_ENAMETOOLONG;
+}
+
+static exec_status guest_posix_realpath_v1(void *data, const wasm_value *args,
+                                          int arg_count, wasm_value *results,
+                                          int *result_count, exec_error *error,
+                                          const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    char path[POSIX_PATH_MAX], resolved[POSIX_PATH_NODE_NAME_MAX];
+    size_t length;
+    (void)error;
+    if (arg_count != 3)
+        return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    if (!args[0].i32)
+        return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    int status = guest_posix_link_string(caller, (uint32_t)args[0].i32,
+                                         path, &length);
+    if (status) return guest_posix_result(-status, results, result_count);
+    if (!args[1].i32 || !caller || !caller->memory)
+        return guest_posix_result(-POSIX_EFAULT, results, result_count);
+    status = store && store->kernel ? posix_kernel_realpath(
+        store->kernel, (const uint8_t *)path, length, resolved,
+        (uint32_t)args[2].i32) : -POSIX_ENOSYS;
+    if (status >= 0 && !guest_posix_write_guest(caller->memory,
+            (uint32_t)args[1].i32, resolved, (size_t)status + 1))
+        status = -POSIX_EFAULT;
+    return guest_posix_result(status, results, result_count);
+}
+
+static exec_status guest_posix_symlinkat_v1(void *data, const wasm_value *args,
+                                            int arg_count, wasm_value *results,
+                                            int *result_count, exec_error *error,
+                                            const waste_exec_engine *caller) {
+    (void)error;
+    if (arg_count != 3) return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    char target[POSIX_PATH_MAX], path[POSIX_PATH_MAX];
+    size_t target_length, path_length;
+    int status = guest_posix_link_string(caller, (uint32_t)args[0].i32,
+                                         target, &target_length);
+    if (!status) status = guest_posix_link_string(caller, (uint32_t)args[2].i32,
+                                                 path, &path_length);
+    if (status) return guest_posix_result(-status, results, result_count);
+    native_store *store = (native_store *)data;
+    int result = store && store->kernel ? posix_kernel_symlinkat(store->kernel,
+        (const uint8_t *)target, target_length, args[1].i32,
+        (const uint8_t *)path, path_length) : -POSIX_ENOSYS;
+    return guest_posix_result(result, results, result_count);
+}
+
+static exec_status guest_posix_linkat_v1(void *data, const wasm_value *args,
+                                         int arg_count, wasm_value *results,
+                                         int *result_count, exec_error *error,
+                                         const waste_exec_engine *caller) {
+    (void)error;
+    if (arg_count != 5) return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    char old_path[POSIX_PATH_MAX], new_path[POSIX_PATH_MAX];
+    size_t old_length, new_length;
+    int status = guest_posix_link_string(caller, (uint32_t)args[1].i32,
+                                         old_path, &old_length);
+    if (!status) status = guest_posix_link_string(caller, (uint32_t)args[3].i32,
+                                                 new_path, &new_length);
+    if (status) return guest_posix_result(-status, results, result_count);
+    native_store *store = (native_store *)data;
+    int result = store && store->kernel ? posix_kernel_linkat(store->kernel,
+        args[0].i32, (const uint8_t *)old_path, old_length,
+        args[2].i32, (const uint8_t *)new_path, new_length,
+        args[4].i32) : -POSIX_ENOSYS;
+    return guest_posix_result(result, results, result_count);
+}
+
 static exec_status guest_posix_readlink(void *data, const wasm_value *args,
                                          int arg_count, wasm_value *results,
                                          int *result_count, exec_error *error,
@@ -1925,6 +2329,7 @@ static exec_status guest_posix_stat_common(void *data, const wasm_value *args,
     uint8_t status[POSIX_GUEST_STAT_BYTES];
     posix_path_metadata metadata;
     posix_guest_stat guest_stat;
+    uint32_t links;
     int errno_value = POSIX_ENOSYS;
     if (arg_count != 2 || guest_posix_memory(caller, &memory, error) != EXEC_OK)
         return guest_posix_result(-1, results, result_count);
@@ -1935,15 +2340,15 @@ static exec_status guest_posix_stat_common(void *data, const wasm_value *args,
         guest_posix_set_errno(store, caller, errno_value ? errno_value : POSIX_EFAULT);
         return guest_posix_result(-1, results, result_count);
     }
-    int result = store->kernel ? posix_kernel_path_stat(
-        store->kernel, (const uint8_t *)path, path_length,
-        follow, &metadata) : -POSIX_ENOSYS;
+    int result = store->kernel ? posix_kernel_fstatat_nlink(
+        store->kernel, POSIX_AT_FDCWD, (const uint8_t *)path, path_length,
+        follow ? 0 : POSIX_AT_SYMLINK_NOFOLLOW, &metadata, &links) : -POSIX_ENOSYS;
     if (result < 0) {
         guest_posix_set_errno(store, caller, -result);
         free(path);
         return guest_posix_result(-1, results, result_count);
     }
-    guest_posix_metadata_stat(&metadata, &guest_stat);
+    guest_posix_metadata_stat(&metadata, &guest_stat, links);
     posix_guest_stat_encode(status, &guest_stat);
     if (!guest_posix_write_guest(memory, (uint32_t)args[1].i32,
                                   status, sizeof(status))) {
@@ -2033,13 +2438,20 @@ static exec_status guest_posix_fstat(void *data, const wasm_value *args,
         POSIX_NODE_REGULAR, 0666, 0, 0, 0,
         (uint64_t)(args[0].i32 + 1), 0, 0
     };
-    if (ofd->kind == POSIX_OFD_REGULAR && ofd->regular.node) {
-        metadata = ofd->regular.node->metadata;
+    uint32_t links = 1;
+    if (ofd->kind == POSIX_OFD_REGULAR) {
+        metadata = ofd->regular.file->metadata;
+        links = posix_kernel_file_link_count(store->kernel, ofd->regular.file);
+        metadata.inode = ofd->regular.file->inode;
         metadata.size = (int64_t)ofd->regular.file->data_capacity;
+    } else if (ofd->kind == POSIX_OFD_NULL) {
+        metadata = ofd->null_device.file->metadata;
+        links = posix_kernel_file_link_count(store->kernel, ofd->null_device.file);
     } else if (ofd->kind == POSIX_OFD_DIRECTORY && ofd->directory.node) {
         metadata = ofd->directory.node->metadata;
+        links = 2;
     }
-    guest_posix_metadata_stat(&metadata, &guest_stat);
+    guest_posix_metadata_stat(&metadata, &guest_stat, links);
     if (ofd->stream_mode) guest_stat.st_mode = ofd->stream_mode;
     posix_guest_stat_encode(status, &guest_stat);
     if (!guest_posix_write_guest(memory, (uint32_t)args[1].i32,
@@ -2079,29 +2491,69 @@ static exec_status guest_posix_fork(void *data, const wasm_value *args,
     return EXEC_YIELD;
 }
 
-static exec_status guest_posix_waitpid(void *data, const wasm_value *args,
+static exec_status guest_posix_wait_result(native_store *store,
+        const waste_exec_engine *caller, int timed, int result,
+        wasm_value *results, int *result_count) {
+    if (timed) posix_kernel_cancel_wait(store->kernel);
+    if (result < 0 && !timed) {
+        guest_posix_set_errno(store, caller, -result);
+        result = -1;
+    }
+    return guest_posix_result(result, results, result_count);
+}
+
+static exec_status guest_posix_waitpid_common(void *data, const wasm_value *args,
                                         int arg_count, wasm_value *results,
                                         int *result_count, exec_error *error,
-                                        const waste_exec_engine *caller) {
+                                        const waste_exec_engine *caller, int timed) {
     native_store *store = (native_store *)data;
     exec_memory *memory = NULL;
     uint8_t status_bytes[4];
-    if (arg_count != 3 || guest_posix_memory(caller, &memory, error) != EXEC_OK) {
-        guest_posix_set_errno(store, caller, POSIX_EFAULT);
-        return guest_posix_result(-1, results, result_count);
+    if (arg_count != (timed ? 4 : 3) || !caller ||
+        guest_posix_memory(caller, &memory, error) != EXEC_OK) {
+        return guest_posix_wait_result(store, caller, timed, -POSIX_EFAULT,
+                                       results, result_count);
+    }
+    if (timed && (args[2].i32 & ~POSIX_WNOHANG)) {
+        return guest_posix_wait_result(store, caller, timed, -POSIX_EINVAL,
+                                       results, result_count);
+    }
+    if (timed && !(args[2].i32 & POSIX_WNOHANG) && !store->kernel->clock_now) {
+        return guest_posix_wait_result(store, caller, timed, -POSIX_ENOSYS,
+                                       results, result_count);
+    }
+    /* Reaping consumes status and tears down the child. Prepare the complete
+     * destination first, including permissions and copy-on-write allocation.
+     * No guest address is retained across WAITPID; retries validate again. */
+    if (args[1].i32) {
+        exec_error output_error = {0};
+        if (exec_memory_prepare_write(memory, (uint32_t)args[1].i32,
+                                       sizeof(status_bytes), &output_error) != EXEC_OK) {
+            return guest_posix_wait_result(store, caller, timed,
+                output_error.memory_fault ? -POSIX_EFAULT : -POSIX_ENOMEM,
+                results, result_count);
+        }
     }
     int status = 0;
     int waited = native_store_wait_process(store, args[0].i32, args[2].i32,
                                            &status);
     if (waited == -POSIX_EAGAIN && !(args[2].i32 & POSIX_WNOHANG)) {
         if (posix_kernel_signal_interrupt(store->kernel)) {
+            if (timed) posix_kernel_cancel_wait(store->kernel);
             int restart = 0;
             exec_status delivered = guest_posix_deliver_signal(store, caller, &restart, error);
             if (delivered != EXEC_OK) return delivered;
             if (!restart) {
-                guest_posix_set_errno(store, caller, POSIX_EINTR);
-                return guest_posix_result(-1, results, result_count);
+                return guest_posix_wait_result(store, caller, timed, -POSIX_EINTR,
+                                               results, result_count);
             }
+        }
+        if (timed) {
+            int deadline = posix_kernel_wait_until(store->kernel,
+                                                   (uint64_t)args[3].i64);
+            if (deadline != -POSIX_EAGAIN)
+                return guest_posix_wait_result(store, caller, timed, deadline,
+                                               results, result_count);
         }
         native_process_capsule *capsule = native_store_active_capsule(store);
         capsule->wait_pid = args[0].i32;
@@ -2109,31 +2561,51 @@ static exec_status guest_posix_waitpid(void *data, const wasm_value *args,
         error->yield_reason = EXEC_YIELD_WAITPID;
         return EXEC_YIELD;
     }
-    if (waited == 0) return guest_posix_result(0, results, result_count);
+    if (waited == 0) return guest_posix_wait_result(store, caller, timed, 0,
+                                                  results, result_count);
     if (waited < 0) {
-        if (waited == -POSIX_ECHILD && args[0].i32 == 0 &&
+        if (!timed && waited == -POSIX_ECHILD && args[0].i32 == 0 &&
             store->last_wait_pid > 0) {
             status = store->last_wait_status;
             status_bytes[0] = (uint8_t)status;
             status_bytes[1] = (uint8_t)(status >> 8);
             status_bytes[2] = (uint8_t)(status >> 16);
             status_bytes[3] = (uint8_t)(status >> 24);
-            if (!guest_posix_write_guest(memory, (uint32_t)args[1].i32,
-                                          status_bytes, sizeof(status_bytes)))
-                return guest_posix_result(-POSIX_EFAULT, results, result_count);
+            if (args[1].i32 && !guest_posix_write_guest(memory,
+                    (uint32_t)args[1].i32, status_bytes, sizeof(status_bytes))) {
+                guest_posix_set_errno(store, caller, POSIX_EFAULT);
+                return guest_posix_result(-1, results, result_count);
+            }
             return guest_posix_result(store->last_wait_pid, results, result_count);
         }
-        guest_posix_set_errno(store, caller, -waited);
-        return guest_posix_result(-1, results, result_count);
+        return guest_posix_wait_result(store, caller, timed, waited,
+                                       results, result_count);
     }
     status_bytes[0] = (uint8_t)status;
     status_bytes[1] = (uint8_t)(status >> 8);
     status_bytes[2] = (uint8_t)(status >> 16);
     status_bytes[3] = (uint8_t)(status >> 24);
     if (args[1].i32 && !guest_posix_write_guest(memory, (uint32_t)args[1].i32,
-                                  status_bytes, sizeof(status_bytes)))
-        return guest_posix_result(-POSIX_EFAULT, results, result_count);
-    return guest_posix_result(waited, results, result_count);
+                                  status_bytes, sizeof(status_bytes))) {
+        return guest_posix_wait_result(store, caller, timed, -POSIX_EFAULT,
+                                       results, result_count);
+    }
+    return guest_posix_wait_result(store, caller, timed, waited,
+                                   results, result_count);
+}
+
+static exec_status guest_posix_waitpid(void *data, const wasm_value *args,
+        int arg_count, wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    return guest_posix_waitpid_common(data, args, arg_count, results,
+                                      result_count, error, caller, 0);
+}
+
+static exec_status guest_posix_waitpid_until_v1(void *data, const wasm_value *args,
+        int arg_count, wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    return guest_posix_waitpid_common(data, args, arg_count, results,
+                                      result_count, error, caller, 1);
 }
 
 static exec_status guest_posix_execve(void *data, const wasm_value *args,
@@ -2154,7 +2626,8 @@ static exec_status guest_posix_execve(void *data, const wasm_value *args,
         guest_posix_set_errno(store, caller, failure);
         return guest_posix_result(-1, results, result_count);
     }
-    if (arg_count != 3 || guest_posix_memory(caller, &memory, error) != EXEC_OK ||
+    if (arg_count != 3 || !args[0].i32 ||
+        guest_posix_memory(caller, &memory, error) != EXEC_OK ||
         !guest_posix_guest_path(caller, (uint32_t)args[0].i32, &path,
                                  &path_length, &path_error)) {
         guest_posix_set_errno(store, caller, path_error);
@@ -2189,13 +2662,14 @@ static exec_status guest_posix_execve(void *data, const wasm_value *args,
     native_exec_request_destroy(&store->exec_request);
     memcpy(store->exec_request.path, path, path_length);
     store->exec_request.path[path_length] = '\0';
+    size_t remaining = PROCESS_EXEC_MAX_BYTES;
     status = guest_posix_copy_guest_vector(
         memory, (uint32_t)args[1].i32, store->exec_request.argv,
-        NATIVE_EXEC_ARG_MAX, &store->exec_request.argc, 0);
+        NATIVE_EXEC_ARG_MAX, &store->exec_request.argc, 0, &remaining);
     if (status == 0)
         status = guest_posix_copy_guest_vector(
             memory, (uint32_t)args[2].i32, store->exec_request.envp,
-            NATIVE_EXEC_ENV_MAX, &store->exec_request.envc, 1);
+            NATIVE_EXEC_ENV_MAX, &store->exec_request.envc, 1, &remaining);
     if (status != 0) {
         native_exec_request_destroy(&store->exec_request);
         guest_posix_set_errno(store, caller, status);
@@ -2328,6 +2802,38 @@ static exec_status guest_posix_fstatat_v1(
         if (exec_memory_write(caller->memory, (uint32_t)args[4].i32,
                               bytes, sizeof(bytes), error) != EXEC_OK)
             result = -POSIX_EFAULT;
+    }
+    return guest_posix_result(result, results, result_count);
+}
+
+/* v1 retains its 48-byte metadata wire format. v2 returns the existing
+ * 128-byte guest stat layout, including a namespace link count. */
+static exec_status guest_posix_fstatat_v2(
+        void *data, const wasm_value *args, int arg_count,
+        wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    (void)error;
+    if (arg_count != 5) return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    uint32_t length = (uint32_t)args[2].i32;
+    uint8_t path[POSIX_PATH_MAX], bytes[POSIX_GUEST_STAT_BYTES];
+    if (length >= sizeof(path))
+        return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    if (!caller || !caller->memory || !args[1].i32 || !args[4].i32 ||
+        !guest_posix_read_guest(caller->memory, (uint32_t)args[1].i32, path, length) ||
+        !guest_posix_read_guest(caller->memory, (uint32_t)args[4].i32, bytes, sizeof(bytes)))
+        return guest_posix_result(-POSIX_EFAULT, results, result_count);
+    native_store *store = (native_store *)data;
+    posix_path_metadata metadata;
+    uint32_t links;
+    int result = store && store->kernel ? posix_kernel_fstatat_nlink(
+        store->kernel, args[0].i32, path, length, args[3].i32,
+        &metadata, &links) : -POSIX_ENOSYS;
+    if (!result) {
+        posix_guest_stat stat;
+        guest_posix_metadata_stat(&metadata, &stat, links);
+        posix_guest_stat_encode(bytes, &stat);
+        if (!guest_posix_write_guest(caller->memory, (uint32_t)args[4].i32,
+                                     bytes, sizeof(bytes))) result = -POSIX_EFAULT;
     }
     return guest_posix_result(result, results, result_count);
 }
@@ -2550,6 +3056,55 @@ static exec_status guest_posix_startup_v1(void *data, const wasm_value *args,
         return guest_posix_result(-POSIX_ENOENT, results, result_count);
     return guest_posix_result((int32_t)capsule->image->startup_ptr, results,
                                result_count);
+}
+
+/* Copy from the active process image, not argv[0], cwd or a provider's image.
+ * All failure paths precede the bounded write; no guest pointer is retained. */
+static exec_status guest_posix_exec_limits_v1(void *data,
+        const wasm_value *args, int arg_count, wasm_value *results,
+        int *result_count, exec_error *error, const waste_exec_engine *caller) {
+    uint8_t encoded[3 * sizeof(uint32_t)];
+    (void)data; (void)error;
+    if (arg_count != 2 || (uint32_t)args[1].i32 != sizeof(encoded))
+        return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    if (!caller || !caller->memory || !args[0].i32)
+        return guest_posix_result(-POSIX_EFAULT, results, result_count);
+    guest_posix_le32(encoded, PROCESS_EXEC_MAX_ARGS);
+    guest_posix_le32(encoded + 4, PROCESS_EXEC_MAX_ENV);
+    guest_posix_le32(encoded + 8, PROCESS_EXEC_MAX_BYTES);
+    if (!guest_posix_write_guest(caller->memory, (uint32_t)args[0].i32,
+                                 encoded, sizeof(encoded)))
+        return guest_posix_result(-POSIX_EFAULT, results, result_count);
+    return guest_posix_result(0, results, result_count);
+}
+
+static exec_status guest_posix_executable_path_v1(void *data,
+                                                  const wasm_value *args,
+                                                  int arg_count,
+                                                  wasm_value *results,
+                                                  int *result_count,
+                                                  exec_error *error,
+                                                  const waste_exec_engine *caller) {
+    native_store *store = (native_store *)data;
+    native_process_capsule *capsule;
+    exec_memory *memory = NULL;
+    (void)error;
+    if (!store || arg_count != 2)
+        return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    capsule = native_store_active_capsule(store);
+    if (!capsule || !capsule->executable_path[0])
+        return guest_posix_result(-POSIX_ENOENT, results, result_count);
+    uint32_t offset = (uint32_t)args[0].i32;
+    uint32_t capacity = (uint32_t)args[1].i32;
+    if (!offset || !caller || !caller->memory)
+        return guest_posix_result(-POSIX_EFAULT, results, result_count);
+    memory = caller->memory;
+    size_t length = strlen(capsule->executable_path);
+    if (capacity <= length)
+        return guest_posix_result(-POSIX_ERANGE, results, result_count);
+    if (!guest_posix_write_guest(memory, offset, capsule->executable_path, length + 1))
+        return guest_posix_result(-POSIX_EFAULT, results, result_count);
+    return guest_posix_result((int32_t)length, results, result_count);
 }
 
 /* ---- dynamic loading host functions ---- */
@@ -2960,13 +3515,26 @@ static exec_status guest_posix_host_download_v1(
 static exec_host_func guest_posix_function(const char *module,
                                              const char *name) {
     if (strcmp(module, "waste_kernel") == 0) {
+        if (strcmp(name, "abort_v1") == 0) return guest_posix_abort;
+        if (strcmp(name, "sigaction_v1") == 0) return guest_posix_sigaction_v1;
+        if (strcmp(name, "alarm_v1") == 0) return guest_posix_alarm_v1;
+        if (strcmp(name, "waitpid_until_v1") == 0) return guest_posix_waitpid_until_v1;
+        if (strcmp(name, "posix_madvise_v1") == 0) return guest_posix_posix_madvise;
         if (strcmp(name, "startup_v1") == 0) return guest_posix_startup_v1;
+        if (strcmp(name, "executable_path_v1") == 0) return guest_posix_executable_path_v1;
+        if (strcmp(name, "exec_limits_v1") == 0) return guest_posix_exec_limits_v1;
+        if (strcmp(name, "getsid_v1") == 0) return guest_posix_getsid_v1;
+        if (strcmp(name, "getpgid_v1") == 0) return guest_posix_getpgid_v1;
+        if (strcmp(name, "setsid_v1") == 0) return guest_posix_setsid_v1;
+        if (strcmp(name, "tcgetpgrp_v1") == 0) return guest_posix_tcgetpgrp_v1;
         if (strcmp(name, "open_v1") == 0) return guest_posix_open;
         if (strcmp(name, "fsync_v1") == 0) return guest_posix_fsync;
         if (strcmp(name, "ftruncate_v1") == 0) return guest_posix_ftruncate;
         if (strcmp(name, "openat_v1") == 0) return guest_posix_openat_v1;
         if (strcmp(name, "fstatat_v1") == 0) return guest_posix_fstatat_v1;
+        if (strcmp(name, "fstatat_v2") == 0) return guest_posix_fstatat_v2;
         if (strcmp(name, "realtime_v1") == 0) return guest_posix_realtime_v1;
+        if (strcmp(name, "clock_gettime_v1") == 0) return guest_posix_clock_gettime_v1;
         if (strcmp(name, "select_v1") == 0) return guest_posix_select;
         if (strcmp(name, "pselect_v1") == 0) return guest_posix_pselect;
         if (strcmp(name, POSIX_KERNEL_PATH_ACCESS_V1) == 0)
@@ -2982,6 +3550,9 @@ static exec_host_func guest_posix_function(const char *module,
         if (strcmp(name, "chdir") == 0) return guest_posix_chdir;
         if (strcmp(name, "lseek") == 0) return guest_posix_lseek;
         if (strcmp(name, "readlink_v1") == 0) return guest_posix_readlink;
+        if (strcmp(name, "symlinkat_v1") == 0) return guest_posix_symlinkat_v1;
+        if (strcmp(name, "realpath_v1") == 0) return guest_posix_realpath_v1;
+        if (strcmp(name, "linkat_v1") == 0) return guest_posix_linkat_v1;
         if (strcmp(name, "fchdir_v1") == 0) return guest_posix_fchdir;
         if (strcmp(name, "fchmodat_v1") == 0) return guest_posix_fchmodat_v1;
         if (strcmp(name, "fcntl_v1") == 0) return guest_posix_fcntl;
@@ -3014,9 +3585,9 @@ static exec_host_func guest_posix_function(const char *module,
     if (strcmp(name, "isatty") == 0) return guest_posix_isatty;
     if (strcmp(name, "tcflow") == 0) return guest_posix_tcflow;
     if (strcmp(name, "time") == 0) return guest_posix_time;
-    if (strcmp(name, "exit") == 0 || strcmp(name, "_exit") == 0)
+    if (strcmp(name, "exit") == 0 || strcmp(name, "_exit") == 0 ||
+        strcmp(name, "_Exit") == 0)
         return guest_posix_exit;
-    if (strcmp(name, "atexit") == 0) return guest_posix_i32_zero;
     if (strcmp(name, "raise") == 0) return guest_posix_raise;
     if (strcmp(name, "kill") == 0) return guest_posix_kill;
     if (strcmp(name, "killpg") == 0) return guest_posix_killpg;
@@ -3027,12 +3598,14 @@ static exec_host_func guest_posix_function(const char *module,
     if (strcmp(name, "sigismember") == 0) return guest_posix_sigismember;
     if (strcmp(name, "sigprocmask") == 0) return guest_posix_sigprocmask;
     if (strcmp(name, "sigpending") == 0) return guest_posix_sigpending;
-    if (strcmp(name, "abort") == 0 || strcmp(name, "siglongjmp") == 0)
+    if (strcmp(name, "abort") == 0) return guest_posix_abort;
+    if (strcmp(name, "siglongjmp") == 0 || strcmp(name, "longjmp") == 0)
         return guest_posix_void;
-    if (strcmp(name, "sigsetjmp") == 0 || strcmp(name, "alarm") == 0 ||
-        strcmp(name, "setitimer") == 0 || strcmp(name, "sleep") == 0 ||
-        strcmp(name, "getrusage") == 0)
+    if (strcmp(name, "alarm") == 0) return guest_posix_alarm;
+    if (strcmp(name, "sigsetjmp") == 0 ||
+        strcmp(name, "setitimer") == 0 || strcmp(name, "sleep") == 0)
         return guest_posix_i32_zero;
+    if (strcmp(name, "getrusage") == 0) return guest_posix_getrusage;
     if (strcmp(name, "gettimeofday") == 0) return guest_posix_gettimeofday;
     if (strcmp(name, "umask") == 0) return guest_posix_umask;
     if (strcmp(name, "dup") == 0) return guest_posix_dup;
@@ -3069,6 +3642,7 @@ static exec_host_func guest_posix_function(const char *module,
     if (strcmp(name, "munmap") == 0) return guest_posix_munmap;
     if (strcmp(name, "msync") == 0) return guest_posix_msync;
     if (strcmp(name, "mprotect") == 0) return guest_posix_mprotect;
+    if (strcmp(name, "posix_madvise") == 0) return guest_posix_posix_madvise;
     if (strcmp(name, "fork") == 0) return guest_posix_fork;
     if (strcmp(name, "pipe") == 0) return guest_posix_pipe;
     if (strcmp(name, "getgroups") == 0 ||
@@ -3087,7 +3661,7 @@ static exec_host_control guest_posix_control(const char *module,
     if (strcmp(module, "env") != 0) return EXEC_HOST_CONTROL_NONE;
     if (strcmp(name, "sigsetjmp") == 0)
         return EXEC_HOST_CONTROL_SIGSETJMP;
-    if (strcmp(name, "siglongjmp") == 0)
+    if (strcmp(name, "siglongjmp") == 0 || strcmp(name, "longjmp") == 0)
         return EXEC_HOST_CONTROL_SIGLONGJMP;
     if (strcmp(name, "exit") == 0)
         return EXEC_HOST_CONTROL_EXIT;

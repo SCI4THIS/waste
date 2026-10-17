@@ -1,0 +1,15 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {"path": "/tmp/abort-probe.wasm", "source": "build/system-tests/abort/probe.wasm", "mode": 493},
+    {"path": "/tmp/abort.wast", "source": "src/system-tests/abort/abort.wast", "mode": 420}
+  ],
+  "events": [
+    {"after": "# ", "text": "/tmp/abort-probe.wasm > /tmp/abort-observations.txt; /bin/wast --verbose /tmp/abort.wast; printf '__ABORT_%s__\\n' \"$?\"\n"},
+    {"after": "__ABORT_0__\r\n", "text": "exit 0\n"}
+  ],
+  "contains": ["__ABORT_0__\r\n", "WAST: 8 PASS, 0 FAIL, 8 total"],
+  "assertions": 9,
+  "exitStatus": 0
+}

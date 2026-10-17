@@ -160,7 +160,8 @@ static exec_status parse_types(waste_exec_engine *eng, wasm_reader *sec, exec_er
         return exec_fail(err, EXEC_ERROR_FORMAT, "invalid type count");
     if (entries > EXEC_MAX_TYPES)
         return exec_fail(err, EXEC_ERROR_FORMAT, "too many types");
-    eng->types = (exec_func_type *)calloc(EXEC_MAX_TYPES, sizeof(*eng->types));
+    uint32_t capacity = entries;
+    eng->types = entries ? calloc(entries, sizeof(*eng->types)) : NULL;
     if (entries && !eng->types)
         return exec_fail(err, EXEC_ERROR_FORMAT, "type alloc failed");
     uint32_t index = 0;
@@ -176,6 +177,22 @@ static exec_status parse_types(waste_exec_engine *eng, wasm_reader *sec, exec_er
         }
         if (group_size > EXEC_MAX_TYPES - index)
             return exec_fail(err, EXEC_ERROR_FORMAT, "too many types");
+        uint32_t needed = index + group_size;
+        if (needed > capacity) {
+            uint32_t grown_capacity = capacity > EXEC_MAX_TYPES / 2 ?
+                EXEC_MAX_TYPES : capacity * 2;
+            if (grown_capacity < needed) grown_capacity = needed;
+            /* calloc checks size multiplication and initializes new entries.
+             * Preserve the existing allocation until growth succeeds. */
+            exec_func_type *grown = calloc(grown_capacity, sizeof(*grown));
+            if (!grown)
+                return exec_fail(err, EXEC_ERROR_FORMAT, "type alloc failed");
+            if (capacity)
+                memcpy(grown, eng->types, (size_t)capacity * sizeof(*grown));
+            free(eng->types);
+            eng->types = grown;
+            capacity = grown_capacity;
+        }
         uint32_t group_start = index;
         for (uint32_t member = 0; member < group_size; member++, index++) {
             if (form == 0x4e && !wasm_reader_read_u8(sec, &form))
@@ -220,9 +237,24 @@ static exec_status parse_types(waste_exec_engine *eng, wasm_reader *sec, exec_er
 static exec_status instantiate_imports(waste_exec_engine *eng,
                                        const wasm_module *module,
                                        const exec_imports *imports,
-                                       exec_error *err) {
-    if (!module || module->import_count > EXEC_MAX_FUNCS)
+                                       int analysis, exec_error *err) {
+    if (!module || module->import_count > WASM_MAX_IMPORTS)
         return exec_fail(err, EXEC_ERROR_FORMAT, "invalid import count");
+    /* Import kinds have separate index spaces. Reserve only function bindings,
+       including declarations when the module has no function section at all. */
+    uint32_t function_count = 0;
+    for (uint32_t i = 0; i < module->import_count; i++)
+        if (module->imports[i].kind == WASM_IMPORT_FUNCTION)
+            function_count++;
+    if (function_count) {
+        eng->function_imports = calloc(function_count,
+                                       sizeof(*eng->function_imports));
+        eng->declared_funcs = calloc(function_count,
+                                     sizeof(*eng->declared_funcs));
+        if (!eng->function_imports || !eng->declared_funcs)
+            return exec_fail(err, EXEC_ERROR_FORMAT,
+                             "function import metadata alloc failed");
+    }
     for (uint32_t i = 0; i < module->import_count; i++) {
         const wasm_import *declaration = &module->imports[i];
         const char *module_name = declaration->module;
@@ -231,7 +263,7 @@ static exec_status instantiate_imports(waste_exec_engine *eng,
             uint32_t type_index = declaration->descriptor.function.type_index;
             if (type_index >= eng->type_count ||
                 eng->types[type_index].kind != WAST_TYPE_FUNC ||
-                eng->import_func_count >= EXEC_MAX_FUNCS)
+                eng->import_func_count >= function_count)
                 return exec_fail(err, EXEC_ERROR_FORMAT, "invalid function import type");
             const exec_host_import *binding =
                 find_host_import(imports, module_name, name);
@@ -247,9 +279,9 @@ static exec_status instantiate_imports(waste_exec_engine *eng,
                 return EXEC_ERROR_FORMAT;
             }
             uint32_t index=eng->import_func_count++;
-            eng->import_func_types[index]=type_index; eng->import_funcs[index]=binding->function;
-            eng->import_host_data[index]=binding->host_data;
-            eng->import_controls[index]=binding->control;
+            eng->function_imports[index].type_index=type_index; eng->function_imports[index].function=binding->function;
+            eng->function_imports[index].host_data=binding->host_data;
+            eng->function_imports[index].control=binding->control;
         } else if (declaration->kind == WASM_IMPORT_TABLE) {
             wasm_valtype type = declaration->descriptor.table.element_type;
             const wasm_import_limits *limits =
@@ -263,12 +295,21 @@ static exec_status instantiate_imports(waste_exec_engine *eng,
                 ((flags&1u) && maximum<initial) ||
                 eng->table_count>=EXEC_MAX_TABLES) return exec_fail(err,EXEC_ERROR_FORMAT,"invalid table import type");
             exec_table *table=find_table_import(imports,module_name,name);
+            if (analysis) {
+                table = &eng->owned_tables[eng->table_count];
+                exec_status status = wasm_instance_allocate_table(
+                    table, eng, type, initial, maximum, flags, err);
+                if (status != EXEC_OK) return status;
+            }
             if (!table) return exec_fail(err,EXEC_ERROR_NOT_FOUND,"unresolved table import");
             if (table->is_64 != ((flags & 4u) != 0) ||
                 !same_value_type(eng,type,table->type_owner,table->element_type,0) ||
                 table->size<initial || ((flags&1u) && (!table->has_max || table->max_size>maximum)))
                 return exec_fail(err,EXEC_ERROR_FORMAT,"table import type mismatch");
-            eng->tables[eng->table_count++]=table; eng->import_table_count++;
+            eng->tables[eng->table_count++]=table;
+            /* Analysis owns its placeholder tables, so exec_free must include
+               them in the owned-table range. No analysis engine escapes. */
+            if (!analysis) eng->import_table_count++;
         } else if (declaration->kind == WASM_IMPORT_MEMORY) {
             const wasm_import_limits *limits =
                 &declaration->descriptor.memory.limits;
@@ -282,6 +323,13 @@ static exec_status instantiate_imports(waste_exec_engine *eng,
                 eng->memory_count >= WAST_MAX_MEMORIES)
                 return exec_fail(err,EXEC_ERROR_FORMAT,"invalid memory import type");
             exec_memory *memory=find_memory_import(imports,module_name,name);
+            if (analysis) {
+                memory = &eng->owned_memories[eng->memory_count];
+                exec_status status = wasm_instance_allocate_memory(
+                    memory, initial, maximum, flags, err);
+                if (status != EXEC_OK) return status;
+                eng->owns_memories[eng->memory_count] = 1;
+            }
             if (!memory) return exec_fail(err,EXEC_ERROR_NOT_FOUND,"unresolved memory import");
             uint64_t current_pages = memory->process_virtual_memory ?
                 memory->linear_pages : memory->pages;
@@ -300,6 +348,16 @@ static exec_status instantiate_imports(waste_exec_engine *eng,
                 mutability>1 || eng->global_count>=EXEC_MAX_GLOBALS)
                 return exec_fail(err,EXEC_ERROR_FORMAT,"invalid global import type");
             exec_global *global=find_global_import(imports,module_name,name);
+            if (analysis) {
+                if (is_reference_type(value_type) &&
+                    !is_nullable_reference_type(value_type))
+                    return exec_fail(err, EXEC_ERROR_UNSUPPORTED,
+                                     "analysis requires nullable imported references");
+                global = &eng->owned_globals[eng->global_count];
+                global->type_owner = eng;
+                global->value = default_value(value_type);
+                global->mutable_ = mutability;
+            }
             if (!global) return exec_fail(err,EXEC_ERROR_NOT_FOUND,"unresolved global import");
             if (!global_type_is_compat(global->type_owner,global->value.type,eng,value_type,mutability) ||
                 global->mutable_!=mutability)
@@ -314,6 +372,11 @@ static exec_status instantiate_imports(waste_exec_engine *eng,
                 eng->tag_count >= WAST_MAX_TAGS)
                 return exec_fail(err, EXEC_ERROR_FORMAT, "invalid tag import");
             exec_tag *tag = find_tag_import(imports, module_name, name);
+            if (analysis) {
+                tag = &eng->owned_tags[eng->tag_count];
+                tag->type_owner = eng;
+                tag->type_index = type_index;
+            }
             if (!tag)
                 return exec_fail(err, EXEC_ERROR_NOT_FOUND,
                                  "unresolved tag import");
@@ -333,18 +396,35 @@ static exec_status instantiate_imports(waste_exec_engine *eng,
 
 /* ---- Function section ---- */
 
-static exec_status parse_funcs(waste_exec_engine *eng, wasm_reader *sec, exec_error *err) {
+static exec_status parse_funcs(waste_exec_engine *eng, wasm_reader *sec,
+                               uint32_t limit, exec_error *err) {
     uint32_t count;
     if (!wasm_reader_read_u32(sec, &count))
         return exec_fail(err, EXEC_ERROR_FORMAT, "invalid function count");
-    if (count > EXEC_MAX_FUNCS) {
+    if (count > limit) {
         if (err) {
             err->status = EXEC_ERROR_FORMAT;
             snprintf(err->message, sizeof(err->message),
                      "too many functions: %u exceeds %u", count,
-                     (unsigned)EXEC_MAX_FUNCS);
+                     limit);
         }
         return EXEC_ERROR_FORMAT;
+    }
+    if (count > (size_t)(sec->end - sec->cursor))
+        return exec_fail(err, EXEC_ERROR_FORMAT, "truncated function types");
+    if (count > UINT32_MAX - eng->import_func_count)
+        return exec_fail(err, EXEC_ERROR_FORMAT,
+                         "combined function index space overflow");
+    if (count) {
+        uint32_t total = eng->import_func_count + count;
+        uint8_t *declarations = realloc(eng->declared_funcs,
+                                        (size_t)total * sizeof(*declarations));
+        if (!declarations)
+            return exec_fail(err, EXEC_ERROR_FORMAT,
+                             "function declaration metadata alloc failed");
+        memset(declarations + eng->import_func_count, 0,
+               (size_t)count * sizeof(*declarations));
+        eng->declared_funcs = declarations;
     }
     eng->funcs = (exec_func *)calloc(count, sizeof(*eng->funcs));
     if (count && !eng->funcs)
@@ -557,7 +637,7 @@ static exec_status instantiate_constexpr(waste_exec_engine *eng,
                 return exec_fail(err, EXEC_ERROR_FORMAT,
                                  "invalid ref.func initializer");
             type_index = function < eng->import_func_count ?
-                eng->import_func_types[function] :
+                eng->function_imports[function].type_index :
                 eng->funcs[function - eng->import_func_count].type_index;
             value.value.type = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE +
                                               type_index);
@@ -790,7 +870,7 @@ static exec_status parse_start(waste_exec_engine *eng, wasm_reader *sec, exec_er
     if (!wasm_reader_read_u32(sec, &func_index) || func_index >= eng->import_func_count + eng->func_count)
         return exec_fail(err, EXEC_ERROR_FORMAT, "invalid start function index");
     uint32_t type_index = func_index < eng->import_func_count ?
-        eng->import_func_types[func_index] :
+        eng->function_imports[func_index].type_index :
         eng->funcs[func_index - eng->import_func_count].type_index;
     if (type_index >= eng->type_count ||
         eng->types[type_index].param_count != 0 ||
@@ -954,11 +1034,11 @@ static exec_status parse_elements(waste_exec_engine *eng, wasm_reader *sec,
                 exec_table_element slot = {eng, func_idx,
                     (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE +
                         (func_idx < eng->import_func_count ?
-                         eng->import_func_types[func_idx] :
+                         eng->function_imports[func_idx].type_index :
                          eng->funcs[func_idx - eng->import_func_count].type_index)),
                     (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE +
                         (func_idx < eng->import_func_count ?
-                         eng->import_func_types[func_idx] :
+                         eng->function_imports[func_idx].type_index :
                          eng->funcs[func_idx - eng->import_func_count].type_index))};
                 eng->declared_funcs[func_idx] = 1;
                 eng->elem_values[segment][item] = slot;
@@ -993,32 +1073,59 @@ static exec_status parse_elements(waste_exec_engine *eng, wasm_reader *sec,
 /* ---- Code section ---- */
 
 
-static exec_status parse_body(waste_exec_engine *eng, exec_func *func, wasm_reader *body, exec_error *err) {
+static exec_status parse_body(waste_exec_engine *eng, exec_func *func,
+                              wasm_reader *body, exec_module_footprint *measure,
+                              int validate, exec_error *err) {
     uint32_t local_groups;
     if (!wasm_reader_read_u32(body, &local_groups))
         return exec_fail(err, EXEC_ERROR_FORMAT, "invalid local declarations");
+    /* Validate and count before allocating. Zero-sized groups need validation
+       too, and a compact declaration can otherwise request enormous storage. */
+    wasm_reader declarations = *body;
+    uint32_t local_count = 0;
     for (uint32_t group = 0; group < local_groups; group++) {
         uint32_t count;
         wasm_valtype value_type;
-        if (!wasm_reader_read_u32(body, &count) || !wasm_decode_valtype(body, &value_type) ||
+        if (!wasm_reader_read_u32(&declarations, &count) ||
+            !wasm_decode_valtype(&declarations, &value_type) ||
             !value_type_is_defined(eng, value_type) ||
-            count > EXEC_MAX_LOCALS - func->local_count)
+            count > EXEC_MAX_LOCALS - local_count)
             return exec_fail(err, EXEC_ERROR_FORMAT, "invalid local declaration");
-        for (uint32_t i = 0; i < count; i++) func->locals[func->local_count++] = value_type;
+        local_count += count;
+    }
+    if (local_count > EXEC_MAX_LOCALS -
+            (uint32_t)eng->types[func->type_index].param_count)
+        return exec_fail(err, EXEC_ERROR_FORMAT, "too many combined parameters and locals");
+    if (local_count) {
+        func->locals = calloc(local_count, sizeof(*func->locals));
+        if (!func->locals)
+            return exec_fail(err, EXEC_ERROR_FORMAT, "local alloc failed");
+    }
+    /* Replay the bounded, validated declarations into the exact-sized array.
+       The function table owns it, including on later body/validation failure. */
+    for (uint32_t group = 0; group < local_groups; group++) {
+        uint32_t count;
+        wasm_valtype value_type;
+        if (!wasm_reader_read_u32(body, &count) ||
+            !wasm_decode_valtype(body, &value_type))
+            return exec_fail(err, EXEC_ERROR_FORMAT, "invalid local declaration");
+        for (uint32_t i = 0; i < count; i++)
+            func->locals[func->local_count++] = value_type;
     }
 
-    /* Allocate instruction buffer based on remaining body size */
-    size_t capacity = (size_t)(body->end - body->cursor);
-    exec_instr *code = (exec_instr *)calloc(capacity + 1, sizeof(*code));
-    if (!code)
-        return exec_fail(err, EXEC_ERROR_FORMAT, "code alloc failed");
+    /* Each instruction consumes at least one byte, but immediates are not
+       instructions. Grow by decoded count rather than reserving by byte size. */
+    size_t instruction_bound = (size_t)(body->end - body->cursor);
+    size_t capacity = 0;
+    uint64_t peak_buffer_bytes = 0;
+    exec_instr *code = NULL;
 
 #define FREE_CODE(c, sz) do { \
     for (uint32_t _i = 0; _i < (sz); _i++) { \
         if ((c)[_i].opcode == 0x0e) { \
             uint32_t *_d; memcpy(&_d, (c)[_i].v128_imm.bytes, sizeof(_d)); free(_d); \
         } \
-        free((c)[_i].catches); \
+        if ((c)[_i].opcode == 0x1f) free((c)[_i].catches); \
     } \
     free(c); \
 } while(0)
@@ -1026,7 +1133,31 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, wasm_read
     uint32_t code_size = 0;
     uint32_t controls[EXEC_MAX_CONTROL];
     uint32_t control_size = 0;
+    int function_ended = 0;
     while (body->cursor < body->end) {
+        /* Grow before decoding so an allocation failure cannot strand the
+           current instruction's branch-table or catch payload. Controls hold
+           indexes, never pointers into this movable buffer. */
+        if (code_size == capacity) {
+            size_t next_capacity = capacity ? capacity * 2 : 16;
+            if (next_capacity < capacity || next_capacity > instruction_bound)
+                next_capacity = instruction_bound;
+            if (next_capacity <= capacity ||
+                next_capacity > SIZE_MAX / sizeof(*code)) {
+                FREE_CODE(code, code_size);
+                return exec_fail(err, EXEC_ERROR_FORMAT,
+                                 "instruction allocation limit exceeded");
+            }
+            exec_instr *next = realloc(code, next_capacity * sizeof(*code));
+            if (!next) {
+                FREE_CODE(code, code_size);
+                return exec_fail(err, EXEC_ERROR_FORMAT, "code alloc failed");
+            }
+            uint64_t peak = ((uint64_t)capacity + next_capacity) * sizeof(*code);
+            if (peak > peak_buffer_bytes) peak_buffer_bytes = peak;
+            code = next;
+            capacity = next_capacity;
+        }
         uint8_t byte;
         if (!wasm_reader_read_u8(body, &byte)) {
             FREE_CODE(code, code_size);
@@ -1034,11 +1165,11 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, wasm_read
         }
         exec_instr instr;
         memset(&instr, 0, sizeof(instr));
-        instr.block_type_index = -1;
         if (byte == 0x00 || byte == 0x01) {
             instr.opcode = byte;
         } else if (byte == 0x02 || byte == 0x03 || byte == 0x04 ||
                    byte == 0x1f) {
+            instr.block_type_index = -1;
             uint8_t block_type;
             if (!wasm_reader_read_u8(body, &block_type)) { FREE_CODE(code, code_size); return exec_fail(err, EXEC_ERROR_FORMAT, "missing block type"); }
             if (control_size >= EXEC_MAX_CONTROL) {
@@ -1050,9 +1181,9 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, wasm_read
             int is_valtype = wasm_decode_byte_valtype(
                 block_type, &direct_block_result);
             if (block_type == 0x40) {
-                instr.v128_imm.bytes[0] = 0; instr.v128_imm.bytes[1] = 0;
+                instr.block_param_count = 0; instr.block_result_count = 0;
             } else if (is_valtype) {
-                instr.v128_imm.bytes[0] = 0; instr.v128_imm.bytes[1] = 1;
+                instr.block_param_count = 0; instr.block_result_count = 1;
                 instr.block_result_type = direct_block_result;
                 instr.has_block_result_type = 1;
             } else {
@@ -1062,8 +1193,8 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, wasm_read
                     FREE_CODE(code, code_size); return exec_fail(err, EXEC_ERROR_FORMAT, "invalid block type index");
                 }
                 exec_func_type *block_sig = &eng->types[type_index];
-                instr.v128_imm.bytes[0] = (uint8_t)block_sig->param_count;
-                instr.v128_imm.bytes[1] = (uint8_t)block_sig->result_count;
+                instr.block_param_count = (uint8_t)block_sig->param_count;
+                instr.block_result_count = (uint8_t)block_sig->result_count;
                 instr.block_type_index = type_index;
             }
             if (byte == 0x1f) {
@@ -1321,7 +1452,7 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, wasm_read
                     return exec_fail(err, EXEC_ERROR_FORMAT,
                                      "invalid GC heap type");
                 }
-                instr.block_type_index = heap_type;
+                instr.heap_type = heap_type;
             } else if (sub_op == 0x18 || sub_op == 0x19) {
                 uint8_t flags;
                 int32_t source_type, target_type;
@@ -1333,9 +1464,9 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, wasm_read
                     return exec_fail(err, EXEC_ERROR_FORMAT,
                                      "invalid br_on_cast immediate");
                 }
-                instr.alignment = flags;
-                instr.block_type_index = source_type;
-                instr.lane_index = (uint32_t)target_type;
+                instr.cast_flags = flags;
+                instr.heap_type = source_type;
+                instr.target_heap_type = target_type;
             }
         } else if (byte == 0xFD) {
             uint32_t simd_op;
@@ -1418,42 +1549,74 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func, wasm_read
                     else code[code[open].u32_imm - 1].u32_imm = code_size - 1;
                 }
                 continue;
-            } else break; /* function end */
+            } else { function_ended = 1; break; }
         } else {
             FREE_CODE(code, code_size);
             return exec_fail(err, EXEC_ERROR_UNSUPPORTED, "unsupported opcode");
         }
-        if (code_size >= (uint32_t)(capacity + 1)) {
-            FREE_CODE(code, code_size);
-            return exec_fail(err, EXEC_ERROR_FORMAT, "instruction limit exceeded");
-        }
         code[code_size++] = instr;
     }
 
-    wasm_validation_result validation =
-        wasm_validate_function(eng, func, code, code_size);
-    if (validation.status != WASM_VALIDATION_VALID) {
+    if (!function_ended || control_size ||
+        body->cursor != body->end) {
         FREE_CODE(code, code_size);
-        if (err) {
-            err->status = validation.status == WASM_VALIDATION_INVALID
+        return exec_fail(err, EXEC_ERROR_FORMAT,
+                         "missing function end or trailing body bytes");
+    }
+    /* Shrinking is optional: failure preserves the valid allocation and its
+       payload ownership. Validation may retain only indexes into this array. */
+    if (code_size && code_size < capacity) {
+        uint64_t peak = ((uint64_t)capacity + code_size) * sizeof(*code);
+        if (peak > peak_buffer_bytes) peak_buffer_bytes = peak;
+        exec_instr *trimmed = realloc(code, (size_t)code_size * sizeof(*code));
+        if (trimmed) { code = trimmed; capacity = code_size; }
+    }
+    if (!measure || validate) {
+        wasm_validation_result validation =
+            wasm_validate_function(eng, func, code, code_size);
+        if (validation.status != WASM_VALIDATION_VALID) {
+            FREE_CODE(code, code_size);
+            if (validation.status == WASM_VALIDATION_ALLOCATION_FAILED)
+                return exec_fail(err, EXEC_ERROR_UNSUPPORTED,
+                                 "validation control workspace allocation failed");
+            if (err) {
+                err->status = validation.status == WASM_VALIDATION_INVALID
+                    ? EXEC_ERROR_FORMAT : EXEC_ERROR_UNSUPPORTED;
+                snprintf(err->message, sizeof(err->message),
+                         "%s instruction %u (opcode 0x%x, subopcode 0x%x)",
+                         validation.status == WASM_VALIDATION_INVALID
+                             ? "invalid function body at"
+                             : "unsupported validation for",
+                         validation.instruction, validation.opcode,
+                         validation.subopcode);
+            }
+            return validation.status == WASM_VALIDATION_INVALID
                 ? EXEC_ERROR_FORMAT : EXEC_ERROR_UNSUPPORTED;
-            snprintf(err->message, sizeof(err->message),
-                     "%s instruction %u (opcode 0x%x, subopcode 0x%x)",
-                     validation.status == WASM_VALIDATION_INVALID
-                         ? "invalid function body at"
-                         : "unsupported validation for",
-                     validation.instruction, validation.opcode,
-                     validation.subopcode);
         }
-        return validation.status == WASM_VALIDATION_INVALID
-            ? EXEC_ERROR_FORMAT : EXEC_ERROR_UNSUPPORTED;
+    }
+    if (measure) {
+        measure->instructions += code_size;
+        measure->instruction_bytes += (uint64_t)capacity * sizeof(*code);
+        measure->encoded_instruction_bytes += instruction_bound;
+        measure->local_bytes += (uint64_t)func->local_count * sizeof(*func->locals);
+        if (peak_buffer_bytes > measure->peak_function_buffer_bytes) {
+            measure->peak_function_buffer_bytes = peak_buffer_bytes;
+            measure->largest_function = measure->measured_functions;
+        }
+        for (uint32_t i = 0; i < code_size; i++) {
+            if (code[i].opcode == 0x0e)
+                measure->payload_bytes += ((uint64_t)code[i].u32_imm + 1) * sizeof(uint32_t);
+            if (code[i].opcode == 0x1f)
+                measure->payload_bytes += (uint64_t)(code[i].catch_count ? code[i].catch_count : 1) * sizeof(exec_catch);
+        }
     }
     func->code      = code;
     func->code_size = code_size;
     return EXEC_OK;
 }
 
-static exec_status parse_code(waste_exec_engine *eng, wasm_reader *sec, exec_error *err) {
+static exec_status parse_code(waste_exec_engine *eng, wasm_reader *sec,
+                               exec_module_footprint *measure, exec_error *err) {
     uint32_t count;
     if (!wasm_reader_read_u32(sec, &count) || count != eng->func_count)
         return exec_fail(err, EXEC_ERROR_FORMAT, "code/function count mismatch");
@@ -1463,7 +1626,8 @@ static exec_status parse_code(waste_exec_engine *eng, wasm_reader *sec, exec_err
         if (!wasm_reader_read_u32(sec, &body_size) ||
             !wasm_reader_read_subreader(sec, body_size, &body))
             return exec_fail(err, EXEC_ERROR_FORMAT, "truncated function body");
-        exec_status st = parse_body(eng, &eng->funcs[i], &body, err);
+        const uint8_t *encoded = body.cursor;
+        exec_status st = parse_body(eng, &eng->funcs[i], &body, measure, 1, err);
         if (st != EXEC_OK) {
             if (err && err->message[0]) {
                 char detail[sizeof(err->message)];
@@ -1479,16 +1643,68 @@ static exec_status parse_code(waste_exec_engine *eng, wasm_reader *sec, exec_err
             }
             return st;
         }
+        if (measure) {
+            measure->measured_functions++;
+            exec_dispose_function(&eng->funcs[i]);
+        } else {
+            /* Copy before returning the caller's source buffer. Validation
+             * still visits every instruction, including unused functions;
+             * only the retained execution representation is deferred. */
+            exec_func *function = &eng->funcs[i];
+            function->encoded_body = malloc(body_size);
+            if (!function->encoded_body)
+                return exec_fail(err, EXEC_ERROR_FORMAT,
+                                 "encoded function allocation failed");
+            memcpy(function->encoded_body, encoded, body_size);
+            function->encoded_body_size = body_size;
+            exec_dispose_function_code(function);
+        }
     }
+    return EXEC_OK;
+}
+
+exec_status exec_materialize_function(waste_exec_engine *engine,
+                                      uint32_t defined_index,
+                                      exec_error *error) {
+    if (!engine || defined_index >= engine->func_count)
+        return exec_fail(error, EXEC_ERROR_TRAP, "unknown defined function");
+    exec_func *function = &engine->funcs[defined_index];
+    if (!function->validated)
+        return exec_fail(error, EXEC_ERROR_TRAP,
+                         "attempted to execute an unvalidated function");
+    if (!function->encoded_body) return EXEC_OK;
+
+    /* Do not expose partial decoding to clones or leave the original row
+     * damaged on allocation failure. Decoding cannot yield or invoke imports.
+     * Revalidation also fills the immutable instruction-resolution metadata. */
+    exec_func decoded = *function;
+    decoded.locals = NULL;
+    decoded.local_count = 0;
+    decoded.code = NULL;
+    decoded.code_size = 0;
+    decoded.encoded_body = NULL;
+    decoded.encoded_body_size = 0;
+    decoded.validated = 0;
+    wasm_reader body = {function->encoded_body, function->encoded_body,
+                       function->encoded_body + function->encoded_body_size,
+                       WASM_LEB_OK};
+    exec_status status = parse_body(engine, &decoded, &body, NULL, 1, error);
+    if (status != EXEC_OK) {
+        exec_dispose_function(&decoded);
+        return status;
+    }
+    free(function->locals);
+    free(function->encoded_body);
+    *function = decoded;
     return EXEC_OK;
 }
 
 /* ---- Module loader ---- */
 
-exec_status exec_load_decoded_with_imports(
+static exec_status load_decoded_with_imports(
         const uint8_t *bytes, size_t size, const wasm_module *module,
         const exec_imports *imports, waste_exec_engine **eng_out,
-        exec_error *err) {
+        exec_module_footprint *measure, exec_error *err) {
     if (!bytes || !module || module->source != bytes ||
         module->source_size != size || !eng_out)
         return exec_fail(err, EXEC_ERROR_FORMAT, "null input");
@@ -1581,16 +1797,16 @@ exec_status exec_load_decoded_with_imports(
             case 1:  st = parse_types(eng, &sec, err);   break;
             case 2:
                 sec.cursor = sec.end;
-                st = instantiate_imports(eng, module, imports, err);
+                st = instantiate_imports(eng, module, imports, measure != NULL, err);
                 break;
-            case 3:  st = parse_funcs(eng, &sec, err);   break;
+            case 3:  st = parse_funcs(eng, &sec, measure ? UINT32_MAX : EXEC_MAX_FUNCS, err); break;
             case 4:  st = parse_tables(eng, &sec, err);  break;
             case 5:  st = parse_memory(eng, &sec, err);  break;
             case 6:  st = parse_globals(eng, &sec, err); break;
             case 7:  st = parse_exports(eng, &sec, err); break;
             case 8:  st = parse_start(eng, &sec, err);   break;
             case 9:  st = parse_elements(eng, &sec, err); break;
-            case 10: st = parse_code(eng, &sec, err);    break;
+            case 10: st = parse_code(eng, &sec, measure, err);    break;
             case 11: st = parse_data(eng, &sec, err);    break;
             case 12:
                 if (!wasm_reader_read_u32(&sec, &eng->declared_data_count))
@@ -1601,6 +1817,15 @@ exec_status exec_load_decoded_with_imports(
                 break;
             case 13: st = parse_tags(eng, &sec, err); break;
             default: st = exec_fail(err, EXEC_ERROR_UNSUPPORTED, "unsupported standard section"); break;
+        }
+        if (measure) {
+            measure->defined_functions = eng->func_count;
+            measure->imported_functions = eng->import_func_count;
+            measure->metadata_bytes = sizeof(*eng) +
+                (uint64_t)eng->type_count * sizeof(*eng->types) +
+                (uint64_t)eng->func_count * sizeof(*eng->funcs) +
+                (uint64_t)eng->import_func_count * sizeof(exec_function_import) +
+                (uint64_t)eng->import_func_count + eng->func_count;
         }
         if (st != EXEC_OK) {
             exec_free(eng);
@@ -1621,6 +1846,13 @@ exec_status exec_load_decoded_with_imports(
             "data count section required or inconsistent";
         exec_free(eng);
         return exec_fail(err, EXEC_ERROR_FORMAT, message);
+    }
+
+    /* Analysis owns only private objects and discards decoded bodies. Never
+       run start code or expose this non-executable instance to a caller. */
+    if (measure) {
+        exec_free(eng);
+        return EXEC_OK;
     }
 
     if (eng->has_start && !eng->instantiation_trapped) {
@@ -1655,6 +1887,166 @@ exec_status exec_load_decoded_with_imports(
 
     *eng_out = eng;
     return EXEC_OK;
+}
+
+exec_status exec_load_decoded_with_imports(
+        const uint8_t *bytes, size_t size, const wasm_module *module,
+        const exec_imports *imports, waste_exec_engine **eng_out,
+        exec_error *err) {
+    return load_decoded_with_imports(bytes, size, module, imports, eng_out,
+                                     NULL, err);
+}
+
+static exec_status reject_analysis_import(void *data, const wasm_value *args,
+        int count, wasm_value *results, int *result_count, exec_error *err,
+        const waste_exec_engine *caller) {
+    (void)data; (void)args; (void)count; (void)results;
+    (void)result_count; (void)caller;
+    return exec_fail(err, EXEC_ERROR_UNSUPPORTED,
+                     "stream validation cannot execute imports");
+}
+
+exec_status exec_validate_functions_streamed(const wasm_module *module,
+        exec_module_footprint *measure, exec_error *err) {
+    if (!measure) return exec_fail(err, EXEC_ERROR_FORMAT, "null validation metrics");
+    memset(measure, 0, sizeof(*measure));
+    if (!module || !module->fully_decoded || !module->source ||
+        module->source_size < 8 || (module->section_count && !module->sections) ||
+        module->import_count > WASM_MAX_IMPORTS ||
+        (module->import_count && !module->imports))
+        return exec_fail(err, EXEC_ERROR_FORMAT, "stream validation requires decoded module");
+    /* Imports are inert functions and engine-owned placeholder objects.
+       No real providers or caller-owned state are involved. */
+    exec_host_import *bindings = module->import_count ?
+        calloc(module->import_count, sizeof(*bindings)) : NULL;
+    if (module->import_count && !bindings)
+        return exec_fail(err, EXEC_ERROR_FORMAT, "analysis bindings alloc failed");
+    uint32_t function_count = 0;
+    for (uint32_t i = 0; i < module->import_count; i++) {
+        if (module->imports[i].kind != WASM_IMPORT_FUNCTION) continue;
+        bindings[function_count].module = module->imports[i].module;
+        bindings[function_count].name = module->imports[i].name;
+        bindings[function_count++].function = reject_analysis_import;
+    }
+    exec_imports imports = {.functions = bindings,
+                           .function_count = function_count};
+    waste_exec_engine *unused = NULL;
+    exec_status status = load_decoded_with_imports(
+        module->source, module->source_size, module, &imports, &unused, measure, err);
+    free(bindings);
+    return status;
+}
+
+/* Streaming diagnostic. Only type/function declarations and instruction bodies
+ * are interpreted; no imported objects or guest memories are instantiated. */
+exec_status exec_measure_module(const wasm_module *module,
+                               exec_module_footprint *measure,
+                               exec_error *err) {
+    if (!module || !module->fully_decoded || !measure ||
+        !module->source || module->source_size < 8 ||
+        (module->section_count && !module->sections) ||
+        (module->import_count && !module->imports))
+        return exec_fail(err, EXEC_ERROR_FORMAT, "footprint requires a decoded module");
+    memset(measure, 0, sizeof(*measure));
+    waste_exec_engine *eng = calloc(1, sizeof(*eng));
+    if (!eng) return exec_fail(err, EXEC_ERROR_FORMAT, "footprint engine alloc failed");
+    exec_status status = EXEC_OK;
+    uint32_t tables = 0, tags = 0;
+    for (uint32_t i = 0; i < module->import_count; i++) {
+        if (module->imports[i].kind == WASM_IMPORT_FUNCTION) eng->import_func_count++;
+        if (module->imports[i].kind == WASM_IMPORT_TABLE) tables++;
+        if (module->imports[i].kind == WASM_IMPORT_TAG) tags++;
+    }
+    measure->imported_functions = eng->import_func_count;
+    if (tables > EXEC_MAX_TABLES || tags > WAST_MAX_TAGS) {
+        status = exec_fail(err, EXEC_ERROR_UNSUPPORTED, "footprint import resource limit");
+        goto done;
+    }
+    eng->table_count = tables;
+    eng->tag_count = tags;
+    if (eng->import_func_count) {
+        eng->declared_funcs = calloc(eng->import_func_count, 1);
+        if (!eng->declared_funcs) {
+            status = exec_fail(err, EXEC_ERROR_FORMAT, "footprint declarations alloc failed");
+            goto done;
+        }
+    }
+    uint8_t seen[14] = {0}, last_rank = 0;
+    for (uint32_t i = 0; i < module->section_count; i++) {
+        const wasm_section *section = &module->sections[i];
+        uint8_t id = section->id;
+        if (section->payload_offset > module->source_size ||
+            section->payload_size > module->source_size - section->payload_offset ||
+            id > 13 || (id && seen[id])) {
+            status = exec_fail(err, EXEC_ERROR_FORMAT, "invalid footprint section directory");
+            goto done;
+        }
+        if (id) {
+            uint8_t rank = id <= 5 ? id : id == 13 ? 6 :
+                id <= 9 ? (uint8_t)(id + 1) : id == 12 ? 11 : id == 10 ? 12 : 13;
+            if (rank < last_rank) {
+                status = exec_fail(err, EXEC_ERROR_FORMAT, "out-of-order footprint section");
+                goto done;
+            }
+            last_rank = rank;
+            seen[id] = 1;
+        }
+        wasm_reader sec = {.start = module->source,
+            .cursor = module->source + section->payload_offset,
+            .end = module->source + section->payload_offset + section->payload_size,
+            .leb_status = WASM_LEB_OK};
+        if (id == 1) status = parse_types(eng, &sec, err);
+        else if (id == 3) {
+            /* Analysis may exceed the execution cap, but each type index still
+               requires a source byte before any count-sized allocation. */
+            status = parse_funcs(eng, &sec, UINT32_MAX, err);
+            measure->defined_functions = eng->func_count;
+        } else if (id == 4 || id == 13) {
+            uint32_t count, prior = id == 4 ? eng->table_count : eng->tag_count;
+            uint32_t limit = id == 4 ? EXEC_MAX_TABLES : WAST_MAX_TAGS;
+            if (!wasm_reader_read_u32(&sec, &count) || count > limit - prior) {
+                status = exec_fail(err, EXEC_ERROR_UNSUPPORTED, "footprint table/tag count limit");
+            } else {
+                if (id == 4) eng->table_count += count;
+                else eng->tag_count += count;
+                sec.cursor = sec.end;
+            }
+        } else if (id == 10) {
+            uint32_t count;
+            if (!wasm_reader_read_u32(&sec, &count) || count != eng->func_count) {
+                status = exec_fail(err, EXEC_ERROR_FORMAT, "code/function count mismatch");
+                goto done;
+            }
+            for (uint32_t function = 0; function < count; function++) {
+                uint32_t size;
+                wasm_reader body;
+                if (!wasm_reader_read_u32(&sec, &size) ||
+                    !wasm_reader_read_subreader(&sec, size, &body)) {
+                    status = exec_fail(err, EXEC_ERROR_FORMAT, "truncated footprint body");
+                    goto done;
+                }
+                status = parse_body(eng, &eng->funcs[function], &body, measure, 0, err);
+                if (status != EXEC_OK) goto done;
+                measure->measured_functions++;
+                exec_dispose_function(&eng->funcs[function]);
+            }
+        } else sec.cursor = sec.end;
+        if (status != EXEC_OK) goto done;
+        if (sec.cursor != sec.end) {
+            status = exec_fail(err, EXEC_ERROR_FORMAT, "trailing footprint section bytes");
+            goto done;
+        }
+    }
+    if (measure->measured_functions != eng->func_count)
+        status = exec_fail(err, EXEC_ERROR_FORMAT, "missing footprint code section");
+ done:
+    measure->metadata_bytes = sizeof(*eng) +
+        (uint64_t)eng->type_count * sizeof(*eng->types) +
+        (uint64_t)eng->func_count * sizeof(*eng->funcs) +
+        (uint64_t)eng->import_func_count * sizeof(exec_function_import) +
+        (uint64_t)eng->import_func_count + eng->func_count;
+    exec_free(eng);
+    return status;
 }
 
 exec_status exec_load_with_imports(const uint8_t *bytes, size_t size,

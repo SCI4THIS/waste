@@ -105,6 +105,16 @@ const plain = value => JSON.parse(JSON.stringify(value));
     await assert.rejects(runner.run({jobs: 0}), /Invalid jobs/);
     await assert.rejects(runner.run({timeoutGroups: {unknown: 10}}), /Unknown timeout/);
   }
+  // Mounted distribution paths may differ from stable source identities.
+  const moved = structuredClone([definitions[0], definitions[7], definitions[8]]);
+  for (const item of moved)
+    item.record.path = "/root/test/html-rt/" + item.record.id.replaceAll("/", "-");
+  const relocatedRunner = suite(filesystem(moved));
+  const relocated = await relocatedRunner.run();
+  assert.deepEqual(plain(relocated.tests.map(record => record.identity)), moved.map(item => item.record.id));
+  assert.deepEqual(plain(relocated.tests.map(record => record.status)), ["PASS", "SKIP", "SKIP"]);
+  assert.equal(relocated.tests[0].passed, 3);
+  assert.equal((await relocatedRunner.run({files: [moved[0].record.path]})).tests.length, 1);
   // Keep intentional in-script aliases while isolating host memory across
   // scripts, independent of manifest order and concurrent scheduling.
   const memoryTests = definitions.slice(4, 6);
@@ -164,6 +174,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
   for (const expected of ["synthetic/unknown.wast", baseline + "\n" + baseline])
     await assert.rejects(suite(filesystem(), expected).list(), /Unknown or duplicate/);
   for (const mutate of [m => { m.format = 2; }, m => { m.tests[0].path = "/tmp/test"; },
+    m => { m.tests[0].path = "/root/test/../escape.wast"; },
     m => { m.tests[1].id = m.tests[0].id; }, m => { m.tests[0].expectFailure = "true"; }])
     await assert.rejects(suite(filesystem(definitions, {}, mutate)).list());
   const mounted = suite(treeVfs(path.join(root, "src/vfs")),

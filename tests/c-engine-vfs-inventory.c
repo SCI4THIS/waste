@@ -66,7 +66,11 @@ static void capacity_check(void) {
     assert(vfs.count == WASTE_VFS_MAX_ENTRIES); // Failed replacement preserves input.
     posix_kernel *kernel = posix_kernel_create(0);
     assert(kernel && !waste_vfs_mount(kernel, &vfs));
-    for (uint32_t i = 0; i < VFS_RUNTIME_NODE_RESERVE; i++) {
+    /* Built-in runtime nodes also consume the configured reserve. Discover
+     * their occupancy rather than duplicating the kernel's bootstrap list. */
+    uint32_t remaining = POSIX_PATH_NODE_MAX - kernel->path_node_count;
+    assert(remaining > 0 && remaining <= VFS_RUNTIME_NODE_RESERVE);
+    for (uint32_t i = 0; i < remaining; i++) {
         char path[32];
         int n = snprintf(path, sizeof(path), "/runtime-%u", i);
         int fd = posix_kernel_open(kernel, (const uint8_t *)path, (size_t)n,

@@ -320,7 +320,7 @@ static void invalidate_jump_frame(waste_exec_engine *eng, uint32_t depth,
 }
 
 static exec_status save_jump_frame(waste_exec_context *ctx,
-                                   uint32_t environment) {
+                                   uint32_t environment, int save_mask) {
     waste_exec_engine *eng = ctx->engine;
     exec_jump_snapshot *snapshot = (void *)0;
     /* Buffers are copied by Bash while nested activations temporarily reuse
@@ -330,6 +330,12 @@ static exec_status save_jump_frame(waste_exec_context *ctx,
     if (!eng->memory || exec_memory_read(eng->memory, environment, token_bytes,
                                         sizeof(token_bytes), ctx->error) != EXEC_OK)
         return exec_fail(ctx->error, EXEC_ERROR_TRAP, "invalid setjmp buffer");
+    posix_sigset mask = {{0}};
+    exec_execution_control *control = eng->execution_control;
+    if (save_mask && (!control || !control->signal_mask_get ||
+        control->signal_mask_get(control->signal_context, &mask)))
+        return exec_fail(ctx->error, EXEC_ERROR_TRAP,
+                         "setjmp signal mask unavailable");
     if (eng->next_jump_token == UINT32_MAX)
         return exec_fail(ctx->error, EXEC_ERROR_TRAP, "setjmp token exhausted");
     for (uint32_t i = 0; i < eng->jump_snapshot_count; i++) {
@@ -407,6 +413,8 @@ static exec_status save_jump_frame(waste_exec_context *ctx,
         memcpy(snapshot->controls, ctx->controls,
                (size_t)*ctx->control_top * sizeof(*ctx->controls));
     snapshot->local_count = ctx->local_count;
+    snapshot->has_signal_mask = save_mask != 0;
+    snapshot->signal_mask = mask;
     return EXEC_OK;
 }
 
@@ -426,6 +434,12 @@ static int restore_jump_frame(waste_exec_context *ctx) {
             continue;
         if (snapshot->local_count != ctx->local_count) {
             exec_fail(err, EXEC_ERROR_TRAP, "setjmp frame shape changed");
+            return -1;
+        }
+        exec_execution_control *control = eng->execution_control;
+        if (snapshot->has_signal_mask && (!control || !control->signal_mask_set ||
+            control->signal_mask_set(control->signal_context, &snapshot->signal_mask))) {
+            exec_fail(err, EXEC_ERROR_TRAP, "longjmp signal mask unavailable");
             return -1;
         }
         *ctx->pc = snapshot->pc;
@@ -647,8 +661,8 @@ int execute_op_block(waste_exec_context *ctx, const exec_instr *instr) {
     }
     if (*ctx->control_top >= EXEC_MAX_CONTROL)
         return exec_fail(ctx->error, EXEC_ERROR_TRAP, "control stack overflow");
-    int parameter_count = instr->v128_imm.bytes[0];
-    int result_count_for_block = instr->v128_imm.bytes[1];
+    int parameter_count = instr->block_param_count;
+    int result_count_for_block = instr->block_result_count;
     if (parameter_count > ctx->operand_stack->top)
         return exec_fail(ctx->error, EXEC_ERROR_TRAP, "block parameters missing");
     ctx->controls[(*ctx->control_top)++] = (exec_control){
@@ -705,14 +719,14 @@ int execute_op_branch(waste_exec_context *ctx, const exec_instr *instr) {
         }
     } else if (instr->opcode == 0xfb) {
         wasm_value reference;
-        int32_t target_heap = (int32_t)instr->lane_index;
+        int32_t target_heap = instr->target_heap_type;
         if (!stack_pop(ctx->operand_stack, &reference) ||
             !is_reference_type(reference.type))
             return exec_fail(ctx->error, EXEC_ERROR_TRAP,
                              "br_on_cast reference missing");
         int matches = reference_matches_heap(
             ctx->engine, &reference, target_heap,
-            (instr->alignment & 2u) != 0);
+            (instr->cast_flags & 2u) != 0);
         int take = instr->simd_op == 0x18 ? matches : !matches;
         if (!stack_push(ctx->operand_stack, reference))
             return exec_fail(ctx->error, EXEC_ERROR_TRAP, "stack overflow");
@@ -815,7 +829,7 @@ int execute_op_ref_func(waste_exec_context *ctx, const exec_instr *instr) {
     wasm_value value; memset(&value, 0, sizeof(value));
     uint32_t function_type =
         instr->u32_imm < eng->import_func_count ?
-        eng->import_func_types[instr->u32_imm] :
+        eng->function_imports[instr->u32_imm].type_index :
         eng->funcs[instr->u32_imm -
                    eng->import_func_count].type_index;
     value.type = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE +
@@ -914,16 +928,18 @@ int execute_op_call(waste_exec_context *ctx, const exec_instr *instr) {
             return exec_fail(ctx->error, EXEC_ERROR_TRAP, "call arguments missing");
     }
     if (instr->u32_imm < eng->import_func_count &&
-        eng->import_controls[instr->u32_imm] ==
+        eng->function_imports[instr->u32_imm].control ==
             EXEC_HOST_CONTROL_SIGSETJMP) {
-        if (callee_type->param_count < 1 ||
+        if ((callee_type->param_count != 1 && callee_type->param_count != 2) ||
             call_args[0].type != WASM_VALTYPE_I32 ||
+            (callee_type->param_count == 2 && call_args[1].type != WASM_VALTYPE_I32) ||
             callee_type->result_count != 1 ||
             callee_type->results[0] != WASM_VALTYPE_I32)
             return exec_fail(ctx->error, EXEC_ERROR_TRAP,
                              "unsupported sigsetjmp signature");
         exec_status saved = save_jump_frame(
-            ctx, (uint32_t)call_args[0].i32);
+            ctx, (uint32_t)call_args[0].i32,
+            callee_type->param_count == 2 && call_args[1].i32 != 0);
         if (saved != EXEC_OK) return saved;
         if (!stack_push(ctx->operand_stack, i32_value(0)))
             return exec_fail(ctx->error, EXEC_ERROR_TRAP,
@@ -963,7 +979,7 @@ int execute_op_call_indirect(waste_exec_context *ctx, const exec_instr *instr) {
     if (target >= teng->import_func_count + teng->func_count)
         return exec_fail(ctx->error, EXEC_ERROR_TRAP, "call_indirect target out of range");
     uint32_t actual_type_index = target < teng->import_func_count ?
-        teng->import_func_types[target] :
+        teng->function_imports[target].type_index :
         teng->funcs[target - teng->import_func_count].type_index;
     if (!func_type_is_subtype(teng, actual_type_index, eng, instr->u32_imm)) {
         if (ctx->error) {
@@ -1036,7 +1052,7 @@ int execute_op_call_ref(waste_exec_context *ctx, const exec_instr *instr) {
         return exec_fail(ctx->error, EXEC_ERROR_TRAP,
                          "call_ref target out of range");
     uint32_t actual_type_index = target < eng->import_func_count ?
-        eng->import_func_types[target] :
+        eng->function_imports[target].type_index :
         eng->funcs[target - eng->import_func_count].type_index;
     if (!func_type_is_subtype(eng, actual_type_index,
                               eng, instr->u32_imm))
@@ -1212,7 +1228,8 @@ int execute_op_simd(waste_exec_context *ctx, const exec_instr *instr) {
     }
 
     int standard_simd = exec_standard_simd_integer(
-        op, instr->lane_index, &instr->v128_imm, ctx->operand_stack, ctx->error);
+        op, op >= 0x15 && op <= 0x22 ? instr->lane_index : 0,
+        op == 0x0d ? &instr->v128_imm : NULL, ctx->operand_stack, ctx->error);
     if (standard_simd < 0) return ctx->error->status;
     if (standard_simd > 0) return EXEC_OK;
     standard_simd = exec_standard_simd_float(op, ctx->operand_stack, ctx->error);
@@ -1407,9 +1424,9 @@ tail_entry:
         return exec_fail(err, EXEC_ERROR_TRAP, "call stack exhausted");
 
     if (func_idx < eng->import_func_count) {
-        exec_func_type *type=&eng->types[eng->import_func_types[func_idx]];
+        exec_func_type *type=&eng->types[eng->function_imports[func_idx].type_index];
         if (arg_count != type->param_count) return exec_fail(err, EXEC_ERROR_TRAP, "import argument count mismatch");
-        if (eng->import_controls[func_idx] == EXEC_HOST_CONTROL_EXIT) {
+        if (eng->function_imports[func_idx].control == EXEC_HOST_CONTROL_EXIT) {
             if (arg_count < 1 || args[0].type != WASM_VALTYPE_I32)
                 return exec_fail(err, EXEC_ERROR_TRAP,
                                  "exit argument missing");
@@ -1420,7 +1437,7 @@ tail_entry:
             }
             return EXEC_ERROR_EXIT;
         }
-        if (eng->import_controls[func_idx] ==
+        if (eng->function_imports[func_idx].control ==
             EXEC_HOST_CONTROL_SIGLONGJMP) {
             if (arg_count < 2 || args[0].type != WASM_VALTYPE_I32 ||
                 args[1].type != WASM_VALTYPE_I32)
@@ -1433,6 +1450,17 @@ tail_entry:
             uint32_t token = 0;
             for (unsigned i = 0; i < sizeof(token_bytes); i++)
                 token |= (uint32_t)token_bytes[i] << (8u * i);
+            int active = 0;
+            for (uint32_t i = 0; i < eng->jump_snapshot_count; i++) {
+                if (eng->jump_snapshots[i].valid &&
+                    eng->jump_snapshots[i].token == token) {
+                    active = 1;
+                    break;
+                }
+            }
+            if (!active)
+                return exec_fail(err, EXEC_ERROR_TRAP,
+                                 "longjmp target not active");
             if (err) {
                 memset(err, 0, sizeof(*err));
                 err->status = EXEC_ERROR_LONGJMP;
@@ -1443,7 +1471,7 @@ tail_entry:
             return EXEC_ERROR_LONGJMP;
         }
         int count=0;
-        exec_status status=eng->import_funcs[func_idx](eng->import_host_data[func_idx],args,arg_count,results,&count,err,eng);
+        exec_status status=eng->function_imports[func_idx].function(eng->function_imports[func_idx].host_data,args,arg_count,results,&count,err,eng);
         if (status != EXEC_OK) return status;
         if (count != type->result_count) return exec_fail(err, EXEC_ERROR_TRAP, "import result count mismatch");
         if (result_count) *result_count=count;
@@ -1478,6 +1506,8 @@ tail_entry:
     }
 
     uint32_t defined_index=func_idx-eng->import_func_count;
+    exec_status materialized = exec_materialize_function(eng, defined_index, err);
+    if (materialized != EXEC_OK) return materialized;
 
     if (!resuming) {
         /* Reusing an interpreter depth means the previous C/Wasm activation is
@@ -1550,6 +1580,10 @@ tail_entry:
                 control->remaining = 4095;
                 exec_status stop = exec_execution_check(control, err);
                 if (stop != EXEC_OK) return stop;
+                if (control->signal_deliver && !control->synchronous_callbacks) {
+                    stop = control->signal_deliver(control->signal_context, eng, err);
+                    if (stop != EXEC_OK) return stop;
+                }
                 /* Cooperative pump: between opcodes the operand stack is a
                  * stable value-type checkpoint, so we may save the exact PC
                  * and yield when the embedder's wall clock crosses the

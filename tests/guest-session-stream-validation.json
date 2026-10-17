@@ -1,0 +1,21 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /root/test/engine-regressions/stream-validation.wast; STREAM_VALIDATION_RESULT=$?; printf '__STREAM_VALIDATION_%s__\\n' \"$STREAM_VALIDATION_RESULT\"\n"
+    },
+    {
+      "after": "__STREAM_VALIDATION_",
+      "text": "exit \"$STREAM_VALIDATION_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "__STREAM_VALIDATION_0__\r\n",
+    "WAST: 6 PASS, 0 FAIL, 6 total"
+  ],
+  "assertions": 7,
+  "exitStatus": 0
+}

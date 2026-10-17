@@ -1,0 +1,21 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /root/test/engine-regressions/function-envelope.wast; FUNCTION_ENVELOPE_RESULT=$?; printf '__FUNCTION_ENVELOPE_%s__\\n' \"$FUNCTION_ENVELOPE_RESULT\"\n"
+    },
+    {
+      "after": "__FUNCTION_ENVELOPE_",
+      "text": "exit \"$FUNCTION_ENVELOPE_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "__FUNCTION_ENVELOPE_0__\r\n",
+    "WAST: 8 PASS, 0 FAIL, 8 total"
+  ],
+  "assertions": 9,
+  "exitStatus": 0
+}

@@ -312,7 +312,7 @@ int global_type_is_compat(const waste_exec_engine *aeng, wasm_valtype actual,
     if (a_isref && r_isref &&
         (unsigned)actual >= WASM_VALTYPE_TYPE_REF_BASE &&
         (unsigned)required < WASM_VALTYPE_TYPE_REF_BASE) {
-        wasm_valtype actual_nullable = (wasm_valtype)((unsigned)actual - 0x100u);
+        wasm_valtype actual_nullable = (wasm_valtype)((unsigned)actual - (WASM_VALTYPE_TYPE_REF_BASE - WASM_VALTYPE_TYPE_REF_NULL_BASE));
         return same_value_type(aeng, actual_nullable, reng, required, 0);
     }
     return 0;
@@ -372,7 +372,7 @@ wasm_valtype nonnullable_reference_type(wasm_valtype type) {
     if (type == WASM_VALTYPE_EXNREF) return WASM_VALTYPE_EXNREF_NONNULL;
     if (WASM_VALTYPE_IS_TYPE_REF(type) &&
         (unsigned)type < WASM_VALTYPE_TYPE_REF_BASE)
-        return (wasm_valtype)((unsigned)type + 0x100u);
+        return (wasm_valtype)((unsigned)type + (WASM_VALTYPE_TYPE_REF_BASE - WASM_VALTYPE_TYPE_REF_NULL_BASE));
     return type;
 }
 
@@ -1129,7 +1129,7 @@ wasm_validation_status validate_op_call(wasm_validate_context *ctx,
     const exec_func_type *callee;
     if (instr->u32_imm < eng->import_func_count)
         callee = &eng->types[
-            eng->import_func_types[instr->u32_imm]];
+            eng->function_imports[instr->u32_imm].type_index];
     else {
         uint32_t index = instr->u32_imm - eng->import_func_count;
         if (index >= eng->func_count)
@@ -1231,15 +1231,16 @@ wasm_validation_status validate_op_ref_func(wasm_validate_context *ctx,
     const waste_exec_engine *eng = ctx->engine;
     if (instr->u32_imm >=
         eng->import_func_count + eng->func_count ||
+        !eng->declared_funcs ||
         !eng->declared_funcs[instr->u32_imm])
         return WASM_VALIDATION_INVALID;
     {
         uint32_t function_type =
             instr->u32_imm < eng->import_func_count ?
-            eng->import_func_types[instr->u32_imm] :
+            eng->function_imports[instr->u32_imm].type_index :
             eng->funcs[instr->u32_imm -
                        eng->import_func_count].type_index;
-        if (function_type >= 0x100u ||
+        if (function_type >= WAST_MAX_TYPES ||
             !validation_push(
                 ctx->stack, ctx->top,
                 (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE +
@@ -1520,7 +1521,7 @@ wasm_validation_status validate_op_gc(wasm_validate_context *ctx,
         wasm_valtype ref,target;
         if(!validation_pop(ctx->stack,ctx->top,control,&ref) ||
            (ref!=WASM_BOTTOM_TYPE && !is_reference_type(ref)) ||
-           !nullable_reference_for_heap(eng,instr->block_type_index,&target))
+           !nullable_reference_for_heap(eng,instr->heap_type,&target))
             return WASM_VALIDATION_INVALID;
         if(op>=0x16) {
             if(op==0x16) target=nonnullable_reference_type(target);
@@ -1530,11 +1531,11 @@ wasm_validation_status validate_op_gc(wasm_validate_context *ctx,
             return WASM_VALIDATION_UNSUPPORTED;
     } else if(op==0x18 || op==0x19) {
         wasm_valtype source,target,operand;
-        if(!nullable_reference_for_heap(eng,instr->block_type_index,&source) ||
-           !nullable_reference_for_heap(eng,(int32_t)instr->lane_index,&target))
+        if(!nullable_reference_for_heap(eng,instr->heap_type,&source) ||
+           !nullable_reference_for_heap(eng,instr->target_heap_type,&target))
             return WASM_VALIDATION_INVALID;
-        if(!(instr->alignment&1u)) source=nonnullable_reference_type(source);
-        if(!(instr->alignment&2u)) target=nonnullable_reference_type(target);
+        if(!(instr->cast_flags&1u)) source=nonnullable_reference_type(source);
+        if(!(instr->cast_flags&2u)) target=nonnullable_reference_type(target);
         if(!global_type_is_compat(eng,target,eng,source,0) ||
            !validation_pop(ctx->stack,ctx->top,control,&operand) ||
            (operand!=WASM_BOTTOM_TYPE &&
@@ -1551,7 +1552,7 @@ wasm_validation_status validate_op_gc(wasm_validate_context *ctx,
             label_count=target_control->kind==0x03?target_control->param_count:target_control->result_count;
         }
         wasm_valtype diff_type=source;
-        if((instr->alignment&3u)==3u)
+        if((instr->cast_flags&3u)==3u)
             diff_type=nonnullable_reference_type(source);
         wasm_valtype carried=op==0x18?target:diff_type;
         if(label_count<1 || !global_type_is_compat(eng,carried,eng,
@@ -1824,9 +1825,20 @@ static wasm_validation_status validate_function_body(
     uint32_t *failure_instruction) {
     if (func->type_index >= eng->type_count) return WASM_VALIDATION_INVALID;
     const exec_func_type *signature = &eng->types[func->type_index];
+    if (signature->param_count < 0 ||
+        (uint32_t)signature->param_count > EXEC_MAX_LOCALS ||
+        func->local_count > EXEC_MAX_LOCALS - (uint32_t)signature->param_count)
+        return WASM_VALIDATION_INVALID;
     wasm_valtype stack[WASM_VALIDATION_STACK];
     int top = 0;
-    wasm_validation_control controls[EXEC_MAX_CONTROL + 1];
+    /* Deep generated switches must not reserve the full configured bound on
+     * the native/browser C stack. A body cannot enter more controls than it
+     * has instructions; allocate only that bounded working set. */
+    size_t control_capacity = code_size < EXEC_MAX_CONTROL ?
+        (size_t)code_size + 1 : (size_t)EXEC_MAX_CONTROL + 1;
+    wasm_validation_control *controls =
+        malloc(control_capacity * sizeof(*controls));
+    if (!controls) return WASM_VALIDATION_ALLOCATION_FAILED;
     uint8_t initialized[(EXEC_MAX_LOCALS + 7) / 8];
     int control_top = 0;
     memset(&controls[0], 0, sizeof(controls[0]));
@@ -1851,6 +1863,7 @@ static wasm_validation_status validate_function_body(
     vctx.control_top = &control_top;
     vctx.initialized = initialized;
 
+    wasm_validation_status result = WASM_VALIDATION_INVALID;
     for (uint32_t pc = 0; pc < code_size; pc++) {
         const exec_instr *instr = &code[pc];
         *failure_instruction = pc;
@@ -1862,20 +1875,25 @@ static wasm_validation_status validate_function_body(
                     controls[control_top].unreachable);
 
         const wasm_opcode_dispatch *dispatch = wasm_opcode_get_dispatch(instr);
-        if (!dispatch || !dispatch->validate)
-            return WASM_VALIDATION_UNSUPPORTED;
+        if (!dispatch || !dispatch->validate) {
+            result = WASM_VALIDATION_UNSUPPORTED;
+            break;
+        }
 
         wasm_validation_status status = dispatch->validate(&vctx, instr);
-        if (status != WASM_VALIDATION_CONTINUE)
-            return status;
+        if (status != WASM_VALIDATION_CONTINUE) {
+            result = status;
+            break;
+        }
     }
-    return WASM_VALIDATION_INVALID;
+    free(controls);
+    return result;
 }
 
 static uint32_t direct_call_type_index(const waste_exec_engine *engine,
                                        uint32_t function_index) {
     if (function_index < engine->import_func_count)
-        return engine->import_func_types[function_index];
+        return engine->function_imports[function_index].type_index;
     function_index -= engine->import_func_count;
     if (function_index >= engine->func_count) return UINT32_MAX;
     return engine->funcs[function_index].type_index;

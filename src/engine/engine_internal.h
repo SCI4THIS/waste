@@ -3,9 +3,11 @@
 
 #include "wat/types.h"
 #include "wasm/module.h"
+#include "lib/include/select.h"
 #include <stddef.h>
 
 typedef struct waste_exec_engine waste_exec_engine;
+typedef struct exec_error exec_error;
 typedef struct exec_tag exec_tag;
 typedef struct exec_clone_binding {
     const waste_exec_engine *source;
@@ -45,6 +47,12 @@ typedef struct {
     void *context;
     /* Engine-owned process termination, separate from host cancellation. */
     int (*signal_poll)(void *);
+    /* Caught process signals run at the same bounded opcode safepoint with
+     * live evaluator frames, through the ordinary synchronous handler path. */
+    exec_status (*signal_deliver)(void *, const waste_exec_engine *, exec_error *);
+    /* Checkpoints copy the active process mask, never a host signal mask. */
+    int (*signal_mask_get)(void *, posix_sigset *);
+    int (*signal_mask_set)(void *, const posix_sigset *);
     void *signal_context;
     uint32_t remaining;
     /* Synchronous callbacks cannot publish a second suspended invocation. */
@@ -93,7 +101,7 @@ typedef enum {
     EXEC_YIELD_WAITPID,
 } exec_yield_reason;
 
-typedef struct {
+struct exec_error {
     exec_status status;
     char message[256];
     /* An exception is a distinct execution result, not a trap.  Keep its
@@ -114,7 +122,7 @@ typedef struct {
     size_t memory_fault_length;
     uint8_t memory_fault_access;
     exec_yield_reason yield_reason;
-} exec_error;
+};
 
 exec_status exec_execution_check(exec_execution_control *control,
                                   exec_error *error);
@@ -267,6 +275,26 @@ exec_status exec_load_decoded_with_imports(
     const uint8_t *bytes, size_t size, const wasm_module *module,
     const exec_imports *imports, waste_exec_engine **engine_out,
     exec_error *error);
+
+/* Decode-only sizing: no binding, validation, instantiation or execution.
+ * Completed bodies are released immediately. Other section contents are not
+ * validated. This never returns an executable engine or changes load limits. */
+typedef struct {
+    uint32_t defined_functions, imported_functions, measured_functions;
+    uint32_t largest_function;
+    uint64_t instructions, instruction_bytes, local_bytes, payload_bytes;
+    uint64_t encoded_instruction_bytes, peak_function_buffer_bytes;
+    uint64_t metadata_bytes;
+} exec_module_footprint;
+exec_status exec_measure_module(const wasm_module *module,
+                               exec_module_footprint *footprint,
+                               exec_error *error);
+/* Validate every body and release it immediately. Imports use inert functions
+ * and private placeholder objects. Private module objects may be
+ * initialized, but no guest function runs and no executable engine escapes. */
+exec_status exec_validate_functions_streamed(const wasm_module *module,
+                                           exec_module_footprint *footprint,
+                                           exec_error *error);
 
 /*
  * Exported extern pointers are stable for the lifetime of their owning engine.

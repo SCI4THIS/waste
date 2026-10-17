@@ -466,7 +466,7 @@ generate_c_engine_tests() {
 
 # ── Auxiliary utility build helpers ──────────────────────────────────────
 
-AUX_UTILITIES=(libc true false pwd echo printf basename dirname cat chmod wc ls date sleep bash rogue libncurses ldd upload download vim)
+AUX_UTILITIES=(libc true false pwd echo printf basename dirname cat chmod wc ls date sleep bash rogue libncurses ldd upload download vim clang)
 AUX_STAGING="$REPO_ROOT/src/vfs"
 AUX_LOG="$LOG_DIR/aux-build.log"
 
@@ -508,6 +508,16 @@ build_single_aux() {
     vim)
       if ! have_command cc || ! have_command patch; then
         show_message "Aux build" "A host C compiler (cc) and patch are required for Vim generators and staging."
+        return 1
+      fi
+      ;;
+    clang)
+      if ! have_command clang++ || ! have_command llvm-ar || ! have_command llvm-ranlib || ! have_command llvm-objcopy; then
+        show_message "Aux build" "clang++, llvm-ar, llvm-ranlib, and llvm-objcopy are required for Clang and its C++ runtime."
+        return 1
+      fi
+      if ! have_command cmake && [[ ! -x "$REPO_ROOT/build/aux/clang/cmake-4.1.3-linux-x86_64/bin/cmake" ]]; then
+        show_message "Aux build" "CMake is required for Clang. Install it or set CLANG_CMAKE to its path when invoking make."
         return 1
       fi
       ;;

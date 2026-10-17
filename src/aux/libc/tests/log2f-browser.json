@@ -1,0 +1,21 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /root/test/aux/libc/log2f.wast; LOG2F_RESULT=$?; printf '__LOG2F_%s__\\n' \"$LOG2F_RESULT\"\n"
+    },
+    {
+      "after": "__LOG2F_",
+      "text": "exit \"$LOG2F_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "__LOG2F_0__\r\n",
+    "WAST: 60 PASS, 0 FAIL, 60 total"
+  ],
+  "assertions": 61,
+  "exitStatus": 0
+}

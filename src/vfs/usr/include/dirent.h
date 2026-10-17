@@ -36,11 +36,19 @@ _Static_assert(__builtin_offsetof(struct dirent, d_name) == 19,
 #define IFTODT(mode) (((mode) & 0170000) >> 12)
 #define DTTOIF(type) ((type) << 12)
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 DIR *opendir(const char *);
 DIR *fdopendir(int);
 int dirfd(DIR *);
 int closedir(DIR *);
 struct dirent *readdir(DIR *);
 void rewinddir(DIR *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -454,11 +454,9 @@ static void native_module(native_wast_context *context, wast_group *group) {
         native_result(context, passed, "(module)", group->validation_error);
         return;
     }
-    wast_group encoded = *group;
-    encoded.module = *module;
     size_t size = 0;
     char message[256] = {0};
-    uint8_t *binary = encode_group_module(&encoded, &size, message);
+    uint8_t *binary = encode_module_source(module, &group->raw_module, &size, message);
     if (!binary) {
         if (group->has_module_assertion)
             native_result(context, group->module_assert_kind != WAST_ASSERT_TRAP,
@@ -627,12 +625,18 @@ int native_wast_run_with_options(native_store *store, const char *filename,
     const char *source, size_t length, native_wast_counts *counts,
     const native_wast_options *options) {
     memset(counts, 0, sizeof(*counts));
-    native_wast_context context = {0};
-    context.store = store;
-    context.counts = counts;
-    context.line = 1;
-    context.options = options;
-    native_process_driver_init(&context.driver);
+    /* The driver embeds bounded continuation frames. Keep this large context
+     * off the host stack as shared evaluator capacities grow. */
+    native_wast_context *context = calloc(1, sizeof(*context));
+    if (!context) {
+        fprintf(stderr, "%s: cannot allocate WAST execution context\n", filename);
+        return 1;
+    }
+    context->store = store;
+    context->counts = counts;
+    context->line = 1;
+    context->options = options;
+    native_process_driver_init(&context->driver);
     FILE *out = options->output;
     if (options->json) {
         fprintf(out, "{\"file\":"); native_wast_json_string(out, filename);
@@ -645,44 +649,44 @@ int native_wast_run_with_options(native_store *store, const char *filename,
         while (wast_stream_next(&scan, context_command, &request) > 0) {}
         wast_stream_destroy(&scan);
         if (options->mode == NATIVE_WAST_RUNTIME && request.language) {
-            wast_setup_record(&context.setup, 1, EXEC_ERROR_FORMAT, WAST_SETUP_LOAD,
+            wast_setup_record(&context->setup, 1, EXEC_ERROR_FORMAT, WAST_SETUP_LOAD,
                 "runtime context conflicts with script-owned providers or linkage assertions");
-            context.stopped = 1;
+            context->stopped = 1;
         } else if (options->mode == NATIVE_WAST_RUNTIME || (request.required && !request.language)) {
             exec_error error = {0};
             exec_status status = request.pages <= UINT32_MAX && request.table_entries <= UINT32_MAX ?
-                native_process_driver_prepare_runtime(options->driver ? options->driver : &context.driver,
+                native_process_driver_prepare_runtime(options->driver ? options->driver : &context->driver,
                     store, (uint32_t)request.pages, (uint32_t)request.table_entries, &error) : EXEC_ERROR_FORMAT;
             if (status != EXEC_OK) {
-                wast_setup_record(&context.setup, 1, status, WAST_SETUP_LOAD,
+                wast_setup_record(&context->setup, 1, status, WAST_SETUP_LOAD,
                     error.message[0] ? error.message : "runtime context memory exceeds limit");
-                context.stopped = 1;
+                context->stopped = 1;
             } else if (options->context_ready) options->context_ready(options->invoke_context);
         }
     }
     wast_stream stream;
     wast_stream_init(&stream, source, length);
-    while (!context.stopped) {
-        int status = wast_stream_next(&stream, native_command, &context);
+    while (!context->stopped) {
+        int status = wast_stream_next(&stream, native_command, context);
         if (status < 0) {
-            context.line = stream.line;
-            native_parse_failure(&context, stream.error);
+            context->line = stream.line;
+            native_parse_failure(context, stream.error);
         }
         if (status <= 0) {
-            context.completed = status == 0 && !context.stopped;
+            context->completed = status == 0 && !context->stopped;
             break;
         }
     }
     wast_stream_destroy(&stream);
     if (options->json) {
         fprintf(out, "\n],\"passed\":%u,\"total\":%u", counts->passed, counts->total);
-        if (context.parse_error[0]) { fprintf(out, ",\"error\":"); native_wast_json_string(out, context.parse_error); }
+        if (context->parse_error[0]) { fprintf(out, ",\"error\":"); native_wast_json_string(out, context->parse_error); }
         fprintf(out, ",\"completed\":%s,\"setup\":{\"total\":%u,\"passed\":%u,\"complete\":%s,\"failures\":[",
-               context.completed ? "true" : "false", context.setup.total,
-               context.setup.passed, context.setup.incomplete ? "false" : "true");
+               context->completed ? "true" : "false", context->setup.total,
+               context->setup.passed, context->setup.incomplete ? "false" : "true");
         const char *phases[] = {"", "encode", "load", "definition", "retain"};
-        for (unsigned i = 0; i < context.setup.count; i++) {
-            const wast_setup_failure *failure = &context.setup.failures[i];
+        for (unsigned i = 0; i < context->setup.count; i++) {
+            const wast_setup_failure *failure = &context->setup.failures[i];
             fprintf(out, "%s{\"line\":%u,\"status\":%d,\"phase\":", i ? "," : "", failure->line, failure->status);
             native_wast_json_string(out, phases[failure->phase]);
             fprintf(out, ",\"error\":"); native_wast_json_string(out, failure->error); fprintf(out, "}");
@@ -692,27 +696,28 @@ int native_wast_run_with_options(native_store *store, const char *filename,
         if (options->verbose) {
             fprintf(out, "\nWAST: %u PASS, %u FAIL, %u total\n", counts->passed,
                     counts->total - counts->passed, counts->total);
-            if (context.setup.passed != context.setup.total)
-                fprintf(out, "Setup: %u PASS, %u FAIL, %u total\n", context.setup.passed,
-                    context.setup.total - context.setup.passed, context.setup.total);
+            if (context->setup.passed != context->setup.total)
+                fprintf(out, "Setup: %u PASS, %u FAIL, %u total\n", context->setup.passed,
+                    context->setup.total - context->setup.passed, context->setup.total);
         }
-        if (!context.first_failure[0] && context.setup.count)
-            snprintf(context.first_failure, sizeof(context.first_failure), "line %u: %.210s",
-                context.setup.failures[0].line, context.setup.failures[0].error);
-        if (context.first_failure[0]) fprintf(stderr, "%s: %s\n", filename, context.first_failure);
+        if (!context->first_failure[0] && context->setup.count)
+            snprintf(context->first_failure, sizeof(context->first_failure), "line %u: %.210s",
+                context->setup.failures[0].line, context->setup.failures[0].error);
+        if (context->first_failure[0]) fprintf(stderr, "%s: %s\n", filename, context->first_failure);
     }
-    native_process_driver_destroy(&context.driver);
-    for (unsigned i = 0; i < context.retained_count; i++) {
-        wast_script_free(context.retained[i]);
-        free(context.retained[i]);
+    native_process_driver_destroy(&context->driver);
+    for (unsigned i = 0; i < context->retained_count; i++) {
+        wast_script_free(context->retained[i]);
+        free(context->retained[i]);
     }
-    free(context.retained);
+    free(context->retained);
     /* Receipt completeness describes serialized evidence, not script EOF.
      * A truncated script still has a complete JSON failure report. */
-    counts->completed = !context.setup.incomplete;
+    counts->completed = !context->setup.incomplete;
     int passed = counts->passed == counts->total &&
-                 context.setup.passed == context.setup.total && context.completed && counts->completed && !ferror(out);
-    wast_setup_reset(&context.setup);
+                 context->setup.passed == context->setup.total && context->completed && counts->completed && !ferror(out);
+    wast_setup_reset(&context->setup);
+    free(context);
     return passed ? 0 : 1;
 }
 

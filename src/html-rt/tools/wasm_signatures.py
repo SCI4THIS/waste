@@ -1,6 +1,8 @@
 """Bounded core-Wasm function import/export signature inspection (no execution)."""
 from pathlib import Path
 
+from runtime_config import read_config
+
 
 class Reader:
     def __init__(self, data):
@@ -37,8 +39,11 @@ class Reader:
 
 
 def inspect(path):
-    data = Path(path).read_bytes()
-    if len(data) > 64 * 1024 * 1024 or data[:8] != b"\0asm\x01\0\0\0":
+    path = Path(path)
+    if path.stat().st_size > read_config()["NATIVE_EXEC_BYTES_MAX"]:
+        raise ValueError("Wasm signature input exceeds configured executable-byte limit")
+    data = path.read_bytes()
+    if data[:8] != b"\0asm\x01\0\0\0":
         raise ValueError("unsupported Wasm signature input")
     reader = Reader(data[8:])
     types, indices, imports, exports, globals_ = [], [], [], [], []

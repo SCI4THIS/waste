@@ -1,0 +1,48 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/classification-c.wasm",
+      "source": "build/system-tests/clang/classification/probe-c.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/classification-cxx.wasm",
+      "source": "build/system-tests/clang/classification/probe-cxx.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/classification.wast",
+      "source": "src/system-tests/clang/classification/classification.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/quad-comparison.wast",
+      "source": "src/aux/libc/tests/quad-comparison.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/classification-c.wasm > /tmp/classification-c.bin; printf '%s\\n' \"$?\" > /tmp/classification-c-status.txt; /tmp/classification-cxx.wasm > /tmp/classification-cxx.bin; printf '%s\\n' \"$?\" > /tmp/classification-cxx-status.txt; /bin/wast --verbose /tmp/classification.wast; printf '__CLASSIFICATION_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__CLASSIFICATION_0__\r\n",
+      "text": "/bin/wast --verbose /tmp/quad-comparison.wast; printf '__QUAD_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__QUAD_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__CLASSIFICATION_0__\r\n",
+    "WAST: 83 PASS, 0 FAIL, 83 total",
+    "__QUAD_0__\r\n",
+    "WAST: 24 PASS, 0 FAIL, 24 total"
+  ],
+  "assertions": 108,
+  "exitStatus": 0
+}

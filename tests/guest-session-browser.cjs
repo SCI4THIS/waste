@@ -141,9 +141,10 @@ const screen = scenario.events.some(event => event.screen)
     drainHostIo();
     if (event.drainTimers) {
       const deadline = Date.now() + 10000;
-      while (status === 1 && [1, 2].includes(exp.waste_wast_wait_kind())) {
-        const milliseconds = exp.waste_wast_wait_timeout_ms();
-        if (!milliseconds) break;
+      while (status === 1 && [1, 2, 6].includes(exp.waste_wast_wait_kind())) {
+        const pumping = exp.waste_wast_wait_kind() === 6;
+        const milliseconds = pumping ? 0 : exp.waste_wast_wait_timeout_ms();
+        if (!pumping && !milliseconds) break;
         assert(Date.now() < deadline, "guest timer did not complete");
         await new Promise(resolve => setTimeout(resolve, milliseconds));
         status = exp.waste_wast_resume();

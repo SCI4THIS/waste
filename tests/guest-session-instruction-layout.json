@@ -1,0 +1,21 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /root/test/engine-regressions/instruction-layout.wast; INSTRUCTION_LAYOUT_RESULT=$?; printf '__INSTRUCTION_LAYOUT_%s__\\n' \"$INSTRUCTION_LAYOUT_RESULT\"\n"
+    },
+    {
+      "after": "__INSTRUCTION_LAYOUT_",
+      "text": "exit \"$INSTRUCTION_LAYOUT_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "__INSTRUCTION_LAYOUT_0__\r\n",
+    "WAST: 16 PASS, 0 FAIL, 16 total"
+  ],
+  "assertions": 17,
+  "exitStatus": 0
+}

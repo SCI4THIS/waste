@@ -1,0 +1,44 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/module-tasks.wasm",
+      "source": "build/system-tests/clang/module-tasks/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/module-tasks.wast",
+      "source": "src/system-tests/clang/module-tasks/module-tasks.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/module-tasks.wasm > /tmp/module-tasks.bin; printf '%s\\n' \"$?\" > /tmp/module-tasks-status.txt; /bin/wast --verbose /tmp/module-tasks.wast; TASK_STATUS=$?; printf '__MODULE_TASK_RESULT_%s__\\n' \"$TASK_STATUS\"\n"
+    },
+    {
+      "after": "__MODULE_TASK_SLEEP__\r\n",
+      "waitKind": 2,
+      "signal": 10
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 42010000000
+    },
+    {
+      "after": "__MODULE_TASK_RESULT_",
+      "text": "exit \"$TASK_STATUS\"\n"
+    }
+  ],
+  "contains": [
+    "__MODULE_TASK_RESULT_0__\r\n",
+    "WAST: 104 PASS, 0 FAIL, 104 total"
+  ],
+  "assertions": 105,
+  "exitStatus": 0,
+  "clockRealtimeNs": "4294967296123456789",
+  "clockMonotonicNs": 42000000000
+}

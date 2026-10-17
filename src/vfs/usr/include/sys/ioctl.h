@@ -13,6 +13,14 @@ typedef struct winsize {
   unsigned short ws_ypixel;
 } waste_winsize;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 int ioctl(int descriptor, unsigned int request, ...);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

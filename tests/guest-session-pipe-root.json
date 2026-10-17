@@ -1,0 +1,14 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "events": [
+    {
+      "after": "# ",
+      "text": "exec wast --verbose /root/test/engine-regressions/pipe-descriptors.wast\n"
+    }
+  ],
+  "contains": ["WAST: 170 PASS, 0 FAIL, 170 total"],
+  "assertions": 171,
+  "exitStatus": 0,
+  "processes": 0
+}

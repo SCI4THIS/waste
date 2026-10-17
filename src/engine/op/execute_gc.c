@@ -239,7 +239,7 @@ int exec_gc_instruction(waste_exec_engine *eng,
         }
         int nullable = op == 0x15 || op == 0x17;
         int matches = reference_matches_heap(eng, &a,
-                                             instr->block_type_index,
+                                             instr->heap_type,
                                              nullable);
         if (op <= 0x15)
             return gc_push(stack, i32_value((uint32_t)matches), err) ? 1 : -1;
@@ -248,9 +248,9 @@ int exec_gc_instruction(waste_exec_engine *eng,
             return -1;
         }
         if (a.ref != UINT32_MAX) {
-            if (instr->block_type_index >= 0)
+            if (instr->heap_type >= 0)
                 a.type = (wasm_valtype)(WASM_VALTYPE_TYPE_REF_BASE +
-                                        (uint32_t)instr->block_type_index);
+                                        (uint32_t)instr->heap_type);
             else
                 a.type = nonnullable_reference_type(a.type);
         }

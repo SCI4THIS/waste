@@ -13,6 +13,12 @@ typedef struct { int64_t tv_sec;  int32_t tv_nsec; } waste_timespec;
 typedef struct { uint32_t sig[4]; } waste_sigset_t;
 
 /* Stable Wasm32 pathname/stat ABI; do not use the host struct stat. */
+#define WASTE_NODE_REGULAR 1
+#define WASTE_NODE_DIRECTORY 2
+#define WASTE_NODE_SYMLINK 3
+/* Kernel-owned null character device; never an archive payload. */
+#define WASTE_NODE_NULL 4
+
 typedef struct {
   uint64_t st_dev; uint64_t st_ino;
   uint32_t st_mode; uint32_t st_nlink; uint32_t st_uid; uint32_t st_gid;

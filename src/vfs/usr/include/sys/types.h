@@ -30,6 +30,7 @@ typedef int pid_t;
 #endif
 /* Use the public Wasm32 timestamp ABI and remain valid beyond 2038. */
 typedef long long time_t;
+typedef unsigned int useconds_t;
 #ifndef socklen_t
 typedef unsigned int socklen_t;
 #endif

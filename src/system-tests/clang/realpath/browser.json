@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/realpath.wasm",
+      "source": "build/system-tests/clang/realpath/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/realpath.wast",
+      "source": "src/system-tests/clang/realpath/realpath.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/realpath.wasm > /tmp/realpath.bin; printf '%s\\n' \"$?\" > /tmp/realpath-status.txt; /bin/wast --verbose /tmp/realpath.wast; result=$?; printf '__REALPATH_%s__\\n' \"$result\"\n"
+    },
+    {
+      "after": "__REALPATH_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__REALPATH_0__\r\n",
+    "WAST: 213 PASS, 0 FAIL, 213 total"
+  ],
+  "assertions": 214,
+  "exitStatus": 0
+}

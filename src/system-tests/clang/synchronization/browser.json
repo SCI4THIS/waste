@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/synchronization.wasm",
+      "source": "build/system-tests/clang/synchronization/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/synchronization.wast",
+      "source": "src/system-tests/clang/synchronization/synchronization.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/synchronization.wasm > /tmp/synchronization.bin; printf '%s\\n' \"$?\" > /tmp/synchronization-status.txt; /bin/wast --verbose /tmp/synchronization.wast; printf '__SYNCHRONIZATION_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__SYNCHRONIZATION_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__SYNCHRONIZATION_0__\r\n",
+    "WAST: 97 PASS, 0 FAIL, 97 total"
+  ],
+  "assertions": 98,
+  "exitStatus": 0
+}

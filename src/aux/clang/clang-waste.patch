@@ -1,0 +1,3804 @@
+--- a/llvm/cmake/modules/HandleLLVMOptions.cmake
++++ b/llvm/cmake/modules/HandleLLVMOptions.cmake
+@@ -242,7 +242,17 @@
+   set( LLVM_ENABLE_REVERSE_ITERATION 1 )
+ endif()
+ 
+-if(WIN32)
++option(LLVM_WASTE_GUEST "Use the WASTE Wasm guest POSIX backend" OFF)
++if(LLVM_WASTE_GUEST)
++  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Generic" OR
++     NOT CMAKE_C_COMPILER_TARGET STREQUAL "wasm32-unknown-unknown")
++    message(FATAL_ERROR "LLVM_WASTE_GUEST requires the Generic wasm32 guest toolchain")
++  endif()
++  # Select POSIX implementations, without pretending the guest is host Unix or
++  # enabling native shared libraries, plugins or linker version scripts.
++  set(LLVM_ON_UNIX 1)
++  set(LLVM_HAVE_LINK_VERSION_SCRIPT 0)
++elseif(WIN32)
+   set(LLVM_HAVE_LINK_VERSION_SCRIPT 0)
+   set(LLVM_ON_UNIX 0)
+ elseif(FUCHSIA OR UNIX OR CYGWIN)
+--- a/llvm/include/llvm/Config/llvm-config.h.cmake
++++ b/llvm/include/llvm/Config/llvm-config.h.cmake
+@@ -56,6 +56,9 @@
+ 
+ /* Define if this is Unixish platform */
+ #cmakedefine LLVM_ON_UNIX ${LLVM_ON_UNIX}
++
++/* Select only the engine-owned WASTE guest adaptations. */
++#cmakedefine LLVM_WASTE_GUEST 1
+ 
+ /* Define if we have the Intel JIT API runtime support library */
+ #cmakedefine01 LLVM_USE_INTEL_JITEVENTS
+--- a/llvm/include/llvm/Support/FileSystem.h
++++ b/llvm/include/llvm/Support/FileSystem.h
+@@ -46,6 +46,10 @@
+ #include <system_error>
+ #include <vector>
+ 
++#if defined(LLVM_WASTE_GUEST)
++#include <sys/stat.h>
++#endif
++
+ namespace llvm {
+ namespace sys {
+ namespace fs {
+@@ -119,6 +123,20 @@
+       static_cast<unsigned short>(~static_cast<unsigned short>(x)));
+ }
+ 
++#if defined(LLVM_ON_UNIX)
++#if defined(LLVM_WASTE_GUEST)
++// WASTE's stable stat metadata has wider fields than its legacy offset/inode
++// typedefs. Keep all metadata bits without changing installed command ABIs.
++using file_status_size_type = decltype(((struct stat *)nullptr)->st_size);
++using file_status_device_type = decltype(((struct stat *)nullptr)->st_dev);
++using file_status_inode_type = decltype(((struct stat *)nullptr)->st_ino);
++#else
++using file_status_size_type = off_t;
++using file_status_device_type = dev_t;
++using file_status_inode_type = ino_t;
++#endif
++#endif
++
+ /// Represents the result of a call to directory_iterator::status(). This is a
+ /// subset of the information returned by a regular sys::fs::status() call, and
+ /// represents the information provided by Windows FileFirstFile/FindNextFile.
+@@ -131,7 +149,7 @@
+   uint32_t fs_st_mtime_nsec = 0;
+   uid_t fs_st_uid = 0;
+   gid_t fs_st_gid = 0;
+-  off_t fs_st_size = 0;
++  file_status_size_type fs_st_size = 0;
+   #elif defined (_WIN32)
+   uint32_t LastAccessedTimeHigh = 0;
+   uint32_t LastAccessedTimeLow = 0;
+@@ -151,7 +169,7 @@
+   #if defined(LLVM_ON_UNIX)
+   basic_file_status(file_type Type, perms Perms, time_t ATime,
+                     uint32_t ATimeNSec, time_t MTime, uint32_t MTimeNSec,
+-                    uid_t UID, gid_t GID, off_t Size)
++                    uid_t UID, gid_t GID, file_status_size_type Size)
+       : fs_st_atime(ATime), fs_st_mtime(MTime),
+         fs_st_atime_nsec(ATimeNSec), fs_st_mtime_nsec(MTimeNSec),
+         fs_st_uid(UID), fs_st_gid(GID),
+@@ -215,9 +233,9 @@
+   LLVM_ABI friend bool equivalent(file_status A, file_status B);
+ 
+ #if defined(LLVM_ON_UNIX)
+-  dev_t fs_st_dev = 0;
++  file_status_device_type fs_st_dev = 0;
+   nlink_t fs_st_nlinks = 0;
+-  ino_t fs_st_ino = 0;
++  file_status_inode_type fs_st_ino = 0;
+ #elif defined(_WIN32)
+   uint32_t NumLinks = 0;
+   uint32_t VolumeSerialNumber = 0;
+@@ -230,10 +248,11 @@
+   explicit file_status(file_type Type) : basic_file_status(Type) {}
+ 
+   #if defined(LLVM_ON_UNIX)
+-  file_status(file_type Type, perms Perms, dev_t Dev, nlink_t Links, ino_t Ino,
++  file_status(file_type Type, perms Perms, file_status_device_type Dev, nlink_t Links,
++              file_status_inode_type Ino,
+               time_t ATime, uint32_t ATimeNSec,
+               time_t MTime, uint32_t MTimeNSec,
+-              uid_t UID, gid_t GID, off_t Size)
++              uid_t UID, gid_t GID, file_status_size_type Size)
+       : basic_file_status(Type, Perms, ATime, ATimeNSec, MTime, MTimeNSec,
+                           UID, GID, Size),
+         fs_st_dev(Dev), fs_st_nlinks(Links), fs_st_ino(Ino) {}
+--- a/llvm/cmake/config-ix.cmake
++++ b/llvm/cmake/config-ix.cmake
+@@ -447,6 +447,10 @@
+   check_function_exists(__cmpdi2 HAVE___CMPDI2)
+ endif()
+ 
++# WASTE exposes nanoseconds as separate stable-ABI integer fields. Probe the
++# actual header rather than assuming a native Unix struct stat layout.
++CHECK_STRUCT_HAS_MEMBER("struct stat" st_mtime_nsec
++    "sys/types.h;sys/stat.h" HAVE_STRUCT_STAT_ST_MTIME_NSEC)
+ CHECK_STRUCT_HAS_MEMBER("struct stat" st_mtimespec.tv_nsec
+     "sys/types.h;sys/stat.h" HAVE_STRUCT_STAT_ST_MTIMESPEC_TV_NSEC)
+ if (UNIX AND "${CMAKE_SYSTEM_NAME}" MATCHES "AIX")
+--- a/llvm/include/llvm/Config/config.h.cmake
++++ b/llvm/include/llvm/Config/config.h.cmake
+@@ -154,6 +154,9 @@
+ #cmakedefine HAVE_SYS_IOCTL_H ${HAVE_SYS_IOCTL_H}
+ 
++/* Define to 1 if stat struct has a separate st_mtime_nsec member. */
++#cmakedefine HAVE_STRUCT_STAT_ST_MTIME_NSEC ${HAVE_STRUCT_STAT_ST_MTIME_NSEC}
++
+ /* Define to 1 if stat struct has st_mtimespec member .*/
+ #cmakedefine HAVE_STRUCT_STAT_ST_MTIMESPEC_TV_NSEC ${HAVE_STRUCT_STAT_ST_MTIMESPEC_TV_NSEC}
+ 
+ /* Define to 1 if stat struct has st_mtim member. */
+--- a/llvm/lib/Support/Unix/Path.inc
++++ b/llvm/lib/Support/Unix/Path.inc
+@@ -71,6 +71,10 @@
+ #endif
+ 
+ #include <sys/types.h>
++#if defined(LLVM_WASTE_GUEST)
++#include <waste/process.h>
++#endif
++#if !defined(LLVM_WASTE_GUEST)
+ #if !defined(__APPLE__) && !defined(__OpenBSD__) && !defined(__FreeBSD__) &&   \
+     !defined(__linux__) && !defined(__FreeBSD_kernel__) && !defined(_AIX) &&   \
+     !defined(__managarm__)
+@@ -106,6 +110,7 @@
+ #else
+ #define STATVFS_F_FLAG(vfs) (vfs).f_flags
+ #endif
++#endif // !LLVM_WASTE_GUEST
+ 
+ using namespace llvm;
+ 
+@@ -183,7 +188,13 @@
+ std::string getMainExecutable(const char *argv0, void *MainAddr) {
+   auto BypassSandbox = sandbox::scopedDisable();
+ 
+-#if defined(__APPLE__)
++#if defined(LLVM_WASTE_GUEST)
++  (void)argv0;
++  (void)MainAddr;
++  char exe_path[PATH_MAX];
++  if (waste_get_executable_path(exe_path, sizeof(exe_path)) >= 0)
++    return exe_path;
++#elif defined(__APPLE__)
+   // On OS X the executable path is saved to the stack by dyld. Reading it
+   // from there is much faster than calling dladdr, especially for large
+   // binaries with symbols.
+@@ -357,6 +368,11 @@
+ uint32_t file_status::getLinkCount() const { return fs_st_nlinks; }
+ 
+ ErrorOr<space_info> disk_space(const Twine &Path) {
++#if defined(LLVM_WASTE_GUEST)
++  // The guest namespace does not expose volume capacity or mount statistics.
++  (void)Path;
++  return make_error_code(errc::function_not_supported);
++#else
+   struct STATVFS Vfs;
+   if (::STATVFS(const_cast<char *>(Path.str().c_str()), &Vfs))
+     return errnoAsErrorCode();
+@@ -366,6 +382,7 @@
+   SpaceInfo.free = static_cast<uint64_t>(Vfs.f_bfree) * FrSize;
+   SpaceInfo.available = static_cast<uint64_t>(Vfs.f_bavail) * FrSize;
+   return SpaceInfo;
++#endif
+ }
+ 
+ std::error_code current_path(SmallVectorImpl<char> &result) {
+@@ -488,6 +505,7 @@
+   return std::error_code();
+ }
+ 
++#if !defined(LLVM_WASTE_GUEST)
+ static bool is_local_impl(struct STATVFS &Vfs) {
+ #if defined(__linux__) || defined(__GNU__) || defined(__managarm__)
+ #ifndef NFS_SUPER_MAGIC
+@@ -572,26 +590,42 @@
+ #endif
+ }
+ 
++#endif // !LLVM_WASTE_GUEST
++
+ std::error_code is_local(const Twine &Path, bool &Result) {
+   sandbox::violationIfEnabled();
+ 
++#if defined(LLVM_WASTE_GUEST)
++  // Leave Result unchanged on error, as required by the public interface.
++  (void)Path;
++  (void)Result;
++  return make_error_code(errc::function_not_supported);
++#else
+   struct STATVFS Vfs;
+   if (::STATVFS(const_cast<char *>(Path.str().c_str()), &Vfs))
+     return errnoAsErrorCode();
+ 
+   Result = is_local_impl(Vfs);
+   return std::error_code();
++#endif
+ }
+ 
+ std::error_code is_local(int FD, bool &Result) {
+   sandbox::violationIfEnabled();
+ 
++#if defined(LLVM_WASTE_GUEST)
++  // Leave Result unchanged on error, as required by the public interface.
++  (void)FD;
++  (void)Result;
++  return make_error_code(errc::function_not_supported);
++#else
+   struct STATVFS Vfs;
+   if (::FSTATVFS(FD, &Vfs))
+     return errnoAsErrorCode();
+ 
+   Result = is_local_impl(Vfs);
+   return std::error_code();
++#endif
+ }
+ 
+ std::error_code rename(const Twine &from, const Twine &to) {
+@@ -762,7 +796,10 @@
+   }
+ 
+   uint32_t atime_nsec, mtime_nsec;
+-#if defined(HAVE_STRUCT_STAT_ST_MTIMESPEC_TV_NSEC)
++#if defined(HAVE_STRUCT_STAT_ST_MTIME_NSEC)
++  atime_nsec = Status.st_atime_nsec;
++  mtime_nsec = Status.st_mtime_nsec;
++#elif defined(HAVE_STRUCT_STAT_ST_MTIMESPEC_TV_NSEC)
+   atime_nsec = Status.st_atimespec.tv_nsec;
+   mtime_nsec = Status.st_mtimespec.tv_nsec;
+ #elif defined(HAVE_STRUCT_STAT_ST_MTIM_TV_NSEC)
+--- a/llvm/include/llvm/Support/Mutex.h
++++ b/llvm/include/llvm/Support/Mutex.h
+@@ -26,15 +26,25 @@
+     /// running in multithreaded mode.
+     template<bool mt_only>
+     class SmartMutex {
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
+       std::recursive_mutex impl;
++#endif
+       unsigned acquired = 0;
+ 
+     public:
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++      // Keep the ownership restrictions of the native recursive mutex.
++      SmartMutex() = default;
++      SmartMutex(const SmartMutex &) = delete;
++      SmartMutex &operator=(const SmartMutex &) = delete;
++#endif
+       bool lock() {
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
+         if (!mt_only || llvm_is_multithreaded()) {
+           impl.lock();
+           return true;
+         }
++#endif
+         // Single-threaded debugging code.  This would be racy in
+         // multithreaded mode, but provides not basic checks in single
+         // threaded mode.
+@@ -43,10 +53,12 @@
+       }
+ 
+       bool unlock() {
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
+         if (!mt_only || llvm_is_multithreaded()) {
+           impl.unlock();
+           return true;
+         }
++#endif
+         // Single-threaded debugging code.  This would be racy in
+         // multithreaded mode, but provides not basic checks in single
+         // threaded mode.
+@@ -56,8 +68,13 @@
+       }
+ 
+       bool try_lock() {
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
+         if (!mt_only || llvm_is_multithreaded())
+           return impl.try_lock();
++#else
++        // A successful try_lock owns one recursive acquisition too.
++        ++acquired;
++#endif
+         return true;
+       }
+     };
+--- a/llvm/include/llvm/Support/PerThreadBumpPtrAllocator.h
++++ b/llvm/include/llvm/Support/PerThreadBumpPtrAllocator.h
+@@ -13,6 +13,7 @@
+ #include "llvm/Support/Compiler.h"
+ #include "llvm/Support/raw_ostream.h"
+ #include <memory>
++#include "llvm/Support/Mutex.h"
+ #include <mutex>
+ #include <vector>
+ 
+@@ -35,7 +36,11 @@
+     : public AllocatorBase<PerThreadAllocator<AllocatorTy>> {
+   // Heap-allocated so that the class stays movable while holding a mutex.
+   struct State {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    llvm::sys::Mutex Mutex;
++#else
+     std::mutex Mutex;
++#endif
+     std::vector<std::unique_ptr<AllocatorTy>> Allocators;
+   };
+ 
+@@ -81,7 +86,7 @@
+       // different threads' bump pointers do not share a cache line.
+       auto New = std::make_unique<AllocatorTy>();
+       A = New.get();
+-      std::lock_guard<std::mutex> Lock(S->Mutex);
++      std::lock_guard<decltype(S->Mutex)> Lock(S->Mutex);
+       S->Allocators.push_back(std::move(New));
+     }
+     return *A;
+@@ -89,7 +94,7 @@
+ 
+   /// Return the number of sub-allocators, i.e. threads that have allocated.
+   size_t getNumberOfAllocators() const {
+-    std::lock_guard<std::mutex> Lock(S->Mutex);
++    std::lock_guard<decltype(S->Mutex)> Lock(S->Mutex);
+     return S->Allocators.size();
+   }
+   /// @}
+--- a/llvm/include/llvm/Support/FileCollector.h
++++ b/llvm/include/llvm/Support/FileCollector.h
+@@ -13,6 +13,7 @@
+ #include "llvm/ADT/StringSet.h"
+ #include "llvm/Support/Compiler.h"
+ #include "llvm/Support/VirtualFileSystem.h"
++#include "llvm/Support/Mutex.h"
+ #include <mutex>
+ #include <string>
+ 
+@@ -43,7 +44,11 @@
+                    std::error_code &EC) = 0;
+ 
+   /// Synchronizes access to internal data structures.
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  llvm::sys::Mutex Mutex;
++#else
+   std::mutex Mutex;
++#endif
+ 
+   /// Tracks already seen files so they can be skipped.
+   StringSet<> Seen;
+--- a/llvm/include/llvm/Support/HashingOutputBackend.h
++++ b/llvm/include/llvm/Support/HashingOutputBackend.h
+@@ -23,6 +23,7 @@
+ #include "llvm/Support/VirtualOutputBackend.h"
+ #include "llvm/Support/VirtualOutputConfig.h"
+ #include "llvm/Support/raw_ostream.h"
++#include "llvm/Support/Mutex.h"
+ #include <mutex>
+ 
+ namespace llvm::vfs {
+@@ -63,7 +64,7 @@
+ private:
+   friend class HashingOutputFile<HasherT>;
+   void addOutputFile(StringRef Path, StringRef Hash) {
+-    std::lock_guard<std::mutex> Lock(OutputHashLock);
++    std::lock_guard<decltype(OutputHashLock)> Lock(OutputHashLock);
+     OutputHashes[Path] = Hash.str();
+   }
+ 
+@@ -95,7 +96,11 @@
+   }
+ 
+ private:
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  llvm::sys::Mutex OutputHashLock;
++#else
+   std::mutex OutputHashLock;
++#endif
+   StringMap<std::string> OutputHashes;
+ };
+ 
+--- a/clang/include/clang/Basic/AtomicLineLogger.h
++++ b/clang/include/clang/Basic/AtomicLineLogger.h
+@@ -19,6 +19,7 @@
+ #include "llvm/ADT/SmallString.h"
+ #include "llvm/Support/raw_ostream.h"
+ #include <atomic>
++#include "llvm/Support/Mutex.h"
+ #include <mutex>
+ #include <optional>
+ #include <string>
+@@ -64,7 +65,11 @@
+   std::atomic<int> FD{-1};
+   std::string LogPath;
+   std::atomic<uint64_t> DroppedLines{0};
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  llvm::sys::Mutex EnableMtx;
++#else
+   std::mutex EnableMtx;
++#endif
+   enum class LogPathSource {
+     None,
+     Constructor, // The path is from the constructor.
+--- a/llvm/lib/Support/FileCollector.cpp
++++ b/llvm/lib/Support/FileCollector.cpp
+@@ -19,7 +19,7 @@
+ FileCollectorBase::~FileCollectorBase() = default;
+ 
+ void FileCollectorBase::addFile(const Twine &File) {
+-  std::lock_guard<std::mutex> lock(Mutex);
++  std::lock_guard<decltype(Mutex)> lock(Mutex);
+   std::string FileStr = File.str();
+   if (markAsSeen(FileStr))
+     addFileImpl(FileStr);
+@@ -181,7 +181,7 @@
+     return Err;
+   }
+ 
+-  std::lock_guard<std::mutex> lock(Mutex);
++  std::lock_guard<decltype(Mutex)> lock(Mutex);
+ 
+   for (auto &entry : VFSWriter.getMappings()) {
+     // Get the status of the original file/directory.
+@@ -236,7 +236,7 @@
+ }
+ 
+ std::error_code FileCollector::writeMapping(StringRef MappingFile) {
+-  std::lock_guard<std::mutex> lock(Mutex);
++  std::lock_guard<decltype(Mutex)> lock(Mutex);
+ 
+   VFSWriter.setOverlayDir(OverlayRoot);
+   VFSWriter.setCaseSensitivity(isCaseSensitivePath(OverlayRoot));
+--- a/clang/lib/Basic/AtomicLineLogger.cpp
++++ b/clang/lib/Basic/AtomicLineLogger.cpp
+@@ -122,7 +122,7 @@
+ }
+ 
+ bool AtomicLineLogger::enable(StringRef RequestedLogPath) {
+-  std::lock_guard<std::mutex> Lock(EnableMtx);
++  std::lock_guard<decltype(EnableMtx)> Lock(EnableMtx);
+   switch (PathSource) {
+   case LogPathSource::None:
+     PathSource = LogPathSource::EnableMethod;
+--- a/llvm/include/llvm/Support/BalancedPartitioning.h
++++ b/llvm/include/llvm/Support/BalancedPartitioning.h
+@@ -42,6 +42,7 @@
+ #include "raw_ostream.h"
+ #include "llvm/ADT/ArrayRef.h"
+ #include "llvm/Support/Compiler.h"
++#include "llvm/Config/llvm-config.h"
+ 
+ #include <atomic>
+ #include <condition_variable>
+@@ -117,8 +118,10 @@
+   /// threads.
+   struct BPThreadPool {
+     ThreadPoolInterface &TheThreadPool;
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
+     std::mutex mtx;
+     std::condition_variable cv;
++#endif
+     /// The number of threads that could spawn more threads
+     std::atomic<int> NumActiveThreads = 0;
+     /// Only true when all threads are down spawning new threads
+--- a/llvm/include/llvm/Support/RWMutex.h
++++ b/llvm/include/llvm/Support/RWMutex.h
+@@ -17,7 +17,9 @@
+ #include "llvm/Support/Threading.h"
+ #include <cassert>
+ #include <mutex>
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
+ #include <shared_mutex>
++#endif
+ 
+ #if defined(__APPLE__)
+ #define LLVM_USE_RW_MUTEX_IMPL
+@@ -97,32 +99,47 @@
+ /// indicates whether this mutex should become a no-op when we're not
+ /// running in multithreaded mode.
+ template <bool mt_only> class SmartRWMutex {
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
+ #if !defined(LLVM_USE_RW_MUTEX_IMPL)
+   std::shared_mutex impl;
+ #else
+   RWMutexImpl impl;
+ #endif
++#endif
+   unsigned readers = 0;
+   unsigned writers = 0;
+ 
+ public:
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  // Retain the ownership restrictions of the native reader/writer mutex.
++  SmartRWMutex() = default;
++  SmartRWMutex(const SmartRWMutex &) = delete;
++  SmartRWMutex &operator=(const SmartRWMutex &) = delete;
++#endif
+   bool lock_shared() {
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
+     if (!mt_only || llvm_is_multithreaded()) {
+       impl.lock_shared();
+       return true;
+     }
+-
+-    // Single-threaded debugging code.  This would be racy in multithreaded
+-    // mode, but provides not basic checks in single threaded mode.
++#endif
++
++    // Single-threaded debugging code.  This would be racy in multithreaded
++    // mode, but provides not basic checks in single threaded mode.
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    assert(writers == 0 && "Writer lock already acquired!");
++#endif
+     ++readers;
+     return true;
+   }
+ 
+   bool unlock_shared() {
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
+     if (!mt_only || llvm_is_multithreaded()) {
+       impl.unlock_shared();
+       return true;
+     }
++#endif
+ 
+     // Single-threaded debugging code.  This would be racy in multithreaded
+     // mode, but provides not basic checks in single threaded mode.
+@@ -131,26 +148,42 @@
+     return true;
+   }
+ 
+-  bool try_lock_shared() { return impl.try_lock_shared(); }
++  bool try_lock_shared() {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    if (writers)
++      return false;
++    ++readers;
++    return true;
++#else
++    return impl.try_lock_shared();
++#endif
++  }
+ 
+   bool lock() {
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
+     if (!mt_only || llvm_is_multithreaded()) {
+       impl.lock();
+       return true;
+     }
+-
+-    // Single-threaded debugging code.  This would be racy in multithreaded
+-    // mode, but provides not basic checks in single threaded mode.
++#endif
++
++    // Single-threaded debugging code.  This would be racy in multithreaded
++    // mode, but provides not basic checks in single threaded mode.
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    assert(readers == 0 && "Reader locks still acquired!");
++#endif
+     assert(writers == 0 && "Writer lock already acquired!");
+     ++writers;
+     return true;
+   }
+ 
+   bool unlock() {
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
+     if (!mt_only || llvm_is_multithreaded()) {
+       impl.unlock();
+       return true;
+     }
++#endif
+ 
+     // Single-threaded debugging code.  This would be racy in multithreaded
+     // mode, but provides not basic checks in single threaded mode.
+@@ -159,13 +192,23 @@
+     return true;
+   }
+ 
+-  bool try_lock() { return impl.try_lock(); }
++  bool try_lock() {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    if (readers || writers)
++      return false;
++    ++writers;
++    return true;
++#else
++    return impl.try_lock();
++#endif
++  }
+ };
+ 
+ using RWMutex = SmartRWMutex<false>;
+ 
+ /// ScopedReader - RAII acquisition of a reader lock
+-#if !defined(LLVM_USE_RW_MUTEX_IMPL)
++#if !defined(LLVM_USE_RW_MUTEX_IMPL) && \
++    (!defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS)
+ template <bool mt_only>
+ using SmartScopedReader = const std::shared_lock<SmartRWMutex<mt_only>>;
+ #else
+@@ -176,6 +219,10 @@
+     mutex.lock_shared();
+   }
+ 
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  SmartScopedReader(const SmartScopedReader &) = delete;
++  SmartScopedReader &operator=(const SmartScopedReader &) = delete;
++#endif
+   ~SmartScopedReader() { mutex.unlock_shared(); }
+ };
+ #endif
+--- a/llvm/include/llvm/Support/ThreadPool.h
++++ b/llvm/include/llvm/Support/ThreadPool.h
+@@ -22,7 +22,11 @@
+ #include "llvm/Support/Threading.h"
+ #include "llvm/Support/thread.h"
+ 
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++#include "llvm/Support/ThreadPoolFuture.h"
++#else
+ #include <future>
++#endif
+ 
+ #include <condition_variable>
+ #include <deque>
+@@ -31,6 +35,10 @@
+ #include <utility>
+ 
+ namespace llvm {
++
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
++template <typename T> using ThreadPoolFuture = std::shared_future<T>;
++#endif
+ 
+ class ThreadPoolTaskGroup;
+ 
+@@ -94,14 +102,14 @@
+   /// Asynchronous submission of a task to the pool. The returned future can be
+   /// used to wait for the task to finish and is *non-blocking* on destruction.
+   template <typename Func>
+-  auto async(Func &&F) -> std::shared_future<decltype(F())> {
++  auto async(Func &&F) -> ThreadPoolFuture<decltype(F())> {
+     return asyncImpl(
+         llvm::unique_function<decltype(F())()>(std::forward<Func>(F)), nullptr);
+   }
+ 
+   template <typename Func>
+   auto async(ThreadPoolTaskGroup &Group, Func &&F)
+-      -> std::shared_future<decltype(F())> {
++      -> ThreadPoolFuture<decltype(F())> {
+     return asyncImpl(
+         llvm::unique_function<decltype(F())()>(std::forward<Func>(F)), &Group);
+   }
+@@ -110,9 +118,13 @@
+   /// Asynchronous submission of a task to the pool. The returned future can be
+   /// used to wait for the task to finish and is *non-blocking* on destruction.
+   template <typename ResTy>
+-  std::shared_future<ResTy> asyncImpl(llvm::unique_function<ResTy()> Task,
++  ThreadPoolFuture<ResTy> asyncImpl(llvm::unique_function<ResTy()> Task,
+                                       ThreadPoolTaskGroup *Group) {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    ThreadPoolFuture<ResTy> Future(std::move(Task));
++#else
+     auto Future = std::async(std::launch::deferred, std::move(Task)).share();
++#endif
+     asyncEnqueue([Future]() { Future.wait(); }, Group);
+     return Future;
+   }
+--- a/llvm/lib/Support/ThreadPool.cpp
++++ b/llvm/lib/Support/ThreadPool.cpp
+@@ -16,7 +16,9 @@
+ #include "llvm/Config/llvm-config.h"
+ 
+ #include "llvm/ADT/ScopeExit.h"
++#if LLVM_ENABLE_THREADS
+ #include "llvm/Support/ExponentialBackoff.h"
++#endif
+ #include "llvm/Support/FormatVariadic.h"
+ #include "llvm/Support/Threading.h"
+ #include "llvm/Support/raw_ostream.h"
+--- a/llvm/lib/Support/CrashRecoveryContext.cpp
++++ b/llvm/lib/Support/CrashRecoveryContext.cpp
+@@ -10,6 +10,7 @@
+ #include "llvm/Config/llvm-config.h"
+ #include "llvm/Support/ErrorHandling.h"
+ #include "llvm/Support/ExitCodes.h"
++#include "llvm/Support/Mutex.h"
+ #include "llvm/Support/Signals.h"
+ #include "llvm/Support/thread.h"
+ #include <cassert>
+@@ -84,8 +85,14 @@
+   }
+ };
+ 
+-std::mutex &getCrashRecoveryContextMutex() {
+-  static std::mutex CrashRecoveryContextMutex;
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++using CrashRecoveryMutex = sys::Mutex;
++#else
++using CrashRecoveryMutex = std::mutex;
++#endif
++
++CrashRecoveryMutex &getCrashRecoveryContextMutex() {
++  static CrashRecoveryMutex CrashRecoveryContextMutex;
+   return CrashRecoveryContextMutex;
+ }
+ 
+@@ -142,7 +149,7 @@
+ }
+ 
+ void CrashRecoveryContext::Enable(bool NeedsPOSIXUtilitySignalHandling) {
+-  std::lock_guard<std::mutex> L(getCrashRecoveryContextMutex());
++  std::lock_guard<CrashRecoveryMutex> L(getCrashRecoveryContextMutex());
+   // FIXME: Shouldn't this be a refcount or something?
+   if (gCrashRecoveryEnabled)
+     return;
+@@ -151,7 +158,7 @@
+ }
+ 
+ void CrashRecoveryContext::Disable() {
+-  std::lock_guard<std::mutex> L(getCrashRecoveryContextMutex());
++  std::lock_guard<CrashRecoveryMutex> L(getCrashRecoveryContextMutex());
+   if (!gCrashRecoveryEnabled)
+     return;
+   gCrashRecoveryEnabled = false;
+@@ -354,6 +361,9 @@
+     { SIGABRT, SIGBUS, SIGFPE, SIGILL, SIGSEGV, SIGTRAP };
+ static const unsigned NumSignals = std::size(Signals);
+ static struct sigaction PrevActions[NumSignals];
++#if defined(LLVM_WASTE_GUEST)
++static bool InstalledActions[NumSignals];
++#endif
+ 
+ static void CrashRecoverySignalHandler(int Signal) {
+   // Lookup the current thread local recovery object.
+@@ -409,6 +419,16 @@
+   sigemptyset(&Handler.sa_mask);
+ 
+   for (unsigned i = 0; i != NumSignals; ++i) {
++#if defined(LLVM_WASTE_GUEST)
++    InstalledActions[i] = false;
++    if (NeedsPOSIXUtilitySignalHandling) {
++      struct sigaction act;
++      if (sigaction(Signals[i], nullptr, &act) != 0 || act.sa_handler == SIG_IGN)
++        continue;
++    }
++    InstalledActions[i] =
++        sigaction(Signals[i], &Handler, &PrevActions[i]) == 0;
++#else
+     if (NeedsPOSIXUtilitySignalHandling) {
+       // Don't install the new handler if the signal disposition is SIG_IGN.
+       struct sigaction act;
+@@ -417,13 +437,20 @@
+     } else {
+       sigaction(Signals[i], &Handler, &PrevActions[i]);
+     }
++#endif
+   }
+ }
+ 
+ static void uninstallExceptionOrSignalHandlers() {
+   // Restore the previous signal handlers.
+-  for (unsigned i = 0; i != NumSignals; ++i)
++  for (unsigned i = 0; i != NumSignals; ++i) {
++#if defined(LLVM_WASTE_GUEST)
++    if (!InstalledActions[i])
++      continue;
++    InstalledActions[i] = false;
++#endif
+     sigaction(Signals[i], &PrevActions[i], nullptr);
++  }
+ }
+ 
+ #endif // !_WIN32
+--- a/llvm/include/llvm/Support/ExponentialBackoff.h
++++ b/llvm/include/llvm/Support/ExponentialBackoff.h
+@@ -13,10 +13,14 @@
+ #define LLVM_EXPONENTIALBACKOFF_H
+ 
+ #include "llvm/ADT/STLExtras.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/Support/Compiler.h"
+ #include "llvm/Support/Error.h"
+ #include <chrono>
+ #include <random>
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++#include "llvm/Support/WasteBackoff.h"
++#endif
+ 
+ namespace llvm {
+ 
+@@ -57,7 +61,11 @@
+   duration MinWait;
+   duration MaxWait;
+   time_point EndTime;
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  detail::WasteBackoffRandom RandDev;
++#else
+   std::random_device RandDev;
++#endif
+   int64_t CurrentMultiplier = 1;
+ };
+ 
+--- a/llvm/lib/Support/ExponentialBackoff.cpp
++++ b/llvm/lib/Support/ExponentialBackoff.cpp
+@@ -7,7 +7,9 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "llvm/Support/ExponentialBackoff.h"
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
+ #include <thread>
++#endif
+ 
+ using namespace llvm;
+ 
+@@ -24,6 +26,10 @@
+   duration WaitDuration = std::min(duration(Dist(RandDev)), EndTime - Now);
+   if (CurMaxWait < MaxWait)
+     CurrentMultiplier *= 2;
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  detail::wasteBackoffSleepUntil(Now + WaitDuration);
++#else
+   std::this_thread::sleep_for(WaitDuration);
++#endif
+   return true;
+ }
+--- a/llvm/lib/Support/LockFileManager.cpp
++++ b/llvm/lib/Support/LockFileManager.cpp
+@@ -10,6 +10,9 @@
+ #include "llvm/ADT/SmallVector.h"
+ #include "llvm/ADT/StringExtras.h"
+ #include "llvm/Config/llvm-config.h" // for LLVM_ON_UNIX
++#if defined(LLVM_WASTE_GUEST)
++#include "llvm/Support/WasteLockFile.h"
++#endif
+ #include "llvm/Support/Errc.h"
+ #include "llvm/Support/ErrorOr.h"
+ #include "llvm/Support/ExponentialBackoff.h"
+@@ -100,7 +103,12 @@
+   char HostName[256];
+   HostName[255] = 0;
+   HostName[0] = 0;
++#if defined(LLVM_WASTE_GUEST)
++  if (gethostname(HostName, 255) != 0)
++    return errnoAsErrorCode();
++#else
+   gethostname(HostName, 255);
++#endif
+   StringRef HostNameRef(HostName);
+   HostID.append(HostNameRef.begin(), HostNameRef.end());
+ 
+@@ -113,6 +121,9 @@
+ }
+ 
+ bool LockFileManager::processStillExecuting(StringRef HostID, int PID) {
++#if defined(LLVM_WASTE_GUEST)
++  return detail::wasteLockOwnerStillExecuting(HostID, PID);
++#else
+ #if LLVM_ON_UNIX && !defined(__ANDROID__)
+   SmallString<256> StoredHostID;
+   if (getHostID(StoredHostID))
+@@ -124,6 +135,7 @@
+ #endif
+ 
+   return true;
++#endif
+ }
+ 
+ namespace {
+--- a/llvm/lib/Support/ManagedStatic.cpp
++++ b/llvm/lib/Support/ManagedStatic.cpp
+@@ -13,14 +13,21 @@
+ #include "llvm/Support/ManagedStatic.h"
+ #include "llvm/Config/config.h"
+ #include "llvm/Support/Threading.h"
++#include "llvm/Support/Mutex.h"
+ #include <cassert>
+ #include <mutex>
+ using namespace llvm;
+ 
+ static const ManagedStaticBase *StaticList = nullptr;
+ 
+-static std::recursive_mutex *getManagedStaticMutex() {
+-  static std::recursive_mutex m;
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++using ManagedStaticMutex = sys::SmartMutex<true>;
++#else
++using ManagedStaticMutex = std::recursive_mutex;
++#endif
++
++static ManagedStaticMutex *getManagedStaticMutex() {
++  static ManagedStaticMutex m;
+   return &m;
+ }
+ 
+@@ -28,7 +35,7 @@
+                                               void (*Deleter)(void*)) const {
+   assert(Creator);
+   if (llvm_is_multithreaded()) {
+-    std::lock_guard<std::recursive_mutex> Lock(*getManagedStaticMutex());
++    std::lock_guard<ManagedStaticMutex> Lock(*getManagedStaticMutex());
+ 
+     if (!Ptr.load(std::memory_order_relaxed)) {
+       void *Tmp = Creator();
+--- a/llvm/lib/Support/Mustache.cpp
++++ b/llvm/lib/Support/Mustache.cpp
+@@ -9,7 +9,11 @@
+ #include "llvm/ADT/SmallVector.h"
+ #include "llvm/Support/Debug.h"
+ #include "llvm/Support/raw_ostream.h"
++#if defined(LLVM_WASTE_GUEST)
++#include "llvm/Support/WasteMustache.h"
++#else
+ #include <sstream>
++#endif
+ 
+ #define DEBUG_TYPE "mustache"
+ 
+@@ -674,9 +678,13 @@
+     return;
+   case json::Value::Number: {
+     auto Num = *Data.getAsNumber();
++#if defined(LLVM_WASTE_GUEST)
++    OS << detail::wasteMustacheNumber(Num);
++#else
+     std::ostringstream SS;
+     SS << Num;
+     OS << SS.str();
++#endif
+     return;
+   }
+   case json::Value::String: {
+--- a/llvm/include/llvm/Support/Parallel.h
++++ b/llvm/include/llvm/Support/Parallel.h
+@@ -19,6 +19,7 @@
+ #include <algorithm>
+ #include <atomic>
+ #include <condition_variable>
++#include <cstdlib>
+ #include <functional>
+ #include <mutex>
+ 
+@@ -40,29 +41,56 @@
+ namespace detail {
+ class Latch {
+   std::atomic<uint32_t> Count;
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
+   mutable std::mutex Mutex;
+   mutable std::condition_variable Cond;
++#endif
+ 
+ public:
+   explicit Latch(uint32_t Count = 0) : Count(Count) {}
+-  ~Latch() { assert(Count.load(std::memory_order_relaxed) == 0); }
+-
+-  void inc() { Count.fetch_add(1, std::memory_order_relaxed); }
++  ~Latch() {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    sync();
++#else
++    assert(Count.load(std::memory_order_relaxed) == 0);
++#endif
++  }
++
++  void inc() {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    if (Count.fetch_add(1, std::memory_order_relaxed) == UINT32_MAX)
++      std::abort();
++#else
++    Count.fetch_add(1, std::memory_order_relaxed);
++#endif
++  }
+ 
+   // dec() must hold Mutex so that sync() cannot observe Count==0 and
+   // destroy the Latch while dec() is still running.
+   void dec() {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    if (Count.fetch_sub(1, std::memory_order_acq_rel) == 0)
++      std::abort();
++#else
+     std::lock_guard<std::mutex> lock(Mutex);
+     // fetch_sub returns the previous value; == 1 means Count is now 0.
+     if (Count.fetch_sub(1, std::memory_order_acq_rel) == 1)
+       Cond.notify_all();
++#endif
+   }
+ 
+   uint32_t getCount() const { return Count.load(std::memory_order_acquire); }
+ 
+   void sync() const {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    // TaskGroup runs synchronously in this profile. Pending work cannot be
++    // waited for on another compiler thread, and must not appear completed.
++    if (Count.load(std::memory_order_acquire) != 0)
++      std::abort();
++#else
+     std::unique_lock<std::mutex> lock(Mutex);
+     Cond.wait(lock, [&] { return Count.load(std::memory_order_relaxed) == 0; });
++#endif
+   }
+ };
+ } // namespace detail
+--- a/llvm/lib/Support/TimeProfiler.cpp
++++ b/llvm/lib/Support/TimeProfiler.cpp
+@@ -19,6 +19,9 @@
+ #include "llvm/Support/Path.h"
+ #include "llvm/Support/Process.h"
+ #include "llvm/Support/Threading.h"
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++#include "llvm/Support/Mutex.h"
++#endif
+ #include <algorithm>
+ #include <cassert>
+ #include <chrono>
+@@ -39,8 +42,16 @@
+ using std::chrono::time_point;
+ using std::chrono::time_point_cast;
+ 
++// The compiler guest is single-threaded; native/threaded registries keep
++// their standard mutex. Keep instance ownership and static shutdown unchanged.
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++using TimeTraceMutex = llvm::sys::SmartMutex<true>;
++#else
++using TimeTraceMutex = std::mutex;
++#endif
++
+ struct TimeTraceProfilerInstances {
+-  std::mutex Lock;
++  TimeTraceMutex Lock;
+   std::vector<TimeTraceProfiler *> List;
+ };
+ 
+@@ -215,7 +226,7 @@
+   void write(raw_pwrite_stream &OS) {
+     // Acquire Mutex as reading ThreadTimeTraceProfilerInstances.
+     auto &Instances = getTimeTraceProfilerInstances();
+-    std::lock_guard<std::mutex> Lock(Instances.Lock);
++    std::lock_guard<decltype(Instances.Lock)> Lock(Instances.Lock);
+     assert(Stack.empty() &&
+            "All profiler sections should be ended when calling write");
+     assert(llvm::all_of(Instances.List,
+@@ -407,7 +418,7 @@
+   TimeTraceProfilerInstance = nullptr;
+ 
+   auto &Instances = getTimeTraceProfilerInstances();
+-  std::lock_guard<std::mutex> Lock(Instances.Lock);
++  std::lock_guard<decltype(Instances.Lock)> Lock(Instances.Lock);
+   for (auto *TTP : Instances.List)
+     delete TTP;
+   Instances.List.clear();
+@@ -417,7 +428,7 @@
+ // This doesn't remove the instance, just moves the pointer to global vector.
+ void llvm::timeTraceProfilerFinishThread() {
+   auto &Instances = getTimeTraceProfilerInstances();
+-  std::lock_guard<std::mutex> Lock(Instances.Lock);
++  std::lock_guard<decltype(Instances.Lock)> Lock(Instances.Lock);
+   Instances.List.push_back(TimeTraceProfilerInstance);
+   TimeTraceProfilerInstance = nullptr;
+ }
+--- a/llvm/lib/Support/CMakeLists.txt
++++ b/llvm/lib/Support/CMakeLists.txt
+@@ -152,6 +152,15 @@
+ endif()
+ 
+ add_subdirectory(BLAKE3)
++
++# The WASTE Clang/LLD graph does not use the localization-dependent ostream
++# adapter or the socket stream (whose callers are unit-test utilities).
++# Retain both in native builds and keep LLVM's source inventory check enabled.
++set(llvm_support_optional_stream_sources raw_os_ostream.cpp raw_socket_stream.cpp)
++if(LLVM_WASTE_GUEST)
++  list(APPEND LLVM_OPTIONAL_SOURCES ${llvm_support_optional_stream_sources})
++  set(llvm_support_optional_stream_sources)
++endif()
+ 
+ add_llvm_component_library(LLVMSupport
+   ABIBreak.cpp
+@@ -304,10 +313,9 @@
+   WithColor.cpp
+   YAMLParser.cpp
+   YAMLTraits.cpp
+-  raw_os_ostream.cpp
++  ${llvm_support_optional_stream_sources}
+   raw_ostream.cpp
+   raw_ostream_proxy.cpp
+-  raw_socket_stream.cpp
+   regcomp.c
+   regerror.c
+   regexec.c
+--- a/llvm/lib/Support/Program.cpp
++++ b/llvm/lib/Support/Program.cpp
+@@ -14,6 +14,9 @@
+ #include "llvm/ADT/StringRef.h"
+ #include "llvm/Config/llvm-config.h"
+ #include "llvm/Support/raw_ostream.h"
++#if defined(LLVM_WASTE_GUEST)
++#include "llvm/Support/WasteProgram.h"
++#endif
+ using namespace llvm;
+ using namespace sys;
+ 
+@@ -37,6 +40,16 @@
+                         std::optional<ProcessStatistics> *ProcStat,
+                         BitVector *AffinityMask) {
+   assert(Redirects.empty() || Redirects.size() == 3);
++#if defined(LLVM_WASTE_GUEST)
++  // Reject unsupported optional waits before Execute can create a child.
++  if (!detail::checkProgramWaitCapabilities(
++          SecondsToWait == 0 ? std::nullopt : std::optional(SecondsToWait),
++          ProcStat, ErrMsg)) {
++    if (ExecutionFailed)
++      *ExecutionFailed = true;
++    return -1;
++  }
++#endif
+   ProcessInfo PI;
+   if (Execute(PI, Program, Args, Env, Redirects, MemoryLimit, ErrMsg,
+               AffinityMask, /*DetachProcess=*/false)) {
+--- a/llvm/lib/Support/Unix/Program.inc
++++ b/llvm/lib/Support/Unix/Program.inc
+@@ -134,7 +134,9 @@
+ }
+ #endif
+ 
++#if !defined(LLVM_WASTE_GUEST)
+ static void TimeOutHandler(int Sig) {}
++#endif
+ 
+ static void SetMemoryLimits(unsigned size) {
+   struct rlimit r;
+@@ -336,7 +338,7 @@
+ 
+ #if defined(_AIX)
+ static pid_t(wait4)(pid_t pid, int *status, int options, struct rusage *usage);
+-#elif !defined(__Fuchsia__)
++#elif !defined(__Fuchsia__) && !defined(LLVM_WASTE_GUEST)
+ using ::wait4;
+ #endif
+ 
+@@ -382,8 +384,17 @@
+                             std::string *ErrMsg,
+                             std::optional<ProcessStatistics> *ProcStat,
+                             bool Polling) {
++#if !defined(LLVM_WASTE_GUEST)
+   struct sigaction Act, Old;
++#endif
+   assert(PI.Pid && "invalid pid to wait on, process not started?");
++#if defined(LLVM_WASTE_GUEST)
++  if (!detail::checkProgramWaitCapabilities(SecondsToWait, ProcStat, ErrMsg)) {
++    ProcessInfo Result;
++    Result.ReturnCode = -1;
++    return Result;
++  }
++#endif
+ 
+   int WaitPidOptions = 0;
+   pid_t ChildPid = PI.Pid;
+@@ -394,6 +405,7 @@
+     if (*SecondsToWait == 0)
+       WaitPidOptions = WNOHANG;
+ 
++#if !defined(LLVM_WASTE_GUEST)
+     // Install a timeout handler.  The handler itself does nothing, but the
+     // simple fact of having a handler at all causes the wait below to return
+     // with EINTR, unlike if we used SIG_IGN.
+@@ -403,12 +415,19 @@
+     sigaction(SIGALRM, &Act, &Old);
+     // FIXME The alarm signal may be delivered to another thread.
+     alarm(*SecondsToWait);
++#endif
+   }
+ 
+   // Parent process: Wait for the child process to terminate.
+   int status = 0;
+   ProcessInfo WaitResult;
+-#ifndef __Fuchsia__
++#if defined(LLVM_WASTE_GUEST)
++  // The shared guest kernel supports child status, not CPU accounting. Keep
++  // indefinite EINTR retry and zero-time polling on its existing scheduler.
++  do {
++    WaitResult.Pid = ::waitpid(ChildPid, &status, WaitPidOptions);
++  } while (WaitUntilTerminates && WaitResult.Pid == -1 && errno == EINTR);
++#elif !defined(__Fuchsia__)
+   rusage Info;
+   if (ProcStat)
+     ProcStat->reset();
+@@ -423,6 +442,7 @@
+       // Non-blocking wait.
+       return WaitResult;
+     } else {
++#if !defined(LLVM_WASTE_GUEST)
+       if (SecondsToWait && errno == EINTR && !Polling) {
+         // Kill the child.
+         kill(PI.Pid, SIGKILL);
+@@ -441,7 +461,9 @@
+ 
+         WaitResult.ReturnCode = -2; // Timeout detected
+         return WaitResult;
+-      } else if (errno != EINTR) {
++      } else if (errno != EINTR)
++#endif
++      {
+         MakeErrMsg(ErrMsg, "Error waiting for child process");
+         WaitResult.ReturnCode = -1;
+         return WaitResult;
+@@ -449,6 +471,7 @@
+     }
+   }
+ 
++#if !defined(LLVM_WASTE_GUEST)
+   // We exited normally without timeout, so turn off the timer.
+   if (SecondsToWait && !WaitUntilTerminates) {
+     alarm(0);
+@@ -466,6 +489,8 @@
+     *ProcStat = ProcessStatistics{UserT + KernelT, UserT, PeakMemory};
+   }
+ #endif
++
++#endif // !LLVM_WASTE_GUEST
+ 
+   // Return the proper exit status. Detect error conditions
+   // so we can return -1 for them and set ErrMsg informatively.
+--- a/llvm/lib/Support/Unix/Program.inc
++++ b/llvm/lib/Support/Unix/Program.inc
+@@ -547,6 +547,10 @@
+ 
+ bool llvm::sys::commandLineFitsWithinSystemLimits(StringRef Program,
+                                                   ArrayRef<StringRef> Args) {
++#if defined(LLVM_WASTE_GUEST)
++  (void)Program;
++  return llvm::detail::commandLineFitsGuestLimits(Args);
++#else
+   static long ArgMax = sysconf(_SC_ARG_MAX);
+   // POSIX requires that _POSIX_ARG_MAX is 4096, which is the lowest possible
+   // value for ARG_MAX on a POSIX compliant system.
+@@ -584,4 +588,5 @@
+   }
+ 
+   return true;
+-}
++#endif
++}
+--- a/llvm/lib/Support/Program.cpp
++++ b/llvm/lib/Support/Program.cpp
+@@ -74,8 +74,13 @@
+ 
+ bool sys::commandLineFitsWithinSystemLimits(StringRef Program,
+                                             ArrayRef<const char *> Args) {
++#if defined(LLVM_WASTE_GUEST)
++  (void)Program;
++  return llvm::detail::commandLineFitsGuestLimits(Args);
++#else
+   SmallVector<StringRef, 8> StringRefArgs(Args);
+   return commandLineFitsWithinSystemLimits(Program, StringRefArgs);
++#endif
+ }
+ 
+ void sys::printArg(raw_ostream &OS, StringRef Arg, bool Quote) {
+--- a/llvm/lib/Support/Unix/Signals.inc
++++ b/llvm/lib/Support/Unix/Signals.inc
+@@ -84,8 +84,15 @@
+ 
+ using namespace llvm;
+ 
++#if defined(LLVM_WASTE_GUEST)
++// The shared guest kernel delivers explicit signal numbers to ordinary handlers.
++// Native fault contexts, siginfo callbacks and alternate stacks are unavailable.
++static void SignalHandler(int Sig);
++static void SignalHandlerTerminate(int Sig);
++#else
+ static void SignalHandler(int Sig, siginfo_t *Info, void *Context);
+ static void SignalHandlerTerminate(int Sig, siginfo_t *Info, void *Context);
++#endif
+ static void InfoSignalHandler(int Sig); // defined below.
+ static void InfoSignalHandlerTerminate(int Sig); // defined below.
+ 
+@@ -274,7 +281,7 @@
+ 
+ /// Signals that represent requests for status.
+ static const int InfoSigs[] = {SIGUSR1
+-#ifdef SIGINFO
++#if defined(SIGINFO) && (!defined(LLVM_WASTE_GUEST) || SIGINFO != SIGUSR1)
+                                ,
+                                SIGINFO
+ #endif
+@@ -344,6 +351,15 @@
+ 
+     struct sigaction NewHandler;
+ 
++#if defined(LLVM_WASTE_GUEST)
++    if (Kind == SignalKind::IsKill)
++      NewHandler.sa_handler = NeedsPOSIXUtilitySignalHandling
++                                  ? SignalHandlerTerminate : SignalHandler;
++    else
++      NewHandler.sa_handler = NeedsPOSIXUtilitySignalHandling
++                                  ? InfoSignalHandlerTerminate : InfoSignalHandler;
++    NewHandler.sa_flags = 0;
++#else
+     switch (Kind) {
+     case SignalKind::IsKill:
+       if (NeedsPOSIXUtilitySignalHandling)
+@@ -364,8 +380,21 @@
+       NewHandler.sa_flags = SA_ONSTACK;
+       break;
+     }
++#endif
+     sigemptyset(&NewHandler.sa_mask);
+ 
++#if defined(LLVM_WASTE_GUEST)
++    // Only save actions that were actually installed. Otherwise unregistering
++    // could turn a pre-existing ignored disposition into a default action.
++    if (NeedsPOSIXUtilitySignalHandling) {
++      struct sigaction Previous;
++      if (sigaction(Signal, nullptr, &Previous) != 0 ||
++          Previous.sa_handler == SIG_IGN)
++        return;
++    }
++    if (sigaction(Signal, &NewHandler, &RegisteredSignalInfo[Index].SA) != 0)
++      return;
++#else
+     if (NeedsPOSIXUtilitySignalHandling) {
+       // Don't install the new handler if the signal disposition is SIG_IGN.
+       struct sigaction act;
+@@ -374,6 +403,7 @@
+     } else {
+       sigaction(Signal, &NewHandler, &RegisteredSignalInfo[Index].SA);
+     }
++#endif
+     RegisteredSignalInfo[Index].SigNo = Signal;
+     ++NumRegisteredSignals;
+   };
+@@ -422,7 +452,11 @@
+ }
+ 
+ // The signal handler that runs.
++#if defined(LLVM_WASTE_GUEST)
++static void SignalHandler(int Sig) {
++#else
+ static void SignalHandler(int Sig, siginfo_t *Info, void *Context) {
++#endif
+   // Restore the signal behavior to default, so that the program actually
+   // crashes when we return and the signal reissues.  This also ensures that if
+   // we crash in our signal handler that the program will terminate immediately
+@@ -456,6 +490,11 @@
+   // Otherwise if it is a fault (like SEGV) run any handler.
+   llvm::sys::RunSignalHandlers();
+ 
++#if defined(LLVM_WASTE_GUEST)
++  // Guest signals are explicitly sent, not machine faults that reissue on
++  // return. Deliver again after restoring dispositions and running cleanup.
++  raise(Sig);
++#else
+ #ifdef __s390__
+   // On S/390, certain signals are delivered with PSW Address pointing to
+   // *after* the faulting instruction.  Simply returning from the signal
+@@ -504,10 +543,16 @@
+   // possible that a thread in the current process could have sent the signal.
+   if (ReraiseSignal)
+     raise(Sig);
+-}
+-
++#endif
++}
++
++#if defined(LLVM_WASTE_GUEST)
++static void SignalHandlerTerminate(int Sig) {
++  SignalHandler(Sig);
++#else
+ static void SignalHandlerTerminate(int Sig, siginfo_t *Info, void *Context) {
+   SignalHandler(Sig, Info, Context);
++#endif
+ 
+   // Resignal if it is a kill signal so that the exit code contains the
+   // terminating signal number.
+--- a/llvm/lib/Support/Unix/Program.inc
++++ b/llvm/lib/Support/Unix/Program.inc
+@@ -172,6 +172,12 @@
+   assert(!AffinityMask && "Starting a process with an affinity mask is "
+                           "currently not supported on Unix!");
+ 
++#if defined(LLVM_WASTE_GUEST)
++  if (!detail::checkProgramExecutionCapabilities(Redirects, MemoryLimit,
++                                                AffinityMask, ErrMsg))
++    return false;
++#endif
++
+   BumpPtrAllocator Allocator;
+   StringSaver Saver(Allocator);
+   std::vector<const char *> ArgVector, EnvVector;
+@@ -272,23 +278,43 @@
+     if (!Redirects.empty()) {
+       // Redirect stdin
+       if (RedirectIO(Redirects[0], 0, ErrMsg)) {
++#if defined(LLVM_WASTE_GUEST)
++        // A failed child setup must never resume the parent's caller.
++        _exit(126);
++#else
+         return false;
++#endif
+       }
+       // Redirect stdout
+       if (RedirectIO(Redirects[1], 1, ErrMsg)) {
++#if defined(LLVM_WASTE_GUEST)
++        // A failed child setup must never resume the parent's caller.
++        _exit(126);
++#else
+         return false;
++#endif
+       }
+       if (Redirects[1] && Redirects[2] && *Redirects[1] == *Redirects[2]) {
+         // If stdout and stderr should go to the same place, redirect stderr
+         // to the FD already open for stdout.
+         if (-1 == dup2(1, 2)) {
+           MakeErrMsg(ErrMsg, "Can't redirect stderr to stdout");
++#if defined(LLVM_WASTE_GUEST)
++          // A failed child setup must never resume the parent's caller.
++          _exit(126);
++#else
+           return false;
++#endif
+         }
+       } else {
+         // Just redirect stderr
+         if (RedirectIO(Redirects[2], 2, ErrMsg)) {
++#if defined(LLVM_WASTE_GUEST)
++          // A failed child setup must never resume the parent's caller.
++          _exit(126);
++#else
+           return false;
++#endif
+         }
+       }
+     }
+@@ -297,7 +323,12 @@
+       // Detach from controlling terminal
+       if (::setsid() == -1) {
+         MakeErrMsg(ErrMsg, "Could not detach process, ::setsid failed");
++#if defined(LLVM_WASTE_GUEST)
++        // A failed child setup must never resume the parent's caller.
++        _exit(126);
++#else
+         return false;
++#endif
+       }
+     }
+ 
+--- a/llvm/lib/Support/Unix/Program.inc
++++ b/llvm/lib/Support/Unix/Program.inc
+@@ -420,7 +420,10 @@
+ #endif
+   assert(PI.Pid && "invalid pid to wait on, process not started?");
+ #if defined(LLVM_WASTE_GUEST)
+-  if (!detail::checkProgramWaitCapabilities(SecondsToWait, ProcStat, ErrMsg)) {
++  uint64_t Deadline = 0;
++  bool TimedWait = SecondsToWait && *SecondsToWait != 0;
++  if (!detail::checkProgramWaitCapabilities(SecondsToWait, ProcStat, ErrMsg,
++                                           &Deadline)) {
+     ProcessInfo Result;
+     Result.ReturnCode = -1;
+     return Result;
+@@ -453,11 +456,32 @@
+   int status = 0;
+   ProcessInfo WaitResult;
+ #if defined(LLVM_WASTE_GUEST)
+-  // The shared guest kernel supports child status, not CPU accounting. Keep
+-  // indefinite EINTR retry and zero-time polling on its existing scheduler.
++  // Reuse the shared process/signal/deadline scheduler, without taking over
++  // SIGALRM. Unrelated caught signals retry the original absolute deadline.
+   do {
+-    WaitResult.Pid = ::waitpid(ChildPid, &status, WaitPidOptions);
+-  } while (WaitUntilTerminates && WaitResult.Pid == -1 && errno == EINTR);
++    WaitResult.Pid = TimedWait ?
++        ::waste_waitpid_until(ChildPid, &status, 0, Deadline) :
++        ::waitpid(ChildPid, &status, WaitPidOptions);
++  } while ((WaitUntilTerminates || TimedWait) &&
++           WaitResult.Pid == -1 && errno == EINTR);
++  if (TimedWait && WaitResult.Pid == 0 && !Polling) {
++    if (::kill(ChildPid, SIGKILL) != 0) {
++      MakeErrMsg(ErrMsg, "Error terminating timed out child process");
++      WaitResult.Pid = -1;
++      WaitResult.ReturnCode = -1;
++      return WaitResult;
++    }
++    // Reap only this target. An unrelated ready child must retain its status.
++    do {
++      WaitResult.Pid = ::waitpid(ChildPid, &status, 0);
++    } while (WaitResult.Pid == -1 && errno == EINTR);
++    if (WaitResult.Pid != ChildPid)
++      MakeErrMsg(ErrMsg, "Child timed out but wouldn't die");
++    else
++      MakeErrMsg(ErrMsg, "Child timed out", 0);
++    WaitResult.ReturnCode = -2;
++    return WaitResult;
++  }
+ #elif !defined(__Fuchsia__)
+   rusage Info;
+   if (ProcStat)
+--- a/clang/include/clang/Basic/CompilerSynchronization.h
++++ b/clang/include/clang/Basic/CompilerSynchronization.h
+@@ -0,0 +1,17 @@
++// Compiler-local aliases preserve the native/threaded standard backend.
++#ifndef CLANG_BASIC_COMPILER_SYNCHRONIZATION_H
++#define CLANG_BASIC_COMPILER_SYNCHRONIZATION_H
++
++#include "llvm/Config/llvm-config.h"
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++#include "clang/Basic/WasteSynchronization.h"
++#else
++#include <condition_variable>
++#include <mutex>
++namespace clang::detail {
++using CompilerMutex = std::mutex;
++using CompilerConditionVariable = std::condition_variable;
++} // namespace clang::detail
++#endif
++
++#endif
+--- a/clang/include/clang/DependencyScanning/InProcessModuleCache.h
++++ b/clang/include/clang/DependencyScanning/InProcessModuleCache.h
+@@ -9,6 +9,7 @@
+ #ifndef LLVM_CLANG_DEPENDENCYSCANNING_INPROCESSMODULECACHE_H
+ #define LLVM_CLANG_DEPENDENCYSCANNING_INPROCESSMODULECACHE_H
+ 
++#include "clang/Basic/CompilerSynchronization.h"
+ #include "clang/Basic/AtomicLineLogger.h"
+ #include "clang/Serialization/ModuleCache.h"
+ #include "llvm/ADT/StringMap.h"
+@@ -28,8 +29,8 @@
+ namespace dependencies {
+ 
+ struct ModuleCacheEntry {
+-  std::mutex Mutex;
+-  std::condition_variable CondVar;
++  clang::detail::CompilerMutex Mutex;
++  clang::detail::CompilerConditionVariable CondVar;
+   bool Locked = false;
+   unsigned Generation = 0;
+ 
+@@ -49,7 +50,7 @@
+ };
+ 
+ struct ModuleCacheEntries {
+-  std::mutex Mutex;
++  clang::detail::CompilerMutex Mutex;
+   llvm::StringMap<std::unique_ptr<ModuleCacheEntry>> Map;
+ 
+   bool ValidateAgainstInvalidatedPaths = false;
+@@ -61,7 +62,7 @@
+   void flush();
+ 
+ private:
+-  mutable std::mutex InvalidatedPathsMutex;
++  mutable clang::detail::CompilerMutex InvalidatedPathsMutex;
+   llvm::StringSet<> InvalidatedPaths;
+   std::atomic<bool> AnyInvalidatedPaths = false;
+ };
+--- a/clang/include/clang/DependencyScanning/DependencyScanningFilesystem.h
++++ b/clang/include/clang/DependencyScanning/DependencyScanningFilesystem.h
+@@ -9,6 +9,7 @@
+ #ifndef LLVM_CLANG_DEPENDENCYSCANNING_DEPENDENCYSCANNINGFILESYSTEM_H
+ #define LLVM_CLANG_DEPENDENCYSCANNING_DEPENDENCYSCANNINGFILESYSTEM_H
+ 
++#include "clang/Basic/CompilerSynchronization.h"
+ #include "clang/Basic/LLVM.h"
+ #include "clang/Lex/DependencyDirectivesScanner.h"
+ #include "llvm/ADT/DenseMap.h"
+@@ -40,7 +41,7 @@
+   std::unique_ptr<llvm::MemoryBuffer> Original;
+ 
+   /// The mutex that must be locked before mutating directive tokens.
+-  std::mutex ValueLock;
++  clang::detail::CompilerMutex ValueLock;
+   SmallVector<dependency_directives_scan::Token, 10> DepDirectiveTokens;
+   /// Accessor to the directive tokens that's atomic to avoid data races.
+   /// \p CachedFileContents has ownership of the pointer.
+@@ -162,15 +163,15 @@
+   /// uncached-negative error shared with overlapping waiters but not
+   /// persisted in the shard.
+   struct InProgressEntry {
+-    std::mutex Mutex;
+-    std::condition_variable CondVar;
++    clang::detail::CompilerMutex Mutex;
++    clang::detail::CompilerConditionVariable CondVar;
+     bool Done = false;
+     llvm::ErrorOr<const CachedFileSystemEntry *> Result = std::error_code{};
+ 
+     /// Publishes the producer's outcome to this slot and wakes all waiters.
+     void publish(llvm::ErrorOr<const CachedFileSystemEntry *> R) {
+       {
+-        std::lock_guard<std::mutex> EntryLock(Mutex);
++        std::lock_guard EntryLock(Mutex);
+         assert(!Done && "slot already published");
+         Result = R;
+         Done = true;
+@@ -181,7 +182,7 @@
+ 
+   struct CacheShard {
+     /// The mutex that needs to be locked before mutation of any member.
+-    mutable std::mutex CacheLock;
++    mutable clang::detail::CompilerMutex CacheLock;
+ 
+     /// Cache state per filename: resolved entry, real path, and an in-flight
+     /// slot (if any). \c InProgress is reset on publish.
+--- a/clang/lib/DependencyScanning/InProcessModuleCache.cpp
++++ b/clang/lib/DependencyScanning/InProcessModuleCache.cpp
+@@ -30,7 +30,7 @@
+          "invalidated paths must be spelled like ModuleDeps::DirectoryDeps");
+ #endif
+   {
+-    std::lock_guard<std::mutex> Lock(InvalidatedPathsMutex);
++    std::lock_guard Lock(InvalidatedPathsMutex);
+     InvalidatedPaths.insert(Path);
+   }
+   AnyInvalidatedPaths.store(true, std::memory_order_release);
+@@ -42,7 +42,7 @@
+     return std::nullopt;
+   if (!AnyInvalidatedPaths.load(std::memory_order_acquire))
+     return false;
+-  std::lock_guard<std::mutex> Lock(InvalidatedPathsMutex);
++  std::lock_guard Lock(InvalidatedPathsMutex);
+   return InvalidatedPaths.contains(Directory);
+ }
+ 
+@@ -71,7 +71,7 @@
+   ReaderWriterLock(ModuleCacheEntry &Entry) : Entry(Entry) {}
+ 
+   Expected<bool> tryLock() override {
+-    std::lock_guard<std::mutex> Lock(Entry.Mutex);
++    std::lock_guard Lock(Entry.Mutex);
+     if (Entry.Locked)
+       return false;
+     Entry.Locked = true;
+@@ -82,7 +82,7 @@
+   llvm::WaitForUnlockResult
+   waitForUnlockFor(std::chrono::seconds MaxSeconds) override {
+     assert(!OwnedGeneration);
+-    std::unique_lock<std::mutex> Lock(Entry.Mutex);
++    std::unique_lock Lock(Entry.Mutex);
+     unsigned CurrentGeneration = Entry.Generation;
+     bool Success = Entry.CondVar.wait_for(Lock, MaxSeconds, [&] {
+       // We check not only Locked, but also Generation to break the wait in case
+@@ -95,7 +95,7 @@
+ 
+   std::error_code unsafeUnlock() override {
+     {
+-      std::lock_guard<std::mutex> Lock(Entry.Mutex);
++      std::lock_guard Lock(Entry.Mutex);
+       Entry.Generation += 1;
+       Entry.Locked = false;
+     }
+@@ -106,7 +106,7 @@
+   ~ReaderWriterLock() override {
+     if (OwnedGeneration) {
+       {
+-        std::lock_guard<std::mutex> Lock(Entry.Mutex);
++        std::lock_guard Lock(Entry.Mutex);
+         // Avoid stomping over the state managed by someone else after
+         // unsafeUnlock() and successful tryLock().
+         if (*OwnedGeneration == Entry.Generation)
+@@ -127,7 +127,7 @@
+   InMemoryModuleCache InMemory;
+ 
+   ModuleCacheEntry &getOrCreateEntry(StringRef Filename) {
+-    std::lock_guard<std::mutex> Lock(Entries.Mutex);
++    std::lock_guard Lock(Entries.Mutex);
+     auto &Entry = Entries.Map[Filename];
+     if (!Entry)
+       Entry = std::make_unique<ModuleCacheEntry>();
+@@ -177,7 +177,7 @@
+   std::error_code write(StringRef Path, llvm::MemoryBufferRef Buffer,
+                         off_t &Size, time_t &ModTime) override {
+     ModuleCacheEntry &Entry = getOrCreateEntry(Path);
+-    std::lock_guard<std::mutex> Lock(Entry.Mutex);
++    std::lock_guard Lock(Entry.Mutex);
+     Logger.log() << "pcm_write: " << Path;
+     if (Entry.State == ModuleCacheEntry::S_Written) {
+       assert(Entry.WrittenBuffer && "Wrote PCM with no contents");
+@@ -200,7 +200,7 @@
+   read(StringRef FileName, off_t &Size, time_t &ModTime) override {
+     Logger.log() << "pcm_read_disk: " << FileName;
+     ModuleCacheEntry &Entry = getOrCreateEntry(FileName);
+-    std::lock_guard<std::mutex> Lock(Entry.Mutex);
++    std::lock_guard Lock(Entry.Mutex);
+     if (Entry.State == ModuleCacheEntry::S_Unknown) {
+       // This is a compiler-internal input/output, let's bypass the sandbox.
+       auto BypassSandbox = llvm::sys::sandbox::scopedDisable();
+--- a/clang/lib/DependencyScanning/DependencyScanningFilesystem.cpp
++++ b/clang/lib/DependencyScanning/DependencyScanningFilesystem.cpp
+@@ -54,7 +54,7 @@
+   if (Contents->DepDirectives.load())
+     return true;
+ 
+-  std::lock_guard<std::mutex> GuardLock(Contents->ValueLock);
++  std::lock_guard GuardLock(Contents->ValueLock);
+ 
+   // Double-checked locking.
+   if (Contents->DepDirectives.load())
+@@ -114,7 +114,7 @@
+   std::vector<OutOfDateEntry> InvalidDiagInfo;
+   for (unsigned i = 0; i < NumShards; i++) {
+     const CacheShard &Shard = CacheShards[i];
+-    std::lock_guard<std::mutex> LockGuard(Shard.CacheLock);
++    std::lock_guard LockGuard(Shard.CacheLock);
+     for (const auto &[Path, State] : Shard.CacheByFilename) {
+       const CachedFileSystemEntry *Entry = State.Entry;
+       // Skip slots without a resolved entry: real-path-only entries from
+@@ -167,10 +167,10 @@
+ /// \p K; otherwise installs a fresh \c InProgressEntry and returns it as a
+ /// producer slot.
+ template <typename Map, typename Key>
+-SlotAcquisitionResult acquireSlot(std::mutex &CacheLock, Map &M, const Key &K) {
++SlotAcquisitionResult acquireSlot(clang::detail::CompilerMutex &CacheLock, Map &M, const Key &K) {
+   std::shared_ptr<InProgressEntry> Pending;
+   {
+-    std::lock_guard<std::mutex> ShardLock(CacheLock);
++    std::lock_guard ShardLock(CacheLock);
+     auto &State = M[K];
+ 
+     // Cache hit.
+@@ -188,7 +188,7 @@
+   }
+ 
+   // Wait off the shard lock so unrelated keys in this shard aren't blocked.
+-  std::unique_lock<std::mutex> EntryLock(Pending->Mutex);
++  std::unique_lock EntryLock(Pending->Mutex);
+   Pending->CondVar.wait(EntryLock, [&] { return Pending->Done; });
+   return SlotResolved{Pending->Result};
+ }
+@@ -198,7 +198,7 @@
+ DependencyScanningFilesystemSharedCache::CacheShard::findRealPathByFilename(
+     StringRef Filename) const {
+   assert(llvm::sys::path::is_absolute_gnu(Filename));
+-  std::lock_guard<std::mutex> LockGuard(CacheLock);
++  std::lock_guard LockGuard(CacheLock);
+   auto It = CacheByFilename.find(Filename);
+   return It == CacheByFilename.end() ? nullptr : It->getValue().RealPath;
+ }
+@@ -206,7 +206,7 @@
+ const CachedRealPath &DependencyScanningFilesystemSharedCache::CacheShard::
+     getOrEmplaceRealPathForFilename(StringRef Filename,
+                                     llvm::ErrorOr<llvm::StringRef> RealPath) {
+-  std::lock_guard<std::mutex> LockGuard(CacheLock);
++  std::lock_guard LockGuard(CacheLock);
+ 
+   const CachedRealPath *&StoredRealPath = CacheByFilename[Filename].RealPath;
+   if (!StoredRealPath) {
+@@ -254,7 +254,7 @@
+   // to retry the open.
+   const CachedFileSystemEntry *SharedEntry;
+   {
+-    std::lock_guard<std::mutex> ShardLock(UIDShard.CacheLock);
++    std::lock_guard ShardLock(UIDShard.CacheLock);
+     auto &State = UIDShard.EntriesByUID[Stat.getUniqueID()];
+     assert(!State.Entry && "UID slot already published an entry");
+     if (TEntry) {
+@@ -309,7 +309,7 @@
+   // section. The cached-negative case allocates here so allocate+bind+reset
+   // share one shard-lock acquisition.
+   {
+-    std::lock_guard<std::mutex> ShardLock(FilenameShard.CacheLock);
++    std::lock_guard ShardLock(FilenameShard.CacheLock);
+     auto &State = FilenameShard.CacheByFilename[FilenameForLookup];
+     assert(!State.Entry && "filename slot already published an entry");
+     if (ShouldCacheNegativeStat) {
+--- a/clang/lib/Frontend/PrecompiledPreamble.cpp
++++ b/clang/lib/Frontend/PrecompiledPreamble.cpp
+@@ -10,6 +10,7 @@
+ //
+ //===----------------------------------------------------------------------===//
+ 
++#include "clang/Basic/CompilerSynchronization.h"
+ #include "clang/Frontend/PrecompiledPreamble.h"
+ #include "clang/Basic/FileManager.h"
+ #include "clang/Basic/LangStandard.h"
+@@ -159,7 +160,7 @@
+   void removeFile(StringRef File);
+ 
+ private:
+-  std::mutex Mutex;
++  clang::detail::CompilerMutex Mutex;
+   llvm::StringSet<> Files;
+ };
+ 
+@@ -169,20 +170,20 @@
+ }
+ 
+ TemporaryFiles::~TemporaryFiles() {
+-  std::lock_guard<std::mutex> Guard(Mutex);
++  std::lock_guard Guard(Mutex);
+   for (const auto &File : Files)
+     llvm::sys::fs::remove(File.getKey());
+ }
+ 
+ void TemporaryFiles::addFile(StringRef File) {
+-  std::lock_guard<std::mutex> Guard(Mutex);
++  std::lock_guard Guard(Mutex);
+   auto IsInserted = Files.insert(File).second;
+   (void)IsInserted;
+   assert(IsInserted && "File has already been added");
+ }
+ 
+ void TemporaryFiles::removeFile(StringRef File) {
+-  std::lock_guard<std::mutex> Guard(Mutex);
++  std::lock_guard Guard(Mutex);
+   auto WasPresent = Files.erase(File);
+   (void)WasPresent;
+   assert(WasPresent && "File was not tracked");
+--- a/clang/lib/Driver/ModulesDriver.cpp
++++ b/clang/lib/Driver/ModulesDriver.cpp
+@@ -12,6 +12,7 @@
+ ///
+ //===----------------------------------------------------------------------===//
+ 
++#include "clang/Basic/CompilerSynchronization.h"
+ #include "clang/Driver/ModulesDriver.h"
+ #include "clang/Basic/Diagnostic.h"
+ #include "clang/Basic/LLVM.h"
+@@ -260,7 +261,7 @@
+   /// The worker bundle automatically released back to the pool when the
+   /// pointer is destroyed. The pool has to outlive the leased worker bundle.
+   [[nodiscard]] auto scopedAcquire() {
+-    std::unique_lock<std::mutex> UL(Lock);
++    std::unique_lock UL(Lock);
+     CV.wait(UL, [&] { return !AvailableSlots.empty(); });
+     const size_t Index = AvailableSlots.pop_back_val();
+     auto ReleaseHandle = [this, Index](WorkerBundle *) { release(Index); };
+@@ -272,7 +273,7 @@
+   /// Releases the worker bundle at \c Index back into the pool.
+   void release(size_t Index) {
+     {
+-      std::scoped_lock<std::mutex> SL(Lock);
++      std::lock_guard SL(Lock);
+       AvailableSlots.push_back(Index);
+     }
+     CV.notify_one();
+@@ -288,8 +289,8 @@
+     llvm::DenseSet<deps::ModuleID> SeenModules;
+   };
+ 
+-  std::mutex Lock;
+-  std::condition_variable CV;
++  clang::detail::CompilerMutex Lock;
++  clang::detail::CompilerConditionVariable CV;
+   SmallVector<size_t> AvailableSlots;
+   SmallVector<WorkerBundle, 0> Slots;
+ };
+@@ -356,7 +357,7 @@
+   SmallVector<size_t, 2> getNewScanInputs(ArrayRef<std::string> NamedModuleDeps,
+                                           StringRef Triple) {
+     SmallVector<size_t, 2> NewScanInputs;
+-    std::scoped_lock<std::mutex> Guard(Lock);
++    std::lock_guard Guard(Lock);
+     for (const auto &ModuleName : NamedModuleDeps) {
+       const auto It = StdlibModuleScanIndexByID.find({ModuleName, Triple});
+       if (It == StdlibModuleScanIndexByID.end())
+@@ -374,7 +375,7 @@
+ private:
+   const llvm::DenseMap<ModuleNameAndTriple, size_t> &StdlibModuleScanIndexByID;
+   llvm::SmallDenseSet<size_t> ScheduledScanInputs;
+-  std::mutex Lock;
++  clang::detail::CompilerMutex Lock;
+ };
+ 
+ /// Collects diagnostics in a form that can be retained until after their
+--- a/clang/lib/DependencyScanning/DependencyScanningWorker.cpp
++++ b/clang/lib/DependencyScanning/DependencyScanningWorker.cpp
+@@ -7,6 +7,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "clang/DependencyScanning/DependencyScanningWorker.h"
++#include "ModuleCompileTasks.h"
+ #include "clang/Basic/Diagnostic.h"
+ #include "clang/Basic/DiagnosticFrontend.h"
+ #include "clang/Basic/DiagnosticSerialization.h"
+@@ -24,8 +25,6 @@
+ #include "llvm/Support/CrashRecoveryContext.h"
+ #include "llvm/Support/VirtualFileSystem.h"
+ #include "llvm/TargetParser/Host.h"
+-#include <mutex>
+-#include <thread>
+ 
+ using namespace clang;
+ using namespace dependencies;
+@@ -514,31 +513,7 @@
+ }
+ 
+ namespace {
+-/// Manages (and terminates) the asynchronous compilation of modules.
+-class AsyncModuleCompiles {
+-  std::mutex Mutex;
+-  bool Stop = false;
+-  // FIXME: Have the service own a thread pool and use that instead.
+-  std::vector<std::thread> Compiles;
+-
+-public:
+-  /// Registers the module compilation, unless this instance is about to be
+-  /// destroyed.
+-  void add(llvm::unique_function<void()> Compile) {
+-    std::lock_guard<std::mutex> Lock(Mutex);
+-    if (!Stop)
+-      Compiles.emplace_back(std::move(Compile));
+-  }
+-
+-  ~AsyncModuleCompiles() {
+-    {
+-      std::lock_guard<std::mutex> Lock(Mutex);
+-      Stop = true;
+-    }
+-    for (std::thread &Compile : Compiles)
+-      Compile.join();
+-  }
+-};
++using clang::dependencies::detail::AsyncModuleCompiles;
+ 
+ struct SingleModuleWithAsyncModuleCompiles : PreprocessOnlyAction {
+   DependencyScanningService &Service;
+--- /dev/null
++++ b/clang/lib/DependencyScanning/ModuleCompileTasks.h
+@@ -0,0 +1,74 @@
++//===- ModuleCompileTasks.h - Module compilation ownership --------*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef LLVM_CLANG_LIB_DEPENDENCYSCANNING_MODULECOMPILETASKS_H
++#define LLVM_CLANG_LIB_DEPENDENCYSCANNING_MODULECOMPILETASKS_H
++
++#include "llvm/ADT/FunctionExtras.h"
++#include "llvm/Config/llvm-config.h"
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++#include "llvm/Support/Parallel.h"
++#include <memory>
++#else
++#include <mutex>
++#include <thread>
++#include <vector>
++#endif
++
++namespace clang::dependencies::detail {
++/// Manages (and terminates) the asynchronous compilation of modules.
++class AsyncModuleCompiles {
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
++  std::mutex Mutex;
++#endif
++  bool Stop = false;
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  // LLVM TaskGroup already runs inline in this compiler profile. In particular,
++  // recursive module discoveries run before shutdown can reject submissions.
++  llvm::parallel::TaskGroup Compiles;
++#else
++  // FIXME: Have the service own a thread pool and use that instead.
++  std::vector<std::thread> Compiles;
++#endif
++
++public:
++  /// Registers the module compilation, unless this instance is about to be
++  /// destroyed.
++  void add(llvm::unique_function<void()> Compile) {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    if (Stop)
++      return;
++    // TaskGroup accepts a copyable function. Keep the move-only compiler,
++    // diagnostic, controller and cache-lock captures in one owning callable.
++    auto Task = std::make_shared<llvm::unique_function<void()>>(std::move(Compile));
++    Compiles.spawn([Task = std::move(Task)] { (*Task)(); });
++#else
++    std::lock_guard<std::mutex> Lock(Mutex);
++    if (!Stop)
++      Compiles.emplace_back(std::move(Compile));
++#endif
++  }
++
++  ~AsyncModuleCompiles() {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    Stop = true;
++    // All callbacks have completed, including callbacks that yielded through
++    // shared POSIX imports. The actual TaskGroup destructor checks completion.
++#else
++    {
++      std::lock_guard<std::mutex> Lock(Mutex);
++      Stop = true;
++    }
++    for (std::thread &Compile : Compiles)
++      Compile.join();
++#endif
++  }
++};
++} // namespace clang::dependencies::detail
++
++#endif
+--- a/lld/include/lld/Common/ErrorHandler.h
++++ b/lld/include/lld/Common/ErrorHandler.h
+@@ -74,6 +74,7 @@
+ #include "llvm/ADT/SmallString.h"
+ #include "llvm/Support/Error.h"
+ #include "llvm/Support/FileOutputBuffer.h"
++#include "llvm/Support/Mutex.h"
+ #include "llvm/Support/raw_ostream.h"
+ #include <mutex>
+ 
+@@ -136,7 +137,11 @@
+   // be indirectly called from multiple threads, we protect them using a mutex.
+   // In the future, we plan on supporting several concurrent linker contexts,
+   // which explains why the mutex is not a global but part of this context.
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  llvm::sys::SmartMutex<true> mu;
++#else
+   std::mutex mu;
++#endif
+   llvm::raw_ostream *stdoutOS{};
+   llvm::raw_ostream *stderrOS{};
+ };
+--- a/lld/Common/ErrorHandler.cpp
++++ b/lld/Common/ErrorHandler.cpp
+@@ -17,7 +17,11 @@
+ #include "llvm/Support/Process.h"
+ #include "llvm/Support/Program.h"
+ #include "llvm/Support/raw_ostream.h"
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++#include "lld/Common/WasteDiagnostics.h"
++#else
+ #include <regex>
++#endif
+ 
+ using namespace llvm;
+ using namespace lld;
+@@ -44,7 +48,7 @@
+ }
+ 
+ void ErrorHandler::flushStreams() {
+-  std::lock_guard<std::mutex> lock(mu);
++  std::lock_guard lock(mu);
+   outs().flush();
+   errs().flush();
+ }
+@@ -169,6 +173,9 @@
+   if (!vsDiagnostics)
+     return std::string(logName);
+ 
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  return lld::detail::guestDiagnosticLocation(msg.str(), logName);
++#else
+   static std::regex regexes[] = {
+       std::regex(
+           R"(^undefined (?:\S+ )?symbol:.*\n)"
+@@ -199,6 +206,7 @@
+     return m.str(1) + "(" + m.str(2) + ")";
+   }
+ 
++#endif
+   return std::string(logName);
+ }
+ 
+@@ -225,14 +233,14 @@
+ void ErrorHandler::log(const Twine &msg) {
+   if (!verbose || disableOutput)
+     return;
+-  std::lock_guard<std::mutex> lock(mu);
++  std::lock_guard lock(mu);
+   reportDiagnostic(logName, Colors::RESET, "", msg);
+ }
+ 
+ void ErrorHandler::message(const Twine &msg, llvm::raw_ostream &s) {
+   if (disableOutput)
+     return;
+-  std::lock_guard<std::mutex> lock(mu);
++  std::lock_guard lock(mu);
+   s << msg << "\n";
+   s.flush();
+ }
+@@ -246,7 +254,7 @@
+   if (suppressWarnings)
+     return;
+ 
+-  std::lock_guard<std::mutex> lock(mu);
++  std::lock_guard lock(mu);
+   reportDiagnostic(getLocation(msg), Colors::MAGENTA, "warning", msg);
+ }
+ 
+@@ -254,6 +262,15 @@
+   // If Visual Studio-style error message mode is enabled,
+   // this particular error is printed out as two errors.
+   if (vsDiagnostics) {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    std::string str = msg.str();
++    llvm::SmallVector<llvm::StringRef, 4> matches;
++    if (lld::detail::guestSplitDuplicate(str, matches)) {
++      error(matches[1].str() + matches[2].str());
++      error(matches[1].str() + matches[3].str());
++      return;
++    }
++#else
+     static std::regex re(R"(^(duplicate symbol: .*))"
+                          R"((\n>>> defined at \S+:\d+.*\n>>>.*))"
+                          R"((\n>>> defined at \S+:\d+.*\n>>>.*))");
+@@ -265,11 +282,12 @@
+       error(m.str(1) + m.str(3));
+       return;
+     }
++#endif
+   }
+ 
+   bool exit = false;
+   {
+-    std::lock_guard<std::mutex> lock(mu);
++    std::lock_guard lock(mu);
+ 
+     if (errorLimit == 0 || errorCount < errorLimit) {
+       reportDiagnostic(getLocation(msg), Colors::RED, "error", msg);
+--- a/lld/CMakeLists.txt
++++ b/lld/CMakeLists.txt
+@@ -176,6 +176,15 @@
+   endif()
+ endif()
+ 
++# Restrict only the explicit WASTE guest; native profiles keep every driver.
++option(LLD_WASTE_WASM_ONLY "Build only the WASTE guest WebAssembly driver" OFF)
++if(LLD_WASTE_WASM_ONLY)
++  if(NOT LLVM_WASTE_GUEST)
++    message(FATAL_ERROR "LLD_WASTE_WASM_ONLY requires LLVM_WASTE_GUEST")
++  endif()
++  add_compile_definitions(LLD_WASTE_WASM_ONLY=1)
++endif()
++
+ option(LLD_BUILD_TOOLS
+   "Build the lld tools. If OFF, just generate build targets." ON)
+ 
+@@ -208,10 +217,12 @@
+ endif()
+ 
+ add_subdirectory(docs)
+-add_subdirectory(COFF)
+-add_subdirectory(ELF)
+-add_subdirectory(MachO)
+-add_subdirectory(MinGW)
++if(NOT LLD_WASTE_WASM_ONLY)
++  add_subdirectory(COFF)
++  add_subdirectory(ELF)
++  add_subdirectory(MachO)
++  add_subdirectory(MinGW)
++endif()
+ add_subdirectory(wasm)
+ 
+ add_custom_target(lld-headers)
+--- a/lld/tools/lld/CMakeLists.txt
++++ b/lld/tools/lld/CMakeLists.txt
+@@ -24,6 +24,9 @@
+   target_link_libraries(${target} ${type} ${ARGN})
+ endfunction()
+ 
++if(LLD_WASTE_WASM_ONLY)
++  lld_target_link_libraries(lld PRIVATE lldCommon lldWasm)
++else()
+ lld_target_link_libraries(lld
+   PRIVATE
+   lldCommon
+@@ -33,10 +36,15 @@
+   lldMinGW
+   lldWasm
+   )
++endif()
+ 
+ if(NOT LLD_SYMLINKS_TO_CREATE)
+-  set(LLD_SYMLINKS_TO_CREATE
+-      lld-link ld.lld ld64.lld wasm-ld)
++  if(LLD_WASTE_WASM_ONLY)
++    set(LLD_SYMLINKS_TO_CREATE wasm-ld)
++  else()
++    set(LLD_SYMLINKS_TO_CREATE
++        lld-link ld.lld ld64.lld wasm-ld)
++  endif()
+ endif()
+ 
+ foreach(link ${LLD_SYMLINKS_TO_CREATE})
+--- a/lld/tools/lld/lld.cpp
++++ b/lld/tools/lld/lld.cpp
+@@ -66,11 +66,22 @@
+   return v;
+ }
+ 
++#if !defined(LLD_WASTE_WASM_ONLY)
+ LLD_HAS_DRIVER(coff)
+ LLD_HAS_DRIVER(elf)
+ LLD_HAS_DRIVER(mingw)
+ LLD_HAS_DRIVER(macho)
++#endif
+ LLD_HAS_DRIVER(wasm)
++
++static ArrayRef<DriverDef> selectedDrivers() {
++#if defined(LLD_WASTE_WASM_ONLY)
++  static const DriverDef drivers[] = {{Wasm, &lld::wasm::link}};
++#else
++  static const DriverDef drivers[] = LLD_ALL_DRIVERS;
++#endif
++  return drivers;
++}
+ 
+ int lld_main(int argc, char **argv, const llvm::ToolContext &) {
+   sys::Process::UseANSIEscapeCodes(true);
+@@ -87,7 +98,7 @@
+   // exception handling and no memory cleanup on exit.
+   if (!inTestVerbosity()) {
+     int r =
+-        lld::unsafeLldMain(args, llvm::outs(), llvm::errs(), LLD_ALL_DRIVERS,
++        lld::unsafeLldMain(args, llvm::outs(), llvm::errs(), selectedDrivers(),
+                            /*exitEarly=*/true);
+     return r;
+   }
+@@ -100,7 +111,7 @@
+     inTestOutputDisabled = (i != 1);
+ 
+     // Execute one iteration.
+-    auto r = lldMain(args, llvm::outs(), llvm::errs(), LLD_ALL_DRIVERS);
++    auto r = lldMain(args, llvm::outs(), llvm::errs(), selectedDrivers());
+     if (!r.canRunAgain)
+       exitLld(r.retCode); // Exit now, can't re-execute again.
+ 
+--- a/lld/Common/Filesystem.cpp
++++ b/lld/Common/Filesystem.cpp
+@@ -75,6 +75,11 @@
+       sys::fs::remove(tmpName);
+   }
+   sys::fs::remove(path);
++#elif defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  // The upstream one-thread fallback leaves replacement to the output writer.
++  // No background close is available in this explicit guest compiler profile,
++  // including when the requested strategy names more threads than it supports.
++  return;
+ #else
+   if (parallel::strategy.ThreadsRequested == 1)
+     return;
+--- a/llvm/include/llvm/LTO/LTO.h
++++ b/llvm/include/llvm/LTO/LTO.h
+@@ -28,6 +28,7 @@
+ #include "llvm/Object/IRSymtab.h"
+ #include "llvm/Support/Caching.h"
+ #include "llvm/Support/Error.h"
++#include "llvm/Support/Mutex.h"
+ #include "llvm/Support/StringSaver.h"
+ #include "llvm/Support/ThreadPool.h"
+ #include "llvm/Support/thread.h"
+@@ -256,7 +257,20 @@
+   bool ShouldEmitImportsFiles;
+   DefaultThreadPool BackendThreadPool;
+   std::optional<Error> Err;
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  sys::SmartMutex<true> ErrMu;
++#else
+   std::mutex ErrMu;
++#endif
++
++  // Both backends aggregate errors under the owner's actual mutex type.
++  void addError(Error E) {
++    std::unique_lock L(ErrMu);
++    if (Err)
++      Err = joinErrors(std::move(*Err), std::move(E));
++    else
++      Err = std::move(E);
++  }
+ 
+ public:
+   ThinBackendProc(
+--- a/llvm/lib/LTO/LTO.cpp
++++ b/llvm/lib/LTO/LTO.cpp
+@@ -1704,13 +1704,8 @@
+           Error E = runThinLTOBackendThread(
+               AddStream, Cache, Task, BM, CombinedIndex, ImportList, ExportList,
+               ResolvedODR, DefinedGlobals, ModuleMap);
+-          if (E) {
+-            std::unique_lock<std::mutex> L(ErrMu);
+-            if (Err)
+-              Err = joinErrors(std::move(*Err), std::move(E));
+-            else
+-              Err = std::move(E);
+-          }
++          if (E)
++            addError(std::move(E));
+           if (LLVM_ENABLE_THREADS && Conf.TimeTraceEnabled)
+             timeTraceProfilerFinishThread();
+         },
+@@ -2002,13 +1997,8 @@
+           std::string NewModulePath =
+               getThinLTOOutputFile(ModulePath, OldPrefix, NewPrefix);
+           auto E = emitFiles(ImportList, Task, ModulePath, NewModulePath);
+-          if (E) {
+-            std::unique_lock<std::mutex> L(ErrMu);
+-            if (Err)
+-              Err = joinErrors(std::move(*Err), std::move(E));
+-            else
+-              Err = std::move(E);
+-          }
++          if (E)
++            addError(std::move(E));
+           assert(ModuleToDefinedGVSummaries.count(ModulePath));
+           const GVSummaryMapTy &DefinedGlobals =
+               ModuleToDefinedGVSummaries.find(ModulePath)->second;
+--- a/llvm/include/llvm/ProfileData/SampleProf.h
++++ b/llvm/include/llvm/ProfileData/SampleProf.h
+@@ -31,6 +31,7 @@
+ #include "llvm/Support/Debug.h"
+ #include "llvm/Support/ErrorOr.h"
+ #include "llvm/Support/MathExtras.h"
++#include "llvm/Support/raw_ostream.h"
+ #include <algorithm>
+ #include <atomic>
+ #include <cstdint>
+@@ -584,7 +585,12 @@
+   }
+ 
+   std::string toString(bool OutputLineLocation) const {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    std::string ContextStr;
++    raw_string_ostream OContextStr(ContextStr);
++#else
+     std::ostringstream OContextStr;
++#endif
+     OContextStr << Func.str();
+     if (OutputLineLocation) {
+       OContextStr << ":" << Location.LineOffset;
+@@ -728,7 +734,12 @@
+ 
+   static std::string getContextString(SampleContextFrames Context,
+                                       bool IncludeLeafLineLocation = false) {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    std::string ContextStr;
++    raw_string_ostream OContextStr(ContextStr);
++#else
+     std::ostringstream OContextStr;
++#endif
+     for (uint32_t I = 0; I < Context.size(); I++) {
+       if (OContextStr.str().size()) {
+         OContextStr << " @ ";
+--- a/llvm/lib/TargetParser/Host.cpp
++++ b/llvm/lib/TargetParser/Host.cpp
+@@ -27,7 +27,24 @@
+ #include <string.h>
+ 
+ // Include the platform-specific parts of this class.
+-#ifdef LLVM_ON_UNIX
++#if defined(LLVM_WASTE_GUEST)
++#include <cstdlib>
++#include <string>
++
++// A Wasm guest has no host kernel release or host CPU to query. Keep the
++// configured guest triple; the optional override remains available.
++static std::string updateTripleOSVersion(std::string TargetTripleString) {
++  return TargetTripleString;
++}
++std::string llvm::sys::getDefaultTargetTriple() {
++  std::string TargetTripleString = LLVM_DEFAULT_TARGET_TRIPLE;
++#if defined(LLVM_TARGET_TRIPLE_ENV)
++  if (const char *EnvTriple = std::getenv(LLVM_TARGET_TRIPLE_ENV))
++    TargetTripleString = EnvTriple;
++#endif
++  return TargetTripleString;
++}
++#elif defined(LLVM_ON_UNIX)
+ #include "Unix/Host.inc"
+ #include <sched.h>
+ #endif
+--- a/llvm/include/llvm/DebugInfo/DWARF/DWARFVerifier.h
++++ b/llvm/include/llvm/DebugInfo/DWARF/DWARFVerifier.h
+@@ -18,6 +18,7 @@
+ #include "llvm/DebugInfo/DWARF/DWARFUnitIndex.h"
+ #include "llvm/DebugInfo/DWARF/LowLevel/DWARFExpression.h"
+ #include "llvm/Support/Compiler.h"
++#include "llvm/Support/Mutex.h"
+ #include <cstdint>
+ #include <map>
+ #include <mutex>
+@@ -42,7 +43,11 @@
+ 
+ class OutputCategoryAggregator {
+ private:
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  sys::SmartMutex<true> WriteMutex;
++#else
+   std::mutex WriteMutex;
++#endif
+   std::map<std::string, AggregationData, std::less<>> Aggregation;
+   uint64_t NumErrors = 0;
+   bool IncludeDetail;
+@@ -124,7 +129,11 @@
+   bool IsObjectFile;
+   bool IsMachOObject;
+   using ReferenceMap = std::map<uint64_t, std::set<uint64_t>>;
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  sys::SmartMutex<true> AccessMutex;
++#else
+   std::mutex AccessMutex;
++#endif
+ 
+   raw_ostream &error() const;
+   raw_ostream &warn() const;
+--- a/llvm/lib/DebugInfo/DWARF/DWARFVerifier.cpp
++++ b/llvm/lib/DebugInfo/DWARF/DWARFVerifier.cpp
+@@ -1364,7 +1364,7 @@
+       }
+       uint64_t DuplicateCUOffset = 0;
+       {
+-        std::lock_guard<std::mutex> Lock(AccessMutex);
++        std::lock_guard Lock(AccessMutex);
+         auto Iter = CUMap.find(Offset);
+         if (Iter != CUMap.end())
+           DuplicateCUOffset = Iter->second;
+@@ -2360,7 +2360,7 @@
+ void OutputCategoryAggregator::Report(StringRef category,
+                                       StringRef sub_category,
+                                       function_ref<void(void)> detailCallback) {
+-  std::lock_guard<std::mutex> Lock(WriteMutex);
++  std::lock_guard Lock(WriteMutex);
+   ++NumErrors;
+   std::string category_str = std::string(category);
+   AggregationData &Agg = Aggregation[category_str];
+--- a/llvm/lib/DebugInfo/DWARF/DWARFContext.cpp
++++ b/llvm/lib/DebugInfo/DWARF/DWARFContext.cpp
+@@ -50,6 +50,7 @@
+ #include "llvm/Support/FormatVariadic.h"
+ #include "llvm/Support/LEB128.h"
+ #include "llvm/Support/MemoryBuffer.h"
++#include "llvm/Support/Mutex.h"
+ #include "llvm/Support/Path.h"
+ #include "llvm/Support/raw_ostream.h"
+ #include <cstdint>
+@@ -634,109 +635,113 @@
+ };
+ 
+ class ThreadSafeState : public ThreadUnsafeDWARFContextState {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  sys::SmartMutex<true> Mutex;
++#else
+   std::recursive_mutex Mutex;
++#endif
+ 
+ public:
+   ThreadSafeState(DWARFContext &DC, std::string &DWP) :
+       ThreadUnsafeDWARFContextState(DC, DWP) {}
+ 
+   DWARFUnitVector &getNormalUnits() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getNormalUnits();
+   }
+   DWARFUnitVector &getDWOUnits(bool Lazy) override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     // We need to not do lazy parsing when we need thread safety as
+     // DWARFUnitVector, in lazy mode, will slowly add things to itself and
+     // will cause problems in a multi-threaded environment.
+     return ThreadUnsafeDWARFContextState::getDWOUnits(false);
+   }
+   const DWARFUnitIndex &getCUIndex() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getCUIndex();
+   }
+   const DWARFDebugAbbrev *getDebugAbbrevDWO() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getDebugAbbrevDWO();
+   }
+ 
+   const DWARFUnitIndex &getTUIndex() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getTUIndex();
+   }
+   DWARFGdbIndex &getGdbIndex() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getGdbIndex();
+   }
+   const DWARFDebugAbbrev *getDebugAbbrev() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getDebugAbbrev();
+   }
+   const DWARFDebugLoc *getDebugLoc() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getDebugLoc();
+   }
+   const DWARFDebugAranges *getDebugAranges() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getDebugAranges();
+   }
+   Expected<const DWARFDebugLine::LineTable *>
+   getLineTableForUnit(DWARFUnit *U, function_ref<void(Error)> RecoverableErrorHandler) override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getLineTableForUnit(U, RecoverableErrorHandler);
+   }
+   void clearLineTableForUnit(DWARFUnit *U) override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::clearLineTableForUnit(U);
+   }
+   Expected<const DWARFDebugFrame *>
+   getDebugFrame(bool ParseCFIProgram) override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getDebugFrame(ParseCFIProgram);
+   }
+   Expected<const DWARFDebugFrame *> getEHFrame(bool ParseCFIProgram) override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getEHFrame(ParseCFIProgram);
+   }
+   const DWARFDebugMacro *getDebugMacinfo() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getDebugMacinfo();
+   }
+   const DWARFDebugMacro *getDebugMacinfoDWO() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getDebugMacinfoDWO();
+   }
+   const DWARFDebugMacro *getDebugMacro() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getDebugMacro();
+   }
+   const DWARFDebugMacro *getDebugMacroDWO() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getDebugMacroDWO();
+   }
+   const DWARFDebugNames &getDebugNames() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getDebugNames();
+   }
+   const AppleAcceleratorTable &getAppleNames() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getAppleNames();
+   }
+   const AppleAcceleratorTable &getAppleTypes() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getAppleTypes();
+   }
+   const AppleAcceleratorTable &getAppleNamespaces() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getAppleNamespaces();
+   }
+   const AppleAcceleratorTable &getAppleObjC() override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getAppleObjC();
+   }
+   std::shared_ptr<DWARFContext>
+   getDWOContext(StringRef AbsolutePath) override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getDWOContext(AbsolutePath);
+   }
+ 
+@@ -744,7 +749,7 @@
+ 
+   const DenseMap<uint64_t, DWARFTypeUnit *> &
+   getTypeUnitMap(bool IsDWO) override {
+-    std::unique_lock<std::recursive_mutex> LockGuard(Mutex);
++    std::unique_lock LockGuard(Mutex);
+     return ThreadUnsafeDWARFContextState::getTypeUnitMap(IsDWO);
+   }
+ };
+--- a/llvm/lib/MC/MCPseudoProbe.cpp
++++ b/llvm/lib/MC/MCPseudoProbe.cpp
+@@ -302,7 +302,12 @@
+ 
+ std::string MCDecodedPseudoProbe::getInlineContextStr(
+     const GUIDProbeFunctionMap &GUID2FuncMAP) const {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  std::string ContextStr;
++  raw_string_ostream OContextStr(ContextStr);
++#else
+   std::ostringstream OContextStr;
++#endif
+   SmallVector<MCPseudoProbeFrameLocation, 16> ContextStack;
+   getInlineContext(ContextStack, GUID2FuncMAP);
+   for (auto &Ctx : ContextStack) {
+--- a/llvm/lib/MC/MCParser/AsmParser.cpp
++++ b/llvm/lib/MC/MCParser/AsmParser.cpp
+@@ -2837,7 +2837,12 @@
+   // eliminate this, although we should protect against infinite loops.
+   unsigned MaxNestingDepth = AsmMacroMaxNestingDepth;
+   if (ActiveMacros.size() == MaxNestingDepth) {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    std::string ErrorStr;
++    raw_string_ostream MaxNestingDepthError(ErrorStr);
++#else
+     std::ostringstream MaxNestingDepthError;
++#endif
+     MaxNestingDepthError << "macros cannot be nested more than "
+                          << MaxNestingDepth << " levels deep."
+                          << " Use -asm-macro-max-nesting-depth to increase "
+--- a/llvm/lib/MC/MCParser/MasmParser.cpp
++++ b/llvm/lib/MC/MCParser/MasmParser.cpp
+@@ -2760,7 +2760,12 @@
+   // eliminate this, although we should protect against infinite loops.
+   unsigned MaxNestingDepth = AsmMacroMaxNestingDepth;
+   if (ActiveMacros.size() == MaxNestingDepth) {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    std::string ErrorStr;
++    raw_string_ostream MaxNestingDepthError(ErrorStr);
++#else
+     std::ostringstream MaxNestingDepthError;
++#endif
+     MaxNestingDepthError << "macros cannot be nested more than "
+                          << MaxNestingDepth << " levels deep."
+                          << " Use -asm-macro-max-nesting-depth to increase "
+--- a/llvm/include/llvm/DebugInfo/GSYM/GsymCreator.h
++++ b/llvm/include/llvm/DebugInfo/GSYM/GsymCreator.h
+@@ -12,6 +12,7 @@
+ #include "llvm/Support/Compiler.h"
+ #include <functional>
+ #include <memory>
++#include "llvm/Support/Mutex.h"
+ #include <mutex>
+ #include <thread>
+ 
+@@ -139,7 +140,11 @@
+ class GsymCreator {
+ protected:
+   // Private member variables require Mutex protections
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  mutable sys::SmartMutex<true> Mutex;
++#else
+   mutable std::mutex Mutex;
++#endif
+   std::vector<FunctionInfo> Funcs;
+   StringTableBuilder StrTab;
+   StringSet<> StringStorage;
+--- a/llvm/lib/DebugInfo/GSYM/DwarfTransformer.cpp
++++ b/llvm/lib/DebugInfo/GSYM/DwarfTransformer.cpp
+@@ -10,6 +10,7 @@
+ #include "llvm/DebugInfo/DWARF/DWARFCompileUnit.h"
+ #include "llvm/DebugInfo/DWARF/DWARFContext.h"
+ #include "llvm/Support/Error.h"
++#include "llvm/Support/Mutex.h"
+ #include "llvm/Support/ThreadPool.h"
+ #include "llvm/Support/raw_ostream.h"
+ 
+@@ -701,7 +702,11 @@
+     pool.wait();
+ 
+     // Now convert all DWARF to GSYM in a thread pool.
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    sys::SmartMutex<true> LogMutex;
++#else
+     std::mutex LogMutex;
++#endif
+     for (const auto &CU : DICtx.compile_units()) {
+       DWARFDie Die = getDie(*CU);
+       if (Die) {
+@@ -713,7 +718,7 @@
+                                      Out.IsQuiet());
+           handleDie(ThreadOut, CUI, Die);
+           // Print ThreadLogStorage lines into an actual stream under a lock
+-          std::lock_guard<std::mutex> guard(LogMutex);
++          std::lock_guard guard(LogMutex);
+           if (Out.GetOS()) {
+             Out << storage;
+           }
+--- a/llvm/lib/DebugInfo/GSYM/GsymCreator.cpp
++++ b/llvm/lib/DebugInfo/GSYM/GsymCreator.cpp
+@@ -68,7 +68,7 @@
+ }
+ 
+ uint32_t GsymCreator::insertFileEntry(FileEntry FE) {
+-  std::lock_guard<std::mutex> Guard(Mutex);
++  std::lock_guard Guard(Mutex);
+   const auto NextIndex = Files.size();
+   // Find FE in hash map and insert if not present.
+   auto R = FileEntryToIndex.insert(std::make_pair(FE, NextIndex));
+@@ -175,7 +175,7 @@
+ 
+ llvm::Error GsymCreator::finalize(OutputAggregator &Out,
+                                   const object::ObjectFile *Obj) {
+-  std::lock_guard<std::mutex> Guard(Mutex);
++  std::lock_guard Guard(Mutex);
+   if (Finalized)
+     return createStringError(std::errc::invalid_argument, "already finalized");
+   Finalized = true;
+@@ -319,7 +319,7 @@
+ 
+   // The hash can be calculated outside the lock.
+   CachedHashStringRef CHStr(S);
+-  std::lock_guard<std::mutex> Guard(Mutex);
++  std::lock_guard Guard(Mutex);
+   if (Copy) {
+     // We need to provide backing storage for the string if requested
+     // since StringTableBuilder stores references to strings. Any string
+@@ -347,13 +347,13 @@
+ }
+ 
+ void GsymCreator::addFunctionInfo(FunctionInfo &&FI) {
+-  std::lock_guard<std::mutex> Guard(Mutex);
++  std::lock_guard Guard(Mutex);
+   Funcs.emplace_back(std::move(FI));
+ }
+ 
+ void GsymCreator::forEachFunctionInfo(
+     std::function<bool(FunctionInfo &)> const &Callback) {
+-  std::lock_guard<std::mutex> Guard(Mutex);
++  std::lock_guard Guard(Mutex);
+   for (auto &FI : Funcs) {
+     if (!Callback(FI))
+       break;
+@@ -362,7 +362,7 @@
+ 
+ void GsymCreator::forEachFunctionInfo(
+     std::function<bool(const FunctionInfo &)> const &Callback) const {
+-  std::lock_guard<std::mutex> Guard(Mutex);
++  std::lock_guard Guard(Mutex);
+   for (const auto &FI : Funcs) {
+     if (!Callback(FI))
+       break;
+@@ -370,7 +370,7 @@
+ }
+ 
+ size_t GsymCreator::getNumFunctionInfos() const {
+-  std::lock_guard<std::mutex> Guard(Mutex);
++  std::lock_guard Guard(Mutex);
+   return Funcs.size();
+ }
+ 
+@@ -534,7 +534,7 @@
+     // Fixup all strings and files in the copied inline information.
+     fixupInlineInfo(SrcGC, *DstFI.Inline);
+   }
+-  std::lock_guard<std::mutex> Guard(Mutex);
++  std::lock_guard Guard(Mutex);
+   Funcs.emplace_back(DstFI);
+   return Funcs.back().cacheEncoding(*this);
+ }
+--- a/llvm/lib/DebugInfo/GSYM/GsymCreatorV1.cpp
++++ b/llvm/lib/DebugInfo/GSYM/GsymCreatorV1.cpp
+@@ -25,7 +25,7 @@
+ }
+ 
+ llvm::Error GsymCreatorV1::encode(FileWriter &O) const {
+-  std::lock_guard<std::mutex> Guard(Mutex);
++  std::lock_guard Guard(Mutex);
+   std::optional<uint64_t> BaseAddress;
+   if (auto Err = validateForEncoding(BaseAddress))
+     return Err;
+--- a/llvm/lib/DebugInfo/GSYM/GsymCreatorV2.cpp
++++ b/llvm/lib/DebugInfo/GSYM/GsymCreatorV2.cpp
+@@ -34,7 +34,7 @@
+ 
+ /// For V2 file layout, see HeaderV2.h
+ llvm::Error GsymCreatorV2::encode(FileWriter &O) const {
+-  std::lock_guard<std::mutex> Guard(Mutex);
++  std::lock_guard Guard(Mutex);
+   std::optional<uint64_t> BaseAddr;
+   if (auto Err = validateForEncoding(BaseAddr))
+     return Err;
+--- a/llvm/include/llvm/Analysis/CFGPrinter.h
++++ b/llvm/include/llvm/Analysis/CFGPrinter.h
+@@ -21,6 +21,7 @@
+ #include "llvm/Analysis/BlockFrequencyInfo.h"
+ #include "llvm/Analysis/BranchProbabilityInfo.h"
+ #include "llvm/Analysis/HeatUtils.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/IR/CFG.h"
+ #include "llvm/IR/Constants.h"
+ #include "llvm/IR/Function.h"
+@@ -30,6 +31,7 @@
+ #include "llvm/Support/Compiler.h"
+ #include "llvm/Support/DOTGraphTraits.h"
+ #include "llvm/Support/FormatVariadic.h"
++#include "llvm/Support/raw_ostream.h"
+ 
+ #include <functional>
+ #include <sstream>
+@@ -318,7 +320,12 @@
+   }
+ 
+   std::string getNodeAttributes(const BasicBlock *Node, DOTFuncInfo *CFGInfo) {
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++    std::string Buffer;
++    raw_string_ostream Attrs(Buffer);
++#else
+     std::stringstream Attrs;
++#endif
+ 
+     if (auto NodeIdFmt = CFGInfo->getNodeIdFormatter())
+       if (auto NodeId = (*NodeIdFmt)(Node))
+--- a/llvm/lib/Analysis/ImportedFunctionsInliningStatistics.cpp
++++ b/llvm/lib/Analysis/ImportedFunctionsInliningStatistics.cpp
+@@ -11,10 +11,12 @@
+ 
+ #include "llvm/Analysis/Utils/ImportedFunctionsInliningStatistics.h"
+ #include "llvm/ADT/STLExtras.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/IR/Function.h"
+ #include "llvm/IR/Module.h"
+ #include "llvm/Support/CommandLine.h"
+ #include "llvm/Support/Debug.h"
++#include "llvm/Support/Format.h"
+ #include "llvm/Support/raw_ostream.h"
+ #include <iomanip>
+ #include <sstream>
+@@ -87,9 +89,16 @@
+   if (All != 0)
+     Result = 100 * static_cast<double>(Fraction) / All;
+ 
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++  std::string Buffer;
++  raw_string_ostream Str(Buffer);
++  Str << Msg << ": " << Fraction << " [" << format("%.4g", Result)
++      << "% of " << PercentageOfMsg << "]";
++#else
+   std::stringstream Str;
+   Str << std::setprecision(4) << Msg << ": " << Fraction << " [" << Result
+       << "% of " << PercentageOfMsg << "]";
++#endif
+   if (LineEnd)
+     Str << "\n";
+   return Str.str();
+--- a/llvm/lib/Analysis/ConstantFolding.cpp
++++ b/llvm/lib/Analysis/ConstantFolding.cpp
+@@ -30,6 +30,7 @@
+ #include "llvm/Analysis/ValueTracking.h"
+ #include "llvm/Analysis/VectorUtils.h"
+ #include "llvm/Config/config.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/IR/Constant.h"
+ #include "llvm/IR/ConstantFold.h"
+ #include "llvm/IR/Constants.h"
+@@ -2293,8 +2294,19 @@
+   }
+ }
+ 
++// These optional host computations have no guest libc provider. Declining a
++// fold preserves the original operation, including its target runtime behavior.
++// Exact APFloat folds and supported host computations remain available.
++#if LLVM_WASTE_GUEST
++#define LLVM_WASTE_OPTIONAL_HOST_MATH(Function) nullptr
++#else
++#define LLVM_WASTE_OPTIONAL_HOST_MATH(Function) Function
++#endif
++
+ Constant *ConstantFoldFP(double (*NativeFP)(double), const APFloat &V, Type *Ty,
+                          DenormalMode DenormMode = DenormalMode::getIEEE()) {
++  if (!NativeFP)
++    return nullptr;
+   if (!DenormMode.isValid() ||
+       DenormMode.Input == DenormalMode::DenormalModeKind::Dynamic ||
+       DenormMode.Output == DenormalMode::DenormalModeKind::Dynamic)
+@@ -2332,6 +2344,8 @@
+ 
+ Constant *ConstantFoldBinaryFP(double (*NativeFP)(double, double),
+                                const APFloat &V, const APFloat &W, Type *Ty) {
++  if (!NativeFP)
++    return nullptr;
+   llvm_fenv_clearexcept();
+   double Result = NativeFP(V.convertToDouble(), W.convertToDouble());
+   if (llvm_fenv_testexcept()) {
+@@ -2919,7 +2933,7 @@
+           return ConstantFP::getNaN(Ty);
+         if (U.isOne())
+           return ConstantFP::getZero(Ty);
+-        return ConstantFoldFP(log, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(log), APF, Ty);
+       case Intrinsic::log2:
+         if (U.isZero())
+           return ConstantFP::getInfinity(Ty, true);
+@@ -2937,28 +2951,28 @@
+         if (U.isOne())
+           return ConstantFP::getZero(Ty);
+         // TODO: What about hosts that lack a C99 library?
+-        return ConstantFoldFP(log10, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(log10), APF, Ty);
+       case Intrinsic::exp:
+-        return ConstantFoldFP(exp, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(exp), APF, Ty);
+       case Intrinsic::exp2:
+         // Fold exp2(x) as pow(2, x), in case the host lacks a C99 library.
+-        return ConstantFoldBinaryFP(pow, APFloat(2.0), APF, Ty);
++        return ConstantFoldBinaryFP(LLVM_WASTE_OPTIONAL_HOST_MATH(pow), APFloat(2.0), APF, Ty);
+       case Intrinsic::exp10:
+         // Fold exp10(x) as pow(10, x), in case the host lacks a C99 library.
+-        return ConstantFoldBinaryFP(pow, APFloat(10.0), APF, Ty);
++        return ConstantFoldBinaryFP(LLVM_WASTE_OPTIONAL_HOST_MATH(pow), APFloat(10.0), APF, Ty);
+       case Intrinsic::sin:
+-        return ConstantFoldFP(sin, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(sin), APF, Ty);
+       case Intrinsic::cos:
+-        return ConstantFoldFP(cos, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(cos), APF, Ty);
+       case Intrinsic::sinh:
+-        return ConstantFoldFP(sinh, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(sinh), APF, Ty);
+       case Intrinsic::cosh:
+-        return ConstantFoldFP(cosh, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(cosh), APF, Ty);
+       case Intrinsic::atan:
+         // Implement optional behavior from C's Annex F for +/-0.0.
+         if (U.isZero())
+           return ConstantFP::get(Ty, U);
+-        return ConstantFoldFP(atan, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(atan), APF, Ty);
+       case Intrinsic::sqrt:
+         return ConstantFoldFP(sqrt, APF, Ty);
+ 
+@@ -3065,10 +3079,14 @@
+           const double SinVals[4] = { 0.0, 1.0, 0.0, -1.0 };
+           V = SinVals[((int)V4 + (IsCos ? 1 : 0)) & 3];
+         } else {
++#if LLVM_WASTE_GUEST
++          return nullptr;
++#else
+           if (IsCos)
+             V = cos(V * 2.0 * numbers::pi);
+           else
+             V = sin(V * 2.0 * numbers::pi);
++#endif
+         }
+         return GetConstantFoldFPValue(V, Ty);
+       }
+@@ -3089,14 +3107,14 @@
+     case LibFunc_acos_finite:
+     case LibFunc_acosf_finite:
+       if (TLI->has(Func))
+-        return ConstantFoldFP(acos, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(acos), APF, Ty);
+       break;
+     case LibFunc_asin:
+     case LibFunc_asinf:
+     case LibFunc_asin_finite:
+     case LibFunc_asinf_finite:
+       if (TLI->has(Func))
+-        return ConstantFoldFP(asin, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(asin), APF, Ty);
+       break;
+     case LibFunc_atan:
+     case LibFunc_atanf:
+@@ -3104,7 +3122,7 @@
+       if (U.isZero())
+         return ConstantFP::get(Ty, U);
+       if (TLI->has(Func))
+-        return ConstantFoldFP(atan, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(atan), APF, Ty);
+       break;
+     case LibFunc_ceil:
+     case LibFunc_ceilf:
+@@ -3116,21 +3134,21 @@
+     case LibFunc_cos:
+     case LibFunc_cosf:
+       if (TLI->has(Func))
+-        return ConstantFoldFP(cos, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(cos), APF, Ty);
+       break;
+     case LibFunc_cosh:
+     case LibFunc_coshf:
+     case LibFunc_cosh_finite:
+     case LibFunc_coshf_finite:
+       if (TLI->has(Func))
+-        return ConstantFoldFP(cosh, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(cosh), APF, Ty);
+       break;
+     case LibFunc_exp:
+     case LibFunc_expf:
+     case LibFunc_exp_finite:
+     case LibFunc_expf_finite:
+       if (TLI->has(Func))
+-        return ConstantFoldFP(exp, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(exp), APF, Ty);
+       break;
+     case LibFunc_exp2:
+     case LibFunc_exp2f:
+@@ -3138,7 +3156,7 @@
+     case LibFunc_exp2f_finite:
+       if (TLI->has(Func))
+         // Fold exp2(x) as pow(2, x), in case the host lacks a C99 library.
+-        return ConstantFoldBinaryFP(pow, APFloat(2.0), APF, Ty);
++        return ConstantFoldBinaryFP(LLVM_WASTE_OPTIONAL_HOST_MATH(pow), APFloat(2.0), APF, Ty);
+       break;
+     case LibFunc_fabs:
+     case LibFunc_fabsf:
+@@ -3159,7 +3177,7 @@
+     case LibFunc_log_finite:
+     case LibFunc_logf_finite:
+       if (!APF.isNegative() && !APF.isZero() && TLI->has(Func))
+-        return ConstantFoldFP(log, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(log), APF, Ty);
+       break;
+     case LibFunc_log2:
+     case LibFunc_log2f:
+@@ -3175,7 +3193,7 @@
+     case LibFunc_log10f_finite:
+       if (!APF.isNegative() && !APF.isZero() && TLI->has(Func))
+         // TODO: What about hosts that lack a C99 library?
+-        return ConstantFoldFP(log10, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(log10), APF, Ty);
+       break;
+     case LibFunc_ilogb:
+     case LibFunc_ilogbf:
+@@ -3185,7 +3203,7 @@
+     case LibFunc_logb:
+     case LibFunc_logbf:
+       if (!APF.isZero() && TLI->has(Func))
+-        return ConstantFoldFP(logb, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(logb), APF, Ty);
+       break;
+     case LibFunc_log1p:
+     case LibFunc_log1pf:
+@@ -3193,14 +3211,14 @@
+       if (U.isZero())
+         return ConstantFP::get(Ty, U);
+       if (APF > APFloat::getOne(APF.getSemantics(), true) && TLI->has(Func))
+-        return ConstantFoldFP(log1p, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(log1p), APF, Ty);
+       break;
+     case LibFunc_logl:
+       return nullptr;
+     case LibFunc_erf:
+     case LibFunc_erff:
+       if (TLI->has(Func))
+-        return ConstantFoldFP(erf, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(erf), APF, Ty);
+       break;
+     case LibFunc_nearbyint:
+     case LibFunc_nearbyintf:
+@@ -3223,14 +3241,14 @@
+     case LibFunc_sin:
+     case LibFunc_sinf:
+       if (TLI->has(Func))
+-        return ConstantFoldFP(sin, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(sin), APF, Ty);
+       break;
+     case LibFunc_sinh:
+     case LibFunc_sinhf:
+     case LibFunc_sinh_finite:
+     case LibFunc_sinhf_finite:
+       if (TLI->has(Func))
+-        return ConstantFoldFP(sinh, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(sinh), APF, Ty);
+       break;
+     case LibFunc_sqrt:
+     case LibFunc_sqrtf:
+@@ -3240,12 +3258,12 @@
+     case LibFunc_tan:
+     case LibFunc_tanf:
+       if (TLI->has(Func))
+-        return ConstantFoldFP(tan, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(tan), APF, Ty);
+       break;
+     case LibFunc_tanh:
+     case LibFunc_tanhf:
+       if (TLI->has(Func))
+-        return ConstantFoldFP(tanh, APF, Ty);
++        return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(tanh), APF, Ty);
+       break;
+     case LibFunc_trunc:
+     case LibFunc_truncf:
+@@ -3447,7 +3465,7 @@
+   case LibFunc_pow_finite:
+   case LibFunc_powf_finite:
+     if (TLI->has(Func))
+-      return ConstantFoldBinaryFP(pow, Op1V, Op2V, Ty);
++      return ConstantFoldBinaryFP(LLVM_WASTE_OPTIONAL_HOST_MATH(pow), Op1V, Op2V, Ty);
+     break;
+   case LibFunc_fmod:
+   case LibFunc_fmodf:
+@@ -3475,7 +3493,7 @@
+   case LibFunc_atan2_finite:
+   case LibFunc_atan2f_finite:
+     if (TLI->has(Func))
+-      return ConstantFoldBinaryFP(atan2, Op1V, Op2V, Ty);
++      return ConstantFoldBinaryFP(LLVM_WASTE_OPTIONAL_HOST_MATH(atan2), Op1V, Op2V, Ty);
+     break;
+   case LibFunc_nextafter:
+   case LibFunc_nextafterf:
+@@ -3723,7 +3741,7 @@
+       default:
+         break;
+       case Intrinsic::pow:
+-        return ConstantFoldBinaryFP(pow, Op1V, Op2V, Ty);
++        return ConstantFoldBinaryFP(LLVM_WASTE_OPTIONAL_HOST_MATH(pow), Op1V, Op2V, Ty);
+       case Intrinsic::amdgcn_fmul_legacy:
+         // The legacy behaviour is that multiplying +/- 0.0 by anything, even
+         // NaN or infinity, gives +0.0.
+@@ -4923,7 +4941,7 @@
+         // FIXME: The computation isn't done in the right precision.
+         Type *Ty = OpC->getType();
+         if (Ty->isDoubleTy() || Ty->isFloatTy() || Ty->isHalfTy())
+-          return ConstantFoldFP(tan, OpC->getValueAPF(), Ty) != nullptr;
++          return ConstantFoldFP(LLVM_WASTE_OPTIONAL_HOST_MATH(tan), OpC->getValueAPF(), Ty) != nullptr;
+         break;
+       }
+ 
+@@ -4984,7 +5002,7 @@
+         Type *Ty = Op0C->getType();
+         if (Ty->isDoubleTy() || Ty->isFloatTy() || Ty->isHalfTy()) {
+           if (Ty == Op1C->getType())
+-            return ConstantFoldBinaryFP(pow, Op0, Op1, Ty) != nullptr;
++            return ConstantFoldBinaryFP(LLVM_WASTE_OPTIONAL_HOST_MATH(pow), Op0, Op1, Ty) != nullptr;
+         }
+         break;
+       }
+@@ -5087,3 +5105,5 @@
+ }
+ 
+ void TargetFolder::anchor() {}
++
++#undef LLVM_WASTE_OPTIONAL_HOST_MATH
+--- a/llvm/lib/Transforms/Utils/CodeLayout.cpp
++++ b/llvm/lib/Transforms/Utils/CodeLayout.cpp
+@@ -41,6 +41,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "llvm/Transforms/Utils/CodeLayout.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/Support/CommandLine.h"
+ #include "llvm/Support/Debug.h"
+ 
+@@ -115,6 +116,9 @@
+     "ext-tsp-max-merge-density-ratio", cl::ReallyHidden, cl::init(100),
+     cl::desc("The maximum ratio between densities of two chains for merging"));
+ 
++// CDSort's only production consumers are ELF/BOLT, which are excluded from
++// the Wasm-only guest toolchain. Re-audit this selection if that graph expands.
++#if !LLVM_WASTE_GUEST
+ // Algorithm-specific options for CDSort.
+ static cl::opt<unsigned> CacheEntries("cdsort-cache-entries", cl::ReallyHidden,
+                                       cl::desc("The size of the cache"));
+@@ -133,6 +137,8 @@
+ static cl::opt<double> FrequencyScale(
+     "cdsort-frequency-scale", cl::ReallyHidden,
+     cl::desc("The scale factor for the frequency-based locality"));
++
++#endif
+ 
+ namespace {
+ 
+@@ -1034,6 +1040,7 @@
+ 
+ /// The implementation of the Cache-Directed Sort (CDSort) algorithm for
+ /// ordering functions represented by a call graph.
++#if !LLVM_WASTE_GUEST
+ class CDSortImpl {
+ public:
+   CDSortImpl(const CDSortConfig &Config, ArrayRef<uint64_t> NodeSizes,
+@@ -1405,6 +1412,8 @@
+   uint64_t TotalSize{0};
+ };
+ 
++#endif
++
+ } // end of anonymous namespace
+ 
+ std::vector<uint64_t>
+@@ -1454,6 +1463,7 @@
+   return calcExtTspScore(Order, NodeSizes, EdgeCounts);
+ }
+ 
++#if !LLVM_WASTE_GUEST
+ std::vector<uint64_t> codelayout::computeCacheDirectedLayout(
+     const CDSortConfig &Config, ArrayRef<uint64_t> FuncSizes,
+     ArrayRef<uint64_t> FuncCounts, ArrayRef<EdgeCount> CallCounts,
+@@ -1486,3 +1496,5 @@
+   return computeCacheDirectedLayout(Config, FuncSizes, FuncCounts, CallCounts,
+                                     CallOffsets);
+ }
++
++#endif
+--- a/llvm/lib/CodeGen/AssignmentTrackingAnalysis.cpp
++++ b/llvm/lib/CodeGen/AssignmentTrackingAnalysis.cpp
+@@ -7,6 +7,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "llvm/CodeGen/AssignmentTrackingAnalysis.h"
++#include "llvm/Config/llvm-config.h"
+ #include "LiveDebugValues/LiveDebugValues.h"
+ #include "llvm/ADT/BitVector.h"
+ #include "llvm/ADT/DenseMapInfo.h"
+@@ -438,7 +439,11 @@
+   /// Format string describing an FragsInMemMap (IntervalMap) interval.
+   std::string toString(FragsInMemMap::const_iterator It, bool Newline = true) {
+     std::string String;
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++    raw_string_ostream S(String);
++#else
+     std::stringstream S(String);
++#endif
+     if (It.valid()) {
+       S << "[" << It.start() << ", " << It.stop()
+         << "): " << toString(It.value());
+--- a/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
++++ b/llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
+@@ -44,5 +44,6 @@
+ #include "llvm/Analysis/ValueTracking.h"
+ #include "llvm/BinaryFormat/MachO.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/Demangle/Demangle.h"
+ #include "llvm/IR/Argument.h"
+ #include "llvm/IR/Attributes.h"
+@@ -84,5 +85,6 @@
+ #include "llvm/Support/Debug.h"
+ #include "llvm/Support/ErrorHandling.h"
++#include "llvm/Support/Format.h"
+ #include "llvm/Support/MathExtras.h"
+ #include "llvm/Support/ModRef.h"
+ #include "llvm/Support/raw_ostream.h"
+@@ -3296,9 +3298,15 @@
+ 
+   for (size_t Val : {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0xf1, 0xf2,
+                      0xf3, 0xf5, 0xf8}) {
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++    std::string Buffer;
++    raw_string_ostream Name(Buffer);
++    Name << kAsanSetShadowPrefix << format_hex_no_prefix(Val, 2);
++#else
+     std::ostringstream Name;
+     Name << kAsanSetShadowPrefix;
+     Name << std::setw(2) << std::setfill('0') << std::hex << Val;
++#endif
+     AsanSetShadowFunc[Val] = ASan.Inserter.insertFunction(
+         Name.str(), IRB.getVoidTy(), IntptrTy, IntptrTy);
+   }
+--- a/llvm/lib/Transforms/IPO/MemProfContextDisambiguation.cpp
++++ b/llvm/lib/Transforms/IPO/MemProfContextDisambiguation.cpp
+@@ -21,6 +21,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "llvm/Transforms/IPO/MemProfContextDisambiguation.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/ADT/DenseMap.h"
+ #include "llvm/ADT/DenseSet.h"
+ #include "llvm/ADT/MapVector.h"
+@@ -3597,10 +3598,14 @@
+   }
+ 
+   static std::string getNodeId(NodeRef Node) {
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++    return (Twine("N0x") + utohexstr((unsigned long long)Node, true)).str();
++#else
+     std::stringstream SStream;
+     SStream << std::hex << "N0x" << (unsigned long long)Node;
+     std::string Result = SStream.str();
+     return Result;
++#endif
+   }
+ 
+   // True if we should highlight a specific context or allocation's contexts in
+--- a/llvm/cmake/modules/llvm-driver-template.cpp.in
++++ b/llvm/cmake/modules/llvm-driver-template.cpp.in
+@@ -7,11 +7,15 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "llvm/ADT/ArrayRef.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/Support/InitLLVM.h"
+ #include "llvm/Support/Driver.h"
+ 
+ int @TOOL_NAME@_main(int argc, char **, const llvm::ToolContext &);
+ 
++#if LLVM_WASTE_GUEST
++extern "C"
++#endif
+ int main(int argc, char **argv) {
+   llvm::InitLLVM X(argc, argv@INITLLVM_ARGS@);
+   return @TOOL_NAME@_main(argc, argv, {argv[0], nullptr, false});
+--- a/clang/lib/Lex/PPMacroExpansion.cpp
++++ b/clang/lib/Lex/PPMacroExpansion.cpp
+@@ -39,6 +39,10 @@
+ #include "llvm/ADT/SmallVector.h"
+ #include "llvm/ADT/StringRef.h"
+ #include "llvm/ADT/StringSwitch.h"
++#include "llvm/Config/llvm-config.h"
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++#include "clang/Lex/WasteTimestamp.h"
++#endif
+ #include "llvm/Support/ErrorHandling.h"
+ #include "llvm/Support/Format.h"
+ #include "llvm/Support/Path.h"
+@@ -1716,15 +1720,28 @@
+     // MSVC, ICC, GCC, VisualAge C++ extension.  The generated string should be
+     // of the form "Ddd Mmm dd hh::mm::ss yyyy", which is returned by asctime.
+     std::string Result = "1"; // DateTimeInitKind::LiteralOne by default.
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
+     std::stringstream TmpStream;
++#endif
++    auto AppendTime = [&](const std::tm *TM) {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++      Result = detail::wasteTimestamp(TM);
++#else
++      TmpStream << std::put_time(TM, "%a %b %e %T %Y");
++#endif
++    };
+ 
+     // Requested regular __TIMESTAMP__ initialization.
+     if (getPreprocessorOpts().InitDateTimeMacros == DateTimeInitKind::Default) {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++      Result.clear();
++#else
+       TmpStream.imbue(std::locale("C"));
++#endif
+       if (getPreprocessorOpts().SourceDateEpoch) {
+         time_t TT = *getPreprocessorOpts().SourceDateEpoch;
+         std::tm *TM = std::gmtime(&TT);
+-        TmpStream << std::put_time(TM, "%a %b %e %T %Y");
++        AppendTime(TM);
+       } else {
+         // Get the file that we are lexing out of.  If we're currently lexing
+         // from a macro, dig into the include stack.
+@@ -1734,10 +1751,12 @@
+         if (CurFile) {
+           time_t TT = CurFile->getModificationTime();
+           struct tm *TM = localtime(&TT);
+-          TmpStream << std::put_time(TM, "%a %b %e %T %Y");
++          AppendTime(TM);
+         }
+       }
++#if !defined(LLVM_WASTE_GUEST) || LLVM_ENABLE_THREADS
+       Result = TmpStream.str();
++#endif
+       if (Result.empty())
+         Result = "??? ??? ?? ??:??:?? ????";
+     }
+--- a/clang/lib/Lex/Pragma.cpp
++++ b/clang/lib/Lex/Pragma.cpp
+@@ -37,6 +37,10 @@
+ #include "llvm/ADT/DenseMap.h"
+ #include "llvm/ADT/SmallVector.h"
+ #include "llvm/ADT/StringRef.h"
++#include "llvm/Config/llvm-config.h"
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++#include "clang/Lex/WastePragma.h"
++#endif
+ #include "llvm/Support/Compiler.h"
+ #include "llvm/Support/ErrorHandling.h"
+ #include "llvm/Support/Timer.h"
+@@ -1120,7 +1124,11 @@
+         PP.EnterToken(Crasher, /*IsReinject*/ false);
+       }
+     } else if (II->isStr("sleep")) {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++      detail::wastePragmaSleep();
++#else
+       std::this_thread::sleep_for(std::chrono::milliseconds(100));
++#endif
+     } else if (II->isStr("dump")) {
+       Token DumpAnnot =
+           Token::createAnnotation(tok::annot_pragma_dump, Tok.getLocation());
+--- a/llvm/include/llvm/ProfileData/Coverage/CoverageMapping.h
++++ b/llvm/include/llvm/ProfileData/Coverage/CoverageMapping.h
+@@ -22,6 +22,7 @@
+ #include "llvm/ADT/StringRef.h"
+ #include "llvm/ADT/iterator.h"
+ #include "llvm/ADT/iterator_range.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/Object/BuildID.h"
+ #include "llvm/ProfileData/Coverage/MCDCTypes.h"
+ #include "llvm/ProfileData/InstrProf.h"
+@@ -464,7 +465,12 @@
+ 
+   std::string formatTestVectorRow(const TestVector &Vec, CondState Result,
+                                   unsigned DisplayRowNumber) const {
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++    std::string Buffer;
++    raw_string_ostream OS(Buffer);
++#else
+     std::ostringstream OS;
++#endif
+     const auto NumConditions = getNumConditions();
+     // Add individual condition values to the string.
+     OS << "  " << DisplayRowNumber << " { ";
+@@ -599,7 +605,12 @@
+   }
+ 
+   std::string getConditionHeaderString(unsigned Condition) {
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++    std::string Buffer;
++    raw_string_ostream OS(Buffer);
++#else
+     std::ostringstream OS;
++#endif
+     const auto &[Line, Col] = CondLoc[Condition];
+     OS << "Condition C" << Condition + 1 << " --> (" << Line << ":" << Col
+        << ")\n";
+@@ -607,7 +618,12 @@
+   }
+ 
+   std::string getTestVectorHeaderString() const {
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++    std::string Buffer;
++    raw_string_ostream OS(Buffer);
++#else
+     std::ostringstream OS;
++#endif
+     if (getNumTestVectors() == 0 && getNumNotExecutedTestVectors() == 0) {
+       OS << "None.\n";
+       return OS.str();
+@@ -640,7 +656,12 @@
+   std::string getConditionCoverageString(unsigned Condition) {
+     assert(Condition < getNumConditions() &&
+            "Condition index is out of bounds!");
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++    std::string Buffer;
++    raw_string_ostream OS(Buffer);
++#else
+     std::ostringstream OS;
++#endif
+ 
+     OS << "  C" << Condition + 1 << "-Pair: ";
+     if (isCondFolded(Condition)) {
+--- a/llvm/lib/TextAPI/BinaryReader/DylibReader.cpp
++++ b/llvm/lib/TextAPI/BinaryReader/DylibReader.cpp
+@@ -12,6 +12,7 @@
+ 
+ #include "llvm/TextAPI/DylibReader.h"
+ #include "llvm/ADT/STLExtras.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/DebugInfo/DWARF/DWARFCompileUnit.h"
+ #include "llvm/DebugInfo/DWARF/DWARFContext.h"
+ #include "llvm/Object/Binary.h"
+@@ -191,6 +192,11 @@
+     }
+     case MachO::LC_UUID: {
+       auto UUIDLC = Obj->getUuidCommand(LCI);
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++      std::string Buffer;
++      raw_string_ostream Stream(Buffer);
++      Stream.write_uuid(UUIDLC.uuid);
++#else
+       std::stringstream Stream;
+       for (unsigned I = 0; I < 16; ++I) {
+         if (I == 4 || I == 6 || I == 8 || I == 10)
+@@ -198,6 +204,7 @@
+         Stream << std::setfill('0') << std::setw(2) << std::uppercase
+                << std::hex << static_cast<int>(UUIDLC.uuid[I]);
+       }
++#endif
+       BA.UUID = Slice.copyString(Stream.str());
+       break;
+     }
+--- a/clang/lib/Analysis/IssueHash.cpp
++++ b/clang/lib/Analysis/IssueHash.cpp
+@@ -14,8 +14,10 @@
+ #include "clang/Lex/Lexer.h"
+ #include "llvm/ADT/StringRef.h"
+ #include "llvm/ADT/Twine.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/Support/LineIterator.h"
+ #include "llvm/Support/MD5.h"
++#include "llvm/Support/raw_ostream.h"
+ 
+ #include <optional>
+ #include <sstream>
+@@ -129,7 +131,12 @@
+               Buffer->getBufferStart(), BufferPos, Buffer->getBufferEnd());
+ 
+   size_t NextStart = 0;
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++  std::string Line;
++  llvm::raw_string_ostream LineBuff(Line);
++#else
+   std::ostringstream LineBuff;
++#endif
+   while (!Lexer.LexFromRawLexer(Token) && NextStart < 2) {
+     if (Token.isAtStartOfLine() && NextStart++ > 0)
+       continue;
+--- a/clang/include/clang/Analysis/Analyses/ThreadSafetyUtil.h
++++ b/clang/include/clang/Analysis/Analyses/ThreadSafetyUtil.h
+@@ -17,6 +17,7 @@
+ #include "clang/Basic/LLVM.h"
+ #include "llvm/ADT/StringRef.h"
+ #include "llvm/ADT/iterator_range.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/Support/Allocator.h"
+ #include <cassert>
+ #include <cstddef>
+@@ -351,9 +352,11 @@
+   VectorData *Data = nullptr;
+ };
+ 
++#if !LLVM_WASTE_GUEST || LLVM_ENABLE_THREADS
+ inline std::ostream& operator<<(std::ostream& ss, const StringRef str) {
+   return ss.write(str.data(), str.size());
+ }
++#endif
+ 
+ } // namespace threadSafety
+ } // namespace clang
+--- a/clang/lib/Analysis/UnsafeBufferUsage.cpp
++++ b/clang/lib/Analysis/UnsafeBufferUsage.cpp
+@@ -32,6 +32,8 @@
+ #include "llvm/ADT/STLFunctionalExtras.h"
+ #include "llvm/ADT/SmallVector.h"
+ #include "llvm/ADT/StringRef.h"
++#include "llvm/Config/llvm-config.h"
++#include "llvm/Support/raw_ostream.h"
+ #include <cstddef>
+ #include <optional>
+ #include <queue>
+@@ -65,7 +67,12 @@
+ // "DRE ==> parent-of-DRE ==> grandparent-of-DRE ==> ...".
+ static std::string getDREAncestorString(const DeclRefExpr *DRE,
+                                         ASTContext &Ctx) {
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++  std::string SSBuffer;
++  llvm::raw_string_ostream SS(SSBuffer);
++#else
+   std::stringstream SS;
++#endif
+   const Stmt *St = DRE;
+   StmtDebugPrinter StmtPriner;
+ 
+@@ -3741,7 +3748,12 @@
+   const Expr *Idx = ArraySub->getIdx();
+   const SourceManager &SM = Ctx.getSourceManager();
+   const LangOptions &LangOpts = Ctx.getLangOpts();
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++  std::string SSBuffer;
++  llvm::raw_string_ostream SS(SSBuffer);
++#else
+   std::stringstream SS;
++#endif
+   bool IdxIsLitZero = false;
+ 
+   if (auto ICE = Idx->getIntegerConstantExpr(Ctx))
+@@ -3818,7 +3830,12 @@
+   if (const VarDecl *VD = dyn_cast<VarDecl>(DREs.front()->getDecl())) {
+     if (S.lookup(VD) == FixitStrategy::Kind::Span) {
+       FixItList Fixes;
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++      std::string SSBuffer;
++      llvm::raw_string_ostream SS(SSBuffer);
++#else
+       std::stringstream SS;
++#endif
+       StringRef varName = VD->getName();
+       const ASTContext &Ctx = VD->getASTContext();
+ 
+@@ -3995,7 +4012,12 @@
+   }
+ 
+   // Will hold the text for `std::span<T> Ident`:
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++  std::string SSBuffer;
++  llvm::raw_string_ostream SS(SSBuffer);
++#else
+   std::stringstream SS;
++#endif
+ 
+   SS << *SpanTyText;
+   // Fix the initializer if it exists:
+@@ -4109,7 +4131,12 @@
+   const auto NewOverloadSignatureCreator =
+       [&SM, &LangOpts, &NewTysTexts,
+        &ParmsMask](const FunctionDecl *FD) -> std::optional<std::string> {
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++    std::string SSBuffer;
++    llvm::raw_string_ostream SS(SSBuffer);
++#else
+     std::stringstream SS;
++#endif
+ 
+     SS << ";";
+     SS << getEndOfLine().str();
+@@ -4154,7 +4181,12 @@
+   const auto OldOverloadDefCreator =
+       [&Handler, &SM, &LangOpts, &NewTysTexts,
+        &ParmsMask](const FunctionDecl *FD) -> std::optional<std::string> {
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++    std::string SSBuffer;
++    llvm::raw_string_ostream SS(SSBuffer);
++#else
+     std::stringstream SS;
++#endif
+ 
+     SS << getEndOfLine().str();
+     // Append: attr-name ret-type func-name "(" param-list ")" "{"
+@@ -4258,7 +4290,12 @@
+     return {};
+   }
+ 
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++  std::string SSBuffer;
++  llvm::raw_string_ostream SS(SSBuffer);
++#else
+   std::stringstream SS;
++#endif
+   std::optional<std::string> SpanTyText = createSpanTypeForVarDecl(PVD, Ctx);
+ 
+   if (PteTyQualifiers)
+--- a/clang/lib/Frontend/CompilerInvocation.cpp
++++ b/clang/lib/Frontend/CompilerInvocation.cpp
+@@ -51,6 +51,9 @@
+ #include "llvm/ADT/StringSwitch.h"
+ #include "llvm/ADT/Twine.h"
+ #include "llvm/Config/llvm-config.h"
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++#include "clang/Frontend/WasteSeedFile.h"
++#endif
+ #include "llvm/Frontend/Debug/Options.h"
+ #include "llvm/IR/DebugInfoMetadata.h"
+ #include "llvm/Linker/Linker.h"
+@@ -4616,6 +4619,11 @@
+   }
+ 
+   if (const Arg *A = Args.getLastArg(OPT_frandomize_layout_seed_file_EQ)) {
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++    if (!detail::wasteReadSeedFile(A->getValue(0), Opts.RandstructSeed))
++      Diags.Report(diag::err_drv_cannot_open_randomize_layout_seed_file)
++          << A->getValue(0);
++#else
+     std::ifstream SeedFile(A->getValue(0));
+ 
+     if (!SeedFile.is_open())
+@@ -4623,6 +4631,7 @@
+           << A->getValue(0);
+ 
+     std::getline(SeedFile, Opts.RandstructSeed);
++#endif
+   }
+ 
+   if (const Arg *A = Args.getLastArg(OPT_frandomize_layout_seed_EQ))
+--- a/clang/lib/Frontend/LayoutOverrideSource.cpp
++++ b/clang/lib/Frontend/LayoutOverrideSource.cpp
+@@ -10,7 +10,11 @@
+ #include "clang/AST/DeclCXX.h"
+ #include "clang/AST/Type.h"
+ #include "clang/Basic/CharInfo.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/Support/raw_ostream.h"
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++#include "clang/Frontend/WasteFileInput.h"
++#endif
+ #include <fstream>
+ #include <string>
+ 
+@@ -41,7 +45,11 @@
+ }
+ 
+ LayoutOverrideSource::LayoutOverrideSource(StringRef Filename) {
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++  detail::WasteFileInput Input(Filename.str().c_str());
++#else
+   std::ifstream Input(Filename.str().c_str());
++#endif
+   if (!Input.is_open())
+     return;
+ 
+@@ -52,7 +60,11 @@
+ 
+   while (Input.good()) {
+     std::string Line;
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++    Input.readLine(Line);
++#else
+     getline(Input, Line);
++#endif
+ 
+     StringRef LineStr(Line);
+ 
+--- a/clang/lib/Driver/ToolChains/HLSL.cpp
++++ b/clang/lib/Driver/ToolChains/HLSL.cpp
+@@ -12,7 +12,13 @@
+ #include "clang/Driver/Job.h"
+ #include "llvm/ADT/StringSwitch.h"
+ #include "llvm/TargetParser/Triple.h"
++#include "llvm/Config/llvm-config.h"
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++#include "llvm/ADT/SmallVector.h"
++#include "llvm/Support/Regex.h"
++#else
+ #include <regex>
++#endif
+ 
+ using namespace clang::driver;
+ using namespace clang::driver::tools;
+@@ -262,8 +268,15 @@
+ }
+ 
+ bool isValidSPIRVExtensionName(const std::string &str) {
++#if LLVM_WASTE_GUEST && !LLVM_ENABLE_THREADS
++  llvm::Regex Pattern("^(dxc|DXC|khr|KHR|SPV_[a-zA-Z0-9_]+)$");
++  llvm::SmallVector<llvm::StringRef, 1> Matches;
++  return Pattern.match(str, &Matches) && !Matches.empty() &&
++         Matches.front().size() == str.size();
++#else
+   std::regex pattern("dxc|DXC|khr|KHR|SPV_[a-zA-Z0-9_]+");
+   return std::regex_match(str, pattern);
++#endif
+ }
+ 
+ // SPIRV extension names are of the form `SPV_[a-zA-Z0-9_]+`. We want to
+--- a/llvm/include/llvm/IR/FixedPointBuilder.h
++++ b/llvm/include/llvm/IR/FixedPointBuilder.h
+@@ -15,6 +15,7 @@
+ #define LLVM_IR_FIXEDPOINTBUILDER_H
+ 
+ #include "llvm/ADT/APFixedPoint.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/IR/Constant.h"
+ #include "llvm/IR/Constants.h"
+ #include "llvm/IR/IRBuilder.h"
+@@ -181,8 +182,15 @@
+                                 : B.CreateUIToFP(Src, OpTy);
+     // Rescale the integral-in-floating point by the scaling factor. This is
+     // lossless, except for overflow to infinity which is unlikely.
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    // The scale is a power of two; reuse the guest's exact binary scaling
++    // provider instead of requiring general-purpose transcendental math.
++    Result = B.CreateFMul(Result,
++        ConstantFP::get(OpTy, std::ldexp(1.0, -(int)SrcSema.getScale())));
++#else
+     Result = B.CreateFMul(Result,
+         ConstantFP::get(OpTy, std::pow(2, -(int)SrcSema.getScale())));
++#endif
+     if (OpTy != DstTy)
+       Result = B.CreateFPTrunc(Result, DstTy);
+     return Result;
+@@ -196,8 +204,15 @@
+       Result = B.CreateFPExt(Result, OpTy);
+     // Rescale the floating point value so that its significant bits (for the
+     // purposes of the conversion) are in the integral range.
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    // The scale is a power of two; reuse the guest's exact binary scaling
++    // provider instead of requiring general-purpose transcendental math.
++    Result = B.CreateFMul(Result,
++        ConstantFP::get(OpTy, std::ldexp(1.0, (int)DstSema.getScale())));
++#else
+     Result = B.CreateFMul(Result,
+         ConstantFP::get(OpTy, std::pow(2, DstSema.getScale())));
++#endif
+ 
+     Type *ResultTy = B.getIntNTy(DstSema.getWidth());
+     if (DstSema.isSaturated()) {
+--- a/clang/lib/Driver/Job.cpp
++++ b/clang/lib/Driver/Job.cpp
+@@ -12,6 +12,7 @@
+ #include "clang/Driver/InputInfo.h"
+ #include "clang/Driver/Tool.h"
+ #include "clang/Driver/ToolChain.h"
++#include "llvm/Config/llvm-config.h"
+ #include "llvm/ADT/ArrayRef.h"
+ #include "llvm/ADT/SmallString.h"
+ #include "llvm/ADT/SmallVector.h"
+@@ -367,6 +368,15 @@
+ 
+   auto Args = llvm::toStringRefArray(Argv.data());
+ 
++  auto *Statistics = &ProcStat;
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  // Ordinary jobs do not require child accounting. Keep explicit statistics
++  // requests on the existing unsupported-capability path, without inventing
++  // timings or peak memory values for the guest.
++  if (!getCreator().getToolChain().getDriver().CCPrintProcessStats)
++    Statistics = nullptr;
++#endif
++
+   // Use Job-specific redirect files if they are present.
+   if (!RedirectFiles.empty()) {
+     std::vector<std::optional<StringRef>> RedirectFilesOptional;
+@@ -379,12 +389,12 @@
+     return llvm::sys::ExecuteAndWait(Executable, Args, Env,
+                                      ArrayRef(RedirectFilesOptional),
+                                      /*secondsToWait=*/0, /*memoryLimit=*/0,
+-                                     ErrMsg, ExecutionFailed, &ProcStat);
++                                     ErrMsg, ExecutionFailed, Statistics);
+   }
+ 
+   return llvm::sys::ExecuteAndWait(Executable, Args, Env, Redirects,
+                                    /*secondsToWait*/ 0, /*memoryLimit*/ 0,
+-                                   ErrMsg, ExecutionFailed, &ProcStat);
++                                   ErrMsg, ExecutionFailed, Statistics);
+ }
+ 
+ CC1Command::CC1Command(const Action &Source, const Tool &Creator,

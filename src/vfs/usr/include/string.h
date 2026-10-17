@@ -6,6 +6,10 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void *memcpy(void *, const void *, size_t);
 void *memmove(void *, const void *, size_t);
 void *memset(void *, int, size_t);
@@ -44,5 +48,9 @@ static inline int memeq(const void *a, const void *b, size_t n) {
 static inline int streq(const char *a, const char *b) {
   return strcmp(a, b) == 0;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

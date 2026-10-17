@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/time-profiler.wasm",
+      "source": "build/system-tests/clang/time-profiler/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/time-profiler.wast",
+      "source": "src/system-tests/clang/time-profiler/time-profiler.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/time-profiler.wasm > /tmp/time-profiler.bin; printf '%s\\n' \"$?\" > /tmp/time-profiler-status.txt; /bin/wast --verbose /tmp/time-profiler.wast; printf '__TIME_PROFILER_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__TIME_PROFILER_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__TIME_PROFILER_0__\r\n",
+    "WAST: 74 PASS, 0 FAIL, 74 total"
+  ],
+  "assertions": 75,
+  "exitStatus": 0
+}

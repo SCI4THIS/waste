@@ -1,15 +1,22 @@
 # Retained native kernel coverage
 
-Current CHECK inventory of `tests/posix-kernel.c`: **21 helpers, 121 retained
-CHECK sites and 261 successful runtime checks**. See
+Current CHECK inventory of `tests/posix-kernel.c`: **27 helpers, 200 retained
+CHECK sites and 340 successful runtime checks**. See
 [test boundary selection](techniques.md#test-boundary-selection) for the
 distinction between guest outcomes and private C invariants.
 
 The four `test_pipe_full` sites execute 19 times (sixteen positive 256-byte
 writes, exact 4096-byte capacity, two raw readiness queries). The five
 lifecycle sites execute 130 times (two allocation guards and descriptor loops
-of 64/3/61). Every other site executes once. 121 source sites produce 261
-checks.
+of 64/3/61). Every other site executes once. 157 source sites produce 297
+checks. The null-device ownership helper adds 16 source sites and runtime checks,
+bringing those totals to 173 sites and 313 checks. Child-deadline ownership adds
+11 sites/checks for missing callbacks, token/clone/cancellation ownership and
+full-width deadline arithmetic, bringing current totals to 184/324.
+Status/wait ownership adds sixteen sites/checks for shared OFD identity, stable
+wait tokens, nonblocking cancellation, copied terminal minimums independent of
+SELECT readiness, restored blocking registration, retained regular status across
+namespace rebasing, teardown and saturated-ref rejection, bringing totals to 200/340.
 
 Each retained ordinal is classified below. Guest complements exercise public
 behavior but do not replace the named C boundary. Supporting open/read/write
@@ -22,6 +29,7 @@ compound ownership/API probe.
 | --- | --- | --- |
 | `test_lifecycle` 1/3 | Allocation of noninteractive/interactive kernel objects | Guest sandboxes cannot invoke these allocation APIs |
 | `test_lifecycle` 2/4/5 | Full raw descriptor-table initialization across 64 slots and three terminal aliases | Descriptor fixtures and shared sessions observe selected guest descriptors |
+| `test_missing_clocks` 1–4 | Allocation and absent platform-clock callbacks return ENOSYS without changing the output | Guest clock WAST covers installed callbacks; it cannot remove runtime callback pointers |
 | `test_invalid_fd` 1–3 | Direct readiness-query bounds, including FD_MAX+100 | Guest descriptor errors in `descriptor-flags.wast` |
 | `test_invalid_fd` 4/6 | Direct raw query of closed descriptors in both kernel profiles | Closed guest descriptor operations |
 | `test_invalid_fd` 5 | NULL-kernel rejection | A guest descriptor or linear-memory address is not a C kernel pointer |
@@ -48,11 +56,24 @@ sites or guest assertions.
 | `test_directory_metadata` 1 | Exact host-seeded directory/file metadata installation | `directory-umask.wast` creates guest directory fixtures |
 | `test_directory_metadata` 2–4 | Dot, parent and child preserve seeded inodes 41/40/42 | Guest iteration tests names/EOF and practical metadata |
 | `test_directory_metadata` 5–6 | Root dot and parent preserve fixed root inode 1 | Guest enumeration cannot assume arbitrary host-seeded inode values |
+| `test_hardlink_inode_ownership` 1–9 | Opaque inode pointer/refcount identity, namespace counts across clone, directory pointer rebasing, and descriptor retention after parent destruction and unlink | `system/clang/hardlink/hardlink.wast` covers public links, stat layouts, errors and compiled fork/wait observations |
+| `test_null_inode_ownership` 1–16 | Shared stateless OFD and retained inode references across dup/fork, absent byte backing, orphan lifetime after both namespaces unlink and the parent is destroyed, and final alias release | `system/devices/null.wast` checks public metadata/path/readiness; actual LLVM empty redirects run in `system/clang/program-execution/program-execution.wast` |
+| `test_child_deadline_ownership` 1–11 | Missing clock callback, stable wait token on retry, clone drops active wait while preserving transaction alarm, cancellation leaves independent alarm, exact UINT64_MAX expiry | `system/clang/child-deadline` covers public errors, live/nested concurrency, controlled clocks/signals and cleanup |
 | `test_creation_mask` 1–2 | Injected realtime callback determines exact second/nanosecond mtimes at creation and write | Guest clock/stat checks do not expose this callback installation |
 | `test_creation_mask` 3 | An explicitly cloned kernel inherits an independent umask | Guest umask checks in `directory-umask.wast` complement public behavior |
 | `test_isolation` 1–2 | Input in one separately allocated kernel leaves the other raw terminal queue empty | Isolated WAST batches use the runtime's sandbox construction |
 | `test_isolation` 3–4 | Same descriptor number is open in one kernel and closed in another | Guest descriptor tests observe one current kernel |
 | `test_isolation` 5–6 | Closing stdin in one kernel leaves the other kernel's alias alive | Shared terminal sessions cover aliases within one kernel |
+
+## Record-lock ownership and continuations
+
+| Current helper / ordinals | Retained boundary | Guest complement |
+| --- | --- | --- |
+| `test_record_lock_ownership` 1–5 | Host setup, exact inode ref retention, transactional owner identity/teardown and explicitly assigned fork identity | `system/clang/locks/locks.wast` verifies public fork/exec and inode aliases |
+| `test_record_lock_ownership` 6–11 | Copied normalized interests, raw polling, wait generation and reference balance across a scratch clone and resume | WAST checks blocking wakeup and restart after a signal handler seeks |
+| `test_record_lock_ownership` 12–16 | Exit reference balance, config-derived admission/split failure and atomic coalescing | WAST checks public partial unlock/downgrade and close release |
+| `test_record_lock_ownership` 17–18 | Injected unrepresentable fd offset and saturated inode refcount reject before publication | Guest struct fields cannot represent these private states |
+| `test_record_lock_ownership` 19–23 | Closed-fd wait revalidation/cancellation and exact parent record/inode lifetime | WAST verifies alias close, exit/death and process contention |
 
 ## Terminal and pipe API boundaries
 
@@ -69,11 +90,17 @@ sites or guest assertions.
 | `test_terminal_modes` 5–6 | Private SIGINT pending state and raw partial-line discard | Handler/session behavior does not expose all private queues |
 | `test_terminal_modes` 7 | Direct kernel VMIN EAGAIN result | Interactive guest reads yield instead |
 | `test_terminal_modes` 8–11 | Host winsize acceptance and private SIGWINCH absence/presence | Existing resize/signal session contracts exercise runtime controls |
+
+Terminal-mode setup clears the observed SIGINT before its independent VMIN
+read and installs a caught SIGWINCH disposition before checking its pending
+queue. Default SIGWINCH notifications are ignored; leaving the earlier SIGINT
+pending would make the next read return EINTR instead of testing VMIN.
 | `test_terminal_output_lengths` 1–2 | Private output helper reports transformed length 4 versus source length 3 | Guest write reports consumed source bytes; timing/output transcript observes expansion |
 | `test_terminal_vtime` 1/4 | Direct kernel EAGAIN while registering timed reads | Terminal timing session exercises guest READ yields |
 | `test_terminal_vtime` 2–3 | Active wait record and exact TIMEOUT polling against an injected C clock | Guest frozen-clock events cannot invoke the private clock callback |
 | `test_pipe_readiness` 1–6 | Raw IN/OUT/HUP/ERR masks around actual write/drain | `pipe-descriptors.wast` uses SELECT and real byte I/O |
-| `test_pipe_readiness` 7 | Direct kernel EAGAIN on an empty pipe | Ordinary batch read exposes raw EAGAIN; interactive import behavior differs |
+| `test_pipe_readiness` 7 | Direct blocking kernel EAGAIN on an empty pipe | Guest blocking reads yield on the registered wait in either runtime profile; explicit O_NONBLOCK returns EAGAIN without waiting |
+| `test_status_wait_ownership` 1–16 | Setup, exact wait generation, shared OFD/status pointers across clones, cancellation on nonblocking retry, fresh blocking token, copied terminal read minimum independent of raw readiness, absent tokens on nonblocking terminal/stream reads, regular status ref balance and saturated-reference rejection | `pipe-descriptors.wast` checks flags and aliases; `system/scheduling/pipe-modes.wast` checks fork sharing for pipe and regular status, restored blocking wakeup, EOF and append aliases; terminal-readiness checks post-yield VMIN completion |
 | `test_pipe_close_transitions` 1–4 | Raw IN/HUP after writer close and ERR/OUT after reader close | Guest buffered drain, EOF and EPIPE |
 | `test_pipe_full` 1 | Every positive partial fill (sixteen executions) | One guest capacity fill does not prove each private partial-write result |
 | `test_pipe_full` 2 | Exact internal POSIX_PIPE_CAPACITY aggregate | Guest fill/full-write/read recovery complements the 4096-byte capacity |

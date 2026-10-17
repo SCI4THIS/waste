@@ -1,0 +1,27 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/floating-conversion.wast",
+      "source": "src/aux/libc/tests/floating-conversion.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /tmp/floating-conversion.wast; printf '__FLOATING_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__FLOATING_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__FLOATING_0__\r\n",
+    "WAST: 174 PASS, 0 FAIL, 174 total"
+  ],
+  "assertions": 175,
+  "exitStatus": 0
+}

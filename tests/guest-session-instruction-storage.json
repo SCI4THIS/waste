@@ -1,0 +1,21 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /root/test/engine-regressions/instruction-storage.wast; INSTRUCTION_STORAGE_RESULT=$?; printf '__INSTRUCTION_STORAGE_%s__\\n' \"$INSTRUCTION_STORAGE_RESULT\"\n"
+    },
+    {
+      "after": "__INSTRUCTION_STORAGE_",
+      "text": "exit \"$INSTRUCTION_STORAGE_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "__INSTRUCTION_STORAGE_0__\r\n",
+    "WAST: 26 PASS, 0 FAIL, 26 total"
+  ],
+  "assertions": 27,
+  "exitStatus": 0
+}

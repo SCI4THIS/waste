@@ -1,9 +1,9 @@
 /* Minimal compiler-rt quad helpers for the Coreutils Wasm ABI.
  *
  * Wasm clang represents long double as IEEE binary128 in two i64 parameters.
- * These helpers preserve that ABI while using double arithmetic internally;
- * this is sufficient for the current true image, which only needs conversion,
- * comparison, and simple formatting-path arithmetic.
+ * Comparisons inspect the full representation without narrowing. Arithmetic
+ * and conversion helpers still use double internally; they do not provide
+ * general correctly rounded binary128 arithmetic.
  */
 
 #include "include/helper.h"
@@ -49,9 +49,16 @@ static void double_to_quad(u64 *out, double value) {
 }
 
 static i32 quad_compare(u64 al, u64 ah, u64 bl, u64 bh) {
-  double a = quad_to_double(al, ah), b = quad_to_double(bl, bh);
-  if (a != a || b != b) return 2;
-  return a < b ? -1 : a > b ? 1 : 0;
+  u64 a_magnitude = ah & 0x7fffffffffffffffULL;
+  u64 b_magnitude = bh & 0x7fffffffffffffffULL;
+  const u64 infinity = 0x7fff000000000000ULL;
+  if (a_magnitude > infinity || (a_magnitude == infinity && al) ||
+      b_magnitude > infinity || (b_magnitude == infinity && bl)) return 2;
+  if (!(a_magnitude | al | b_magnitude | bl)) return 0; /* Signed zeros. */
+  if ((ah ^ bh) >> 63) return ah >> 63 ? -1 : 1;
+  i32 order = a_magnitude < b_magnitude ? -1 : a_magnitude > b_magnitude ? 1 :
+              al < bl ? -1 : al > bl ? 1 : 0;
+  return ah >> 63 ? -order : order;
 }
 
 void __floatsitf(u64 *out, i32 value) { double_to_quad(out, (double)value); }
@@ -63,19 +70,19 @@ i32 __unordtf2(u64 al, u64 ah, u64 bl, u64 bh) {
   return quad_compare(al, ah, bl, bh) == 2;
 }
 i32 __eqtf2(u64 al, u64 ah, u64 bl, u64 bh) {
-  return quad_compare(al, ah, bl, bh) != 0;
-}
-i32 __netf2(u64 al, u64 ah, u64 bl, u64 bh) {
-  return quad_compare(al, ah, bl, bh) == 0 ? 0 : 1;
-}
-i32 __getf2(u64 al, u64 ah, u64 bl, u64 bh) {
   i32 result = quad_compare(al, ah, bl, bh); return result == 2 ? 1 : result;
 }
+i32 __netf2(u64 al, u64 ah, u64 bl, u64 bh) {
+  return __eqtf2(al, ah, bl, bh);
+}
+i32 __getf2(u64 al, u64 ah, u64 bl, u64 bh) {
+  i32 result = quad_compare(al, ah, bl, bh); return result == 2 ? -1 : result;
+}
 i32 __lttf2(u64 al, u64 ah, u64 bl, u64 bh) {
-  return quad_compare(al, ah, bl, bh) < 0 ? -1 : 0;
+  return __eqtf2(al, ah, bl, bh);
 }
 i32 __gttf2(u64 al, u64 ah, u64 bl, u64 bh) {
-  return quad_compare(al, ah, bl, bh) > 0 ? 1 : 0;
+  return __getf2(al, ah, bl, bh);
 }
 
 void __addtf3(u64 *out, u64 al, u64 ah, u64 bl, u64 bh) {

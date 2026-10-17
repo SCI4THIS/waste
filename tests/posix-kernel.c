@@ -51,6 +51,20 @@ static void test_lifecycle(void) {
     posix_kernel_destroy(NULL);
 }
 
+/* Missing platform callbacks cannot be represented by a guest WAST sandbox.
+ * Retain this private guard: an absent clock must not masquerade as epoch zero. */
+static void test_missing_clocks(void) {
+    posix_kernel *k = posix_kernel_create(0);
+    uint64_t value = UINT64_C(123);
+    CHECK(k != NULL, "create clockless kernel");
+    CHECK(posix_kernel_clock_now(k, POSIX_CLOCK_REALTIME, &value) == -POSIX_ENOSYS,
+          "missing realtime callback");
+    CHECK(posix_kernel_clock_now(k, POSIX_CLOCK_MONOTONIC, &value) == -POSIX_ENOSYS,
+          "missing monotonic callback");
+    CHECK(value == UINT64_C(123), "missing callback changed output");
+    posix_kernel_destroy(k);
+}
+
 /* --- Invalid descriptor queries --- */
 
 static void test_invalid_fd(void) {
@@ -178,6 +192,46 @@ static void test_fork_path_publication(void) {
 
 /* Guest names, capacity errors, iteration EOF and close checks now run in
  * directory-umask.wast. Retain exact host-seeded inode metadata here. */
+/* Private checks for opaque retained inode identity and clone ownership;
+ * public link/error/stat behavior is asserted in clang/hardlink/hardlink.wast. */
+static void test_hardlink_inode_ownership(void) {
+    posix_kernel *k = posix_kernel_create(0);
+    int fd = posix_kernel_open(k, (const uint8_t *)"/tmp/inode", 10,
+                               POSIX_O_CREAT | POSIX_O_RDWR, 0600);
+    CHECK(fd >= 0 && posix_kernel_linkat(k, POSIX_AT_FDCWD,
+          (const uint8_t *)"/tmp/inode", 10, POSIX_AT_FDCWD,
+          (const uint8_t *)"/tmp/alias", 10, 0) == 0, "prepare inode ownership fixture");
+    posix_file_object *object = k->fds[fd].ofd->regular.file;
+    CHECK(object && object->refs == 3 && posix_kernel_file_link_count(k, object) == 2,
+          "two names and one description retain one inode");
+    int directory = posix_kernel_open(k, (const uint8_t *)"/tmp", 4, 0, 0);
+    posix_kernel *child = posix_kernel_clone(k);
+    CHECK(child && child->fds[fd].ofd->regular.file == object && object->refs == 6,
+          "fork shares the inode and retains names and description");
+    CHECK(child && child->fds[directory].ofd->directory.node !=
+          k->fds[directory].ofd->directory.node,
+          "fork rebases retained directory pointers into its own namespace");
+    CHECK(child && posix_kernel_file_link_count(child, object) == 2 &&
+          posix_kernel_file_link_count(k, object) == 2,
+          "fork references do not become directory links");
+    if (!child) { posix_kernel_destroy(k); return; }
+    posix_kernel_destroy(k);
+    CHECK(object->refs == 3, "destroying parent preserves child inode references");
+    CHECK(posix_kernel_path_unlink(child, (const uint8_t *)"/tmp/inode", 10, 0) == 0 &&
+          posix_kernel_path_unlink(child, (const uint8_t *)"/tmp/alias", 10, 0) == 0 &&
+          object->refs == 1 && posix_kernel_file_link_count(child, object) == 0,
+          "last unlinked inode remains owned by descriptor");
+    CHECK(posix_kernel_file_write_at(child, fd, 0, "abc", 3) == 3,
+          "removed names do not invalidate inode writes");
+    uint64_t inode = object->inode;
+    int new_fd = posix_kernel_open(child, (const uint8_t *)"/tmp/inode", 10,
+                                   POSIX_O_CREAT | POSIX_O_RDWR, 0600);
+    CHECK(new_fd >= 0 && child->fds[new_fd].ofd->regular.file != object &&
+          child->fds[new_fd].ofd->regular.file->inode != inode,
+          "new pathname gets an independent inode after deletion");
+    posix_kernel_destroy(child);
+}
+
 static void test_directory_metadata(void) {
     posix_kernel *k = posix_kernel_create(0);
     const posix_path_metadata tmp = {
@@ -331,6 +385,9 @@ static void test_terminal_modes(void) {
     CHECK(posix_kernel_signal_pending(k, 2), "intr raises SIGINT");
     CHECK((posix_kernel_query_readiness(k, 0) & POSIX_POLL_IN) == 0,
           "intr discards partial line");
+    /* This observation is complete; pending SIGINT would interrupt the
+     * following VMIN read instead of letting it install an input wait. */
+    posix_kernel_signal_clear(k, 2);
 
     termios.lflag = 0;
     termios.cc[POSIX_TERMIOS_VMIN] = 3;
@@ -341,6 +398,9 @@ static void test_terminal_modes(void) {
           "raw read waits for VMIN bytes");
     posix_kernel_terminal_enqueue(k, 0, (const uint8_t *)"z", 1);
     posix_kernel_read(k, 0, buffer, sizeof(buffer));
+    /* The default SIGWINCH disposition discards notifications. Install the
+     * caught disposition whose pending queue this private probe observes. */
+    posix_kernel_signal_set_disposition(k, POSIX_SIGWINCH, POSIX_SIGNAL_HANDLER);
     posix_winsize unchanged = {24, 80, 0, 0};
     CHECK(posix_kernel_terminal_set_winsize(k, 0, &unchanged) == 0,
           "accept unchanged terminal window size");
@@ -776,13 +836,286 @@ static void test_foreground_process_group_routing(void) {
     posix_kernel_destroy(k);
 }
 
+
+/* Opaque lock-owner/inode lifetime, admission limits and copied wait interests.
+ * Public ranges, contention, fork/exec and signals are asserted in locks.wast. */
+static void test_record_lock_ownership(void) {
+    posix_kernel *parent = posix_kernel_create(0);
+    const char *path = "/tmp/private-lock";
+    int fd = posix_kernel_open(parent, (const uint8_t *)path, strlen(path),
+                               POSIX_O_CREAT | POSIX_O_RDWR, 0600);
+    CHECK(parent && fd >= 0, "private lock setup");
+    if (!parent || fd < 0) { posix_kernel_destroy(parent); return; }
+    posix_file_object *file = parent->fds[fd].ofd->regular.file;
+    uint32_t refs = file->refs;
+    posix_flock lock = {POSIX_F_WRLCK, 0, 0, 4, 77};
+    CHECK(posix_kernel_record_lock(parent, fd, POSIX_F_SETLK, &lock) == 0 &&
+          file->lock_count == 1 && file->refs == refs + 1,
+          "record retains exactly one inode reference");
+    posix_kernel *scratch = posix_kernel_clone(parent);
+    CHECK(scratch && scratch->lock_owner == parent->lock_owner,
+          "transactional clone retains process lock identity");
+    posix_kernel_destroy(scratch);
+    CHECK(file->lock_count == 1 && file->refs == refs + 1,
+          "transactional teardown preserves process locks");
+    posix_kernel *child = posix_kernel_clone(parent);
+    CHECK(child && posix_kernel_set_lock_pid(child, 99) == 0 &&
+          child->lock_owner != parent->lock_owner,
+          "actual fork assigns an independent lock owner");
+    CHECK(posix_kernel_record_lock(child, fd, POSIX_F_SETLKW, &lock) == -POSIX_EAGAIN &&
+          child->wait.active && child->wait.lock_file == file,
+          "blocking interest retains the original inode");
+    uint32_t waiting_refs = file->refs;
+    uint64_t generation = child->wait.generation;
+    CHECK(child->wait.lock_start == 0 && child->wait.lock_end == 3 &&
+          child->wait.lock_type == POSIX_F_WRLCK &&
+          posix_kernel_wait_poll(child) == POSIX_WAIT_BLOCKED,
+          "wait owns normalized range independent of guest bytes");
+    scratch = posix_kernel_clone(child);
+    CHECK(scratch && !scratch->wait.active && !scratch->wait.lock_file,
+          "clone never copies a pending lock continuation reference");
+    posix_kernel_destroy(scratch);
+    CHECK(file->refs == waiting_refs && child->wait.generation == generation &&
+          posix_kernel_wait_poll(child) == POSIX_WAIT_BLOCKED,
+          "scratch teardown preserves original wait interest");
+    lock.type = POSIX_F_UNLCK;
+    CHECK(posix_kernel_record_lock(parent, fd, POSIX_F_SETLK, &lock) == 0 &&
+          posix_kernel_wait_poll(child) == POSIX_WAIT_READY,
+          "raw wait becomes ready after owner unlock");
+    lock.type = 123; lock.whence = 123; lock.start = INT64_MAX;
+    CHECK(posix_kernel_record_lock(child, fd, POSIX_F_SETLKW, &lock) == 0 &&
+          !child->wait.active && !child->wait.lock_file && file->lock_count == 1,
+          "resume uses copied interest and releases its wait reference");
+    posix_kernel_close_all_fds(child);
+    CHECK(file->lock_count == 0, "exit close releases the child record");
+    posix_kernel_destroy(child);
+    CHECK(file->refs == refs, "fork/wait/record teardown balances inode refs");
+    lock = (posix_flock){POSIX_F_WRLCK, 0, 0, 4, 77};
+    int result = 0;
+    for (unsigned i = 0; i < POSIX_RECORD_LOCK_MAX; i++) {
+        lock.start = i * 8;
+        result |= posix_kernel_record_lock(parent, fd, POSIX_F_SETLK, &lock);
+    }
+    CHECK(result == 0 && file->lock_count == POSIX_RECORD_LOCK_MAX &&
+          file->refs == refs + POSIX_RECORD_LOCK_MAX,
+          "admission bound derives from the shared config");
+    lock = (posix_flock){POSIX_F_UNLCK, 0, 1, 1, 77};
+    CHECK(posix_kernel_record_lock(parent, fd, POSIX_F_SETLK, &lock) == -POSIX_ENOLCK &&
+          file->lock_count == POSIX_RECORD_LOCK_MAX &&
+          file->refs == refs + POSIX_RECORD_LOCK_MAX,
+          "split admission failure leaves records and references untouched");
+    lock = (posix_flock){POSIX_F_WRLCK, 0, 0, 0, 77};
+    CHECK(posix_kernel_record_lock(parent, fd, POSIX_F_SETLK, &lock) == 0 &&
+          file->lock_count == 1 && file->refs == refs + 1,
+          "coalescing admits a replacement before publishing records");
+    parent->fds[fd].ofd->regular.offset = UINT64_MAX;
+    lock = (posix_flock){POSIX_F_WRLCK, 1, 0, 1, 77};
+    CHECK(posix_kernel_record_lock(parent, fd, POSIX_F_SETLK, &lock) == -POSIX_EOVERFLOW &&
+          file->lock_count == 1,
+          "raw offset beyond signed representation never wraps");
+    parent->fds[fd].ofd->regular.offset = 0;
+    child = posix_kernel_clone(parent);
+    posix_kernel_set_lock_pid(child, 100);
+    lock = (posix_flock){POSIX_F_WRLCK, 0, 0, 1, 77};
+    waiting_refs = file->refs;
+    file->refs = UINT32_MAX;
+    CHECK(posix_kernel_record_lock(child, fd, POSIX_F_SETLKW, &lock) == -POSIX_ENOLCK &&
+          file->refs == UINT32_MAX && !child->wait.active,
+          "wait rejects a saturated retained inode without publishing interest");
+    file->refs = waiting_refs;
+    CHECK(posix_kernel_record_lock(child, fd, POSIX_F_SETLKW, &lock) == -POSIX_EAGAIN,
+          "register retained interest for descriptor invalidation");
+    posix_kernel_close(child, fd);
+    CHECK(posix_kernel_wait_poll(child) == POSIX_WAIT_READY,
+          "closed descriptor wakes for revalidation");
+    CHECK(posix_kernel_record_lock(child, fd, POSIX_F_SETLKW, &lock) == -POSIX_EBADF &&
+          !child->wait.active && !child->wait.lock_file,
+          "descriptor revalidation cancels the retained interest");
+    posix_kernel_destroy(child);
+    CHECK(file->lock_count == 1, "child descriptor teardown preserves parent record");
+    posix_kernel_close(parent, fd);
+    CHECK(file->lock_count == 0 && file->refs == refs - 1,
+          "last owning descriptor close releases the process record");
+    posix_kernel_destroy(parent);
+}
+
+/* Private ownership guard: WAST covers public device behavior. Null OFDs
+ * contain no pointers into a movable/destroyed kernel namespace. */
+static void test_null_inode_ownership(void) {
+    posix_kernel *parent = posix_kernel_create(0);
+    CHECK(parent != NULL, "null ownership parent");
+    if (!parent) return;
+    const uint8_t path[] = "/dev/null";
+    int fd = posix_kernel_open(parent, path, sizeof(path) - 1, POSIX_O_RDWR, 0);
+    CHECK(fd >= 0, "null ownership descriptor");
+    if (fd < 0) { posix_kernel_destroy(parent); return; }
+    posix_ofd *ofd = parent->fds[fd].ofd;
+    CHECK(ofd->kind == POSIX_OFD_NULL, "null description kind");
+    posix_file_object *file = ofd->null_device.file;
+    CHECK(file && file->refs == 2 && file->inode > VFS_MAX_ENTRIES,
+          "namespace and OFD retain an inode outside the transport range");
+    CHECK(file && !file->data && !file->data_capacity, "device has no byte backing");
+    int alias = posix_kernel_dup(parent, fd);
+    CHECK(alias >= 0, "null ownership alias");
+    posix_kernel *child = posix_kernel_clone(parent);
+    CHECK(child != NULL, "null ownership clone");
+    if (!child || alias < 0) {
+        posix_kernel_destroy(child); posix_kernel_destroy(parent); return;
+    }
+    CHECK(child->fds[fd].ofd == ofd && child->fds[alias].ofd == ofd,
+          "fork and dup retain the same stateless description");
+    CHECK(ofd->ref_count == 4 && file->refs == 3,
+          "descriptor references are distinct from namespace/inode references");
+    CHECK(posix_kernel_path_unlink(parent, path, sizeof(path) - 1, 0) == 0,
+          "remove parent namespace entry");
+    CHECK(posix_kernel_path_unlink(child, path, sizeof(path) - 1, 0) == 0,
+          "remove child namespace entry");
+    CHECK(file->refs == 1 && !file->data && !file->data_capacity,
+          "orphan device retained solely by shared description");
+    posix_kernel_destroy(parent);
+    CHECK(ofd->ref_count == 2 && file->refs == 1,
+          "parent destruction preserves child's orphan inode");
+    CHECK(posix_kernel_file_link_count(child, file) == 0,
+          "orphan inode has no namespace links");
+    CHECK(posix_kernel_close(child, fd) == 0, "release first child alias");
+    CHECK(ofd->ref_count == 1 && file->refs == 1,
+          "last alias keeps inode alive");
+    posix_kernel_destroy(child);
+}
+
+static void test_child_deadline_ownership(void) {
+    posix_kernel *parent = posix_kernel_create(0);
+    CHECK(parent != NULL, "deadline ownership parent");
+    if (!parent) return;
+    CHECK(posix_kernel_wait_until(parent, UINT64_MAX) == -POSIX_ENOSYS &&
+          !parent->wait.active, "missing clock cannot register a child deadline");
+    uint64_t now = 42;
+    posix_kernel_set_clock(parent, test_clock_now, &now);
+    CHECK(posix_kernel_alarm(parent, 1) == 0, "independent parent alarm");
+    CHECK(posix_kernel_wait_until(parent, 100) == -POSIX_EAGAIN,
+          "register child deadline");
+    uint64_t generation = parent->wait.generation;
+    CHECK(posix_kernel_wait_until(parent, 100) == -POSIX_EAGAIN &&
+          parent->wait.generation == generation, "retry retains the wait token");
+    posix_kernel *child = posix_kernel_clone(parent);
+    CHECK(child != NULL, "deadline ownership clone");
+    if (child) {
+        CHECK(!child->wait.active && child->alarm_active &&
+              child->alarm_deadline_ns == parent->alarm_deadline_ns,
+              "transaction clone drops wait token and preserves independent alarm");
+        posix_kernel_destroy(child);
+    }
+    posix_kernel_cancel_wait(parent);
+    CHECK(!parent->wait.active && parent->alarm_active &&
+          parent->alarm_deadline_ns == 1000000042,
+          "cancelling child wait preserves alarm ownership");
+    now = 100;
+    CHECK(posix_kernel_wait_until(parent, 100) == 0 && !parent->wait.active,
+          "expired child deadline leaves no wait token");
+    posix_kernel_alarm(parent, 0);
+    now = UINT64_MAX - 1;
+    CHECK(posix_kernel_wait_until(parent, UINT64_MAX) == -POSIX_EAGAIN &&
+          posix_kernel_wait_poll(parent) == POSIX_WAIT_BLOCKED,
+          "full-width absolute deadline does not wrap");
+    now = UINT64_MAX;
+    CHECK(posix_kernel_wait_poll(parent) == POSIX_WAIT_TIMEOUT,
+          "last monotonic nanosecond expires exactly");
+    posix_kernel_destroy(parent);
+}
+
+/* Guests observe flags and I/O; they cannot inspect OFD identity or wait
+ * generations. Retain these ownership/continuation guards under sanitizers. */
+static void test_status_wait_ownership(void) {
+    posix_kernel *parent = posix_kernel_create(1);
+    int fds[2];
+    uint8_t byte = 0;
+    int result = parent ? posix_kernel_pipe(parent, fds) : -POSIX_ENOMEM;
+    CHECK(result == 0, "status ownership pipe");
+    if (result) { posix_kernel_destroy(parent); return; }
+    CHECK(posix_kernel_read(parent, fds[0], &byte, 1) == -POSIX_EAGAIN &&
+          parent->wait.active, "blocking raw read registers a wait");
+    uint64_t generation = parent->wait.generation;
+    CHECK(posix_kernel_set_status_flags(parent, fds[0], POSIX_O_NONBLOCK) == 0 &&
+          parent->wait.active && parent->wait.generation == generation,
+          "status mutation does not replace an existing wait token");
+    CHECK(posix_kernel_read(parent, fds[0], &byte, 1) == -POSIX_EAGAIN &&
+          !parent->wait.active, "nonblocking retry cancels the old wait");
+    posix_kernel *child = posix_kernel_clone(parent);
+    CHECK(child && child->fds[fds[0]].ofd == parent->fds[fds[0]].ofd,
+          "fork shares the status-bearing description");
+    if (child) {
+        CHECK(posix_kernel_set_status_flags(child, fds[0], 0) == 0 &&
+              parent->fds[fds[0]].ofd->status->flags == 0,
+              "child mutation reaches the same parent description");
+        posix_kernel_destroy(child);
+    }
+    CHECK(posix_kernel_read(parent, fds[0], &byte, 1) == -POSIX_EAGAIN &&
+          parent->wait.active && parent->wait.generation != generation,
+          "restored blocking mode registers a fresh wait");
+    posix_kernel_cancel_wait(parent);
+    posix_termios termios;
+    (void)posix_kernel_tcgetattr(parent, 0, &termios);
+    termios.cc[POSIX_TERMIOS_VMIN] = 3;
+    CHECK(posix_kernel_tcsetattr(parent, 0, &termios) == 0 &&
+          posix_kernel_terminal_enqueue(parent, 0, (const uint8_t *)"x", 1) == 0,
+          "host seeds partial VMIN input");
+    uint8_t buffer[4];
+    CHECK(posix_kernel_read(parent, 0, buffer, sizeof(buffer)) == -POSIX_EAGAIN &&
+          parent->wait.active && parent->wait.read_minimum == 3 &&
+          (posix_kernel_query_readiness(parent, 0) & POSIX_POLL_IN) &&
+          posix_kernel_wait_poll(parent) == POSIX_WAIT_BLOCKED,
+          "READ copies its minimum independently of ordinary SELECT readiness");
+    CHECK(posix_kernel_set_status_flags(parent, 0, POSIX_O_NONBLOCK) == 0 &&
+          posix_kernel_read(parent, 0, &byte, 1) == 1 && byte == 'x' &&
+          posix_kernel_read(parent, 0, &byte, 1) == -POSIX_EAGAIN &&
+          !parent->wait.active && !parent->wait.read_minimum,
+          "nonblocking terminal bypasses VMIN and clears the read token");
+    (void)posix_kernel_set_status_flags(parent, 0, 0);
+    int fd = posix_kernel_attach_stream(parent, 10, 0, 1, -1, 0);
+    CHECK(fd == 0 && posix_kernel_set_status_flags(parent, 10, POSIX_O_NONBLOCK) == 0 &&
+          posix_kernel_read(parent, 10, &byte, 1) == -POSIX_EAGAIN &&
+          !parent->wait.active, "nonblocking stream has no read token");
+    posix_path_metadata metadata = {POSIX_NODE_REGULAR, 0666, 0, 0, 1, 99, 0, 0};
+    int regular_fd = -1;
+    if (!posix_kernel_path_add_data(parent, "/status", &metadata, (const uint8_t *)"x", 1))
+        regular_fd = posix_kernel_open(parent, (const uint8_t *)"/status", 7, POSIX_O_RDWR, 0);
+    CHECK(regular_fd >= 0, "host-seeded regular status owner");
+    if (regular_fd >= 0) {
+        posix_ofd *ofd = parent->fds[regular_fd].ofd;
+        child = posix_kernel_clone(parent);
+        CHECK(child && child->fds[regular_fd].ofd != ofd &&
+              child->fds[regular_fd].ofd->status == ofd->status && ofd->status->refs == 2,
+              "rebased regular descriptions retain one status object");
+        if (child) {
+            CHECK(posix_kernel_set_status_flags(child, regular_fd, POSIX_O_APPEND) == 0 &&
+                  ofd->status->flags == (POSIX_O_RDWR | POSIX_O_APPEND),
+                  "rebased child mutates its retained status owner");
+            posix_kernel_destroy(child);
+        }
+        CHECK(ofd->status->refs == 1, "child teardown releases only its status reference");
+        ofd->status->refs = UINT32_MAX;
+        child = posix_kernel_clone(parent);
+        CHECK(!child && ofd->status->refs == UINT32_MAX,
+              "saturated status reference rejects cloning before publication");
+        ofd->status->refs = child ? 2 : 1;
+        if (child) posix_kernel_destroy(child);
+    }
+    posix_kernel_destroy(parent);
+}
+
 int main(void) {
+    test_status_wait_ownership();
+    test_child_deadline_ownership();
+    test_record_lock_ownership();
     test_lifecycle();
+    test_missing_clocks();
     test_invalid_fd();
     test_terminal_readiness();
     test_file_read_at();
     test_fork_path_publication();
     test_directory_metadata();
+    test_hardlink_inode_ownership();
+    test_null_inode_ownership();
     test_creation_mask();
     test_terminal_modes();
     test_terminal_output_lengths();

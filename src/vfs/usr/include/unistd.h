@@ -14,12 +14,24 @@
 #define R_OK 4
 #define _POSIX_VERSION 200809L
 #define _POSIX2_VERSION 200809L
+/* Guest sysconf selectors; these values are part of the guest ABI. */
+#define _SC_ARG_MAX 0
+#define _POSIX_ARG_MAX 4096
+#define _SC_PAGESIZE 30
+#define _SC_PAGE_SIZE _SC_PAGESIZE
+#define _SC_GETPW_R_SIZE_MAX 70
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+extern char **environ;
 
 int access(const char *, int);
 int eaccess(const char *, int);
 int faccessat(int, const char *, int, int);
 int close(int);
-void _exit(int);
+_Noreturn void _exit(int);
 int dup(int);
 int dup2(int, int);
 int pipe(int [2]);
@@ -27,14 +39,19 @@ int pipe2(int [2], int);
 ssize_t copy_file_range(int, off_t *, int, off_t *, size_t, unsigned int);
 ssize_t splice(int, off_t *, int, off_t *, size_t, unsigned int);
 int execve(const char *, char *const [], char *const []);
+int execv(const char *, char *const []);
 int execvp(const char *, char *const []);
 int fsync(int);
 int ftruncate(int, off_t);
 int isatty(int);
 pid_t tcgetpgrp(int);
-int link(const char *, const char *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
-int symlink(const char *, const char *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
-int symlinkat(const char *, int, const char *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
+pid_t getsid(pid_t);
+pid_t setsid(void);
+pid_t getpgid(pid_t);
+pid_t getpgrp(void);
+int link(const char *, const char *);
+int symlink(const char *, const char *);
+int symlinkat(const char *, int, const char *);
 int linkat(int, const char *, int, const char *, int);
 off_t lseek(int, off_t, int);
 ssize_t read(int, void *, size_t);
@@ -58,6 +75,8 @@ struct timespec;
 int utimensat(int, const char *, const struct timespec *, int);
 char *getcwd(char *, size_t);
 unsigned int sleep(unsigned int);
+unsigned int alarm(unsigned int);
+int usleep(useconds_t);
 int pause(void) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 int getpid(void);
 uid_t getuid(void);
@@ -66,7 +85,12 @@ pid_t fork(void);
 pid_t vfork(void) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 int getdtablesize(void);
 int getpagesize(void);
+long sysconf(int);
 const char *getprogname(void);
 int gethostname(char *, size_t);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

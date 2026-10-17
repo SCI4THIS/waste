@@ -1,6 +1,6 @@
 /* allocator.c — Boundary-tag allocator for the WASTE guest libc.
  *
- * This implements malloc/calloc/realloc/free
+ * This implements malloc/calloc/realloc/free and aligned allocation
  * using a boundary-tag free-list allocator with 16-byte aligned blocks.
  * Each block has a 16-byte header (size|flags, prev, next, padding) and a
  * 4-byte boundary tag at the end.  The allocator calls memory.grow via
@@ -11,6 +11,8 @@
  */
 
 #include "include/helper.h"
+
+void waste_exit_reset(void);
 
 /* ---- internal state --------------------------------------------------- */
 
@@ -68,6 +70,7 @@ i32 waste_allocator_init(i32 base) {
     grow_calls = 0;
     st32(errno_address, 0);
     initialized = 1;
+    waste_exit_reset();
     return 1;
 }
 
@@ -83,7 +86,8 @@ i32 sbrk(i32 increment) {
         set_errno(12);
         return -1;
     }
-    if ((u64)next > 0xffffffffULL) {
+    /* Block sizes and address arithmetic use signed i32 internally. */
+    if ((u64)next > 0x7fffffffULL) {
         set_errno(12);
         return -1;
     }
@@ -162,13 +166,12 @@ static void release_block(i32 block) {
 /* ---- public API ------------------------------------------------------- */
 
 void *malloc(size_t requested_sz) {
-    i32 requested = (i32)requested_sz;
     if (!initialized) { set_errno(22); return (void *)0; }
-    if ((u32)requested > 0xffffffe0u) { set_errno(12); return (void *)0; }
-    if (requested == 0) requested = 1;
-
-    i32 total = align16(requested + 20);
-    if (total < 32) total = 32;
+    /* Round before narrowing: SIZE_MAX-near requests must not wrap to a
+     * small successful allocation or enter signed block-size arithmetic. */
+    u64 total64 = ((u64)(requested_sz ? requested_sz : 1) + 35) & ~15ULL;
+    if (total64 > 0x7ffffff0ULL) { set_errno(12); return (void *)0; }
+    i32 total = (i32)total64;
 
     /* Search free list. */
     i32 block = free_head;
@@ -190,11 +193,70 @@ void *malloc(size_t requested_sz) {
     }
 
     /* No suitable free block found — extend the heap. */
+    if ((u64)(u32)program_break + 15 + (u32)total > 0x7fffffffULL) {
+        set_errno(12);
+        return (void *)0;
+    }
     i32 aligned_break = align16(program_break);
     i32 old_break = sbrk(aligned_break - program_break + total);
     if (old_break == -1) return (void *)0;
     write_block(aligned_break, total, 1);
     return (void *)(u32)(aligned_break + 16);
+}
+
+/* Retain the ordinary header immediately before the aligned result. Split
+ * padding into reusable boundary-tag blocks instead of hiding a base pointer
+ * in user bytes; free, realloc and coalescing then use their usual paths. */
+static void *allocate_aligned(size_t alignment, size_t size) {
+    if (alignment <= 16) return malloc(size);
+    u64 reserve = (u64)size + alignment + 32;
+    if (reserve > 0x7ffffff0ULL - 35) {
+        set_errno(12);
+        return (void *)0;
+    }
+    void *raw = malloc((size_t)reserve);
+    if (!raw) return (void *)0;
+    i32 block = (i32)(u32)raw - 16;
+    i32 original_size = ld32(block) & ~1;
+    u64 pointer = ((u64)(u32)raw + alignment - 1) & ~((u64)alignment - 1);
+    i32 prefix = (i32)(pointer - (u32)raw);
+    if (prefix && prefix < 32) {
+        pointer += alignment;
+        prefix += (i32)alignment;
+    }
+    i32 aligned_block = block + prefix;
+    i32 total = (i32)(((u64)(size ? size : 1) + 35) & ~15ULL);
+    i32 tail = original_size - prefix - total;
+    if (tail < 32) { total += tail; tail = 0; }
+    write_block(aligned_block, total, 1);
+    if (tail) {
+        write_block(aligned_block + total, tail, 1);
+        release_block(aligned_block + total);
+    }
+    if (prefix) {
+        write_block(block, prefix, 1);
+        release_block(block);
+    }
+    return (void *)(u32)pointer;
+}
+
+void *aligned_alloc(size_t alignment, size_t size) {
+    if (!alignment || (alignment & (alignment - 1)) || size % alignment) {
+        set_errno(22);
+        return (void *)0;
+    }
+    return allocate_aligned(alignment, size);
+}
+
+int posix_memalign(void **result, size_t alignment, size_t size) {
+    if (!result || alignment < sizeof(void *) || (alignment & (alignment - 1)))
+        return 22;
+    i32 saved_errno = errno_address ? ld32(errno_address) : 0;
+    void *memory = allocate_aligned(alignment, size);
+    set_errno(saved_errno);
+    if (!memory) return 12;
+    *result = memory;
+    return 0;
 }
 
 void free(void *ptr) {

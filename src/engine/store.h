@@ -30,9 +30,9 @@ typedef struct {
 } native_linked_module;
 
 #define NATIVE_PROCESS_MAX 16
-#define NATIVE_EXEC_PATH_MAX 256
-#define NATIVE_EXEC_ARG_MAX 128
-#define NATIVE_EXEC_ENV_MAX 256
+#define NATIVE_EXEC_PATH_MAX VFS_PATH_MAX_BYTES
+#define NATIVE_EXEC_ARG_MAX (PROCESS_EXEC_MAX_ARGS + 1)
+#define NATIVE_EXEC_ENV_MAX (PROCESS_EXEC_MAX_ENV + 1)
 #define NATIVE_EXEC_INTERPRETER_MAX 4u
 
 typedef enum {
@@ -220,6 +220,9 @@ typedef struct {
      * linked table/function bindings can still refer to that original clone. */
     waste_exec_engine *owned_fork_engine;
     native_process_image *image;
+    /* Loaded namespace identity survives fork's private evaluator clone and
+     * later cwd/namespace changes without borrowing the parent's image. */
+    char executable_path[NATIVE_EXEC_PATH_MAX];
     uint8_t is_application;
     uint32_t root_func_idx;
     wasm_value root_args[WAST_MAX_ARGS];
@@ -362,6 +365,7 @@ typedef struct native_store {
 
 void native_exec_request_init(native_exec_request *request);
 void native_exec_request_destroy(native_exec_request *request);
+int native_exec_request_check_limits(const native_exec_request *request);
 int native_exec_request_take_handler(native_exec_request *request,
                                      native_exec_handler_kind kind,
                                      uint8_t **bytes_out, size_t *size_out);
@@ -412,6 +416,9 @@ int native_process_capsule_munmap_range(native_process_capsule *capsule,
 int native_process_capsule_mprotect_range(native_process_capsule *capsule,
                                           uint64_t address, uint64_t length,
                                           uint8_t protection);
+int native_process_capsule_advise_range(const native_process_capsule *capsule,
+                                       uint64_t address, uint64_t length,
+                                       int advice);
 int native_process_capsule_record_file_mapping(
     native_process_capsule *capsule, uint64_t address, uint64_t length,
     posix_file_object *file_object, uint64_t file_offset, int shared,
@@ -584,6 +591,9 @@ void native_store_release_process_libraries(
 
 int native_store_getpid(const native_store *store);
 int native_store_getppid(const native_store *store);
+int native_store_getsid(const native_store *store, int pid);
+int native_store_getpgid(const native_store *store, int pid);
+int native_store_setsid(native_store *store);
 int native_store_set_active_process(native_store *store, int pid);
 int native_store_fork_process(native_store *store, int *pid_out);
 int native_store_clone_process_graph(native_store *store, int parent_pid,
@@ -631,5 +641,8 @@ exec_status native_load_module(native_store *store,
 
 uint8_t *encode_group_module(const wast_group *group, size_t *size_out,
                               char *error);
+uint8_t *encode_module_source(const wast_module *module,
+                             const wast_raw_module *raw, size_t *size_out,
+                             char *error);
 
 #endif /* WASTE_RUNTIME_STORE_H */

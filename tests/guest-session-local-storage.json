@@ -1,0 +1,21 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /root/test/engine-regressions/local-storage.wast; LOCAL_STORAGE_RESULT=$?; printf '__LOCAL_STORAGE_%s__\\n' \"$LOCAL_STORAGE_RESULT\"\n"
+    },
+    {
+      "after": "__LOCAL_STORAGE_",
+      "text": "exit \"$LOCAL_STORAGE_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "__LOCAL_STORAGE_0__\r\n",
+    "WAST: 16 PASS, 0 FAIL, 16 total"
+  ],
+  "assertions": 17,
+  "exitStatus": 0
+}

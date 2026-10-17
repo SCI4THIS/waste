@@ -52,29 +52,31 @@ int main(int argc, char **argv) {
     if (!engine) return 1;
     CHECK(exec_find_export(engine, "run", &function, &error) == EXEC_OK,
           "find two-wait entry");
-    exec_continuation continuation;
-    exec_continuation_init(&continuation);
+    exec_continuation *continuation = calloc(1, sizeof(*continuation));
+    CHECK(continuation != NULL, "allocate two-wait continuation");
+    if (!continuation) { exec_free(engine); return 1; }
+    exec_continuation_init(continuation);
     exec_status status = exec_invoke(engine, function, NULL, 0, &result,
                                      &count, &error);
     CHECK(status == EXEC_YIELD && error.yield_reason == EXEC_YIELD_READ,
           "first read yield status=%d reason=%d", status, error.yield_reason);
-    CHECK(exec_continuation_capture(engine, &continuation, &error) == EXEC_OK,
+    CHECK(exec_continuation_capture(engine, continuation, &error) == EXEC_OK,
           "capture first read");
-    CHECK(exec_continuation_resume(&continuation, engine, 2, EXEC_YIELD_READ,
+    CHECK(exec_continuation_resume(continuation, engine, 2, EXEC_YIELD_READ,
                                    &error) == EXEC_OK, "resume first read");
     status = exec_invoke(engine, function, NULL, 0, &result, &count, &error);
     CHECK(status == EXEC_YIELD && error.yield_reason == EXEC_YIELD_READ,
           "second read yield status=%d reason=%d", status, error.yield_reason);
-    exec_continuation_init(&continuation);
-    CHECK(exec_continuation_capture(engine, &continuation, &error) == EXEC_OK,
+    exec_continuation_init(continuation);
+    CHECK(exec_continuation_capture(engine, continuation, &error) == EXEC_OK,
           "capture second read");
-    CHECK(exec_continuation_resume(&continuation, engine, 2, EXEC_YIELD_READ,
+    CHECK(exec_continuation_resume(continuation, engine, 2, EXEC_YIELD_READ,
                                    &error) == EXEC_OK, "resume second read");
     status = exec_invoke(engine, function, NULL, 0, &result, &count, &error);
     CHECK(status == EXEC_OK && count == 1 && result.i32 == 3 && state.calls == 4,
           "two-read image completion status=%d result=%d calls=%d",
           status, count ? result.i32 : -1, state.calls);
-    exec_continuation_destroy(&continuation); exec_free(engine);
+    exec_continuation_destroy(continuation); free(continuation); exec_free(engine);
     printf("C-engine replacement two-wait fixture: %d checks, %d failures\n",
            checks, failures);
     return failures ? 1 : 0;

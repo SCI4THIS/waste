@@ -1,11 +1,15 @@
 /* unistd.c — POSIX unistd stubs for the WASTE guest libc. */
 
 #include "include/helper.h"
+#include <waste/abi/fcntl.h>
 
 struct timespec { i64 tv_sec; long tv_nsec; };
 
 __attribute__((import_module("waste_kernel"), import_name("startup_v1")))
 extern i32 waste_kernel_startup_v1(void);
+
+extern i32 waste_kernel_executable_path_v1(char *, u32)
+  __attribute__((import_module("waste_kernel"), import_name("executable_path_v1")));
 
 extern i32 waste_kernel_open_v1(const char *path, i32 flags, i32 mode)
   __attribute__((import_module("waste_kernel"), import_name("open_v1")));
@@ -19,6 +23,11 @@ extern i64 waste_kernel_lseek(i32 fd, i64 offset, i32 whence)
   __attribute__((import_module("waste_kernel"), import_name("lseek")));
 static i32 env_result(i32 result) {
   if (result < -1) { *__errno_location() = -result; return -1; }
+  return result;
+}
+long waste_get_executable_path(char *buffer, u32 capacity) {
+  i32 result = waste_kernel_executable_path_v1(buffer, capacity);
+  if (result < 0) { *__errno_location() = -result; return -1; }
   return result;
 }
 i32 open(const char *path, i32 flags, ...) {
@@ -47,6 +56,13 @@ i32 openat(i32 directory, const char *path, i32 flags, ...) {
       directory, path, c_length(path), flags, mode));
 }
 i32 close(i32 descriptor) { return env_result(waste_env_close(descriptor)); }
+extern i32 unlink(const char *path);
+extern i32 rmdir(const char *path);
+i32 remove(const char *path) {
+  i32 result = unlink(path);
+  if (result < 0 && *__errno_location() == 21) return rmdir(path);
+  return result;
+}
 extern i32 waste_kernel_fsync_v1(i32 descriptor)
   __attribute__((import_module("waste_kernel"), import_name("fsync_v1")));
 extern i32 waste_kernel_ftruncate_v1(i32 descriptor, i64 length)
@@ -71,12 +87,15 @@ char *getcwd(char *buffer, u32 capacity) {
   return result ? buffer : 0;
 }
 i32 fcntl(i32 fd, i32 cmd, ...) {
-  /* Extract the optional third argument from the va_list.  All fcntl
-   * commands that take an argument expect a single int. */
+  /* Keep record pointers distinct from integer flags and argument-free calls. */
   i32 arg = 0;
   __builtin_va_list ap;
   __builtin_va_start(ap, cmd);
-  arg = __builtin_va_arg(ap, i32);
+  if (cmd == WASTE_F_GETLK || cmd == WASTE_F_SETLK || cmd == WASTE_F_SETLKW)
+    arg = (i32)(u32)__builtin_va_arg(ap, void *);
+  else if (cmd == WASTE_F_DUPFD || cmd == WASTE_F_DUPFD_CLOEXEC ||
+           cmd == WASTE_F_SETFD || cmd == WASTE_F_SETFL)
+    arg = __builtin_va_arg(ap, i32);
   __builtin_va_end(ap);
   return env_result(waste_kernel_fcntl_v1(fd, cmd, arg));
 }
@@ -204,8 +223,6 @@ i32 splice(i32 input_fd, i64 *input_offset,
     *__errno_location() = 38;
     return -1;
 }
-i32 tcgetpgrp(i32 fd){(void)fd;return 1;}
-i32 sysconf(i32 name){if(name==30)return 65536;return 1024;} /* 30 = _SC_PAGESIZE */
 i32 pathconf(const char*path,i32 name){(void)path;(void)name;return 255;}
 u32 confstr(i32 name,char*buffer,u32 capacity){(void)name;const char*value="/bin:/usr/bin";u32 needed=c_length(value)+1;if(buffer&&capacity){u32 n=needed<capacity?needed:capacity;bytes_copy(buffer,value,n);buffer[n-1]=0;}return needed;}
 
@@ -216,7 +233,19 @@ i32 mkfifo(const char*p,u32 mode){(void)p;(void)mode;return unsupported();}
 i32 mkfifoat(i32 directory,const char*p,u32 mode){(void)directory;(void)p;(void)mode;return unsupported();}
 i32 mknod(const char*p,u32 mode,unsigned long device){(void)p;(void)mode;(void)device;return unsupported();}
 i32 mknodat(i32 directory,const char*p,u32 mode,unsigned long device){(void)directory;(void)p;(void)mode;(void)device;return unsupported();}
-i32 linkat(i32 old_directory,const char*old_path,i32 new_directory,const char*new_path,i32 flags){(void)old_directory;(void)old_path;(void)new_directory;(void)new_path;(void)flags;return unsupported();}
+extern i32 waste_kernel_linkat_v1(i32 old_directory, const char *old_path,
+                                   i32 new_directory, const char *new_path, i32 flags)
+  __attribute__((import_module("waste_kernel"), import_name("linkat_v1")));
+i32 linkat(i32 old_directory, const char *old_path,
+            i32 new_directory, const char *new_path, i32 flags) {
+  i32 result = waste_kernel_linkat_v1(
+      old_directory, old_path, new_directory, new_path, flags);
+  if (result < 0) { *__errno_location() = -result; return -1; }
+  return result;
+}
+i32 link(const char *old_path, const char *new_path) {
+  return linkat(-100, old_path, -100, new_path, 0);
+}
 i32 lchown(const char*p,u32 u,u32 g){return chown(p,u,g);}
 i32 fchown(i32 fd,u32 u,u32 g){(void)fd;(void)u;(void)g;return unsupported();}
 extern i32 waste_kernel_fchdir_v1(i32 fd) __attribute__((import_module("waste_kernel"), import_name("fchdir_v1")));
@@ -239,6 +268,17 @@ extern i32 waste_kernel_readlink_v1(const char *path, char *buffer, u32 capacity
 i32 readlink(const char *path, char *buffer, u32 capacity) {
   return env_result(waste_kernel_readlink_v1(path, buffer, capacity));
 }
+extern i32 waste_kernel_symlinkat_v1(const char *target, i32 directory,
+                                      const char *path)
+  __attribute__((import_module("waste_kernel"), import_name("symlinkat_v1")));
+i32 symlinkat(const char *target, i32 directory, const char *path) {
+  i32 result = waste_kernel_symlinkat_v1(target, directory, path);
+  if (result < 0) { *__errno_location() = -result; return -1; }
+  return result;
+}
+i32 symlink(const char *target, const char *path) {
+  return symlinkat(target, -100, path);
+}
 
 /* Path queries cross the versioned engine-owned kernel boundary. The kernel
  * receives a bounded span and compact metadata; these wrappers retain the
@@ -248,14 +288,6 @@ extern i32 waste_kernel_path_access_v1(const char *path, u32 length,
                                         i32 mode, i32 flags);
 static i32 path_result(i32 result) {
   if (result < 0) { *__errno_location() = -result; return -1; }
-  return 0;
-}
-
-static u32 stat_type_mode(u32 kind) {
-  /* POSIX file-type bits for the stable Wasm32 struct stat ABI. */
-  if (kind == 1) return 0100000u;
-  if (kind == 2) return 0040000u;
-  if (kind == 3) return 0120000u;
   return 0;
 }
 
@@ -273,31 +305,14 @@ i32 faccessat(i32 directory, const char *path, i32 mode, i32 flags) {
       path, c_length(path), mode, flags));
 }
 
-extern i32 waste_kernel_fstatat_v1(i32 directory, const char *path,
-                                    u32 length, i32 flags, waste_path_metadata *metadata)
-  __attribute__((import_module("waste_kernel"), import_name("fstatat_v1")));
+extern i32 waste_kernel_fstatat_v2(i32 directory, const char *path,
+                                    u32 length, i32 flags, waste_stat *output)
+  __attribute__((import_module("waste_kernel"), import_name("fstatat_v2")));
 static i32 stat_query_at(i32 directory, const char *path,
                          waste_stat *output, i32 flags) {
   if (!path || !output) { *__errno_location() = 14; return -1; }
-  waste_path_metadata metadata;
-  i32 result = waste_kernel_fstatat_v1(directory, path, c_length(path), flags, &metadata);
-  if (result < 0) { *__errno_location() = -result; return -1; }
-  bytes_zero(output, sizeof(*output));
-  output->st_ino = metadata.inode;
-  output->st_mode = metadata.mode | stat_type_mode(metadata.kind);
-  output->st_nlink = metadata.kind == 2 ? 2 : 1;
-  output->st_uid = metadata.uid;
-  output->st_gid = metadata.gid;
-  output->st_size = metadata.size;
-  output->st_blksize = 4096;
-  output->st_blocks = (metadata.size + 511) / 512;
-  output->st_atime_sec = metadata.mtime_sec;
-  output->st_atime_nsec = metadata.mtime_nsec;
-  output->st_mtime_sec = metadata.mtime_sec;
-  output->st_mtime_nsec = metadata.mtime_nsec;
-  output->st_ctime_sec = metadata.mtime_sec;
-  output->st_ctime_nsec = metadata.mtime_nsec;
-  return 0;
+  return env_result(waste_kernel_fstatat_v2(
+      directory, path, c_length(path), flags, output));
 }
 
 i32 stat(const char *path, waste_stat *output) { return stat_query_at(-100, path, output, 0); }

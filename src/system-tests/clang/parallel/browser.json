@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/parallel.wasm",
+      "source": "build/system-tests/clang/parallel/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/parallel.wast",
+      "source": "src/system-tests/clang/parallel/parallel.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/parallel.wasm > /tmp/parallel.bin; printf '%s\\n' \"$?\" > /tmp/parallel-status.txt; /bin/wast --verbose /tmp/parallel.wast; printf '__PARALLEL_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__PARALLEL_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__PARALLEL_0__\r\n",
+    "WAST: 124 PASS, 0 FAIL, 124 total"
+  ],
+  "assertions": 125,
+  "exitStatus": 0
+}

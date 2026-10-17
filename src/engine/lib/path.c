@@ -22,7 +22,9 @@ static void write_le64(uint8_t *p, uint64_t value) {
 }
 
 int posix_path_metadata_validate(const posix_path_metadata *metadata) {
-    if (!metadata || metadata->kind > POSIX_NODE_SYMLINK || metadata->size < 0)
+    if (!metadata || metadata->kind > POSIX_NODE_NULL || metadata->size < 0)
+        return -1;
+    if (metadata->kind == POSIX_NODE_NULL && metadata->size != 0)
         return -1;
     if (metadata->kind == POSIX_NODE_NONE)
         return -1;

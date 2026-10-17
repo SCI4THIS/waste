@@ -201,6 +201,68 @@ static void test_handler_mask_round_trip(void) {
     posix_kernel_destroy(kernel);
 }
 
+static uint64_t alarm_clock(void *data) { return *(uint64_t *)data; }
+
+/* Private clock absence/overflow and transaction ownership guards. Public
+ * fork/exec, deadline delivery and ABI expectations live in watchdog WAST. */
+static void test_alarm_deadline_ownership(void) {
+    uint64_t now = UINT64_C(42000000000);
+    posix_kernel *kernel = posix_kernel_create(0);
+    CHECK(kernel != NULL, "alarm kernel allocation");
+    CHECK(posix_kernel_alarm(kernel, 1) == -POSIX_ENOSYS,
+          "clockless alarm reported success");
+    CHECK(!kernel->alarm_active, "clockless alarm changed state");
+    posix_kernel_set_clock(kernel, alarm_clock, &now);
+    CHECK(posix_kernel_alarm(kernel, UINT32_MAX) == 0, "unsigned alarm setup");
+    CHECK(posix_kernel_alarm(kernel, 0) == UINT32_MAX, "unsigned remaining range");
+    CHECK(posix_kernel_alarm(kernel, 2) == 0, "alarm replacement setup");
+    posix_kernel *candidate = posix_kernel_clone(kernel);
+    CHECK(candidate && candidate->alarm_active, "transaction lost alarm");
+    CHECK(candidate->alarm_deadline_ns == kernel->alarm_deadline_ns,
+          "transaction changed deadline");
+    CHECK(posix_kernel_alarm(candidate, 0) == 2, "candidate cancellation");
+    CHECK(kernel->alarm_active, "candidate changed source timer");
+    posix_kernel_destroy(candidate);
+    now += UINT64_C(1000000001);
+    CHECK(posix_kernel_alarm(kernel, 3) == 1, "remaining fractional second");
+    uint64_t deadline = kernel->alarm_deadline_ns;
+    posix_kernel_cancel_wait(kernel);
+    CHECK(kernel->alarm_active && kernel->alarm_deadline_ns == deadline,
+          "syscall wait cancellation removed alarm");
+    posix_kernel_signal_exec(kernel);
+    CHECK(kernel->alarm_active && kernel->alarm_deadline_ns == deadline,
+          "exec reset alarm");
+    posix_sigset mask = {{UINT32_C(1) << (POSIX_SIGALRM - 1), 0, 0, 0}};
+    posix_kernel_set_signal_mask(kernel, &mask);
+    now = deadline - 1;
+    posix_kernel_alarm_poll(kernel);
+    CHECK(kernel->alarm_active, "alarm fired before deadline");
+    now++;
+    posix_kernel_alarm_poll(kernel);
+    CHECK(!kernel->alarm_active, "expired alarm retained deadline");
+    CHECK(posix_kernel_signal_pending(kernel, POSIX_SIGALRM), "masked expiry absent");
+    CHECK(posix_kernel_alarm(kernel, 0) == 0, "expired remaining time");
+    CHECK(posix_kernel_signal_pending(kernel, POSIX_SIGALRM), "cancel cleared signal");
+    CHECK(posix_kernel_signal_interrupt(kernel) == 0, "masked alarm interrupted");
+    memset(&mask, 0, sizeof(mask));
+    posix_kernel_set_signal_mask(kernel, &mask);
+    CHECK(posix_kernel_signal_interrupt(kernel) == -POSIX_EINTR, "unmasked alarm absent");
+    CHECK(posix_kernel_signal_last_delivered(kernel) == POSIX_SIGALRM,
+          "incorrect expiry signal");
+    posix_kernel_alarm_poll(kernel);
+    CHECK(!posix_kernel_signal_pending(kernel, POSIX_SIGALRM), "alarm repeated");
+    now = UINT64_MAX - 1;
+    CHECK(posix_kernel_alarm(kernel, UINT32_MAX) == 0, "saturated timer setup");
+    CHECK(kernel->alarm_deadline_ns == UINT64_MAX, "deadline wrapped");
+    CHECK(posix_kernel_alarm(kernel, 1) == 1, "saturated remaining rounding");
+    posix_kernel_signal_set_disposition(kernel, POSIX_SIGALRM, POSIX_SIGNAL_IGNORE);
+    now = UINT64_MAX;
+    posix_kernel_alarm_poll(kernel);
+    CHECK(!kernel->alarm_active && !posix_kernel_signal_pending(kernel, POSIX_SIGALRM),
+          "ignored alarm stayed armed or pending");
+    posix_kernel_destroy(kernel);
+}
+
 int main(void) {
     test_pending_before_call();
     test_signal_after_yield();
@@ -208,6 +270,7 @@ int main(void) {
     test_cancel_and_error_restore();
     test_signal_dispositions();
     test_handler_mask_round_trip();
+    test_alarm_deadline_ownership();
     if (failures) {
         fprintf(stderr, "%d/%d tests FAILED\n", failures, tests);
         return 1;

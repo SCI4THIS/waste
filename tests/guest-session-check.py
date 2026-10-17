@@ -57,6 +57,8 @@ def native_session(executable, vfs_root, script, events, result, timeout=10, exp
                            output.find(marker, consumed) >= 0 and
                            ("pid" not in event or (waits and waits[-1]["pid"] == event["pid"])) and
                            ("waitKind" not in event or (waits and waits[-1]["kind"] == event["waitKind"]))):
+                    if event_index and events[event_index - 1].get("stillWaiting"):
+                        assert len(output) == consumed, "guest advanced before its wait was satisfied"
                     if time.monotonic() >= deadline:
                         raise AssertionError(f"native output timeout: {output!r}")
                     for key, _ in selector.select(0.1):
@@ -103,6 +105,11 @@ def native_session(executable, vfs_root, script, events, result, timeout=10, exp
                         operation, first, second = 1, *event["resize"]
                     elif "monotonicNs" in event:
                         value = event["monotonicNs"]
+                        # Decimal strings preserve full uint64 precision in
+                        # the same JSON consumed by the JavaScript harnesses.
+                        if isinstance(value, str):
+                            assert value.isascii() and value.isdecimal(), value
+                            value = int(value)
                         assert isinstance(value, int) and 0 <= value <= (1 << 64) - 1
                         operation, first, second = 4, value & 0xffffffff, value >> 32
                     else:
@@ -153,17 +160,26 @@ def main():
     parser.add_argument("--native", default="build/cli-rt/private/guest-session")
     parser.add_argument("--vfs-root", default="src/vfs")
     parser.add_argument("--wasm", default="build/html-rt/waste-wast.wasm")
-    parser.add_argument("--scenario", action="append", choices=("vim", "vim-scroll", "scheduling-timers", "scheduling-cpu", "shared-dependencies", "shared-libc", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "bash-invalid", "aux-bash", "matrix", "chmod", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"))
+    parser.add_argument("--scenario", action="append", choices=("clang-checkpoint", "clang-crash-recovery", "clang-finite-wait", "clang-finite-saturation", "clang-child-deadline", "clang-clocks", "clang-watchdog", "clang-backoff", "clang-usleep", "vim", "vim-scroll", "scheduling-timers", "scheduling-cpu", "pipe-modes", "pipe-descriptors", "pipe-bash", "pipe-root", "pipe-root-fail", "shared-dependencies", "shared-libc", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "bash-invalid", "aux-bash", "matrix", "chmod", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"))
     parser.add_argument("--page", help="Also check identical scenarios through the packaged production worker")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="guest-session-", dir="build/engine") as temporary:
-        for name in args.scenario or ("vim", "vim-scroll", "scheduling-timers", "scheduling-cpu", "shared-dependencies", "shared-libc", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "bash-invalid", "aux-bash", "matrix", "chmod", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"):
-            contract = ("src/system-tests/vim/session.json" if name == "vim" else
+        for name in args.scenario or ("vim", "vim-scroll", "scheduling-timers", "scheduling-cpu", "pipe-modes", "pipe-descriptors", "pipe-bash", "pipe-root", "pipe-root-fail", "shared-dependencies", "shared-libc", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded", "bash", "bash-invalid", "aux-bash", "matrix", "chmod", "pipeline", "heredoc", "heredoc-long", "exec-fail", "rogue-fresh", "rogue", "handlers", "handler-start"):
+            contract = ("src/system-tests/clang/checkpoint/browser.json" if name == "clang-checkpoint" else
+                        "src/system-tests/clang/crash-recovery/browser.json" if name == "clang-crash-recovery" else
+                        "src/system-tests/clang/finite-wait/controlled.json" if name == "clang-finite-wait" else
+                        "src/system-tests/clang/finite-wait/saturation.json" if name == "clang-finite-saturation" else
+                        "src/system-tests/clang/child-deadline/controlled.json" if name == "clang-child-deadline" else
+                        "src/system-tests/clang/watchdog/controlled.json" if name == "clang-watchdog" else
+                        "src/system-tests/clang/clocks-controlled.json" if name == "clang-clocks" else
+                        "src/system-tests/clang/backoff/controlled.json" if name == "clang-backoff" else
+                        "src/system-tests/clang/timed-locks/controlled.json" if name == "clang-usleep" else
+                        "src/system-tests/vim/session.json" if name == "vim" else
                         "src/system-tests/vim/scroll-session.json" if name == "vim-scroll" else
                         f"tests/guest-session-{name}.json")
             scenario = json.loads(Path(contract).read_text())
             # Bash exercises the default mounted bootstrap, not a host copy.
-            script = scenario["fixture"] if name in ("scheduling-timers", "scheduling-cpu", "shared-libc", "io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded") else None
+            script = scenario["fixture"] if name in ("pipe-modes", "pipe-descriptors", "scheduling-timers", "scheduling-cpu", "shared-libc", "io", "diy-control", "terminal-control", "terminal-readiness", "terminal-timing", "process-groups", "terminal-descriptors", "clock", "waits", "transfer", "signal-pid", "signal-pid-backgrounded", "signal-pgid", "signal-pgid-fork", "signal-pgid-backgrounded") else None
             extra_args = []
             if "clockRealtimeNs" in scenario:
                 extra_args += ["--clock-realtime-ns", str(scenario["clockRealtimeNs"])]

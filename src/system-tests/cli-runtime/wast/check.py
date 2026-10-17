@@ -5,10 +5,13 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[4]
 FIXTURES = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT / 'src/html-rt/tools'))
+from runtime_config import read_config
 
 
 def main():
@@ -22,6 +25,7 @@ def main():
     checks = []
     env = dict(os.environ, ASAN_OPTIONS=os.environ.get('ASAN_OPTIONS', 'detect_leaks=0:halt_on_error=1'),
                UBSAN_OPTIONS='halt_on_error=1')
+    batch_budget_ms = read_config()['LEGACY_NATIVE_TIMEOUT_DEFAULT_MS'] * (4 if args.sanitize else 1)
 
     def run(name, flags, *, code=0, contains=None, data=b'', cwd=None, timeout=30):
         p = subprocess.run([str(runner), *map(str, flags)], cwd=cwd or ROOT,
@@ -124,9 +128,12 @@ def main():
         run('CLI timeout error', ['--timeout-ms', '0', language], code=2)
         # Sanitizer instrumentation needs a larger batch budget than the default.
         run('batch library context', ['--suite', '--group=aux/libc', '--group=system/libc', '--jobs=2',
-            '--timeout-ms=30000', f'--results={work}/batch.json'], contains=b'14 PASS, 0 FAIL', timeout=60)
+            f'--timeout-ms={batch_budget_ms}', f'--results={work}/batch.json'],
+            contains=b'0 FAIL', timeout=batch_budget_ms / 1000 + 30)
         batch = json.loads((work / 'batch.json').read_text())
-        assert batch['summary']['skip'] == 0 and batch['summary']['pass'] == 14
+        assert batch['tests'] and all(test['status'] == 'PASS' and test['total'] > 0
+                                     for test in batch['tests']), batch
+        assert batch['summary']['skip'] == 0, batch
     (output / ('results' + suffix + '.json')).write_text(json.dumps({'passed': len(checks), 'checks': checks}, indent=2) + '\n')
     print(f'PASS standalone WAST: {len(checks)} host boundaries ({suffix or "native"})')
 

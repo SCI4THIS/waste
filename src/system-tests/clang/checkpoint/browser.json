@@ -1,0 +1,44 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/checkpoint-c.wasm",
+      "source": "build/system-tests/clang/checkpoint/probe-c.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/checkpoint-cxx.wasm",
+      "source": "build/system-tests/clang/checkpoint/probe-cxx.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/checkpoint.wast",
+      "source": "src/system-tests/clang/checkpoint/checkpoint.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/checkpoint-jumps.wast",
+      "source": "tests/engine-regressions/setjmp-buffer-copy.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/checkpoint-c.wasm > /tmp/checkpoint-c.bin; printf '%s\\n' \"$?\" > /tmp/checkpoint-c-status.txt; /tmp/checkpoint-cxx.wasm > /tmp/checkpoint-cxx.bin; printf '%s\\n' \"$?\" > /tmp/checkpoint-cxx-status.txt; /bin/wast --verbose /tmp/checkpoint.wast && /bin/wast --verbose /tmp/checkpoint-jumps.wast; printf '__CHECKPOINT_%s__\\n' \"$?\"\n",
+      "drainTimers": true
+    },
+    {
+      "after": "__CHECKPOINT_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__CHECKPOINT_0__\r\n",
+    "WAST: 218 PASS, 0 FAIL, 218 total",
+    "WAST: 12 PASS, 0 FAIL, 12 total"
+  ],
+  "assertions": 231,
+  "exitStatus": 0
+}

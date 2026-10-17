@@ -7,6 +7,11 @@ The authored WAST files test the shared native/browser process scheduler:
 - `cpu.wast` spins on a zero-timeout pipe readiness query until its parent gets
   a CPU slice and writes a byte. Its second assertion transfers more than a
   pipe buffer can hold, requiring blocked writers and readers to yield.
+- `pipe-modes.wast` switches an aliased reader from nonblocking back to blocking
+  across fork, checks data/EOF wakeup, and changes regular-file append placement
+  through aliases and fork. `tests/engine-regressions/pipe-descriptors.wast` explicitly
+  requests nonblocking I/O for EAGAIN and checks shared status independently of
+  descriptor-local close-on-exec flags.
 - `handler-long.wast` and `handler-short.wast` deliberately reuse module IDs and
   registrations. The aux-bash scenario runs these concurrently from Bash and
   checks that each handler resumes and cleans up only its own definitions.
@@ -22,11 +27,30 @@ make -C src/html-rt bash-html
 ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
   python3 tests/guest-session-check.py \
   --native build/cli-rt/private/guest-session-sanitize \
-  --scenario scheduling-timers --scenario scheduling-cpu --scenario aux-bash \
+  --scenario scheduling-timers --scenario scheduling-cpu \
+  --scenario pipe-modes --scenario pipe-descriptors --scenario pipe-bash \
+  --scenario pipe-root --scenario pipe-root-fail \
+  --scenario aux-bash \
   --page build/html-rt/bash.html \
   > build/engine/concurrent-session-results.txt \
   2> build/engine/concurrent-session-check.log
 ```
+
+The standalone descriptor regression also runs through the public CLI and
+installed Bash:
+
+```sh
+build/cli-rt/wasm --vfs-root src/vfs src/vfs/usr/bin/bash --norc \
+  -c 'wast --verbose /root/test/engine-regressions/pipe-descriptors.wast'
+```
+
+Expect `WAST: 170 PASS, 0 FAIL, 170 total`. The `pipe-bash` session checks the
+same invocation and zero exit status through native, sanitizer, browser API and
+the packaged production worker.
+The `pipe-root` and `pipe-root-fail` contracts replace root Bash with WAST and
+check successful and intentionally failing reports, status 0/1, and cleanup
+without a child wait/reap transition. This also covers Bash's final-command
+exec optimization in the public CLI invocation above.
 
 Leak detection is disabled for the documented ptrace environment; address and
 undefined-behavior checks remain enabled. These are system probes: fork inside

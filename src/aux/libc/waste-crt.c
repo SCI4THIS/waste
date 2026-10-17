@@ -5,7 +5,7 @@ typedef int i32;
 
 /* Provide real definitions for stdin/stdout/stderr so wasm-ld places them
    at valid data-segment addresses instead of address 0.  _start() fills
-   these with the waste-libc's FILE pointers before calling main(). */
+   these with waste-libc's FILE pointers before constructors and main(). */
 typedef struct WasteFile __waste_crt_FILE;
 __waste_crt_FILE *stdin;
 __waste_crt_FILE *stdout;
@@ -61,13 +61,13 @@ extern i32 main(i32, char **, char **);
 __attribute__((export_name("_start")))
 void _start(void) {
   i32 status;
-  if (__wasm_call_ctors) __wasm_call_ctors();
   /* Bind CRT-defined stdin/stdout/stderr to waste-libc's FILE handles.
      This must happen after waste_stdio_init (called by the engine host)
      so the waste-libc handles are already allocated. */
   stdin = waste_stdin();
   stdout = waste_stdout();
   stderr = waste_stderr();
+  if (__wasm_call_ctors) __wasm_call_ctors();
   status = __waste_startup_call(main);
   fflush((void *)0);
   waste_env_exit(status);

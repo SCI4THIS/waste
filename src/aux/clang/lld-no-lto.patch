@@ -1,0 +1,136 @@
+--- a/LTO.h
++++ b/LTO.h
+@@ -39,6 +39,7 @@
+ class BitcodeFile;
+ class InputFile;
+ 
++#if !defined(LLD_WASTE_NO_LTO)
+ class BitcodeCompiler {
+ public:
+   BitcodeCompiler();
+@@ -57,6 +58,9 @@
+   std::unique_ptr<llvm::raw_fd_ostream> indexFile;
+   llvm::DenseSet<StringRef> thinIndices;
+ };
++#else
++class BitcodeCompiler {};
++#endif
+ } // namespace lld::wasm
+ 
+ #endif
+--- a/InputFiles.h
++++ b/InputFiles.h
+@@ -168,7 +168,9 @@
+ 
+   void parse(StringRef symName);
+   void parseLazy();
++#if !defined(LLD_WASTE_NO_LTO)
+   std::unique_ptr<llvm::lto::InputFile> obj;
++#endif
+ 
+   // Set to true once LTO is complete in order prevent further bitcode objects
+   // being added.
+--- a/InputFiles.cpp
++++ b/InputFiles.cpp
+@@ -100,7 +100,12 @@
+   }
+ 
+   assert(magic == file_magic::bitcode);
++#if defined(LLD_WASTE_NO_LTO)
++  fatal(toString(mb.getBufferIdentifier()) +
++        ": LLVM bitcode/LTO support is disabled; compile to Wasm objects without -flto");
++#else
+   return make<BitcodeFile>(mb, archiveName, offsetInArchive, lazy);
++#endif
+ }
+ 
+ // Relocations contain either symbol or type indices.  This function takes a
+@@ -813,6 +818,7 @@
+   }
+ }
+ 
++#if !defined(LLD_WASTE_NO_LTO)
+ static uint8_t mapVisibility(GlobalValue::VisibilityTypes gvVisibility) {
+   switch (gvVisibility) {
+   case GlobalValue::DefaultVisibility:
+@@ -916,5 +922,14 @@
+     symbols.push_back(createBitcodeSymbol(keptComdats, objSym, *this));
+ }
+ 
++#else
++bool BitcodeFile::doneLTO = false;
++void BitcodeFile::parseLazy() {
++  fatal("LLVM bitcode/LTO support is disabled");
++}
++void BitcodeFile::parse(StringRef) {
++  fatal("LLVM bitcode/LTO support is disabled");
++}
++#endif
+ } // namespace wasm
+ } // namespace lld
+--- a/Driver.cpp
++++ b/Driver.cpp
+@@ -87,10 +87,12 @@
+ // Technically this can be delayed until we read bitcode files, but
+ // we don't bother to do lazily because the initialization is fast.
+ static void initLLVM() {
++#if !defined(LLD_WASTE_NO_LTO)
+   InitializeAllTargets();
+   InitializeAllTargetMCs();
+   InitializeAllAsmPrinters();
+   InitializeAllAsmParsers();
++#endif
+ }
+ 
+ class LinkerDriver {
+@@ -815,6 +817,7 @@
+   return sym;
+ }
+ 
++#if !defined(LLD_WASTE_NO_LTO)
+ static void handleLibcall(StringRef name) {
+   Symbol *sym = symtab->find(name);
+   if (sym && sym->isLazy() && isa<BitcodeFile>(sym->getFile())) {
+@@ -823,6 +826,7 @@
+     cast<LazySymbol>(sym)->extract();
+   }
+ }
++#endif
+ 
+ static void writeWhyExtract() {
+   if (ctx.arg.whyExtract.empty())
+@@ -1430,11 +1434,13 @@
+   // We only need to add libcall symbols to the link before LTO if the symbol's
+   // definition is in bitcode. Any other required libcall symbols will be added
+   // to the link after LTO when we add the LTO object file to the link.
++#if !defined(LLD_WASTE_NO_LTO)
+   if (!ctx.bitcodeFiles.empty()) {
+     llvm::Triple TT(ctx.bitcodeFiles.front()->obj->getTargetTriple());
+     for (auto *s : lto::LTO::getRuntimeLibcallSymbols(TT))
+       handleLibcall(s);
+   }
++#endif
+   if (errorCount())
+     return;
+ 
+--- a/SymbolTable.cpp
++++ b/SymbolTable.cpp
+@@ -82,6 +82,7 @@
+   // Prevent further LTO objects being included
+   BitcodeFile::doneLTO = true;
+ 
++#if !defined(LLD_WASTE_NO_LTO)
+   // Collect the bitcode library functions that are not safe to call because
+   // they were not yet brought in the link. (Such symbols are lazy.)
+   llvm::BumpPtrAllocator alloc;
+@@ -115,6 +116,10 @@
+     obj->parse(true);
+     ctx.objectFiles.push_back(obj);
+   }
++#else
++  if (!ctx.bitcodeFiles.empty())
++    fatal("LLVM bitcode/LTO support is disabled");
++#endif
+ }
+ 
+ Symbol *SymbolTable::find(StringRef name) {

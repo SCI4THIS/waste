@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/layout-override.wasm",
+      "source": "build/system-tests/clang/layout-override/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/layout-override.wast",
+      "source": "src/system-tests/clang/layout-override/layout-override.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/layout-override.wasm > /tmp/layout-override.bin; printf '%s\\n' \"$?\" > /tmp/layout-override-status.txt; /bin/wast --verbose /tmp/layout-override.wast; LAYOUT_OVERRIDE_RESULT=$?; printf '__LAYOUT_OVERRIDE_%s__\\n' \"$LAYOUT_OVERRIDE_RESULT\"\n"
+    },
+    {
+      "after": "__LAYOUT_OVERRIDE_",
+      "text": "exit \"$LAYOUT_OVERRIDE_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "__LAYOUT_OVERRIDE_0__\r\n",
+    "WAST: 43 PASS, 0 FAIL, 43 total"
+  ],
+  "assertions": 44,
+  "exitStatus": 0
+}

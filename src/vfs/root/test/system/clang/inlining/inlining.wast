@@ -1,0 +1,50 @@
+;; Complete actual inlining helper, graph statistics and copied output.
+(module $inlining
+  (import "waste-runtime" "memory" (memory 4))
+  (import "libc" "open" (func $open (param i32 i32 i32) (result i32)))
+  (import "env" "read" (func $read (param i32 i32 i32) (result i32)))
+  (import "libc" "close" (func $close (param i32) (result i32)))
+  (import "libc" "memcmp" (func $compare (param i32 i32 i32) (result i32)))
+  (data (i32.const 180000) "/tmp/inlining.bin\00")
+  (data (i32.const 180128) "/tmp/inlining-status.txt\00")
+  (data (i32.const 180256) "/tmp/inlining-text.txt\00")
+  (data (i32.const 180384) "/tmp/inlining-dump.txt\00")
+  (data (i32.const 200000) "fraction: 1 [33.33% of units]\0azero: 1 [0% of units]\0afull: 7 [100% of units]small: 1 [1e-05% of units]\0alarge: 2147483647 [2.147e+11% of units]\0anegative: -1 [-33.33% of units]\0aempty: 0 [0% of units]\0aowned-copy: 2 [66.67% of units]\0acompiled:      33.33|17|1.125|tail")
+  (data (i32.const 202000) "------- Dumping inliner stats for [inlining-module] -------\0a-- List of inlined functions:\0aInlined not imported function [helper]: #inlines = 1, #inlines_to_importing_module = 1\0aInlined imported function [imported]: #inlines = 1, #inlines_to_importing_module = 1\0a-- Summary:\0aAll functions: 4, imported functions: 2\0ainlined functions: 2 [50% of all functions]\0aimported functions inlined anywhere: 1 [50% of imported functions]\0aimported functions inlined into importing module: 1 [50% of imported functions], remaining: 1 [50% of imported functions]\0anon-imported functions inlined anywhere: 1 [50% of non-imported functions]\0anon-imported functions inlined into importing module: 1 [50% of non-imported functions]\0a")
+  (func $capture (param $path i32) (param $output i32) (param $capacity i32) (result i32)
+    (local $fd i32) (local $count i32)
+    local.get $path i32.const 0 i32.const 0 call $open local.tee $fd
+    i32.const 0 i32.lt_s if i32.const -1 return end
+    local.get $fd local.get $output local.get $capacity call $read local.set $count
+    local.get $fd call $close drop local.get $count)
+  (func (export "capture") (result i32)
+    i32.const 180000 i32.const 184000 i32.const 4096 call $capture)
+  (func (export "status") (result i32)
+    i32.const 180128 i32.const 190000 i32.const 8 call $capture i32.const 3 i32.eq
+    i32.const 190000 i32.load16_u i32.const 0x3333 i32.eq i32.and
+    i32.const 190002 i32.load8_u i32.const 10 i32.eq i32.and)
+  (func (export "value") (param $index i32) (result i64)
+    i32.const 184000 local.get $index i32.const 8 i32.mul i32.add i64.load)
+  (func (export "exact-helper-and-compiled-text") (result i32)
+    i32.const 180256 i32.const 210000 i32.const 4096 call $capture i32.const 263 i32.eq
+    i32.const 210000 i32.const 200000 i32.const 263 call $compare i32.eqz i32.and)
+  (func (export "exact-real-graph-dump") (result i32)
+    i32.const 180384 i32.const 212000 i32.const 4096 call $capture i32.const 710 i32.eq
+    i32.const 212000 i32.const 202000 i32.const 710 call $compare i32.eqz i32.and)
+)
+(assert_return (invoke "capture") (i32.const 96))
+(assert_return (invoke "status") (i32.const 1))
+(assert_return (invoke "value" (i32.const 0)) (i64.const 34))
+(assert_return (invoke "value" (i32.const 1)) (i64.const 30))
+(assert_return (invoke "value" (i32.const 2)) (i64.const 22))
+(assert_return (invoke "value" (i32.const 3)) (i64.const 23))
+(assert_return (invoke "value" (i32.const 4)) (i64.const 27))
+(assert_return (invoke "value" (i32.const 5)) (i64.const 40))
+(assert_return (invoke "value" (i32.const 6)) (i64.const 32))
+(assert_return (invoke "value" (i32.const 7)) (i64.const 23))
+(assert_return (invoke "value" (i32.const 8)) (i64.const 32))
+(assert_return (invoke "value" (i32.const 9)) (i64.const 34))
+(assert_return (invoke "value" (i32.const 10)) (i64.const 263))
+(assert_return (invoke "value" (i32.const 11)) (i64.const 1))
+(assert_return (invoke "exact-helper-and-compiled-text") (i32.const 1))
+(assert_return (invoke "exact-real-graph-dump") (i32.const 1))

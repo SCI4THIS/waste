@@ -60,7 +60,8 @@ struct dirent *readdir(DIR *directory) {
   directory->entry.d_ino = metadata.inode;
   directory->entry.d_off++;
   directory->entry.d_reclen = (unsigned short)sizeof(directory->entry);
-  directory->entry.d_type = metadata.kind == 2 ? 4 :
-                            metadata.kind == 3 ? 10 : 8;
+  directory->entry.d_type = metadata.kind == WASTE_NODE_DIRECTORY ? DT_DIR :
+                            metadata.kind == WASTE_NODE_SYMLINK ? DT_LNK :
+                            metadata.kind == WASTE_NODE_NULL ? DT_CHR : DT_REG;
   return &directory->entry;
 }

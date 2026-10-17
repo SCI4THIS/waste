@@ -45,6 +45,9 @@ struct sigaction {
 #define SIG_SETMASK 2
 #define SA_RESTART 0x10000000
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 sighandler_t signal(int, sighandler_t);
 int raise(int);
 int kill(pid_t, int);
@@ -57,5 +60,8 @@ int sigismember(const sigset_t *, int);
 int sigprocmask(int, const sigset_t *, sigset_t *);
 int sigpending(sigset_t *);
 const char *strsignal(int);
+#ifdef __cplusplus
+}
+#endif
 
 #endif

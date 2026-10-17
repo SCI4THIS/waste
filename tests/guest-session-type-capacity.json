@@ -1,0 +1,21 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /root/test/engine-regressions/type-capacity.wast; TYPE_CAPACITY_RESULT=$?; printf '__TYPE_CAPACITY_%s__\\n' \"$TYPE_CAPACITY_RESULT\"\n"
+    },
+    {
+      "after": "__TYPE_CAPACITY_",
+      "text": "exit \"$TYPE_CAPACITY_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "__TYPE_CAPACITY_0__\r\n",
+    "WAST: 12 PASS, 0 FAIL, 12 total"
+  ],
+  "assertions": 13,
+  "exitStatus": 0
+}

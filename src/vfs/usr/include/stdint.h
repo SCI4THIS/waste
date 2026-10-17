@@ -70,10 +70,20 @@ typedef long long intmax_t; typedef unsigned long long uintmax_t;
 #define SIZE_MAX __SIZE_MAX__
 #define SIG_ATOMIC_MIN (-__SIG_ATOMIC_MAX__-1)
 #define SIG_ATOMIC_MAX __SIG_ATOMIC_MAX__
-#define WCHAR_MIN __WCHAR_MIN__
-#define WCHAR_MAX __WCHAR_MAX__
-#define WINT_MIN __WINT_MIN__
-#define WINT_MAX __WINT_MAX__
+#ifndef WCHAR_MIN
+# ifdef __WCHAR_UNSIGNED__
+#  define WCHAR_MIN 0
+# else
+#  define WCHAR_MIN (-__WCHAR_MAX__-1)
+# endif
+#endif
+#ifndef WCHAR_MAX
+# define WCHAR_MAX __WCHAR_MAX__
+#endif
+/* uchar.h defines the guest wint_t as unsigned int, independently of the
+   compiler's default signed __WINT_TYPE__. */
+#define WINT_MIN 0U
+#define WINT_MAX UINT32_MAX
 #define INT8_C(v) v
 #define UINT8_C(v) v
 #define INT16_C(v) v

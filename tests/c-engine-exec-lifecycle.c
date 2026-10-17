@@ -120,28 +120,31 @@ static int run_case(const uint8_t *bytes, size_t size, int successful) {
     };
     exec_imports binding = {.functions = imports, .function_count = 5};
     waste_exec_engine *engine = NULL; exec_error error; wasm_value result;
-    int count = 0; uint32_t fn = 0; exec_continuation parent;
-    exec_continuation_init(&parent);
+    int count = 0; uint32_t fn = 0;
+    exec_continuation *parent = calloc(1, sizeof(*parent));
+    CHECK(parent != NULL, "allocate parent continuation");
+    if (!parent) return 0;
+    exec_continuation_init(parent);
     memset(&error, 0, sizeof(error));
     CHECK(exec_load_with_imports(bytes, size, &binding, &engine, &error) == EXEC_OK,
           "fixture load: %s", error.message);
-    if (!engine) return 0;
+    if (!engine) { free(parent); return 0; }
     CHECK(exec_find_export(engine, "run", &fn, &error) == EXEC_OK,
           "fixture export: %s", error.message);
     state.phase = PHASE_FORK;
     exec_status st = exec_invoke(engine, fn, NULL, 0, &result, &count, &error);
     CHECK(st == EXEC_YIELD && error.yield_reason == EXEC_YIELD_FORK,
           "fork yield status=%d reason=%d", st, error.yield_reason);
-    CHECK(exec_continuation_capture(engine, &parent, &error) == EXEC_OK,
+    CHECK(exec_continuation_capture(engine, parent, &error) == EXEC_OK,
           "parent capture: %s", error.message);
     exec_error rejected;
     memset(&rejected, 0, sizeof(rejected));
-    CHECK(exec_continuation_resume(&parent, NULL, 1, EXEC_YIELD_FORK,
+    CHECK(exec_continuation_resume(parent, NULL, 1, EXEC_YIELD_FORK,
                                    &rejected) == EXEC_ERROR_TRAP,
           "wrong-engine resume was accepted");
     if (getenv("WASTE_PROFILE"))
         fprintf(stderr, "WASTE_PROFILE exec fixture capture depth=%u\n",
-                parent.active_call_depth);
+                parent->active_call_depth);
     state.phase = PHASE_CHILD;
     st = exec_invoke(engine, fn, NULL, 0, &result, &count, &error);
     CHECK(st == EXEC_YIELD && error.yield_reason == EXEC_YIELD_EXEC,
@@ -154,23 +157,23 @@ static int run_case(const uint8_t *bytes, size_t size, int successful) {
     } else {
         state.child_exit = 0;
     }
-    CHECK(exec_continuation_resume(&parent, engine, 1, EXEC_YIELD_FORK,
+    CHECK(exec_continuation_resume(parent, engine, 1, EXEC_YIELD_FORK,
                                    &error) == EXEC_OK,
           "parent resume: %s", error.message);
     state.phase = PHASE_PARENT;
     if (getenv("WASTE_PROFILE"))
         fprintf(stderr, "WASTE_PROFILE exec fixture resume phase=parent depth=%u\n",
-                parent.active_call_depth);
+                parent->active_call_depth);
     st = exec_invoke(engine, fn, NULL, 0, &result, &count, &error);
     CHECK(st == EXEC_OK && result.i32 == 0,
           "parent status=%d result=%d", st, result.i32);
     CHECK(state.waits == 1 && state.writes >= 2,
           "parent lifecycle waits=%d writes=%d", state.waits, state.writes);
     memset(&rejected, 0, sizeof(rejected));
-    CHECK(exec_continuation_resume(&parent, engine, 1, EXEC_YIELD_FORK,
+    CHECK(exec_continuation_resume(parent, engine, 1, EXEC_YIELD_FORK,
                                    &rejected) == EXEC_ERROR_TRAP,
           "double continuation resume was accepted");
-    exec_continuation_destroy(&parent); exec_free(engine); return 1;
+    exec_continuation_destroy(parent); free(parent); exec_free(engine); return 1;
 }
 
 int main(int argc, char **argv) {

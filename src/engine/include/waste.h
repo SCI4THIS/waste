@@ -36,13 +36,13 @@ typedef enum {
     WASM_VALTYPE_NULLEXTERNREF
 } wasm_valtype;
 
-#define WASM_VALTYPE_TYPE_REF_NULL_BASE 0x100
-#define WASM_VALTYPE_TYPE_REF_BASE      0x200
-#define WASM_VALTYPE_TYPE_REF_LIMIT     0x300
+#define WASM_VALTYPE_TYPE_REF_NULL_BASE 0x1000
+#define WASM_VALTYPE_TYPE_REF_BASE      0x2000
+#define WASM_VALTYPE_TYPE_REF_LIMIT     0x3000
 #define WASM_VALTYPE_IS_TYPE_REF(t) \
     ((unsigned)(t) >= WASM_VALTYPE_TYPE_REF_NULL_BASE && \
      (unsigned)(t) < WASM_VALTYPE_TYPE_REF_LIMIT)
-#define WASM_VALTYPE_TYPE_REF_INDEX(t) ((unsigned)(t) & 0xffu)
+#define WASM_VALTYPE_TYPE_REF_INDEX(t) ((unsigned)(t) & (WASM_VALTYPE_TYPE_REF_BASE - WASM_VALTYPE_TYPE_REF_NULL_BASE - 1u))
 
 typedef struct {
     wasm_valtype type;

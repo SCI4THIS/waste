@@ -1,0 +1,25 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [],
+  "events": [
+    {
+      "after": "# ",
+      "text": "LAZY_FUNCTIONS_STATUS=0; /bin/wast --verbose /root/test/engine-regressions/stream-validation.wast || LAZY_FUNCTIONS_STATUS=1; /bin/wast --verbose /root/test/engine-regressions/type-capacity-512.wast || LAZY_FUNCTIONS_STATUS=1; /bin/wast --verbose /root/test/engine-regressions/function-capacity.wast || LAZY_FUNCTIONS_STATUS=1; /bin/wast --verbose /root/test/engine-regressions/control-depth.wast || LAZY_FUNCTIONS_STATUS=1; /bin/wast --verbose /root/test/engine-regressions/instruction-layout.wast || LAZY_FUNCTIONS_STATUS=1; printf '__LAZY_FUNCTIONS_%s__\\n' \"$LAZY_FUNCTIONS_STATUS\"\n"
+    },
+    {
+      "after": "__LAZY_FUNCTIONS_",
+      "text": "exit \"$LAZY_FUNCTIONS_STATUS\"\n"
+    }
+  ],
+  "contains": [
+    "__LAZY_FUNCTIONS_0__\r\n",
+    "WAST: 6 PASS, 0 FAIL, 6 total",
+    "WAST: 12 PASS, 0 FAIL, 12 total",
+    "WAST: 8 PASS, 0 FAIL, 8 total",
+    "WAST: 26 PASS, 0 FAIL, 26 total",
+    "WAST: 16 PASS, 0 FAIL, 16 total"
+  ],
+  "assertions": 69,
+  "exitStatus": 0
+}

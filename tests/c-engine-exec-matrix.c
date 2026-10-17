@@ -261,22 +261,26 @@ int main(int argc, char **argv) {
 
     {
         waste_exec_engine continuation_engine;
-        exec_continuation continuation;
-        exec_error continuation_error;
-        memset(&continuation_engine, 0, sizeof(continuation_engine));
-        continuation_engine.func_count = 7;
-        continuation_engine.import_func_count = 3;
-        exec_continuation_init(&continuation);
-        memset(&continuation_error, 0, sizeof(continuation_error));
-        CHECK(exec_continuation_capture(&continuation_engine, &continuation,
-                                        &continuation_error) == EXEC_OK &&
-              exec_continuation_resume(&continuation, &continuation_engine,
-                                       0, EXEC_YIELD_NONE,
-                                       &continuation_error) == EXEC_OK &&
-              continuation_engine.func_count == 7 &&
-              continuation_engine.import_func_count == 3,
-              "continuation restore preserves engine function tables");
-        exec_continuation_destroy(&continuation);
+        exec_continuation *continuation = calloc(1, sizeof(*continuation));
+        CHECK(continuation != NULL, "continuation context allocates");
+        if (continuation) {
+            exec_error continuation_error;
+            memset(&continuation_engine, 0, sizeof(continuation_engine));
+            continuation_engine.func_count = 7;
+            continuation_engine.import_func_count = 3;
+            exec_continuation_init(continuation);
+            memset(&continuation_error, 0, sizeof(continuation_error));
+            CHECK(exec_continuation_capture(&continuation_engine, continuation,
+                                            &continuation_error) == EXEC_OK &&
+                  exec_continuation_resume(continuation, &continuation_engine,
+                                           0, EXEC_YIELD_NONE,
+                                           &continuation_error) == EXEC_OK &&
+                  continuation_engine.func_count == 7 &&
+                  continuation_engine.import_func_count == 3,
+                  "continuation restore preserves engine function tables");
+            exec_continuation_destroy(continuation);
+            free(continuation);
+        }
     }
 
     {

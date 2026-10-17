@@ -1,0 +1,37 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/mustache.wasm",
+      "source": "build/system-tests/clang/mustache/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/mustache.wast",
+      "source": "src/system-tests/clang/mustache/mustache.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/mustache-reference.bin",
+      "source": "build/system-tests/clang/mustache/reference.bin",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/mustache.wasm > /tmp/mustache.bin; printf '%s\\n' \"$?\" > /tmp/mustache-status.txt; /bin/wast --verbose /tmp/mustache.wast; printf '__MUSTACHE_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__MUSTACHE_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__MUSTACHE_0__\r\n",
+    "WAST: 96 PASS, 0 FAIL, 96 total"
+  ],
+  "assertions": 97,
+  "exitStatus": 0
+}

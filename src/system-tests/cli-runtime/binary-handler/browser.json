@@ -1,0 +1,33 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/bin-handler-printf",
+      "source": "src/vfs/usr/bin/printf",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/bin-handler-text.wat",
+      "source": "src/system-tests/cli-runtime/binary-handler/not-binary.wat",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/bin-handler-results.wast",
+      "source": "src/system-tests/cli-runtime/binary-handler/results.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wasm /tmp/bin-handler-printf '%s|%s\\n' alpha beta > /tmp/bin-handler-output.txt\nprintf '%s\\n' \"$?\" > /tmp/bin-handler-status.txt\n/bin/wasm /tmp/bin-handler-text.wat > /tmp/bin-handler-format.txt 2>&1\nprintf '%s\\n' \"$?\" > /tmp/bin-handler-format-status.txt\n/bin/wasm > /tmp/bin-handler-usage.txt 2>&1\nprintf '%s\\n' \"$?\" > /tmp/bin-handler-usage-status.txt\n/bin/wast --verbose /tmp/bin-handler-results.wast\nBINARY_HANDLER_STATUS=$?\nprintf '__BINARY_HANDLER_%s__\\n' \"$BINARY_HANDLER_STATUS\"\nexit \"$BINARY_HANDLER_STATUS\"\n"
+    }
+  ],
+  "contains": [
+    "__BINARY_HANDLER_0__\r\n",
+    "WAST: 4 PASS, 0 FAIL, 4 total"
+  ],
+  "assertions": 5,
+  "exitStatus": 0
+}

@@ -1,11 +1,18 @@
 #ifndef WASTE_ERRNO_H
 #define WASTE_ERRNO_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 int *__errno_location(void);
+#ifdef __cplusplus
+}
+#endif
 #define errno (*__errno_location())
 
 #define EPERM 1
 #define ENOENT 2
+#define ESRCH 3
 #define EINTR 4
 #define EIO 5
 #define ECHILD 10
@@ -24,6 +31,8 @@ int *__errno_location(void);
 #define EFBIG 27
 #define ENOSPC 28
 #define EPIPE 32
+#define EDEADLK 35
+#define ENOLCK 37
 #define ENOTEMPTY 39
 #define ENAMETOOLONG 36
 #define ENODEV 19

@@ -17,7 +17,13 @@ struct timezone {
   int tz_dsttime;
 };
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 int gettimeofday(struct timeval *, void *);
 int settimeofday(const struct timeval *, const struct timezone *);
+#ifdef __cplusplus
+}
+#endif
 
 #endif

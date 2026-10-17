@@ -2,6 +2,9 @@
 
 /* ---- Guest libc: full FILE I/O and printf ---- */
 #include "include/helper.h"
+#include "include/format.h"
+#include <errno.h>
+#include <limits.h>
 
 #ifdef WASTE_POSIX_IO
 extern i32 open(const char *path, i32 flags, ...);
@@ -330,9 +333,11 @@ i32 fclose(FILE *file) {
   return 0;
 }
 
-typedef struct FormatOutput { char *destination; u32 capacity; u32 count; } FormatOutput;
+typedef struct FormatOutput { char *destination; u32 capacity; u32 count; i32 error; } FormatOutput;
 
 static void format_byte(FormatOutput *output, char value) {
+  if (output->error) return;
+  if (output->count == INT_MAX) { output->error = EOVERFLOW; return; }
   if (output->destination && output->capacity && output->count + 1 < output->capacity)
     output->destination[output->count] = value;
   output->count++;
@@ -345,7 +350,7 @@ static void format_text(FormatOutput *output, const char *text, i32 precision) {
     return;
   }
   u32 at = 0;
-  while (text[at] && (precision < 0 || at < (u32)precision)) format_byte(output, text[at++]);
+  while (!output->error && text[at] && (precision < 0 || at < (u32)precision)) format_byte(output, text[at++]);
 }
 
 static void format_unsigned(FormatOutput *output, u64 value, u32 radix,
@@ -360,25 +365,25 @@ static void format_unsigned(FormatOutput *output, u64 value, u32 radix,
   } while (value && count < sizeof(digits));
   i32 total = (i32)count + negative;
   if (negative && padding == '0') format_byte(output, '-');
-  while (total < width) { format_byte(output, padding); total++; }
+  while (!output->error && total < width) { format_byte(output, padding); total++; }
   if (negative && padding != '0') format_byte(output, '-');
   while (count) format_byte(output, digits[--count]);
 }
 
 static i32 format_variadic(char *destination, u32 capacity, const char *format, va_list arguments) {
-  FormatOutput output = {destination, capacity, 0};
-  for (u32 at = 0; format && format[at]; at++) {
+  FormatOutput output = {destination, capacity, 0, 0};
+  for (u32 at = 0; !output.error && format && format[at]; at++) {
     if (format[at] != '%') { format_byte(&output, format[at]); continue; }
     at++;
     if (format[at] == '%') { format_byte(&output, '%'); continue; }
     /* Skip flag characters: -, +, space, #, 0, ' (grouping) */
     char padding = ' ';
-    i32 left_justify = 0, show_sign = 0, space_sign = 0;
+    i32 left_justify = 0, show_sign = 0, space_sign = 0, alternate = 0;
     for (;;) {
       if (format[at] == '-') { left_justify = 1; at++; }
       else if (format[at] == '+') { show_sign = 1; at++; }
       else if (format[at] == ' ') { space_sign = 1; at++; }
-      else if (format[at] == '#') { at++; }
+      else if (format[at] == '#') { alternate = 1; at++; }
       else if (format[at] == '\'') { at++; }
       else if (format[at] == '0') { padding = '0'; at++; }
       else break;
@@ -386,41 +391,70 @@ static i32 format_variadic(char *destination, u32 capacity, const char *format, 
     if (left_justify) padding = ' ';
     i32 width = 0;
     if (format[at] == '*') { width = va_arg(arguments, i32); at++; }
-    else while (format[at] >= '0' && format[at] <= '9') width = width * 10 + format[at++] - '0';
+    else while (format[at] >= '0' && format[at] <= '9') {
+      i32 digit = format[at++] - '0';
+      if (width > (INT_MAX - digit) / 10) { output.error = EOVERFLOW; break; }
+      width = width * 10 + digit;
+    }
+    if (output.error) break;
     i32 precision = -1;
     if (format[at] == '.') {
       at++; precision = 0;
       if (format[at] == '*') { precision = va_arg(arguments, i32); at++; }
-      else while (format[at] >= '0' && format[at] <= '9') precision = precision * 10 + format[at++] - '0';
+      else while (format[at] >= '0' && format[at] <= '9') {
+        i32 digit = format[at++] - '0';
+        if (precision > (INT_MAX - digit) / 10) { output.error = EOVERFLOW; break; }
+        precision = precision * 10 + digit;
+      }
     }
-    i32 long_count = 0;
-    while (format[at] == 'l') { long_count++; at++; }
-    if (format[at] == 'j') { long_count = 2; at++; }
-    else if (format[at] == 'z' || format[at] == 't') { at++; }
-    else if (format[at] == 'h') { at++; if (format[at] == 'h') at++; }
+    if (output.error) break;
+    i32 length = LEN_DEFAULT;
+    if (format[at] == 'l') { length = LEN_L; at++; if (format[at] == 'l') { length = LEN_LL; at++; } }
+    else if (format[at] == 'j') { length = LEN_J; at++; }
+    else if (format[at] == 'z') { length = LEN_Z; at++; }
+    else if (format[at] == 't') { length = LEN_T; at++; }
+    else if (format[at] == 'h') { length = LEN_H; at++; if (format[at] == 'h') { length = LEN_HH; at++; } }
+    else if (format[at] == 'L') { length = LEN_BIG_L; at++; }
     char conversion = format[at];
     if (conversion == 's') format_text(&output, va_arg(arguments, const char *), precision);
     else if (conversion == 'c') format_byte(&output, (char)va_arg(arguments, i32));
     else if (conversion == 'd' || conversion == 'i') {
-      i64 value = long_count > 1 ? va_arg(arguments, i64) :
-        long_count ? (i64)va_arg(arguments, long) : (i64)va_arg(arguments, i32);
+      i64 value = length == LEN_LL || length == LEN_J ? va_arg(arguments, i64) :
+        length == LEN_L ? (i64)va_arg(arguments, long) : (i64)va_arg(arguments, i32);
       i32 negative = value < 0;
       u64 magnitude = negative ? (u64)(-(value + 1)) + 1 : (u64)value;
       format_unsigned(&output, magnitude, 10, 0, width, padding, negative);
     } else if (conversion == 'u' || conversion == 'o' || conversion == 'x' || conversion == 'X') {
-      u64 value = long_count > 1 ? va_arg(arguments, u64) :
-        long_count ? (u64)va_arg(arguments, unsigned long) : (u64)va_arg(arguments, u32);
+      u64 value = length == LEN_LL || length == LEN_J ? va_arg(arguments, u64) :
+        length == LEN_L ? (u64)va_arg(arguments, unsigned long) : (u64)va_arg(arguments, u32);
       format_unsigned(&output, value, conversion == 'u' ? 10 : conversion == 'o' ? 8 : 16,
                       conversion == 'X', width, padding, 0);
     } else if (conversion == 'p') {
       format_byte(&output, '0'); format_byte(&output, 'x');
       format_unsigned(&output, (u32)(u64)va_arg(arguments, void *), 16, 0, 0, ' ', 0);
+    } else if (conversion == 'f' || conversion == 'F' || conversion == 'e' || conversion == 'E' ||
+               conversion == 'g' || conversion == 'G' || conversion == 'a' || conversion == 'A') {
+      if ((length != LEN_DEFAULT && length != LEN_L && length != LEN_BIG_L) || width == INT_MIN) {
+        output.error = width == INT_MIN ? EOVERFLOW : EINVAL;
+        break;
+      }
+      if (width < 0) { left_justify = 1; width = -width; }
+      format_spec spec = {left_justify, show_sign, space_sign, alternate,
+                          padding == '0', width, precision, length};
+      u32 remaining = output.count < capacity ? capacity - output.count : 0;
+      char *start = destination && remaining ? destination + output.count : 0;
+      i32 count = __waste_format_float(start, remaining, &spec, conversion, &arguments);
+      if (count < 0) { output.error = errno; break; }
+      if ((u32)count > (u32)INT_MAX - output.count) { output.error = EOVERFLOW; break; }
+      output.count += (u32)count;
     } else {
       format_byte(&output, '%');
       if (conversion) format_byte(&output, conversion);
+      else break;
     }
   }
   if (destination && capacity) destination[output.count < capacity ? output.count : capacity - 1] = 0;
+  if (output.error) { errno = output.error; return -1; }
   return (i32)output.count;
 }
 
@@ -574,8 +608,11 @@ void perror(const char *prefix) {
 i32 vfprintf(FILE *file, const char *format, va_list arguments) {
   va_list copy; va_copy(copy, arguments);
   i32 length = format_variadic(0, 0, format, copy); va_end(copy);
+  if (length < 0) return -1;
   char *buffer = malloc((u32)length + 1); if (!buffer) return -1;
-  va_copy(copy, arguments); format_variadic(buffer, (u32)length + 1, format, copy); va_end(copy);
+  va_copy(copy, arguments);
+  i32 written = format_variadic(buffer, (u32)length + 1, format, copy); va_end(copy);
+  if (written < 0) { free(buffer); return -1; }
   i32 result = fwrite(buffer, 1, (u32)length, file) == (u32)length ? length : -1;
   free(buffer); return result;
 }
@@ -593,8 +630,10 @@ i32 printf(const char *format, ...) {
 i32 asprintf(char **destination, const char *format, ...) {
   va_list arguments, copy; va_start(arguments, format); va_copy(copy, arguments);
   i32 length = format_variadic(0, 0, format, copy); va_end(copy);
+  if (length < 0) { va_end(arguments); return -1; }
   char *buffer = malloc((u32)length + 1); if (!buffer) { va_end(arguments); return -1; }
-  format_variadic(buffer, (u32)length + 1, format, arguments); va_end(arguments);
+  i32 written = format_variadic(buffer, (u32)length + 1, format, arguments); va_end(arguments);
+  if (written < 0) { free(buffer); return -1; }
   *destination = buffer; return length;
 }
 
@@ -605,8 +644,10 @@ i32 vprintf(const char *format, va_list arguments) {
 i32 vasprintf(char **destination, const char *format, va_list arguments) {
   va_list copy; va_copy(copy, arguments);
   i32 length = format_variadic(0, 0, format, copy); va_end(copy);
+  if (length < 0) return -1;
   char *buffer = malloc((u32)length + 1); if (!buffer) return -1;
-  format_variadic(buffer, (u32)length + 1, format, arguments);
+  i32 written = format_variadic(buffer, (u32)length + 1, format, arguments);
+  if (written < 0) { free(buffer); return -1; }
   *destination = buffer; return length;
 }
 

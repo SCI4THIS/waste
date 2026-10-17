@@ -2,15 +2,87 @@
   "baselineRepairs": [],
   "counts": {
     "groups": {
-      "aux/libc": 9,
+      "aux/clang": 1,
+      "aux/libc": 27,
       "aux/sleep": 1,
       "aux/vim": 1,
       "diy-posix-test": 5,
-      "engine-regressions": 15,
+      "engine-regressions": 25,
       "render": 1,
+      "system/abort": 1,
+      "system/clang": 1,
+      "system/clang/accounts": 1,
+      "system/clang/advice": 2,
+      "system/clang/argument-limits": 1,
+      "system/clang/assignment-format": 1,
+      "system/clang/backoff": 2,
+      "system/clang/cfg-format": 1,
+      "system/clang/checkpoint": 1,
+      "system/clang/child-deadline": 2,
+      "system/clang/classification": 1,
+      "system/clang/clocks": 2,
+      "system/clang/code-layout": 1,
+      "system/clang/compiler-imports": 1,
+      "system/clang/coverage-format": 1,
+      "system/clang/crash-recovery": 1,
+      "system/clang/dwarf-context": 1,
+      "system/clang/dwarf-verifier": 1,
+      "system/clang/dylib-uuid": 1,
+      "system/clang/endian": 1,
+      "system/clang/exec-wait": 1,
+      "system/clang/executable-path": 1,
+      "system/clang/filesystem": 2,
+      "system/clang/finite-wait": 3,
+      "system/clang/folding": 1,
+      "system/clang/gsym": 1,
+      "system/clang/hardlink": 1,
+      "system/clang/inlining": 1,
+      "system/clang/issue-hash": 1,
+      "system/clang/layout-override": 1,
+      "system/clang/lld-diagnostics": 1,
+      "system/clang/lld-filesystem": 1,
+      "system/clang/lld-link": 3,
+      "system/clang/lock-owner": 1,
+      "system/clang/locks": 1,
+      "system/clang/logb": 1,
+      "system/clang/lto-errors": 1,
+      "system/clang/managed-static": 1,
+      "system/clang/memprof-format": 1,
+      "system/clang/module-cache": 1,
+      "system/clang/module-tasks": 1,
+      "system/clang/mustache": 1,
+      "system/clang/mutex": 1,
+      "system/clang/parallel": 1,
+      "system/clang/platform": 1,
+      "system/clang/process": 1,
+      "system/clang/program-execution": 1,
+      "system/clang/program-wait": 1,
+      "system/clang/raw-stream": 1,
+      "system/clang/realpath": 1,
+      "system/clang/seed-file": 1,
+      "system/clang/session": 1,
+      "system/clang/shadow-callbacks": 1,
+      "system/clang/shutdown": 1,
+      "system/clang/signals": 1,
+      "system/clang/spirv-name": 1,
+      "system/clang/startup": 1,
+      "system/clang/stdio": 1,
+      "system/clang/symlink": 2,
+      "system/clang/synchronization": 1,
+      "system/clang/target-host": 1,
+      "system/clang/thread-pool": 1,
+      "system/clang/time-profiler": 2,
+      "system/clang/timed-locks": 2,
+      "system/clang/timestamp": 1,
+      "system/clang/unsafe-buffer": 1,
+      "system/clang/watchdog": 2,
+      "system/clang/wide": 1,
+      "system/clang/wide-format": 1,
+      "system/cli-runtime/binary-handler": 1,
       "system/cli-runtime/wast": 6,
-      "system/libc": 8,
-      "system/scheduling": 4,
+      "system/devices": 1,
+      "system/libc": 10,
+      "system/scheduling": 5,
       "system/wast": 3,
       "wasm-spec/core": 97,
       "wasm-spec/core/bulk-memory": 8,
@@ -24,8 +96,8 @@
       "wasm-spec/custom/metadata.code.branch_hint": 1,
       "wasm-spec/custom/name": 1
     },
-    "supported": 281,
-    "tests": 314
+    "supported": 291,
+    "tests": 430
   },
   "files": [
     {
@@ -50,11 +122,25 @@
       "source": "assembled:tests/diy-posix-test/posix-kernel.wast"
     },
     {
+      "path": "/root/test/aux/clang/installed.wast",
+      "role": "test-input",
+      "sha256": "ce6904073b5dd493489c3ca96d54758e6364a009e7aa4eedb6c3d3510c18080f",
+      "size": 3736,
+      "source": "src/aux/clang/tests/installed.wast"
+    },
+    {
       "path": "/root/test/aux/libc/accounts.wast",
       "role": "test-input",
       "sha256": "dfedd59611d7359c94f0585cc79e1bf1d8cd8ab2dae81a170d0a2f666a77bcef",
       "size": 3844,
       "source": "src/aux/libc/tests/accounts.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/aligned-allocation.wast",
+      "role": "test-input",
+      "sha256": "111456feef154b624cb383a2d17ace2f673325d45d181cad48b1ed803ac33001",
+      "size": 11103,
+      "source": "src/aux/libc/tests/aligned-allocation.wast"
     },
     {
       "path": "/root/test/aux/libc/allocator.wast",
@@ -64,6 +150,20 @@
       "source": "src/aux/libc/tests/allocator.wast"
     },
     {
+      "path": "/root/test/aux/libc/clocks.wast",
+      "role": "test-input",
+      "sha256": "e428335cc0385c97ce8e4911cc781894b2e629506f07ec471b3aec4dbec60c28",
+      "size": 4203,
+      "source": "src/aux/libc/tests/clocks.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/division.wast",
+      "role": "test-input",
+      "sha256": "d9d8ae1e464310118783a79d5986e4ff8d2197979a276429edee2d6911c13d71",
+      "size": 1365,
+      "source": "src/aux/libc/tests/division.wast"
+    },
+    {
       "path": "/root/test/aux/libc/entropy-messages.wast",
       "role": "test-input",
       "sha256": "391b5202b9f5d2135172a8e90688dc4e00a0e6589902a5a5d6d4623fc4855b23",
@@ -71,11 +171,53 @@
       "source": "src/aux/libc/tests/entropy-messages.wast"
     },
     {
+      "path": "/root/test/aux/libc/fenv.wast",
+      "role": "test-input",
+      "sha256": "3980449424d32a49c85fb9e59322bd4a9aee461b3a2c41d5a9f518f217edc9c7",
+      "size": 6209,
+      "source": "src/aux/libc/tests/fenv.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/floating-conversion.wast",
+      "role": "test-input",
+      "sha256": "ba3b650054d8a6f77ca07d9d8ed03cb69e87f8c5d3b98f5bf392b755aa7642ef",
+      "size": 50498,
+      "source": "src/aux/libc/tests/floating-conversion.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/integer-conversion.wast",
+      "role": "test-input",
+      "sha256": "18c6f264e19f7ea722f39051f03b99ccb79004327c78221f8a5ff16391a3422b",
+      "size": 23522,
+      "source": "src/aux/libc/tests/integer-conversion.wast"
+    },
+    {
       "path": "/root/test/aux/libc/locale-wide.wast",
       "role": "test-input",
       "sha256": "934801a20a049dc1cd58760ed8bdc196d884e7c2d4f8ad634438ae89fbe76f9c",
       "size": 3199,
       "source": "src/aux/libc/tests/locale-wide.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/log2-round.wast",
+      "role": "test-input",
+      "sha256": "c72cbe0db297258f3425050c6f2141b7a59c372f7d62b9c9a97d474ac50615fa",
+      "size": 11200,
+      "source": "src/aux/libc/tests/log2-round.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/log2f.wast",
+      "role": "test-input",
+      "sha256": "0c696cafac50b873d3bf3f69abf6a10d66fab181af5f528e801f102eb8fa6434",
+      "size": 8738,
+      "source": "src/aux/libc/tests/log2f.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/lround.wast",
+      "role": "test-input",
+      "sha256": "b1c5cfe38303e8c27886ef2f37d23b29995b5b5dca3bda0fcbb5637ee3118226",
+      "size": 2761,
+      "source": "src/aux/libc/tests/lround.wast"
     },
     {
       "path": "/root/test/aux/libc/matching-sort.wast",
@@ -90,6 +232,41 @@
       "sha256": "59683518f07a5539f79aedcab26350264d8ebce421a8e320dc4542019f147ba9",
       "size": 5945,
       "source": "src/aux/libc/tests/memory-conversion.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/modf.wast",
+      "role": "test-input",
+      "sha256": "ad313ab62ea741e9231f225cb7dedbff7405024916a0b427922e8f9490bf9bb3",
+      "size": 4030,
+      "source": "src/aux/libc/tests/modf.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/narrow-floating-format.wast",
+      "role": "test-input",
+      "sha256": "e81aefa4550e0a98ee8b29c578c0c737d2a78e15c0bd16b48ddc76cb880ade69",
+      "size": 19510,
+      "source": "src/aux/libc/tests/narrow-floating-format.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/quad-comparison.wast",
+      "role": "test-input",
+      "sha256": "2952ebcf56826c0e5e9ab71e24d436dab03327f8717b04679fb685d39402bd0a",
+      "size": 6972,
+      "source": "src/aux/libc/tests/quad-comparison.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/reentrant-accounts.wast",
+      "role": "test-input",
+      "sha256": "dbfefc6bf009ab9f210d4e6949f7115ab93f24205d1e1db32b46467c6c9f02c1",
+      "size": 10641,
+      "source": "src/aux/libc/tests/reentrant-accounts.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/resource-usage.wast",
+      "role": "test-input",
+      "sha256": "7ddbf0b47664b9d8df7d53b1dc12e5a71f2fe7c63a9eebb3248c294c3469b633",
+      "size": 4118,
+      "source": "src/aux/libc/tests/resource-usage.wast"
     },
     {
       "path": "/root/test/aux/libc/search-tokenize.wast",
@@ -111,6 +288,34 @@
       "sha256": "a421a69f5b5e14bbb60b4d76aad3668796611103c9ac0d9a547fccfa55918bcf",
       "size": 1475,
       "source": "src/aux/libc/tests/termcap.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/usleep.wast",
+      "role": "test-input",
+      "sha256": "6aa7aeadc602b25c4d08f7dd8d776869dc82b16a5b339bfc44de237535964425",
+      "size": 1997,
+      "source": "src/aux/libc/tests/usleep.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/vsnprintf.wast",
+      "role": "test-input",
+      "sha256": "85599fb2f5b8e1909740fb70573120be006fbb1fe3188fcb719011badca2a2e5",
+      "size": 4672,
+      "source": "src/aux/libc/tests/vsnprintf.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/wide-format.wast",
+      "role": "test-input",
+      "sha256": "9be3264505bd516f46e6f8a05a69c6693efa9481bd7588f991c4b5b7b4d9c29c",
+      "size": 81301,
+      "source": "src/aux/libc/tests/wide-format.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/wide-memory.wast",
+      "role": "test-input",
+      "sha256": "f6bf3718d233eb67d8b63ea6e7c0457640d513d3a89a09105e61bc891d957ae2",
+      "size": 9034,
+      "source": "src/aux/libc/tests/wide-memory.wast"
     },
     {
       "path": "/root/test/aux/sleep/nanosleep.wast",
@@ -169,6 +374,13 @@
       "source": "tests/engine-regressions/continuation-waits.wast"
     },
     {
+      "path": "/root/test/engine-regressions/control-depth.wast",
+      "role": "test-input",
+      "sha256": "dc277529870d5f769dbf2849ac031fa68b39f3c6dab35cc01ada46a3264f9b64",
+      "size": 331212,
+      "source": "tests/engine-regressions/control-depth.wast"
+    },
+    {
       "path": "/root/test/engine-regressions/descriptor-flags.wast",
       "role": "test-input",
       "sha256": "1a534a3102a3bc32f01ce8db60e287ead3a47c72d772c23eaf7fb36f9b37c9ac",
@@ -190,6 +402,27 @@
       "source": "tests/engine-regressions/extern-aliases.wast"
     },
     {
+      "path": "/root/test/engine-regressions/function-capacity.wast",
+      "role": "test-input",
+      "sha256": "b585e5be3fba46532392f0bdb4fecf25f36670ecaf4adbc0496ddcaea04949c6",
+      "size": 1601275,
+      "source": "tests/engine-regressions/function-capacity.wast"
+    },
+    {
+      "path": "/root/test/engine-regressions/function-envelope.wast",
+      "role": "test-input",
+      "sha256": "183a3f95fdf9b6175c5e2e5cd54ace21f83b54c0f94fbec2292841f5b9f654d5",
+      "size": 1219,
+      "source": "tests/engine-regressions/function-envelope.wast"
+    },
+    {
+      "path": "/root/test/engine-regressions/function-metadata.wast",
+      "role": "test-input",
+      "sha256": "77078c8aa7858f6ab43d88671aeb578de6df81c9c0463280f0404385c4863f69",
+      "size": 608509,
+      "source": "tests/engine-regressions/function-metadata.wast"
+    },
+    {
       "path": "/root/test/engine-regressions/i32-smoke.wast",
       "role": "test-input",
       "sha256": "13ee5edc79cd56c910c88727408a041729e215d68c14cb28bf75751dbd43b93c",
@@ -204,6 +437,27 @@
       "source": "tests/engine-regressions/instance-isolation.wast"
     },
     {
+      "path": "/root/test/engine-regressions/instruction-layout.wast",
+      "role": "test-input",
+      "sha256": "017306830922c46d7cf9612c842361771f2a26a246dfe72e6923e9ca5e0b04d9",
+      "size": 3190,
+      "source": "tests/engine-regressions/instruction-layout.wast"
+    },
+    {
+      "path": "/root/test/engine-regressions/instruction-storage.wast",
+      "role": "test-input",
+      "sha256": "e1181b2ed9fe6e26a162a43659894ae5b35b397c3484a8197db4b1d94205cb49",
+      "size": 15350,
+      "source": "tests/engine-regressions/instruction-storage.wast"
+    },
+    {
+      "path": "/root/test/engine-regressions/local-storage.wast",
+      "role": "test-input",
+      "sha256": "7080507ea361ef6bf11de9647edb85b3fc3fb5a34e0c5a662e83962354005920",
+      "size": 3456,
+      "source": "tests/engine-regressions/local-storage.wast"
+    },
+    {
       "path": "/root/test/engine-regressions/path-vfs.wast",
       "role": "test-input",
       "sha256": "b741aa30ca1f644b309eaeb1e0ec0a43bc5e6eb2fba9e14e94a99f31d65d1f05",
@@ -213,8 +467,8 @@
     {
       "path": "/root/test/engine-regressions/pipe-descriptors.wast",
       "role": "test-input",
-      "sha256": "e41d8dfa207dc66c809625d11a7dace93de47d5930e1bc6823de9b7be696ce90",
-      "size": 17053,
+      "sha256": "8fa25d9617ad8d905095bbb98de4ab26f992c69f66e9f94203698af247a2da7a",
+      "size": 20564,
       "source": "tests/engine-regressions/pipe-descriptors.wast"
     },
     {
@@ -234,8 +488,8 @@
     {
       "path": "/root/test/engine-regressions/setjmp-buffer-copy.wast",
       "role": "test-input",
-      "sha256": "f9731c9ae3b548aa2d18c5bbcb2477681a9f752f9a51bbb635e4a565b66c7f31",
-      "size": 1747,
+      "sha256": "30db00e98767f192e75c3cf78088ccec4f3ff55cabef225a02d096fedec719d7",
+      "size": 4065,
       "source": "tests/engine-regressions/setjmp-buffer-copy.wast"
     },
     {
@@ -258,6 +512,27 @@
       "sha256": "aa46152949f29ff5cbd72aa53542d86be182ebeb3c058430db813bb638a1d82c",
       "size": 14025,
       "source": "tests/engine-regressions/signal-masks.wast"
+    },
+    {
+      "path": "/root/test/engine-regressions/stream-validation.wast",
+      "role": "test-input",
+      "sha256": "446184ee0785d6bb50b18153e1f17bafd4f83883b31989ff0fb26f0ab781b6cd",
+      "size": 778,
+      "source": "tests/engine-regressions/stream-validation.wast"
+    },
+    {
+      "path": "/root/test/engine-regressions/type-capacity-512.wast",
+      "role": "test-input",
+      "sha256": "85e942fdd38dbbe8a9bd354d3308edefb1911ab27ef615133255bf1ef4446d24",
+      "size": 24518,
+      "source": "tests/engine-regressions/type-capacity-512.wast"
+    },
+    {
+      "path": "/root/test/engine-regressions/type-capacity.wast",
+      "role": "test-input",
+      "sha256": "0645ae81f49c3eedbbf1e7b031fb0eae482a57ffd62a4c19960163c085a0a526",
+      "size": 57911,
+      "source": "tests/engine-regressions/type-capacity.wast"
     },
     {
       "path": "/root/test/html-rt.sh",
@@ -337,11 +612,599 @@
       "source": "tests/render/terminal.wast"
     },
     {
+      "path": "/root/test/system/abort/abort.wast",
+      "role": "test-input",
+      "sha256": "e2151d8dc6e7357214b6af9e9e92926b62e711f8f592bda71b8ad89d73dc878c",
+      "size": 2185,
+      "source": "src/system-tests/abort/abort.wast"
+    },
+    {
+      "path": "/root/test/system/clang/accounts/accounts.wast",
+      "role": "test-input",
+      "sha256": "fc38acc01e41fb7e0ed9c9e43570c92a01858ccb0f61f8e81225b0925ad28e52",
+      "size": 4953,
+      "source": "src/system-tests/clang/accounts/accounts.wast"
+    },
+    {
+      "path": "/root/test/system/clang/advice/advice.wast",
+      "role": "test-input",
+      "sha256": "5f0f4025edbdb2fbd1fe3a443aedca3aa113fa128eec6dbcf8902230cecfeac0",
+      "size": 3866,
+      "source": "src/system-tests/clang/advice/advice.wast"
+    },
+    {
+      "path": "/root/test/system/clang/advice/ranges.wast",
+      "role": "test-input",
+      "sha256": "578ca6704a96010167517de11587a0fdd243534886181f7a687d2b35224ccb36",
+      "size": 13003,
+      "source": "src/system-tests/clang/advice/ranges.wast"
+    },
+    {
+      "path": "/root/test/system/clang/argument-limits/argument-limits.wast",
+      "role": "test-input",
+      "sha256": "032dfb490163bd20023ffe731e50f9e71903bc75eea2216a273d8ddddfe4307b",
+      "size": 18765,
+      "source": "src/system-tests/clang/argument-limits/argument-limits.wast"
+    },
+    {
+      "path": "/root/test/system/clang/assignment-format/assignment-format.wast",
+      "role": "test-input",
+      "sha256": "cc5084adb9577d61484fccf1a23bd05a65593b9c0cd1ce0889e078bc4c715625",
+      "size": 3625,
+      "source": "src/system-tests/clang/assignment-format/assignment-format.wast"
+    },
+    {
+      "path": "/root/test/system/clang/backoff/backoff.wast",
+      "role": "test-input",
+      "sha256": "6a7152d8566711fb7a32302061fbd0c01f4d05b6f2ebdbba76e0deccb7e32aeb",
+      "size": 2923,
+      "source": "src/system-tests/clang/backoff/backoff.wast"
+    },
+    {
+      "path": "/root/test/system/clang/backoff/controlled.wast",
+      "role": "test-input",
+      "sha256": "299a67802e36c89022424794a9d95da84b7a2ab1b51ed6bf1c3f89de5e27f8b5",
+      "size": 3432,
+      "source": "src/system-tests/clang/backoff/controlled.wast"
+    },
+    {
+      "path": "/root/test/system/clang/cfg-format/cfg-format.wast",
+      "role": "test-input",
+      "sha256": "41ba54fab68682038322ba44fa94b51f11f348b4e57a027067d43328c63b5c5b",
+      "size": 7930,
+      "source": "src/system-tests/clang/cfg-format/cfg-format.wast"
+    },
+    {
+      "path": "/root/test/system/clang/checkpoint/checkpoint.wast",
+      "role": "test-input",
+      "sha256": "043b3be843509163f5c4566941f167164ed68a8132ecc039f1252bde4594280a",
+      "size": 22365,
+      "source": "src/system-tests/clang/checkpoint/checkpoint.wast"
+    },
+    {
+      "path": "/root/test/system/clang/child-deadline/child-deadline.wast",
+      "role": "test-input",
+      "sha256": "d0f45445e9cbd6799049f6818004e67c9fcd9acbd2e104801cacc789ee33ada4",
+      "size": 10165,
+      "source": "src/system-tests/clang/child-deadline/child-deadline.wast"
+    },
+    {
+      "path": "/root/test/system/clang/child-deadline/controlled.wast",
+      "role": "test-input",
+      "sha256": "c1f62e1996fe122e2b1b78fbaad77a37ce8a6c9a42d17bfd04cb73c7b53e17cd",
+      "size": 6429,
+      "source": "src/system-tests/clang/child-deadline/controlled.wast"
+    },
+    {
+      "path": "/root/test/system/clang/classification/classification.wast",
+      "role": "test-input",
+      "sha256": "5a4a3b85882c484894e17d3f67a3e2fd028a332e46f52bcb3201c625f6f81e29",
+      "size": 20387,
+      "source": "src/system-tests/clang/classification/classification.wast"
+    },
+    {
+      "path": "/root/test/system/clang/clocks/after.wast",
+      "role": "test-input",
+      "sha256": "ca3d48118ed7893aadd7258bbb8928173332c9cf68ac030b0481492ec83a6b85",
+      "size": 1259,
+      "source": "src/system-tests/clang/clocks/after.wast"
+    },
+    {
+      "path": "/root/test/system/clang/clocks/before.wast",
+      "role": "test-input",
+      "sha256": "3e0a6095b28f74534f9162e5e3b430ee0eb140e40b4a851054ab1d820f0592da",
+      "size": 1321,
+      "source": "src/system-tests/clang/clocks/before.wast"
+    },
+    {
+      "path": "/root/test/system/clang/code-layout/code-layout.wast",
+      "role": "test-input",
+      "sha256": "fc991260c61de9efcb08dcf46262adcf5a0d99272381af17ba63e707dcaafa3b",
+      "size": 15855,
+      "source": "src/system-tests/clang/code-layout/code-layout.wast"
+    },
+    {
+      "path": "/root/test/system/clang/compiled.wast",
+      "role": "test-input",
+      "sha256": "2cb0b6bc1ca5616415294a1dae3497d2f8a46927c1135d96baddaf36dfa496e7",
+      "size": 1906,
+      "source": "src/system-tests/clang/compiled.wast"
+    },
+    {
+      "path": "/root/test/system/clang/compiler-imports/compiler-imports.wast",
+      "role": "test-input",
+      "sha256": "3ccfd922ca5436dc3e940a533594bdde502aeaf404b199f274e602ad65e65465",
+      "size": 2411,
+      "source": "src/system-tests/clang/compiler-imports/compiler-imports.wast"
+    },
+    {
+      "path": "/root/test/system/clang/coverage-format/coverage-format.wast",
+      "role": "test-input",
+      "sha256": "8d85a7ca11f3a37be38cd49652def01c60404b891b3b1df6998df2aa2c5c8270",
+      "size": 3700,
+      "source": "src/system-tests/clang/coverage-format/coverage-format.wast"
+    },
+    {
+      "path": "/root/test/system/clang/crash-recovery/crash-recovery.wast",
+      "role": "test-input",
+      "sha256": "7baec488b817893ec581904c14a837e34fb382226268b1e9e70d83610bcc8757",
+      "size": 11220,
+      "source": "src/system-tests/clang/crash-recovery/crash-recovery.wast"
+    },
+    {
+      "path": "/root/test/system/clang/dwarf-context/dwarf-context.wast",
+      "role": "test-input",
+      "sha256": "7ff4dd03d4ce93fb4b1e2b151f24177e0745babc022f871c09b2729696b54c70",
+      "size": 6309,
+      "source": "src/system-tests/clang/dwarf-context/dwarf-context.wast"
+    },
+    {
+      "path": "/root/test/system/clang/dwarf-verifier/dwarf-verifier.wast",
+      "role": "test-input",
+      "sha256": "a918134c544251da1c786d7e57075d6a07a280d78f576861226677f22804aca5",
+      "size": 5013,
+      "source": "src/system-tests/clang/dwarf-verifier/dwarf-verifier.wast"
+    },
+    {
+      "path": "/root/test/system/clang/dylib-uuid/dylib-uuid.wast",
+      "role": "test-input",
+      "sha256": "f93ceefd4d2cb060c22c6f5d334df0798ba73a5d3178c610ea2297617f87a597",
+      "size": 4506,
+      "source": "src/system-tests/clang/dylib-uuid/dylib-uuid.wast"
+    },
+    {
+      "path": "/root/test/system/clang/endian/endian.wast",
+      "role": "test-input",
+      "sha256": "5ebff67cc8f64d4a91948c56c3412154e2956112a7df71c1c6cd17893087443b",
+      "size": 3575,
+      "source": "src/system-tests/clang/endian/endian.wast"
+    },
+    {
+      "path": "/root/test/system/clang/exec-wait/exec-wait.wast",
+      "role": "test-input",
+      "sha256": "ac20bc00950cc2eb1e4fda6038cdf973b9792d857f892229f5edc081e44ee703",
+      "size": 19502,
+      "source": "src/system-tests/clang/exec-wait/exec-wait.wast"
+    },
+    {
+      "path": "/root/test/system/clang/executable-path/executable-path.wast",
+      "role": "test-input",
+      "sha256": "c0af96182cc530c00e9b1d140443901a364f0461a5949d0e1f618e7be2192d2d",
+      "size": 23386,
+      "source": "src/system-tests/clang/executable-path/executable-path.wast"
+    },
+    {
+      "path": "/root/test/system/clang/filesystem/clock.wast",
+      "role": "test-input",
+      "sha256": "3a9aa17591ee69792bdc99ed21e7590d6dcda52f68431171be5d352f5636723c",
+      "size": 1355,
+      "source": "src/system-tests/clang/filesystem/clock.wast"
+    },
+    {
+      "path": "/root/test/system/clang/filesystem/filesystem.wast",
+      "role": "test-input",
+      "sha256": "dc197fc789a1e79839dd150fe11908086ecc14afb91117353ef4353437822dc8",
+      "size": 9904,
+      "source": "src/system-tests/clang/filesystem/filesystem.wast"
+    },
+    {
+      "path": "/root/test/system/clang/finite-wait/controlled.wast",
+      "role": "test-input",
+      "sha256": "e9f8067e2258ccabbc461992b7afcaa4dddef3bb7e87ece8f5be671e26b83a9c",
+      "size": 11811,
+      "source": "src/system-tests/clang/finite-wait/controlled.wast"
+    },
+    {
+      "path": "/root/test/system/clang/finite-wait/finite-wait.wast",
+      "role": "test-input",
+      "sha256": "8159252c351967d934f6d3d591b1cdd99059fed3b5966c8df943b6d8e7ad829f",
+      "size": 18187,
+      "source": "src/system-tests/clang/finite-wait/finite-wait.wast"
+    },
+    {
+      "path": "/root/test/system/clang/finite-wait/saturation.wast",
+      "role": "test-input",
+      "sha256": "1a81227565cc530f69b123cc181b4bbdcf225b4b3d27b919a406167a5317bd41",
+      "size": 3982,
+      "source": "src/system-tests/clang/finite-wait/saturation.wast"
+    },
+    {
+      "path": "/root/test/system/clang/folding/folding.wast",
+      "role": "test-input",
+      "sha256": "3e76d800c045beb1fdc01c8cb027281d8e0227bd84d5519391ae7af07779a2ce",
+      "size": 15435,
+      "source": "src/system-tests/clang/folding/folding.wast"
+    },
+    {
+      "path": "/root/test/system/clang/gsym/gsym.wast",
+      "role": "test-input",
+      "sha256": "0ab73388a1e01e58f1822bdec2afc128eefaca9c433b30674c8fb3af0a60c306",
+      "size": 9143,
+      "source": "src/system-tests/clang/gsym/gsym.wast"
+    },
+    {
+      "path": "/root/test/system/clang/hardlink/hardlink.wast",
+      "role": "test-input",
+      "sha256": "4003dadd5f033321d24819e859c7fcaff42dd4e5283335f6ae1e77cc94887f1f",
+      "size": 31578,
+      "source": "src/system-tests/clang/hardlink/hardlink.wast"
+    },
+    {
+      "path": "/root/test/system/clang/inlining/inlining.wast",
+      "role": "test-input",
+      "sha256": "15c4530bea50e270dc21aea2caa15168ff8d42e0e7cfb58d4835474a05eea21b",
+      "size": 4029,
+      "source": "src/system-tests/clang/inlining/inlining.wast"
+    },
+    {
+      "path": "/root/test/system/clang/issue-hash/issue-hash.wast",
+      "role": "test-input",
+      "sha256": "f842fe4f79ee9986516863fb9c27a33a576cb565116ce0e1371f72fe31df611e",
+      "size": 4343,
+      "source": "src/system-tests/clang/issue-hash/issue-hash.wast"
+    },
+    {
+      "path": "/root/test/system/clang/layout-override/layout-override.wast",
+      "role": "test-input",
+      "sha256": "8be360a83da3e2e07b15999cb5038089d204e1023edf9ee6a4c58428a85ca558",
+      "size": 3963,
+      "source": "src/system-tests/clang/layout-override/layout-override.wast"
+    },
+    {
+      "path": "/root/test/system/clang/lld-diagnostics/diagnostics.wast",
+      "role": "test-input",
+      "sha256": "85d9b59c4f54d3464e78803a77ce1d7591cd28450028e13e2ed488f1d5b1ae68",
+      "size": 12461,
+      "source": "src/system-tests/clang/lld-diagnostics/diagnostics.wast"
+    },
+    {
+      "path": "/root/test/system/clang/lld-filesystem/filesystem.wast",
+      "role": "test-input",
+      "sha256": "79b460b1bad08b524c60e396a0a101cff20fe41137b372c760b67681dbd9eab4",
+      "size": 19703,
+      "source": "src/system-tests/clang/lld-filesystem/filesystem.wast"
+    },
+    {
+      "path": "/root/test/system/clang/lld-link/link.wast",
+      "role": "test-input",
+      "sha256": "19337a57bdf3e61d440cd7a5b1c1e8661cc04d22bea81e4f4a7d8d319f0f97c3",
+      "size": 2195,
+      "source": "src/system-tests/clang/lld-link/link.wast"
+    },
+    {
+      "path": "/root/test/system/clang/lld-link/no-lto.wast",
+      "role": "test-input",
+      "sha256": "d032a9a106113f6155714113c96a34480f91440ff842321b85383fdd54b1ca18",
+      "size": 2880,
+      "source": "src/system-tests/clang/lld-link/no-lto.wast"
+    },
+    {
+      "path": "/root/test/system/clang/lld-link/sdk.wast",
+      "role": "test-input",
+      "sha256": "f32b134b56c3ba1fef045870589f9fa8778457fcbf9033e81b9e431ddf95db83",
+      "size": 4443,
+      "source": "src/system-tests/clang/lld-link/sdk.wast"
+    },
+    {
+      "path": "/root/test/system/clang/lock-owner/lock-owner.wast",
+      "role": "test-input",
+      "sha256": "7546a34ef695a51a2241ce266f9eecd271948e8c6f6c1aee2673267c6f92a7a9",
+      "size": 9513,
+      "source": "src/system-tests/clang/lock-owner/lock-owner.wast"
+    },
+    {
+      "path": "/root/test/system/clang/locks/locks.wast",
+      "role": "test-input",
+      "sha256": "e9777654c4b8fd0592febb25562062a915594bdd164394ac679091c1d97d4c4b",
+      "size": 33725,
+      "source": "src/system-tests/clang/locks/locks.wast"
+    },
+    {
+      "path": "/root/test/system/clang/logb/logb.wast",
+      "role": "test-input",
+      "sha256": "05ebd0c4b561a777265fa9168b796d9c9b1593380a087a1ec2aceaeeb226bc11",
+      "size": 11274,
+      "source": "src/system-tests/clang/logb/logb.wast"
+    },
+    {
+      "path": "/root/test/system/clang/lto-errors/lto-errors.wast",
+      "role": "test-input",
+      "sha256": "228b8b5b5c3ab032e6b43ba9371f5adaa53ebd151f2ab7c9a2688a0c3cb8be52",
+      "size": 15796,
+      "source": "src/system-tests/clang/lto-errors/lto-errors.wast"
+    },
+    {
+      "path": "/root/test/system/clang/managed-static/managed-static.wast",
+      "role": "test-input",
+      "sha256": "878a4b8a1ba595388cdb3650670b11163f6fa6bfe15cee9805ce9a6caf359d93",
+      "size": 8919,
+      "source": "src/system-tests/clang/managed-static/managed-static.wast"
+    },
+    {
+      "path": "/root/test/system/clang/memprof-format/memprof-format.wast",
+      "role": "test-input",
+      "sha256": "6758c6525e1b56c72d7d2a67c7da386a6e69a505ccf03bcb6b3122816e400a33",
+      "size": 7938,
+      "source": "src/system-tests/clang/memprof-format/memprof-format.wast"
+    },
+    {
+      "path": "/root/test/system/clang/module-cache/module-cache.wast",
+      "role": "test-input",
+      "sha256": "3d8790576090377cbda994e044bf22a30fc3db20d468b035e8e14cb18b1ef430",
+      "size": 9449,
+      "source": "src/system-tests/clang/module-cache/module-cache.wast"
+    },
+    {
+      "path": "/root/test/system/clang/module-tasks/module-tasks.wast",
+      "role": "test-input",
+      "sha256": "c1052e50861b35533b1b63c8a7f1193a55052df2cca66d3242dfdc7de1845b68",
+      "size": 9088,
+      "source": "src/system-tests/clang/module-tasks/module-tasks.wast"
+    },
+    {
+      "path": "/root/test/system/clang/mustache/mustache.wast",
+      "role": "test-input",
+      "sha256": "414ead823571cf082b2806627b482b756b222db0d38ecf34d348f09c89e50bb7",
+      "size": 12422,
+      "source": "src/system-tests/clang/mustache/mustache.wast"
+    },
+    {
+      "path": "/root/test/system/clang/mutex/mutex.wast",
+      "role": "test-input",
+      "sha256": "3bc5222f3b87b54cf0e07b5751eb45bfa798ab79ef5ae5aa9e583c669418ab27",
+      "size": 4110,
+      "source": "src/system-tests/clang/mutex/mutex.wast"
+    },
+    {
+      "path": "/root/test/system/clang/parallel/parallel.wast",
+      "role": "test-input",
+      "sha256": "25fb5c81ccef1260f05dcc85a2db1ed058bb9cb1e574a998076fe589052a94b6",
+      "size": 11152,
+      "source": "src/system-tests/clang/parallel/parallel.wast"
+    },
+    {
+      "path": "/root/test/system/clang/platform/platform.wast",
+      "role": "test-input",
+      "sha256": "1ed9b62c6a1a1652baaf96bc2db703259ce263340c676d889b41abcace0a2d76",
+      "size": 7357,
+      "source": "src/system-tests/clang/platform/platform.wast"
+    },
+    {
+      "path": "/root/test/system/clang/process/process.wast",
+      "role": "test-input",
+      "sha256": "3e58bbc2d27268788baa6317a890a6ce3df57e31ca6b4aaa4b51ca059a6057b6",
+      "size": 5539,
+      "source": "src/system-tests/clang/process/process.wast"
+    },
+    {
+      "path": "/root/test/system/clang/program-execution/program-execution.wast",
+      "role": "test-input",
+      "sha256": "1c541895bb67aad8667cd5ee97a5b3843ef99dfa0578bfcaa776a6dc548db0a9",
+      "size": 36124,
+      "source": "src/system-tests/clang/program-execution/program-execution.wast"
+    },
+    {
+      "path": "/root/test/system/clang/program-wait/program-wait.wast",
+      "role": "test-input",
+      "sha256": "4970cdeadb60db16824b25fae4e64669eb4edff658fffe52f9ded334040c8505",
+      "size": 21898,
+      "source": "src/system-tests/clang/program-wait/program-wait.wast"
+    },
+    {
+      "path": "/root/test/system/clang/raw-stream/raw-stream.wast",
+      "role": "test-input",
+      "sha256": "7be7696378f269a9a7006fdfc8b7c7be8f81ab605d964b492fa46b3272a19f16",
+      "size": 7144,
+      "source": "src/system-tests/clang/raw-stream/raw-stream.wast"
+    },
+    {
+      "path": "/root/test/system/clang/realpath/realpath.wast",
+      "role": "test-input",
+      "sha256": "f6f0d991f1e80b9d2dd0df95b4e45773082955cd080e5e6c1597420692f748eb",
+      "size": 23832,
+      "source": "src/system-tests/clang/realpath/realpath.wast"
+    },
+    {
+      "path": "/root/test/system/clang/seed-file/seed-file.wast",
+      "role": "test-input",
+      "sha256": "4ee1e55c1ac5557c83bc2a186151f7e2e5f6587db2501bd51bb4a3c5ec340bde",
+      "size": 5562,
+      "source": "src/system-tests/clang/seed-file/seed-file.wast"
+    },
+    {
+      "path": "/root/test/system/clang/session/session.wast",
+      "role": "test-input",
+      "sha256": "1f5126d62502a516bc0e90a4684ab56c2525b0c3012bf9f3b2aa61467cc9bd2d",
+      "size": 7664,
+      "source": "src/system-tests/clang/session/session.wast"
+    },
+    {
+      "path": "/root/test/system/clang/shadow-callbacks/shadow-callbacks.wast",
+      "role": "test-input",
+      "sha256": "f5bcfa8b97fc64eb6977cb9e78abc93609fce09cf30c2b27df6f35d4bb681d65",
+      "size": 7089,
+      "source": "src/system-tests/clang/shadow-callbacks/shadow-callbacks.wast"
+    },
+    {
+      "path": "/root/test/system/clang/shutdown/shutdown.wast",
+      "role": "test-input",
+      "sha256": "62555a900f07d6b04c16f53dd19ad28550bb967167b55bc08624aead85c1d815",
+      "size": 25515,
+      "source": "src/system-tests/clang/shutdown/shutdown.wast"
+    },
+    {
+      "path": "/root/test/system/clang/signals/signals.wast",
+      "role": "test-input",
+      "sha256": "a846731dddbe693caef0d7ed9ff5ec08aa13b892d1b01128f495aa1cd2dc6354",
+      "size": 13375,
+      "source": "src/system-tests/clang/signals/signals.wast"
+    },
+    {
+      "path": "/root/test/system/clang/spirv-name/spirv-name.wast",
+      "role": "test-input",
+      "sha256": "2e0c0302f52f6a2666c1665e0c18a2b508c54605b86604979373aefb47ec4ebd",
+      "size": 4931,
+      "source": "src/system-tests/clang/spirv-name/spirv-name.wast"
+    },
+    {
+      "path": "/root/test/system/clang/startup/startup.wast",
+      "role": "test-input",
+      "sha256": "59dce2f7caeee32bc614399e8d6a02e07acf6dc180ac4040a58330f72d39a3ac",
+      "size": 8890,
+      "source": "src/system-tests/clang/startup/startup.wast"
+    },
+    {
+      "path": "/root/test/system/clang/stdio/format.wast",
+      "role": "test-input",
+      "sha256": "ce32ff93bbe3d9485bfa1b60f9f2e365de27f2f34979f65b9df776aab24ac735",
+      "size": 12165,
+      "source": "src/system-tests/clang/stdio/format.wast"
+    },
+    {
+      "path": "/root/test/system/clang/symlink/symlink-loader.wast",
+      "role": "test-input",
+      "sha256": "a9ebc2666c0775907d48550f113e1ab100d4778bad86444da6ffe008875ac7f6",
+      "size": 872,
+      "source": "src/system-tests/clang/symlink/symlink-loader.wast"
+    },
+    {
+      "path": "/root/test/system/clang/symlink/symlink.wast",
+      "role": "test-input",
+      "sha256": "b47bb2fea05c58ffebe1bd96fd3d98e8dfe1d2c41aa3503f4243d464701b280b",
+      "size": 23536,
+      "source": "src/system-tests/clang/symlink/symlink.wast"
+    },
+    {
+      "path": "/root/test/system/clang/synchronization/synchronization.wast",
+      "role": "test-input",
+      "sha256": "f21049ea43eb47c4ffdb2dbe1268d312635c8586d98dc816f6e301498e7ef360",
+      "size": 9237,
+      "source": "src/system-tests/clang/synchronization/synchronization.wast"
+    },
+    {
+      "path": "/root/test/system/clang/target-host/target-host.wast",
+      "role": "test-input",
+      "sha256": "5ca3431f56b37603273e21c2621ba8d5833f1aea5d9d60a8745260bbc89bfdcb",
+      "size": 1880,
+      "source": "src/system-tests/clang/target-host/target-host.wast"
+    },
+    {
+      "path": "/root/test/system/clang/thread-pool/thread-pool.wast",
+      "role": "test-input",
+      "sha256": "e46b237305a026a90e1684a4b5832af30b8431953709e30da45dce899b6ac448",
+      "size": 7690,
+      "source": "src/system-tests/clang/thread-pool/thread-pool.wast"
+    },
+    {
+      "path": "/root/test/system/clang/time-profiler/lifecycle.wast",
+      "role": "test-input",
+      "sha256": "27c8500f23627070058564e044742741a1625c1384d7b6a77d985b4cf434165e",
+      "size": 12404,
+      "source": "src/system-tests/clang/time-profiler/lifecycle.wast"
+    },
+    {
+      "path": "/root/test/system/clang/time-profiler/time-profiler.wast",
+      "role": "test-input",
+      "sha256": "3dee34c47ef9c87ecb112239e202b68c7709588458c565f867e3f71cff62076f",
+      "size": 7463,
+      "source": "src/system-tests/clang/time-profiler/time-profiler.wast"
+    },
+    {
+      "path": "/root/test/system/clang/timed-locks/controlled.wast",
+      "role": "test-input",
+      "sha256": "ad018ac519a72bd35cc5d742f408dba08cad505f283ac5a5f1b6b7e65cc6f3e8",
+      "size": 3157,
+      "source": "src/system-tests/clang/timed-locks/controlled.wast"
+    },
+    {
+      "path": "/root/test/system/clang/timed-locks/timed-locks.wast",
+      "role": "test-input",
+      "sha256": "0bab8244c514f89da34d2c05bfa5c59d028336419bbfa5f9733b1a70b761f3f7",
+      "size": 5162,
+      "source": "src/system-tests/clang/timed-locks/timed-locks.wast"
+    },
+    {
+      "path": "/root/test/system/clang/timestamp/timestamp.wast",
+      "role": "test-input",
+      "sha256": "49ef6e803c05a294c5e0d7b311d8756a7a5185879fd3d995861fc59640b594f9",
+      "size": 4913,
+      "source": "src/system-tests/clang/timestamp/timestamp.wast"
+    },
+    {
+      "path": "/root/test/system/clang/unsafe-buffer/unsafe-buffer.wast",
+      "role": "test-input",
+      "sha256": "250c47f8c324097b7dc9a5d242e17e525eff7ed01e4b4bbbec3664da932de722",
+      "size": 3974,
+      "source": "src/system-tests/clang/unsafe-buffer/unsafe-buffer.wast"
+    },
+    {
+      "path": "/root/test/system/clang/watchdog/controlled.wast",
+      "role": "test-input",
+      "sha256": "b5f07f60c3b7fb3c1d2f97eba3e91d2571f72011faf5a93fedb39374bbf93265",
+      "size": 4850,
+      "source": "src/system-tests/clang/watchdog/controlled.wast"
+    },
+    {
+      "path": "/root/test/system/clang/watchdog/watchdog.wast",
+      "role": "test-input",
+      "sha256": "6ddaaa9e85a672ef64e55bd84a9416b06fc64cb4eb58748304a7ec35a61d92bd",
+      "size": 6518,
+      "source": "src/system-tests/clang/watchdog/watchdog.wast"
+    },
+    {
+      "path": "/root/test/system/clang/wide-format/wide-format.wast",
+      "role": "test-input",
+      "sha256": "800dbc3bde12b78dcf9374028030cf1aa1f128b3175fe43d4c897ed8aebbd378",
+      "size": 10164,
+      "source": "src/system-tests/clang/wide-format/wide-format.wast"
+    },
+    {
+      "path": "/root/test/system/clang/wide/wide.wast",
+      "role": "test-input",
+      "sha256": "8a31b31533289d0338024adb50369dae209cb250da8c81cf16b135d2d53a607d",
+      "size": 7016,
+      "source": "src/system-tests/clang/wide/wide.wast"
+    },
+    {
+      "path": "/root/test/system/cli-runtime/binary-handler/results.wast",
+      "role": "test-input",
+      "sha256": "c2bcfdcf94a8e49ef43811f12fc432f742c6aa831a380021488f4cff1716b11c",
+      "size": 2870,
+      "source": "src/system-tests/cli-runtime/binary-handler/results.wast"
+    },
+    {
       "path": "/root/test/system/cli-runtime/wast/unlinkable.wast",
       "role": "test-input",
       "sha256": "9a19d7f51b18fcab21cc35c5e834c7055535502f5b0041e606a3355be9574878",
       "size": 174,
       "source": "src/system-tests/cli-runtime/wast/unlinkable.wast"
+    },
+    {
+      "path": "/root/test/system/devices/null.wast",
+      "role": "test-input",
+      "sha256": "66498d0ff5712179d61f0115508baa61ee306c41a0f120a21e4ff9925c4b4ff3",
+      "size": 12930,
+      "source": "src/system-tests/devices/null.wast"
     },
     {
       "path": "/root/test/system/libc/environment-boundaries.wast",
@@ -358,11 +1221,25 @@
       "source": "src/system-tests/libc/file-sync.wast"
     },
     {
+      "path": "/root/test/system/libc/mmap-heap.wast",
+      "role": "test-input",
+      "sha256": "630b097ca6275443ec421e7a6bf036d752d6b862f19d71ce0be617c3e96a60e5",
+      "size": 2140,
+      "source": "src/system-tests/libc/mmap-heap.wast"
+    },
+    {
       "path": "/root/test/system/libc/path-runtime.wast",
       "role": "test-input",
       "sha256": "773102be57337569b524d71242f2da4fb3cda3df6100aa1c46a425d01a556ce4",
       "size": 777,
       "source": "src/system-tests/libc/path-runtime.wast"
+    },
+    {
+      "path": "/root/test/system/libc/remove.wast",
+      "role": "test-input",
+      "sha256": "52d567a157d94879850bcf1db9de00cb25047fe4e25864e518e00f76d36c155f",
+      "size": 2006,
+      "source": "src/system-tests/libc/remove.wast"
     },
     {
       "path": "/root/test/system/libc/select-abi.wast",
@@ -395,8 +1272,8 @@
     {
       "path": "/root/test/system/libc/time-resource.wast",
       "role": "test-input",
-      "sha256": "e4411ad05d20405b8d51b8f7be8a6519666f3c4d4cb6cae85f680860dd8a8296",
-      "size": 3120,
+      "sha256": "533d7e3fe71c574b2bcc59997ce87dd37b1b09d7342c0672ceccb2c49ab14d40",
+      "size": 3343,
       "source": "src/system-tests/libc/time-resource.wast"
     },
     {
@@ -419,6 +1296,13 @@
       "sha256": "8e8224d8a10e67bc9f0bf1df62663c313aef25384b626cd3bbee8ab705bbcd40",
       "size": 483,
       "source": "src/system-tests/scheduling/handler-short.wast"
+    },
+    {
+      "path": "/root/test/system/scheduling/pipe-modes.wast",
+      "role": "test-input",
+      "sha256": "e0f7f6a3215539a7598a646a746d6d614f7f30ff0bb2e09eb7181646fa6ef59c",
+      "size": 7465,
+      "source": "src/system-tests/scheduling/pipe-modes.wast"
     },
     {
       "path": "/root/test/system/scheduling/timers.wast",
@@ -2281,7 +3165,7 @@
       "timeoutScope": "existing dashboard has no per-test deadline"
     }
   },
-  "selection_sha256": "16f5ae2b13c3710667b0ddb3a694c86699c0639c42ff1c71b0a90f98f02bf62a",
+  "selection_sha256": "73e3b1b3f52d8028a5fa2571007ef51eb86d5f035cd96fc43201dfa9dd36852f",
   "sourceInputs": [
     {
       "hostOnly": true,
@@ -9977,6 +10861,33 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "engine-regressions/control-depth.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 331212,
+        "sourcePath": "tests/engine-regressions/control-depth.wast"
+      },
+      "expectFailure": false,
+      "group": "engine-regressions",
+      "id": "engine-regressions/control-depth.wast",
+      "name": "control-depth.wast",
+      "nativeParity": "shared-engine",
+      "path": "/root/test/engine-regressions/control-depth.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "tests/engine-regressions/control-depth.wast",
+        "sha256": "dc277529870d5f769dbf2849ac031fa68b39f3c6dab35cc01ada46a3264f9b64",
+        "size": 331212
+      },
+      "spec_sha256": "5bbec32e8d3feb3b076025cdb2fb9ae5abf5f36b49eba926c1f828d83a11c1a9",
+      "suite": "engine-regressions",
+      "unsupported": false,
+      "unsupportedReason": null
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "engine-regressions/descriptor-flags.wast",
         "mode": "wast-stream",
         "sourceBytes": 11653,
@@ -10058,6 +10969,87 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "engine-regressions/function-capacity.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 1601275,
+        "sourcePath": "tests/engine-regressions/function-capacity.wast"
+      },
+      "expectFailure": false,
+      "group": "engine-regressions",
+      "id": "engine-regressions/function-capacity.wast",
+      "name": "function-capacity.wast",
+      "nativeParity": "shared-engine",
+      "path": "/root/test/engine-regressions/function-capacity.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "tests/engine-regressions/function-capacity.wast",
+        "sha256": "b585e5be3fba46532392f0bdb4fecf25f36670ecaf4adbc0496ddcaea04949c6",
+        "size": 1601275
+      },
+      "spec_sha256": "806ce1e562fc5f46c3db7cf269a4136b88b212a86a823f2bda64936bd15c27dd",
+      "suite": "engine-regressions",
+      "unsupported": false,
+      "unsupportedReason": null
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "engine-regressions/function-envelope.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 1219,
+        "sourcePath": "tests/engine-regressions/function-envelope.wast"
+      },
+      "expectFailure": false,
+      "group": "engine-regressions",
+      "id": "engine-regressions/function-envelope.wast",
+      "name": "function-envelope.wast",
+      "nativeParity": "shared-engine",
+      "path": "/root/test/engine-regressions/function-envelope.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "tests/engine-regressions/function-envelope.wast",
+        "sha256": "183a3f95fdf9b6175c5e2e5cd54ace21f83b54c0f94fbec2292841f5b9f654d5",
+        "size": 1219
+      },
+      "spec_sha256": "132d1761d0475db656a5eaacf2ba7a9b8bcc44f33d02018b42785952fa169254",
+      "suite": "engine-regressions",
+      "unsupported": false,
+      "unsupportedReason": null
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "engine-regressions/function-metadata.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 608509,
+        "sourcePath": "tests/engine-regressions/function-metadata.wast"
+      },
+      "expectFailure": false,
+      "group": "engine-regressions",
+      "id": "engine-regressions/function-metadata.wast",
+      "name": "function-metadata.wast",
+      "nativeParity": "shared-engine",
+      "path": "/root/test/engine-regressions/function-metadata.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "tests/engine-regressions/function-metadata.wast",
+        "sha256": "77078c8aa7858f6ab43d88671aeb578de6df81c9c0463280f0404385c4863f69",
+        "size": 608509
+      },
+      "spec_sha256": "134377b158265e9596a035ccc9586a15d259db37228be728a70897c3588bc819",
+      "suite": "engine-regressions",
+      "unsupported": false,
+      "unsupportedReason": null
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "engine-regressions/i32-smoke.wast",
         "mode": "wast-stream",
         "sourceBytes": 6091,
@@ -10112,6 +11104,87 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "engine-regressions/instruction-layout.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3190,
+        "sourcePath": "tests/engine-regressions/instruction-layout.wast"
+      },
+      "expectFailure": false,
+      "group": "engine-regressions",
+      "id": "engine-regressions/instruction-layout.wast",
+      "name": "instruction-layout.wast",
+      "nativeParity": "shared-engine",
+      "path": "/root/test/engine-regressions/instruction-layout.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "tests/engine-regressions/instruction-layout.wast",
+        "sha256": "017306830922c46d7cf9612c842361771f2a26a246dfe72e6923e9ca5e0b04d9",
+        "size": 3190
+      },
+      "spec_sha256": "b7d9af0bff9f4b57c5f7f716cd1e674442f2fe8b609dd18bb6476c5e4cc6a6e4",
+      "suite": "engine-regressions",
+      "unsupported": false,
+      "unsupportedReason": null
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "engine-regressions/instruction-storage.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 15350,
+        "sourcePath": "tests/engine-regressions/instruction-storage.wast"
+      },
+      "expectFailure": false,
+      "group": "engine-regressions",
+      "id": "engine-regressions/instruction-storage.wast",
+      "name": "instruction-storage.wast",
+      "nativeParity": "shared-engine",
+      "path": "/root/test/engine-regressions/instruction-storage.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "tests/engine-regressions/instruction-storage.wast",
+        "sha256": "e1181b2ed9fe6e26a162a43659894ae5b35b397c3484a8197db4b1d94205cb49",
+        "size": 15350
+      },
+      "spec_sha256": "1561ee7ad8d1b4e93693ae2cd2ee32c20bddfb024213444a84cc1e20e3e5cbc4",
+      "suite": "engine-regressions",
+      "unsupported": false,
+      "unsupportedReason": null
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "engine-regressions/local-storage.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3456,
+        "sourcePath": "tests/engine-regressions/local-storage.wast"
+      },
+      "expectFailure": false,
+      "group": "engine-regressions",
+      "id": "engine-regressions/local-storage.wast",
+      "name": "local-storage.wast",
+      "nativeParity": "shared-engine",
+      "path": "/root/test/engine-regressions/local-storage.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "tests/engine-regressions/local-storage.wast",
+        "sha256": "7080507ea361ef6bf11de9647edb85b3fc3fb5a34e0c5a662e83962354005920",
+        "size": 3456
+      },
+      "spec_sha256": "7ed854db0ab9dbfeef5754a3e70ad437ffd0dfd7ed8c2fc7b1f1d53fdbb859fc",
+      "suite": "engine-regressions",
+      "unsupported": false,
+      "unsupportedReason": null
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "engine-regressions/path-vfs.wast",
         "mode": "wast-stream",
         "sourceBytes": 13769,
@@ -10141,7 +11214,7 @@
         "assertionCount": 0,
         "file": "engine-regressions/pipe-descriptors.wast",
         "mode": "wast-stream",
-        "sourceBytes": 17053,
+        "sourceBytes": 20564,
         "sourcePath": "tests/engine-regressions/pipe-descriptors.wast"
       },
       "expectFailure": false,
@@ -10154,10 +11227,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "tests/engine-regressions/pipe-descriptors.wast",
-        "sha256": "e41d8dfa207dc66c809625d11a7dace93de47d5930e1bc6823de9b7be696ce90",
-        "size": 17053
+        "sha256": "8fa25d9617ad8d905095bbb98de4ab26f992c69f66e9f94203698af247a2da7a",
+        "size": 20564
       },
-      "spec_sha256": "f2113d0ee8b4c183abc7cb07b27fb79c44b5fae715323f57e909ddd16bfc2d1f",
+      "spec_sha256": "8c9c4b74290dc16d41ab005ef6893d9486c5e866542b5bc377e13c9899061c7c",
       "suite": "engine-regressions",
       "unsupported": false,
       "unsupportedReason": null
@@ -10222,7 +11295,7 @@
         "assertionCount": 0,
         "file": "engine-regressions/setjmp-buffer-copy.wast",
         "mode": "wast-stream",
-        "sourceBytes": 1747,
+        "sourceBytes": 4065,
         "sourcePath": "tests/engine-regressions/setjmp-buffer-copy.wast"
       },
       "expectFailure": false,
@@ -10235,10 +11308,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "tests/engine-regressions/setjmp-buffer-copy.wast",
-        "sha256": "f9731c9ae3b548aa2d18c5bbcb2477681a9f752f9a51bbb635e4a565b66c7f31",
-        "size": 1747
+        "sha256": "30db00e98767f192e75c3cf78088ccec4f3ff55cabef225a02d096fedec719d7",
+        "size": 4065
       },
-      "spec_sha256": "2248df8e148f8d664637ee5da645957576f20ba31ce29f84f0f4ea73bb3ab8a5",
+      "spec_sha256": "348aa34fda0edfad6ac0a9dd42c94a74b7841016f58f1fd1f0414caeac627d42",
       "suite": "engine-regressions",
       "unsupported": false,
       "unsupportedReason": null
@@ -10328,6 +11401,87 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "engine-regressions/stream-validation.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 778,
+        "sourcePath": "tests/engine-regressions/stream-validation.wast"
+      },
+      "expectFailure": false,
+      "group": "engine-regressions",
+      "id": "engine-regressions/stream-validation.wast",
+      "name": "stream-validation.wast",
+      "nativeParity": "shared-engine",
+      "path": "/root/test/engine-regressions/stream-validation.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "tests/engine-regressions/stream-validation.wast",
+        "sha256": "446184ee0785d6bb50b18153e1f17bafd4f83883b31989ff0fb26f0ab781b6cd",
+        "size": 778
+      },
+      "spec_sha256": "e9e2c9cd859ddd0e810472595897851ac0059a03edad8cf00e79a69aa74161b8",
+      "suite": "engine-regressions",
+      "unsupported": false,
+      "unsupportedReason": null
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "engine-regressions/type-capacity-512.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 24518,
+        "sourcePath": "tests/engine-regressions/type-capacity-512.wast"
+      },
+      "expectFailure": false,
+      "group": "engine-regressions",
+      "id": "engine-regressions/type-capacity-512.wast",
+      "name": "type-capacity-512.wast",
+      "nativeParity": "shared-engine",
+      "path": "/root/test/engine-regressions/type-capacity-512.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "tests/engine-regressions/type-capacity-512.wast",
+        "sha256": "85e942fdd38dbbe8a9bd354d3308edefb1911ab27ef615133255bf1ef4446d24",
+        "size": 24518
+      },
+      "spec_sha256": "bd8172cdb9f567b2333381afc75aece6e204b846ab54123fb57b9e9416ee4d33",
+      "suite": "engine-regressions",
+      "unsupported": false,
+      "unsupportedReason": null
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "engine-regressions/type-capacity.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 57911,
+        "sourcePath": "tests/engine-regressions/type-capacity.wast"
+      },
+      "expectFailure": false,
+      "group": "engine-regressions",
+      "id": "engine-regressions/type-capacity.wast",
+      "name": "type-capacity.wast",
+      "nativeParity": "shared-engine",
+      "path": "/root/test/engine-regressions/type-capacity.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "tests/engine-regressions/type-capacity.wast",
+        "sha256": "0645ae81f49c3eedbbf1e7b031fb0eae482a57ffd62a4c19960163c085a0a526",
+        "size": 57911
+      },
+      "spec_sha256": "f986ad1acc4730cc5c299bf3568fd7929ca389d506bef44d1b97d7d65cca0f2d",
+      "suite": "engine-regressions",
+      "unsupported": false,
+      "unsupportedReason": null
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "render/terminal.wast",
         "mode": "wast-stream",
         "sourceBytes": 2999,
@@ -10355,6 +11509,33 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "aux/clang/installed.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3736,
+        "sourcePath": "src/aux/clang/tests/installed.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/clang",
+      "id": "aux/clang/installed.wast",
+      "name": "installed.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/clang/installed.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/clang/tests/installed.wast",
+        "sha256": "ce6904073b5dd493489c3ca96d54758e6364a009e7aa4eedb6c3d3510c18080f",
+        "size": 3736
+      },
+      "spec_sha256": "893618914cf8f84353f96544e6f5a7568441e57e0f9d8bb199584eb9c0702990",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "aux/libc/accounts.wast",
         "mode": "wast-stream",
         "sourceBytes": 3844,
@@ -10374,6 +11555,33 @@
         "size": 3844
       },
       "spec_sha256": "ef3ed7f925efa3501978573f77b647538239129b5536f81f7c090b61b7149f45",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/aligned-allocation.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 11103,
+        "sourcePath": "src/aux/libc/tests/aligned-allocation.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/aligned-allocation.wast",
+      "name": "aligned-allocation.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/aligned-allocation.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/aligned-allocation.wast",
+        "sha256": "111456feef154b624cb383a2d17ace2f673325d45d181cad48b1ed803ac33001",
+        "size": 11103
+      },
+      "spec_sha256": "c3884113d548971d8862ab68841a1c0639d7ddb945999ab8cda1227084d02c94",
       "suite": "aux",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
@@ -10409,6 +11617,60 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "aux/libc/clocks.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4203,
+        "sourcePath": "src/aux/libc/tests/clocks.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/clocks.wast",
+      "name": "clocks.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/clocks.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/clocks.wast",
+        "sha256": "e428335cc0385c97ce8e4911cc781894b2e629506f07ec471b3aec4dbec60c28",
+        "size": 4203
+      },
+      "spec_sha256": "378b3fd23868eaf7cacb2494e9a19e524a9777a2676a0ddc19787ded4d98841a",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/division.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 1365,
+        "sourcePath": "src/aux/libc/tests/division.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/division.wast",
+      "name": "division.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/division.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/division.wast",
+        "sha256": "d9d8ae1e464310118783a79d5986e4ff8d2197979a276429edee2d6911c13d71",
+        "size": 1365
+      },
+      "spec_sha256": "292d0280d2058694372005db6d7e75846db9c3b2c7c3d553016b2e871d2b1f2e",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "aux/libc/entropy-messages.wast",
         "mode": "wast-stream",
         "sourceBytes": 1461,
@@ -10436,6 +11698,87 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "aux/libc/fenv.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 6209,
+        "sourcePath": "src/aux/libc/tests/fenv.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/fenv.wast",
+      "name": "fenv.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/fenv.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/fenv.wast",
+        "sha256": "3980449424d32a49c85fb9e59322bd4a9aee461b3a2c41d5a9f518f217edc9c7",
+        "size": 6209
+      },
+      "spec_sha256": "5f1bf7490908aa46109fee862a16615ef64c4f36d035357f8a082d96f429c9cb",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/floating-conversion.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 50498,
+        "sourcePath": "src/aux/libc/tests/floating-conversion.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/floating-conversion.wast",
+      "name": "floating-conversion.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/floating-conversion.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/floating-conversion.wast",
+        "sha256": "ba3b650054d8a6f77ca07d9d8ed03cb69e87f8c5d3b98f5bf392b755aa7642ef",
+        "size": 50498
+      },
+      "spec_sha256": "10eeb1172e64dca88162c4ef1ac51dfd72313e97643d47958254796bfe878a14",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/integer-conversion.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 23522,
+        "sourcePath": "src/aux/libc/tests/integer-conversion.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/integer-conversion.wast",
+      "name": "integer-conversion.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/integer-conversion.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/integer-conversion.wast",
+        "sha256": "18c6f264e19f7ea722f39051f03b99ccb79004327c78221f8a5ff16391a3422b",
+        "size": 23522
+      },
+      "spec_sha256": "612f022862953ac3b2598108308a0a9473d36e23eab35cd993dad37c055acf33",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "aux/libc/locale-wide.wast",
         "mode": "wast-stream",
         "sourceBytes": 3199,
@@ -10455,6 +11798,87 @@
         "size": 3199
       },
       "spec_sha256": "73287b8399864323b4f6c9ae7b57bb99c432c31a9931c101c4aed06bafbf8dd9",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/log2-round.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 11200,
+        "sourcePath": "src/aux/libc/tests/log2-round.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/log2-round.wast",
+      "name": "log2-round.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/log2-round.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/log2-round.wast",
+        "sha256": "c72cbe0db297258f3425050c6f2141b7a59c372f7d62b9c9a97d474ac50615fa",
+        "size": 11200
+      },
+      "spec_sha256": "0e89c40de3cc48d8c2814467801cee57c50759d59f2e7036602a913b5595ac75",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/log2f.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 8738,
+        "sourcePath": "src/aux/libc/tests/log2f.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/log2f.wast",
+      "name": "log2f.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/log2f.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/log2f.wast",
+        "sha256": "0c696cafac50b873d3bf3f69abf6a10d66fab181af5f528e801f102eb8fa6434",
+        "size": 8738
+      },
+      "spec_sha256": "452214fa862f41bbf681f49fe432bf20591841fb0fe0034e8fb2cf2f1f902a34",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/lround.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 2761,
+        "sourcePath": "src/aux/libc/tests/lround.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/lround.wast",
+      "name": "lround.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/lround.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/lround.wast",
+        "sha256": "b1c5cfe38303e8c27886ef2f37d23b29995b5b5dca3bda0fcbb5637ee3118226",
+        "size": 2761
+      },
+      "spec_sha256": "5395064541b439b635eb8199a429cf7d00b107494fb48e60c6f7785a81bbf532",
       "suite": "aux",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
@@ -10509,6 +11933,141 @@
         "size": 5945
       },
       "spec_sha256": "fcfcad873a49a1e6701e7015625ea9caf1fdabbcc1f51fdb29900c7c6a4f756e",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/modf.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4030,
+        "sourcePath": "src/aux/libc/tests/modf.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/modf.wast",
+      "name": "modf.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/modf.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/modf.wast",
+        "sha256": "ad313ab62ea741e9231f225cb7dedbff7405024916a0b427922e8f9490bf9bb3",
+        "size": 4030
+      },
+      "spec_sha256": "1e371d70014e8745a93f2404865b9fdfc3da1717e6c210c32efadf4e6b616be9",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/narrow-floating-format.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 19510,
+        "sourcePath": "src/aux/libc/tests/narrow-floating-format.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/narrow-floating-format.wast",
+      "name": "narrow-floating-format.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/narrow-floating-format.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/narrow-floating-format.wast",
+        "sha256": "e81aefa4550e0a98ee8b29c578c0c737d2a78e15c0bd16b48ddc76cb880ade69",
+        "size": 19510
+      },
+      "spec_sha256": "4abd0c5dfe5075cf48cd6f512d19e72f6941a0949e6a80c9bbcee5fe638b360d",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/quad-comparison.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 6972,
+        "sourcePath": "src/aux/libc/tests/quad-comparison.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/quad-comparison.wast",
+      "name": "quad-comparison.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/quad-comparison.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/quad-comparison.wast",
+        "sha256": "2952ebcf56826c0e5e9ab71e24d436dab03327f8717b04679fb685d39402bd0a",
+        "size": 6972
+      },
+      "spec_sha256": "af9adb70923ff5274b7c9bbdf9dd6b2195ee40a62b8659150b24faf789d22440",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/reentrant-accounts.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 10641,
+        "sourcePath": "src/aux/libc/tests/reentrant-accounts.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/reentrant-accounts.wast",
+      "name": "reentrant-accounts.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/reentrant-accounts.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/reentrant-accounts.wast",
+        "sha256": "dbfefc6bf009ab9f210d4e6949f7115ab93f24205d1e1db32b46467c6c9f02c1",
+        "size": 10641
+      },
+      "spec_sha256": "f8764a29df78612c6038e683b44fc3051aefdfa54c023954a510561f86728251",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/resource-usage.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4118,
+        "sourcePath": "src/aux/libc/tests/resource-usage.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/resource-usage.wast",
+      "name": "resource-usage.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/resource-usage.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/resource-usage.wast",
+        "sha256": "7ddbf0b47664b9d8df7d53b1dc12e5a71f2fe7c63a9eebb3248c294c3469b633",
+        "size": 4118
+      },
+      "spec_sha256": "47280e6987464a1d9472076e587c2ecf940488ea91f71a0052a4247df3b4b741",
       "suite": "aux",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
@@ -10598,6 +12157,114 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "aux/libc/usleep.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 1997,
+        "sourcePath": "src/aux/libc/tests/usleep.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/usleep.wast",
+      "name": "usleep.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/usleep.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/usleep.wast",
+        "sha256": "6aa7aeadc602b25c4d08f7dd8d776869dc82b16a5b339bfc44de237535964425",
+        "size": 1997
+      },
+      "spec_sha256": "60e40b20be74b18a1ad99bfdafab79671e9fc5c9ed133c3df02dc362741fac55",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/vsnprintf.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4672,
+        "sourcePath": "src/aux/libc/tests/vsnprintf.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/vsnprintf.wast",
+      "name": "vsnprintf.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/vsnprintf.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/vsnprintf.wast",
+        "sha256": "85599fb2f5b8e1909740fb70573120be006fbb1fe3188fcb719011badca2a2e5",
+        "size": 4672
+      },
+      "spec_sha256": "165e557f996cf7e7645544f4445439a6709e13f11ff7b429918eef6637311890",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/wide-format.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 81301,
+        "sourcePath": "src/aux/libc/tests/wide-format.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/wide-format.wast",
+      "name": "wide-format.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/wide-format.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/wide-format.wast",
+        "sha256": "9be3264505bd516f46e6f8a05a69c6693efa9481bd7588f991c4b5b7b4d9c29c",
+        "size": 81301
+      },
+      "spec_sha256": "568f23decbb2e44031ac3882ad1e61d801ba159a91e18a1fd8cf86125f9e9458",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/wide-memory.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 9034,
+        "sourcePath": "src/aux/libc/tests/wide-memory.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/wide-memory.wast",
+      "name": "wide-memory.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/wide-memory.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/aux/libc/tests/wide-memory.wast",
+        "sha256": "f6bf3718d233eb67d8b63ea6e7c0457640d513d3a89a09105e61bc891d957ae2",
+        "size": 9034
+      },
+      "spec_sha256": "d3a8fadff117736ffaa25efdbd6e67f394b028a1b3c230f09cd067864fd98a53",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "aux/sleep/nanosleep.wast",
         "mode": "wast-stream",
         "sourceBytes": 883,
@@ -10645,6 +12312,2247 @@
       },
       "spec_sha256": "8e9814a12bd51d44f13052724c2b9959e3b4efc38bd717c51b9f0b64c89e821f",
       "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/abort/abort.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 2185,
+        "sourcePath": "src/system-tests/abort/abort.wast"
+      },
+      "expectFailure": false,
+      "group": "system/abort",
+      "id": "system/abort/abort.wast",
+      "name": "abort.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/abort/abort.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/abort/abort.wast",
+        "sha256": "e2151d8dc6e7357214b6af9e9e92926b62e711f8f592bda71b8ad89d73dc878c",
+        "size": 2185
+      },
+      "spec_sha256": "6568c3306d889741e8cdb2f9a2f7edb1fb1094cc111b712562677d2c36e854b4",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/accounts/accounts.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4953,
+        "sourcePath": "src/system-tests/clang/accounts/accounts.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/accounts",
+      "id": "system/clang/accounts/accounts.wast",
+      "name": "accounts.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/accounts/accounts.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/accounts/accounts.wast",
+        "sha256": "fc38acc01e41fb7e0ed9c9e43570c92a01858ccb0f61f8e81225b0925ad28e52",
+        "size": 4953
+      },
+      "spec_sha256": "40d5bd3eb066a3ea9abc7452ed22c42d09776fe4e0b869513cae6f3ab31f3e54",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/advice/advice.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3866,
+        "sourcePath": "src/system-tests/clang/advice/advice.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/advice",
+      "id": "system/clang/advice/advice.wast",
+      "name": "advice.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/advice/advice.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/advice/advice.wast",
+        "sha256": "5f0f4025edbdb2fbd1fe3a443aedca3aa113fa128eec6dbcf8902230cecfeac0",
+        "size": 3866
+      },
+      "spec_sha256": "2373dff92e8a6b64e8a07eb2065833bfeb1d7ac8e49c30b0fc5e51386d5f52fb",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/advice/ranges.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 13003,
+        "sourcePath": "src/system-tests/clang/advice/ranges.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/advice",
+      "id": "system/clang/advice/ranges.wast",
+      "name": "ranges.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/advice/ranges.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/advice/ranges.wast",
+        "sha256": "578ca6704a96010167517de11587a0fdd243534886181f7a687d2b35224ccb36",
+        "size": 13003
+      },
+      "spec_sha256": "df6002fadaf95d5f7b908b16cdfd9baf8a45753b1173dad32fdd1366a204c0c2",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/argument-limits/argument-limits.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 18765,
+        "sourcePath": "src/system-tests/clang/argument-limits/argument-limits.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/argument-limits",
+      "id": "system/clang/argument-limits/argument-limits.wast",
+      "name": "argument-limits.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/argument-limits/argument-limits.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/argument-limits/argument-limits.wast",
+        "sha256": "032dfb490163bd20023ffe731e50f9e71903bc75eea2216a273d8ddddfe4307b",
+        "size": 18765
+      },
+      "spec_sha256": "80acfef3aae37ead5b67e6747647784428758cd195deac3924fb217fd6e3b730",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/assignment-format/assignment-format.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3625,
+        "sourcePath": "src/system-tests/clang/assignment-format/assignment-format.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/assignment-format",
+      "id": "system/clang/assignment-format/assignment-format.wast",
+      "name": "assignment-format.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/assignment-format/assignment-format.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/assignment-format/assignment-format.wast",
+        "sha256": "cc5084adb9577d61484fccf1a23bd05a65593b9c0cd1ce0889e078bc4c715625",
+        "size": 3625
+      },
+      "spec_sha256": "d5ba9ab7ae824cdbceadf7296154037f294c39d9c22223c6e4dcd9df5049db77",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/backoff/backoff.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 2923,
+        "sourcePath": "src/system-tests/clang/backoff/backoff.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/backoff",
+      "id": "system/clang/backoff/backoff.wast",
+      "name": "backoff.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/backoff/backoff.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/backoff/backoff.wast",
+        "sha256": "6a7152d8566711fb7a32302061fbd0c01f4d05b6f2ebdbba76e0deccb7e32aeb",
+        "size": 2923
+      },
+      "spec_sha256": "fb90fbe416164a17831ffe6a5a7632b78f80b79a51658ade6f19ff0f458661f2",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/backoff/controlled.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3432,
+        "sourcePath": "src/system-tests/clang/backoff/controlled.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/backoff",
+      "id": "system/clang/backoff/controlled.wast",
+      "name": "controlled.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/backoff/controlled.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/backoff/controlled.wast",
+        "sha256": "299a67802e36c89022424794a9d95da84b7a2ab1b51ed6bf1c3f89de5e27f8b5",
+        "size": 3432
+      },
+      "spec_sha256": "951b1ec978b932d8896e12016915bd5633ac866be54cd7eca287550ea3e9b5fd",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/cfg-format/cfg-format.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 7930,
+        "sourcePath": "src/system-tests/clang/cfg-format/cfg-format.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/cfg-format",
+      "id": "system/clang/cfg-format/cfg-format.wast",
+      "name": "cfg-format.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/cfg-format/cfg-format.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/cfg-format/cfg-format.wast",
+        "sha256": "41ba54fab68682038322ba44fa94b51f11f348b4e57a027067d43328c63b5c5b",
+        "size": 7930
+      },
+      "spec_sha256": "8e4050ae8b1c72d13ca6f9cfb7016d4ad3b5d44c7a01c87c1bc47cc176893de4",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/checkpoint/checkpoint.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 22365,
+        "sourcePath": "src/system-tests/clang/checkpoint/checkpoint.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/checkpoint",
+      "id": "system/clang/checkpoint/checkpoint.wast",
+      "name": "checkpoint.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/checkpoint/checkpoint.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/checkpoint/checkpoint.wast",
+        "sha256": "043b3be843509163f5c4566941f167164ed68a8132ecc039f1252bde4594280a",
+        "size": 22365
+      },
+      "spec_sha256": "f5069bdbfe4350588ad30c6f015850a719da1cac10bcf754e005cf0b8b3e3ae5",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/child-deadline/child-deadline.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 10165,
+        "sourcePath": "src/system-tests/clang/child-deadline/child-deadline.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/child-deadline",
+      "id": "system/clang/child-deadline/child-deadline.wast",
+      "name": "child-deadline.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/child-deadline/child-deadline.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/child-deadline/child-deadline.wast",
+        "sha256": "d0f45445e9cbd6799049f6818004e67c9fcd9acbd2e104801cacc789ee33ada4",
+        "size": 10165
+      },
+      "spec_sha256": "42f9940ab47fecb39d7e7420615b9f54ebfbd563c3ed3764a688ed87e2f74f09",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/child-deadline/controlled.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 6429,
+        "sourcePath": "src/system-tests/clang/child-deadline/controlled.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/child-deadline",
+      "id": "system/clang/child-deadline/controlled.wast",
+      "name": "controlled.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/child-deadline/controlled.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/child-deadline/controlled.wast",
+        "sha256": "c1f62e1996fe122e2b1b78fbaad77a37ce8a6c9a42d17bfd04cb73c7b53e17cd",
+        "size": 6429
+      },
+      "spec_sha256": "3ba82ca9782e16d3d3909a0c6abde413323a92ed94cbbd4dc845aac759af1ed1",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/classification/classification.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 20387,
+        "sourcePath": "src/system-tests/clang/classification/classification.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/classification",
+      "id": "system/clang/classification/classification.wast",
+      "name": "classification.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/classification/classification.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/classification/classification.wast",
+        "sha256": "5a4a3b85882c484894e17d3f67a3e2fd028a332e46f52bcb3201c625f6f81e29",
+        "size": 20387
+      },
+      "spec_sha256": "59f0ca84cdf53637bfc3f0acd2aef1274dd82e1d8df897816fa63e501586e019",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/clocks/after.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 1259,
+        "sourcePath": "src/system-tests/clang/clocks/after.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/clocks",
+      "id": "system/clang/clocks/after.wast",
+      "name": "after.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/clocks/after.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/clocks/after.wast",
+        "sha256": "ca3d48118ed7893aadd7258bbb8928173332c9cf68ac030b0481492ec83a6b85",
+        "size": 1259
+      },
+      "spec_sha256": "de5dbe8b82d768a1344ebca2b64c06b5cc40b6541772393198b4b566170238db",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/clocks/before.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 1321,
+        "sourcePath": "src/system-tests/clang/clocks/before.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/clocks",
+      "id": "system/clang/clocks/before.wast",
+      "name": "before.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/clocks/before.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/clocks/before.wast",
+        "sha256": "3e0a6095b28f74534f9162e5e3b430ee0eb140e40b4a851054ab1d820f0592da",
+        "size": 1321
+      },
+      "spec_sha256": "195375774c7b7e0e9416dc77117c5be116d6443713d02b6bdfd73d5c5754da2a",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/code-layout/code-layout.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 15855,
+        "sourcePath": "src/system-tests/clang/code-layout/code-layout.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/code-layout",
+      "id": "system/clang/code-layout/code-layout.wast",
+      "name": "code-layout.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/code-layout/code-layout.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/code-layout/code-layout.wast",
+        "sha256": "fc991260c61de9efcb08dcf46262adcf5a0d99272381af17ba63e707dcaafa3b",
+        "size": 15855
+      },
+      "spec_sha256": "d1cb0a371ed7350703c93b8fdb546dc82cdcde9ae4e9c52d22642e89465b24b5",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/compiled.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 1906,
+        "sourcePath": "src/system-tests/clang/compiled.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang",
+      "id": "system/clang/compiled.wast",
+      "name": "compiled.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/compiled.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/compiled.wast",
+        "sha256": "2cb0b6bc1ca5616415294a1dae3497d2f8a46927c1135d96baddaf36dfa496e7",
+        "size": 1906
+      },
+      "spec_sha256": "8bce8a2734c223137d5cffef084aba3fa6a8bc0b47300fdb696b08a2ccc4081c",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/compiler-imports/compiler-imports.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 2411,
+        "sourcePath": "src/system-tests/clang/compiler-imports/compiler-imports.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/compiler-imports",
+      "id": "system/clang/compiler-imports/compiler-imports.wast",
+      "name": "compiler-imports.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/compiler-imports/compiler-imports.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/compiler-imports/compiler-imports.wast",
+        "sha256": "3ccfd922ca5436dc3e940a533594bdde502aeaf404b199f274e602ad65e65465",
+        "size": 2411
+      },
+      "spec_sha256": "af4d1fcdd914e86323f2e02cd43a9115b7c9135bbbc913c371982b199975f2f7",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/coverage-format/coverage-format.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3700,
+        "sourcePath": "src/system-tests/clang/coverage-format/coverage-format.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/coverage-format",
+      "id": "system/clang/coverage-format/coverage-format.wast",
+      "name": "coverage-format.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/coverage-format/coverage-format.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/coverage-format/coverage-format.wast",
+        "sha256": "8d85a7ca11f3a37be38cd49652def01c60404b891b3b1df6998df2aa2c5c8270",
+        "size": 3700
+      },
+      "spec_sha256": "b2268e18bd595a53071f4e0db08941b81e5cb276913b9ea3b4c8e9af017377c0",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/crash-recovery/crash-recovery.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 11220,
+        "sourcePath": "src/system-tests/clang/crash-recovery/crash-recovery.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/crash-recovery",
+      "id": "system/clang/crash-recovery/crash-recovery.wast",
+      "name": "crash-recovery.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/crash-recovery/crash-recovery.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/crash-recovery/crash-recovery.wast",
+        "sha256": "7baec488b817893ec581904c14a837e34fb382226268b1e9e70d83610bcc8757",
+        "size": 11220
+      },
+      "spec_sha256": "502f924f30c9ea8f9ae2b6a31912d9e253203aad8678def80d6b982a75e0b42a",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/dwarf-context/dwarf-context.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 6309,
+        "sourcePath": "src/system-tests/clang/dwarf-context/dwarf-context.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/dwarf-context",
+      "id": "system/clang/dwarf-context/dwarf-context.wast",
+      "name": "dwarf-context.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/dwarf-context/dwarf-context.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/dwarf-context/dwarf-context.wast",
+        "sha256": "7ff4dd03d4ce93fb4b1e2b151f24177e0745babc022f871c09b2729696b54c70",
+        "size": 6309
+      },
+      "spec_sha256": "e1bfea210e4922bcc53fb39f1a7263d112eb6107dfb4e0e38a16418da9480a92",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/dwarf-verifier/dwarf-verifier.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 5013,
+        "sourcePath": "src/system-tests/clang/dwarf-verifier/dwarf-verifier.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/dwarf-verifier",
+      "id": "system/clang/dwarf-verifier/dwarf-verifier.wast",
+      "name": "dwarf-verifier.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/dwarf-verifier/dwarf-verifier.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/dwarf-verifier/dwarf-verifier.wast",
+        "sha256": "a918134c544251da1c786d7e57075d6a07a280d78f576861226677f22804aca5",
+        "size": 5013
+      },
+      "spec_sha256": "bdde28385477d25e0c2ffc7cf9a69e424388893f4ea1316bba6d82d7276af565",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/dylib-uuid/dylib-uuid.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4506,
+        "sourcePath": "src/system-tests/clang/dylib-uuid/dylib-uuid.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/dylib-uuid",
+      "id": "system/clang/dylib-uuid/dylib-uuid.wast",
+      "name": "dylib-uuid.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/dylib-uuid/dylib-uuid.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/dylib-uuid/dylib-uuid.wast",
+        "sha256": "f93ceefd4d2cb060c22c6f5d334df0798ba73a5d3178c610ea2297617f87a597",
+        "size": 4506
+      },
+      "spec_sha256": "3fcaa6e54b88f1a591a8892e9c6df6e7f363a6a5836645107748f416c7ccfdd2",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/endian/endian.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3575,
+        "sourcePath": "src/system-tests/clang/endian/endian.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/endian",
+      "id": "system/clang/endian/endian.wast",
+      "name": "endian.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/endian/endian.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/endian/endian.wast",
+        "sha256": "5ebff67cc8f64d4a91948c56c3412154e2956112a7df71c1c6cd17893087443b",
+        "size": 3575
+      },
+      "spec_sha256": "aa9ee88c56814eec7b78dc62d80fa79b3689a42d5a182e3cee893c1bfd6394c6",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/exec-wait/exec-wait.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 19502,
+        "sourcePath": "src/system-tests/clang/exec-wait/exec-wait.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/exec-wait",
+      "id": "system/clang/exec-wait/exec-wait.wast",
+      "name": "exec-wait.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/exec-wait/exec-wait.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/exec-wait/exec-wait.wast",
+        "sha256": "ac20bc00950cc2eb1e4fda6038cdf973b9792d857f892229f5edc081e44ee703",
+        "size": 19502
+      },
+      "spec_sha256": "7a5391223b9e8d3195ef7eb6d3ac70a11312bda5b6d73c4e9eb5948a461e567a",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/executable-path/executable-path.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 23386,
+        "sourcePath": "src/system-tests/clang/executable-path/executable-path.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/executable-path",
+      "id": "system/clang/executable-path/executable-path.wast",
+      "name": "executable-path.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/executable-path/executable-path.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/executable-path/executable-path.wast",
+        "sha256": "c0af96182cc530c00e9b1d140443901a364f0461a5949d0e1f618e7be2192d2d",
+        "size": 23386
+      },
+      "spec_sha256": "87db8b1728da1261a5c6f2a2cfb2931aec2b39290bfdd45c41da04b535322943",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/filesystem/clock.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 1355,
+        "sourcePath": "src/system-tests/clang/filesystem/clock.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/filesystem",
+      "id": "system/clang/filesystem/clock.wast",
+      "name": "clock.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/filesystem/clock.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/filesystem/clock.wast",
+        "sha256": "3a9aa17591ee69792bdc99ed21e7590d6dcda52f68431171be5d352f5636723c",
+        "size": 1355
+      },
+      "spec_sha256": "1117ffb129490434039353eb11a9c18d4ad3d15162969aa65217a6fd4061e559",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/filesystem/filesystem.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 9904,
+        "sourcePath": "src/system-tests/clang/filesystem/filesystem.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/filesystem",
+      "id": "system/clang/filesystem/filesystem.wast",
+      "name": "filesystem.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/filesystem/filesystem.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/filesystem/filesystem.wast",
+        "sha256": "dc197fc789a1e79839dd150fe11908086ecc14afb91117353ef4353437822dc8",
+        "size": 9904
+      },
+      "spec_sha256": "2128e4fb86776cf971174401501e6e19bdd9f0671fae3a766679be40757b2aaa",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/finite-wait/controlled.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 11811,
+        "sourcePath": "src/system-tests/clang/finite-wait/controlled.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/finite-wait",
+      "id": "system/clang/finite-wait/controlled.wast",
+      "name": "controlled.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/finite-wait/controlled.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/finite-wait/controlled.wast",
+        "sha256": "e9f8067e2258ccabbc461992b7afcaa4dddef3bb7e87ece8f5be671e26b83a9c",
+        "size": 11811
+      },
+      "spec_sha256": "4971eb7fae495768faec2582f32836b62312fb83ed4a9b23377769644c7d59f4",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/finite-wait/finite-wait.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 18187,
+        "sourcePath": "src/system-tests/clang/finite-wait/finite-wait.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/finite-wait",
+      "id": "system/clang/finite-wait/finite-wait.wast",
+      "name": "finite-wait.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/finite-wait/finite-wait.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/finite-wait/finite-wait.wast",
+        "sha256": "8159252c351967d934f6d3d591b1cdd99059fed3b5966c8df943b6d8e7ad829f",
+        "size": 18187
+      },
+      "spec_sha256": "8b4587b072816c8e0ca5f0b8a105f815a3262192605c0a27e126218ea77bc06e",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/finite-wait/saturation.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3982,
+        "sourcePath": "src/system-tests/clang/finite-wait/saturation.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/finite-wait",
+      "id": "system/clang/finite-wait/saturation.wast",
+      "name": "saturation.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/finite-wait/saturation.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/finite-wait/saturation.wast",
+        "sha256": "1a81227565cc530f69b123cc181b4bbdcf225b4b3d27b919a406167a5317bd41",
+        "size": 3982
+      },
+      "spec_sha256": "965410fec249deb88bdc07d0230dda60be7ea9311c68a56ba195ace4b89805e1",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/folding/folding.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 15435,
+        "sourcePath": "src/system-tests/clang/folding/folding.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/folding",
+      "id": "system/clang/folding/folding.wast",
+      "name": "folding.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/folding/folding.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/folding/folding.wast",
+        "sha256": "3e76d800c045beb1fdc01c8cb027281d8e0227bd84d5519391ae7af07779a2ce",
+        "size": 15435
+      },
+      "spec_sha256": "7dcc05f089c4b83dadedc72b6c7ff4ffe363e7ae918bf502000f8dd7dd9f3a63",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/gsym/gsym.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 9143,
+        "sourcePath": "src/system-tests/clang/gsym/gsym.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/gsym",
+      "id": "system/clang/gsym/gsym.wast",
+      "name": "gsym.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/gsym/gsym.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/gsym/gsym.wast",
+        "sha256": "0ab73388a1e01e58f1822bdec2afc128eefaca9c433b30674c8fb3af0a60c306",
+        "size": 9143
+      },
+      "spec_sha256": "af6710872178ed16b85cfc74494b5a408f92e6669cbf749aafd36611969078b3",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/hardlink/hardlink.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 31578,
+        "sourcePath": "src/system-tests/clang/hardlink/hardlink.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/hardlink",
+      "id": "system/clang/hardlink/hardlink.wast",
+      "name": "hardlink.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/hardlink/hardlink.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/hardlink/hardlink.wast",
+        "sha256": "4003dadd5f033321d24819e859c7fcaff42dd4e5283335f6ae1e77cc94887f1f",
+        "size": 31578
+      },
+      "spec_sha256": "a09f0eba003860d10359ea4a53015299bcc50909709f8d3dafde61d4332ec918",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/inlining/inlining.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4029,
+        "sourcePath": "src/system-tests/clang/inlining/inlining.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/inlining",
+      "id": "system/clang/inlining/inlining.wast",
+      "name": "inlining.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/inlining/inlining.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/inlining/inlining.wast",
+        "sha256": "15c4530bea50e270dc21aea2caa15168ff8d42e0e7cfb58d4835474a05eea21b",
+        "size": 4029
+      },
+      "spec_sha256": "ecea2d168b31b1379a3d64e4a69f792cbb88c78fd46692a692f01c88f89f8509",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/issue-hash/issue-hash.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4343,
+        "sourcePath": "src/system-tests/clang/issue-hash/issue-hash.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/issue-hash",
+      "id": "system/clang/issue-hash/issue-hash.wast",
+      "name": "issue-hash.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/issue-hash/issue-hash.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/issue-hash/issue-hash.wast",
+        "sha256": "f842fe4f79ee9986516863fb9c27a33a576cb565116ce0e1371f72fe31df611e",
+        "size": 4343
+      },
+      "spec_sha256": "a4df3331a17c8e1d3ea574bf748324e5779e0b93db6b1b2fd826db225f413002",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/layout-override/layout-override.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3963,
+        "sourcePath": "src/system-tests/clang/layout-override/layout-override.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/layout-override",
+      "id": "system/clang/layout-override/layout-override.wast",
+      "name": "layout-override.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/layout-override/layout-override.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/layout-override/layout-override.wast",
+        "sha256": "8be360a83da3e2e07b15999cb5038089d204e1023edf9ee6a4c58428a85ca558",
+        "size": 3963
+      },
+      "spec_sha256": "6850ad828e6f2454ef2e5355e517c844d78be82f8f661a3515ebc9d823a32b75",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/lld-diagnostics/diagnostics.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 12461,
+        "sourcePath": "src/system-tests/clang/lld-diagnostics/diagnostics.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/lld-diagnostics",
+      "id": "system/clang/lld-diagnostics/diagnostics.wast",
+      "name": "diagnostics.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/lld-diagnostics/diagnostics.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/lld-diagnostics/diagnostics.wast",
+        "sha256": "85d9b59c4f54d3464e78803a77ce1d7591cd28450028e13e2ed488f1d5b1ae68",
+        "size": 12461
+      },
+      "spec_sha256": "f6183c67923c3c4cc74a8131e2dc481c7db82fc8179077431a940ce8dc49974b",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/lld-filesystem/filesystem.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 19703,
+        "sourcePath": "src/system-tests/clang/lld-filesystem/filesystem.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/lld-filesystem",
+      "id": "system/clang/lld-filesystem/filesystem.wast",
+      "name": "filesystem.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/lld-filesystem/filesystem.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/lld-filesystem/filesystem.wast",
+        "sha256": "79b460b1bad08b524c60e396a0a101cff20fe41137b372c760b67681dbd9eab4",
+        "size": 19703
+      },
+      "spec_sha256": "efae762d33fdc0d1c0f910efd61f660c5bc63cf523f6771642e3ffad7388c1b3",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/lld-link/link.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 2195,
+        "sourcePath": "src/system-tests/clang/lld-link/link.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/lld-link",
+      "id": "system/clang/lld-link/link.wast",
+      "name": "link.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/lld-link/link.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/lld-link/link.wast",
+        "sha256": "19337a57bdf3e61d440cd7a5b1c1e8661cc04d22bea81e4f4a7d8d319f0f97c3",
+        "size": 2195
+      },
+      "spec_sha256": "6781eb024ae3797cc378d0aab618e2b87966abc7e280851c511bb3dc0aab39a5",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/lld-link/no-lto.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 2880,
+        "sourcePath": "src/system-tests/clang/lld-link/no-lto.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/lld-link",
+      "id": "system/clang/lld-link/no-lto.wast",
+      "name": "no-lto.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/lld-link/no-lto.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/lld-link/no-lto.wast",
+        "sha256": "d032a9a106113f6155714113c96a34480f91440ff842321b85383fdd54b1ca18",
+        "size": 2880
+      },
+      "spec_sha256": "b067fa909eea3d58ea1489acb8ff622459f70b393630f4e440b4ad7d1d4975fe",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/lld-link/sdk.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4443,
+        "sourcePath": "src/system-tests/clang/lld-link/sdk.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/lld-link",
+      "id": "system/clang/lld-link/sdk.wast",
+      "name": "sdk.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/lld-link/sdk.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/lld-link/sdk.wast",
+        "sha256": "f32b134b56c3ba1fef045870589f9fa8778457fcbf9033e81b9e431ddf95db83",
+        "size": 4443
+      },
+      "spec_sha256": "0ae0ad2364f4ed120dd7a6d9a6c98006513bf17a203b940acabd20af7745b02e",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/lock-owner/lock-owner.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 9513,
+        "sourcePath": "src/system-tests/clang/lock-owner/lock-owner.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/lock-owner",
+      "id": "system/clang/lock-owner/lock-owner.wast",
+      "name": "lock-owner.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/lock-owner/lock-owner.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/lock-owner/lock-owner.wast",
+        "sha256": "7546a34ef695a51a2241ce266f9eecd271948e8c6f6c1aee2673267c6f92a7a9",
+        "size": 9513
+      },
+      "spec_sha256": "84e9455f9ecf6ca38e742f8b18bc88194e8d70b7567e77391317f389ed26c449",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/locks/locks.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 33725,
+        "sourcePath": "src/system-tests/clang/locks/locks.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/locks",
+      "id": "system/clang/locks/locks.wast",
+      "name": "locks.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/locks/locks.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/locks/locks.wast",
+        "sha256": "e9777654c4b8fd0592febb25562062a915594bdd164394ac679091c1d97d4c4b",
+        "size": 33725
+      },
+      "spec_sha256": "4fa06da36ebda43a1a52bfb7bb861420a8393712a0a60addf915fa6c5f7a389e",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/logb/logb.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 11274,
+        "sourcePath": "src/system-tests/clang/logb/logb.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/logb",
+      "id": "system/clang/logb/logb.wast",
+      "name": "logb.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/logb/logb.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/logb/logb.wast",
+        "sha256": "05ebd0c4b561a777265fa9168b796d9c9b1593380a087a1ec2aceaeeb226bc11",
+        "size": 11274
+      },
+      "spec_sha256": "f84be948b966e94d2250235d57e9da29f0d4eeee4990a713c89f58958663bf4f",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/lto-errors/lto-errors.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 15796,
+        "sourcePath": "src/system-tests/clang/lto-errors/lto-errors.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/lto-errors",
+      "id": "system/clang/lto-errors/lto-errors.wast",
+      "name": "lto-errors.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/lto-errors/lto-errors.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/lto-errors/lto-errors.wast",
+        "sha256": "228b8b5b5c3ab032e6b43ba9371f5adaa53ebd151f2ab7c9a2688a0c3cb8be52",
+        "size": 15796
+      },
+      "spec_sha256": "90b44620b76ab9b63350089cc18224b6f57d8c11acd7ef1bba3b915a78001d3d",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/managed-static/managed-static.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 8919,
+        "sourcePath": "src/system-tests/clang/managed-static/managed-static.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/managed-static",
+      "id": "system/clang/managed-static/managed-static.wast",
+      "name": "managed-static.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/managed-static/managed-static.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/managed-static/managed-static.wast",
+        "sha256": "878a4b8a1ba595388cdb3650670b11163f6fa6bfe15cee9805ce9a6caf359d93",
+        "size": 8919
+      },
+      "spec_sha256": "c3a864be1dcb1f8e84656eb4cd0b6b228e7755f76ee767a7b92a7015ae940bc4",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/memprof-format/memprof-format.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 7938,
+        "sourcePath": "src/system-tests/clang/memprof-format/memprof-format.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/memprof-format",
+      "id": "system/clang/memprof-format/memprof-format.wast",
+      "name": "memprof-format.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/memprof-format/memprof-format.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/memprof-format/memprof-format.wast",
+        "sha256": "6758c6525e1b56c72d7d2a67c7da386a6e69a505ccf03bcb6b3122816e400a33",
+        "size": 7938
+      },
+      "spec_sha256": "cd2ffad1194adfcea214dce845fcda5494e48bc454c67e96e31f07e44637d71c",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/module-cache/module-cache.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 9449,
+        "sourcePath": "src/system-tests/clang/module-cache/module-cache.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/module-cache",
+      "id": "system/clang/module-cache/module-cache.wast",
+      "name": "module-cache.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/module-cache/module-cache.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/module-cache/module-cache.wast",
+        "sha256": "3d8790576090377cbda994e044bf22a30fc3db20d468b035e8e14cb18b1ef430",
+        "size": 9449
+      },
+      "spec_sha256": "c74bd08b13d72add38ae16583422dcad9f550299b1c8d7cb16656dc0a62f16d3",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/module-tasks/module-tasks.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 9088,
+        "sourcePath": "src/system-tests/clang/module-tasks/module-tasks.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/module-tasks",
+      "id": "system/clang/module-tasks/module-tasks.wast",
+      "name": "module-tasks.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/module-tasks/module-tasks.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/module-tasks/module-tasks.wast",
+        "sha256": "c1052e50861b35533b1b63c8a7f1193a55052df2cca66d3242dfdc7de1845b68",
+        "size": 9088
+      },
+      "spec_sha256": "91cbc9532d35634850213f7a945aa0f2b257aaed2ab4f97da8413c97cae92379",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/mustache/mustache.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 12422,
+        "sourcePath": "src/system-tests/clang/mustache/mustache.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/mustache",
+      "id": "system/clang/mustache/mustache.wast",
+      "name": "mustache.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/mustache/mustache.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/mustache/mustache.wast",
+        "sha256": "414ead823571cf082b2806627b482b756b222db0d38ecf34d348f09c89e50bb7",
+        "size": 12422
+      },
+      "spec_sha256": "6a96cc629a77de02a500022cbf3a49bbdfbc8a5284bac9b7593b007fe61696d2",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/mutex/mutex.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4110,
+        "sourcePath": "src/system-tests/clang/mutex/mutex.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/mutex",
+      "id": "system/clang/mutex/mutex.wast",
+      "name": "mutex.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/mutex/mutex.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/mutex/mutex.wast",
+        "sha256": "3bc5222f3b87b54cf0e07b5751eb45bfa798ab79ef5ae5aa9e583c669418ab27",
+        "size": 4110
+      },
+      "spec_sha256": "26c2030c1889598ef3eb907b9e790613aefceebba7314fff8ab24976db8f4f24",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/parallel/parallel.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 11152,
+        "sourcePath": "src/system-tests/clang/parallel/parallel.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/parallel",
+      "id": "system/clang/parallel/parallel.wast",
+      "name": "parallel.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/parallel/parallel.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/parallel/parallel.wast",
+        "sha256": "25fb5c81ccef1260f05dcc85a2db1ed058bb9cb1e574a998076fe589052a94b6",
+        "size": 11152
+      },
+      "spec_sha256": "27b2e2eebb0b26c7963ae0e2a49d7367958247b06ff3b9be3bc1164dc374489d",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/platform/platform.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 7357,
+        "sourcePath": "src/system-tests/clang/platform/platform.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/platform",
+      "id": "system/clang/platform/platform.wast",
+      "name": "platform.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/platform/platform.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/platform/platform.wast",
+        "sha256": "1ed9b62c6a1a1652baaf96bc2db703259ce263340c676d889b41abcace0a2d76",
+        "size": 7357
+      },
+      "spec_sha256": "36e5bb7a775708f7c264cd613ea389e15b16ad91d65be3fb75a472bf9d31c0e0",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/process/process.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 5539,
+        "sourcePath": "src/system-tests/clang/process/process.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/process",
+      "id": "system/clang/process/process.wast",
+      "name": "process.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/process/process.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/process/process.wast",
+        "sha256": "3e58bbc2d27268788baa6317a890a6ce3df57e31ca6b4aaa4b51ca059a6057b6",
+        "size": 5539
+      },
+      "spec_sha256": "eb6fcae7374370a19e08f7eba0c270242716c101ff906418230d927e8fa4de1e",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/program-execution/program-execution.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 36124,
+        "sourcePath": "src/system-tests/clang/program-execution/program-execution.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/program-execution",
+      "id": "system/clang/program-execution/program-execution.wast",
+      "name": "program-execution.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/program-execution/program-execution.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/program-execution/program-execution.wast",
+        "sha256": "1c541895bb67aad8667cd5ee97a5b3843ef99dfa0578bfcaa776a6dc548db0a9",
+        "size": 36124
+      },
+      "spec_sha256": "6f9f25dd048dea378ea18de3bad5b4d138b04abb44c6c21229a6cfb15929d0c8",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/program-wait/program-wait.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 21898,
+        "sourcePath": "src/system-tests/clang/program-wait/program-wait.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/program-wait",
+      "id": "system/clang/program-wait/program-wait.wast",
+      "name": "program-wait.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/program-wait/program-wait.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/program-wait/program-wait.wast",
+        "sha256": "4970cdeadb60db16824b25fae4e64669eb4edff658fffe52f9ded334040c8505",
+        "size": 21898
+      },
+      "spec_sha256": "d21b59e3bba119a85f72001a5519b6a1211097460be1b4ad264efc048d3ff4a3",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/raw-stream/raw-stream.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 7144,
+        "sourcePath": "src/system-tests/clang/raw-stream/raw-stream.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/raw-stream",
+      "id": "system/clang/raw-stream/raw-stream.wast",
+      "name": "raw-stream.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/raw-stream/raw-stream.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/raw-stream/raw-stream.wast",
+        "sha256": "7be7696378f269a9a7006fdfc8b7c7be8f81ab605d964b492fa46b3272a19f16",
+        "size": 7144
+      },
+      "spec_sha256": "acf3ed0a4c769551e1451feccc69b5d908d4bc1dc9281cd12255774cb2c80188",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/realpath/realpath.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 23832,
+        "sourcePath": "src/system-tests/clang/realpath/realpath.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/realpath",
+      "id": "system/clang/realpath/realpath.wast",
+      "name": "realpath.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/realpath/realpath.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/realpath/realpath.wast",
+        "sha256": "f6f0d991f1e80b9d2dd0df95b4e45773082955cd080e5e6c1597420692f748eb",
+        "size": 23832
+      },
+      "spec_sha256": "da10799f5a5c8befaf2b29d7fd6f66814e27f518335fdbfaa2d0521205b0a54b",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/seed-file/seed-file.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 5562,
+        "sourcePath": "src/system-tests/clang/seed-file/seed-file.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/seed-file",
+      "id": "system/clang/seed-file/seed-file.wast",
+      "name": "seed-file.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/seed-file/seed-file.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/seed-file/seed-file.wast",
+        "sha256": "4ee1e55c1ac5557c83bc2a186151f7e2e5f6587db2501bd51bb4a3c5ec340bde",
+        "size": 5562
+      },
+      "spec_sha256": "3a3419166e44ac5f156b9c56a17284be42ef1e9c84c92917ceef9ea1d7e0e30f",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/session/session.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 7664,
+        "sourcePath": "src/system-tests/clang/session/session.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/session",
+      "id": "system/clang/session/session.wast",
+      "name": "session.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/session/session.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/session/session.wast",
+        "sha256": "1f5126d62502a516bc0e90a4684ab56c2525b0c3012bf9f3b2aa61467cc9bd2d",
+        "size": 7664
+      },
+      "spec_sha256": "8410a11f273d98fa17bf526cbb8e1fa545e901e50861cd0dd8e99638ec2d2b71",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/shadow-callbacks/shadow-callbacks.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 7089,
+        "sourcePath": "src/system-tests/clang/shadow-callbacks/shadow-callbacks.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/shadow-callbacks",
+      "id": "system/clang/shadow-callbacks/shadow-callbacks.wast",
+      "name": "shadow-callbacks.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/shadow-callbacks/shadow-callbacks.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/shadow-callbacks/shadow-callbacks.wast",
+        "sha256": "f5bcfa8b97fc64eb6977cb9e78abc93609fce09cf30c2b27df6f35d4bb681d65",
+        "size": 7089
+      },
+      "spec_sha256": "6b75c999ae21f93704fc82644e5babbac3c36b2f4e564f7f483bcaf1ddb3c6e8",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/shutdown/shutdown.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 25515,
+        "sourcePath": "src/system-tests/clang/shutdown/shutdown.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/shutdown",
+      "id": "system/clang/shutdown/shutdown.wast",
+      "name": "shutdown.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/shutdown/shutdown.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/shutdown/shutdown.wast",
+        "sha256": "62555a900f07d6b04c16f53dd19ad28550bb967167b55bc08624aead85c1d815",
+        "size": 25515
+      },
+      "spec_sha256": "c3b9a4fd15ef40724c2200c44c63a8cc2e6f0fd42defaa75072757a6c2ab4bd3",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/signals/signals.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 13375,
+        "sourcePath": "src/system-tests/clang/signals/signals.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/signals",
+      "id": "system/clang/signals/signals.wast",
+      "name": "signals.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/signals/signals.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/signals/signals.wast",
+        "sha256": "a846731dddbe693caef0d7ed9ff5ec08aa13b892d1b01128f495aa1cd2dc6354",
+        "size": 13375
+      },
+      "spec_sha256": "4edc550f09553b4c6a404c9577400ddf14f55da381a402ed18f7e85867371ddb",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/spirv-name/spirv-name.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4931,
+        "sourcePath": "src/system-tests/clang/spirv-name/spirv-name.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/spirv-name",
+      "id": "system/clang/spirv-name/spirv-name.wast",
+      "name": "spirv-name.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/spirv-name/spirv-name.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/spirv-name/spirv-name.wast",
+        "sha256": "2e0c0302f52f6a2666c1665e0c18a2b508c54605b86604979373aefb47ec4ebd",
+        "size": 4931
+      },
+      "spec_sha256": "7ab344fc95512f76d84c6cfe5da617126cf5ae194d0d4db85ed606e7f28d1177",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/startup/startup.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 8890,
+        "sourcePath": "src/system-tests/clang/startup/startup.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/startup",
+      "id": "system/clang/startup/startup.wast",
+      "name": "startup.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/startup/startup.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/startup/startup.wast",
+        "sha256": "59dce2f7caeee32bc614399e8d6a02e07acf6dc180ac4040a58330f72d39a3ac",
+        "size": 8890
+      },
+      "spec_sha256": "71757fb46af632a011e77af9f7a295bce4bb98c8f1cbe9d3aa8621cbeffb33d9",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/stdio/format.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 12165,
+        "sourcePath": "src/system-tests/clang/stdio/format.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/stdio",
+      "id": "system/clang/stdio/format.wast",
+      "name": "format.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/stdio/format.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/stdio/format.wast",
+        "sha256": "ce32ff93bbe3d9485bfa1b60f9f2e365de27f2f34979f65b9df776aab24ac735",
+        "size": 12165
+      },
+      "spec_sha256": "7d9f205fc38a76016a611d4a7c65e989b0d97d70566dcade5c565d7c11a97783",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/symlink/symlink-loader.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 872,
+        "sourcePath": "src/system-tests/clang/symlink/symlink-loader.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/symlink",
+      "id": "system/clang/symlink/symlink-loader.wast",
+      "name": "symlink-loader.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/symlink/symlink-loader.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/symlink/symlink-loader.wast",
+        "sha256": "a9ebc2666c0775907d48550f113e1ab100d4778bad86444da6ffe008875ac7f6",
+        "size": 872
+      },
+      "spec_sha256": "014f163342302b810e67e723939a0513ede9ffc40db4c032b10b2c74afb13c92",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/symlink/symlink.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 23536,
+        "sourcePath": "src/system-tests/clang/symlink/symlink.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/symlink",
+      "id": "system/clang/symlink/symlink.wast",
+      "name": "symlink.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/symlink/symlink.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/symlink/symlink.wast",
+        "sha256": "b47bb2fea05c58ffebe1bd96fd3d98e8dfe1d2c41aa3503f4243d464701b280b",
+        "size": 23536
+      },
+      "spec_sha256": "aa98fdd19dca7fa83f1b95ecffe5dd70f1ae3cbe836feb11cd5cd2e80462d6e1",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/synchronization/synchronization.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 9237,
+        "sourcePath": "src/system-tests/clang/synchronization/synchronization.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/synchronization",
+      "id": "system/clang/synchronization/synchronization.wast",
+      "name": "synchronization.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/synchronization/synchronization.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/synchronization/synchronization.wast",
+        "sha256": "f21049ea43eb47c4ffdb2dbe1268d312635c8586d98dc816f6e301498e7ef360",
+        "size": 9237
+      },
+      "spec_sha256": "2d09fa21c94849440bffeaaa9e672767965a4abbcdc75531862f57c2779aa694",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/target-host/target-host.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 1880,
+        "sourcePath": "src/system-tests/clang/target-host/target-host.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/target-host",
+      "id": "system/clang/target-host/target-host.wast",
+      "name": "target-host.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/target-host/target-host.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/target-host/target-host.wast",
+        "sha256": "5ca3431f56b37603273e21c2621ba8d5833f1aea5d9d60a8745260bbc89bfdcb",
+        "size": 1880
+      },
+      "spec_sha256": "09a87e7b63238b0601313614c1f55f71d23c7fc976189a145517cbf7c12d156f",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/thread-pool/thread-pool.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 7690,
+        "sourcePath": "src/system-tests/clang/thread-pool/thread-pool.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/thread-pool",
+      "id": "system/clang/thread-pool/thread-pool.wast",
+      "name": "thread-pool.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/thread-pool/thread-pool.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/thread-pool/thread-pool.wast",
+        "sha256": "e46b237305a026a90e1684a4b5832af30b8431953709e30da45dce899b6ac448",
+        "size": 7690
+      },
+      "spec_sha256": "fb51aa995484d4310a214ef69bea30d83a4cfd6142ffe6fc2e731013530af21c",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/time-profiler/lifecycle.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 12404,
+        "sourcePath": "src/system-tests/clang/time-profiler/lifecycle.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/time-profiler",
+      "id": "system/clang/time-profiler/lifecycle.wast",
+      "name": "lifecycle.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/time-profiler/lifecycle.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/time-profiler/lifecycle.wast",
+        "sha256": "27c8500f23627070058564e044742741a1625c1384d7b6a77d985b4cf434165e",
+        "size": 12404
+      },
+      "spec_sha256": "1e13c729780b812d99b4ed756a74c87d8b957ed6d6510036650d117ae9632bbe",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/time-profiler/time-profiler.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 7463,
+        "sourcePath": "src/system-tests/clang/time-profiler/time-profiler.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/time-profiler",
+      "id": "system/clang/time-profiler/time-profiler.wast",
+      "name": "time-profiler.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/time-profiler/time-profiler.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/time-profiler/time-profiler.wast",
+        "sha256": "3dee34c47ef9c87ecb112239e202b68c7709588458c565f867e3f71cff62076f",
+        "size": 7463
+      },
+      "spec_sha256": "b192ca96af1bd2bd6f2042149631a46f159e0fdefbfe52673a8ae025be6c9503",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/timed-locks/controlled.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3157,
+        "sourcePath": "src/system-tests/clang/timed-locks/controlled.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/timed-locks",
+      "id": "system/clang/timed-locks/controlled.wast",
+      "name": "controlled.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/timed-locks/controlled.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/timed-locks/controlled.wast",
+        "sha256": "ad018ac519a72bd35cc5d742f408dba08cad505f283ac5a5f1b6b7e65cc6f3e8",
+        "size": 3157
+      },
+      "spec_sha256": "6f7a4768f7087f53373bea3802d2b9a00a23b1baa2bc138c77803642fc7fd642",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/timed-locks/timed-locks.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 5162,
+        "sourcePath": "src/system-tests/clang/timed-locks/timed-locks.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/timed-locks",
+      "id": "system/clang/timed-locks/timed-locks.wast",
+      "name": "timed-locks.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/timed-locks/timed-locks.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/timed-locks/timed-locks.wast",
+        "sha256": "0bab8244c514f89da34d2c05bfa5c59d028336419bbfa5f9733b1a70b761f3f7",
+        "size": 5162
+      },
+      "spec_sha256": "77d042c01adac0f1e428c299b35fe1783a20552e0b000c556c0b0346ebf9beb7",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/timestamp/timestamp.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4913,
+        "sourcePath": "src/system-tests/clang/timestamp/timestamp.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/timestamp",
+      "id": "system/clang/timestamp/timestamp.wast",
+      "name": "timestamp.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/timestamp/timestamp.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/timestamp/timestamp.wast",
+        "sha256": "49ef6e803c05a294c5e0d7b311d8756a7a5185879fd3d995861fc59640b594f9",
+        "size": 4913
+      },
+      "spec_sha256": "64515bc3e2fdf9784e335bfec0ea5be4cd36e33b3feafdd9cc3ea4fa6332dea3",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/unsafe-buffer/unsafe-buffer.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3974,
+        "sourcePath": "src/system-tests/clang/unsafe-buffer/unsafe-buffer.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/unsafe-buffer",
+      "id": "system/clang/unsafe-buffer/unsafe-buffer.wast",
+      "name": "unsafe-buffer.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/unsafe-buffer/unsafe-buffer.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/unsafe-buffer/unsafe-buffer.wast",
+        "sha256": "250c47f8c324097b7dc9a5d242e17e525eff7ed01e4b4bbbec3664da932de722",
+        "size": 3974
+      },
+      "spec_sha256": "f380099dd586fed5a4e390c393bc2f4b7d8acdfbc25ce4555cfc31756f3fef09",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/watchdog/controlled.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4850,
+        "sourcePath": "src/system-tests/clang/watchdog/controlled.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/watchdog",
+      "id": "system/clang/watchdog/controlled.wast",
+      "name": "controlled.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/watchdog/controlled.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/watchdog/controlled.wast",
+        "sha256": "b5f07f60c3b7fb3c1d2f97eba3e91d2571f72011faf5a93fedb39374bbf93265",
+        "size": 4850
+      },
+      "spec_sha256": "95f49da9957a9100937c6683eca3c444ae3dc303b740ae439840ca880e037e5e",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/watchdog/watchdog.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 6518,
+        "sourcePath": "src/system-tests/clang/watchdog/watchdog.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/watchdog",
+      "id": "system/clang/watchdog/watchdog.wast",
+      "name": "watchdog.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/watchdog/watchdog.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/watchdog/watchdog.wast",
+        "sha256": "6ddaaa9e85a672ef64e55bd84a9416b06fc64cb4eb58748304a7ec35a61d92bd",
+        "size": 6518
+      },
+      "spec_sha256": "1b77562f3fcc73ba7f77a91ee1a5c0a3fab86c73a4e509a12ee3386f52050db6",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/wide/wide.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 7016,
+        "sourcePath": "src/system-tests/clang/wide/wide.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/wide",
+      "id": "system/clang/wide/wide.wast",
+      "name": "wide.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/wide/wide.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/wide/wide.wast",
+        "sha256": "8a31b31533289d0338024adb50369dae209cb250da8c81cf16b135d2d53a607d",
+        "size": 7016
+      },
+      "spec_sha256": "3308fa694b50748f7286fae761fac6209e81d8506bbe8e3c3c7909ae4e24a27a",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/clang/wide-format/wide-format.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 10164,
+        "sourcePath": "src/system-tests/clang/wide-format/wide-format.wast"
+      },
+      "expectFailure": false,
+      "group": "system/clang/wide-format",
+      "id": "system/clang/wide-format/wide-format.wast",
+      "name": "wide-format.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/clang/wide-format/wide-format.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/clang/wide-format/wide-format.wast",
+        "sha256": "800dbc3bde12b78dcf9374028030cf1aa1f128b3175fe43d4c897ed8aebbd378",
+        "size": 10164
+      },
+      "spec_sha256": "b53eaff7ba91f03b49cf74ec2131dbb96df5c3fc373e45f3ef066f8c817ea10e",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/cli-runtime/binary-handler/results.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 2870,
+        "sourcePath": "src/system-tests/cli-runtime/binary-handler/results.wast"
+      },
+      "expectFailure": false,
+      "group": "system/cli-runtime/binary-handler",
+      "id": "system/cli-runtime/binary-handler/results.wast",
+      "name": "results.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/cli-runtime/binary-handler/results.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/cli-runtime/binary-handler/results.wast",
+        "sha256": "c2bcfdcf94a8e49ef43811f12fc432f742c6aa831a380021488f4cff1716b11c",
+        "size": 2870
+      },
+      "spec_sha256": "dce43fb35e6edb5b0fff06aefed6018cd8f37417434a35a7324852597c233641",
+      "suite": "system",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
     },
@@ -10814,6 +14722,33 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "system/devices/null.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 12930,
+        "sourcePath": "src/system-tests/devices/null.wast"
+      },
+      "expectFailure": false,
+      "group": "system/devices",
+      "id": "system/devices/null.wast",
+      "name": "null.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/devices/null.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/devices/null.wast",
+        "sha256": "66498d0ff5712179d61f0115508baa61ee306c41a0f120a21e4ff9925c4b4ff3",
+        "size": 12930
+      },
+      "spec_sha256": "deb4625a5fceadb7b4b7523476b7b0e0667d8b247976a1ac090f149412fb11d2",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "system/libc/environment-boundaries.wast",
         "mode": "wast-stream",
         "sourceBytes": 6657,
@@ -10868,6 +14803,33 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "system/libc/mmap-heap.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 2140,
+        "sourcePath": "src/system-tests/libc/mmap-heap.wast"
+      },
+      "expectFailure": false,
+      "group": "system/libc",
+      "id": "system/libc/mmap-heap.wast",
+      "name": "mmap-heap.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/libc/mmap-heap.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/libc/mmap-heap.wast",
+        "sha256": "630b097ca6275443ec421e7a6bf036d752d6b862f19d71ce0be617c3e96a60e5",
+        "size": 2140
+      },
+      "spec_sha256": "c0b742b88d2ea69b7f91324a1d974edcdc17c5e370587a84c813a6df68b5b6ac",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "system/libc/path-runtime.wast",
         "mode": "wast-stream",
         "sourceBytes": 777,
@@ -10887,6 +14849,33 @@
         "size": 777
       },
       "spec_sha256": "9a52b471deb721daa931eb361defe9c8b4e860f928a2763940666d6bb239b0a1",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/libc/remove.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 2006,
+        "sourcePath": "src/system-tests/libc/remove.wast"
+      },
+      "expectFailure": false,
+      "group": "system/libc",
+      "id": "system/libc/remove.wast",
+      "name": "remove.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/libc/remove.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/libc/remove.wast",
+        "sha256": "52d567a157d94879850bcf1db9de00cb25047fe4e25864e518e00f76d36c155f",
+        "size": 2006
+      },
+      "spec_sha256": "92c11bc5358399bca8c85dfdb4c44b6f51fde9cf09555b0714df23ab5ffd812e",
       "suite": "system",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
@@ -11005,7 +14994,7 @@
         "assertionCount": 0,
         "file": "system/libc/time-resource.wast",
         "mode": "wast-stream",
-        "sourceBytes": 3120,
+        "sourceBytes": 3343,
         "sourcePath": "src/system-tests/libc/time-resource.wast"
       },
       "expectFailure": false,
@@ -11018,10 +15007,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "src/system-tests/libc/time-resource.wast",
-        "sha256": "e4411ad05d20405b8d51b8f7be8a6519666f3c4d4cb6cae85f680860dd8a8296",
-        "size": 3120
+        "sha256": "533d7e3fe71c574b2bcc59997ce87dd37b1b09d7342c0672ceccb2c49ab14d40",
+        "size": 3343
       },
-      "spec_sha256": "f8def3b7421e401d6f9dbfa1573827fc3a24e368141d7fb8894ecf5891a404eb",
+      "spec_sha256": "adf11803cac3618bb970597f0afa710949a52290357637a1fedac9be6381c45d",
       "suite": "system",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
@@ -11103,6 +15092,33 @@
         "size": 483
       },
       "spec_sha256": "c8e1cc659e7f50f9c6ca32fbefc7632adc61d3ee5046d0ddfdbbc96038bf314d",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/scheduling/pipe-modes.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 7465,
+        "sourcePath": "src/system-tests/scheduling/pipe-modes.wast"
+      },
+      "expectFailure": false,
+      "group": "system/scheduling",
+      "id": "system/scheduling/pipe-modes.wast",
+      "name": "pipe-modes.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/scheduling/pipe-modes.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/system-tests/scheduling/pipe-modes.wast",
+        "sha256": "e0f7f6a3215539a7598a646a746d6d614f7f30ff0bb2e09eb7181646fa6ef59c",
+        "size": 7465
+      },
+      "spec_sha256": "bdfe5971f822df4fb09641a94e52192bb40b0b52f666be48b8890041570e2056",
       "suite": "system",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"

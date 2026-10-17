@@ -1,12 +1,31 @@
 WASM_LD ?= $(shell command -v wasm-ld 2>/dev/null || printf '%s' ../../build/engine/toolchain/usr/bin/wasm-ld)
 WASM_LD_LIB ?= $(if $(filter ../../build/engine/toolchain/%,$(WASM_LD)),../../build/engine/toolchain/usr/lib,)
 PYTHON ?= python3
+HOST_CC ?= clang
+HTML_RUNTIME_MAX_MEMORY = $(shell $(PYTHON) tools/runtime_config.py --get HTML_RUNTIME_MAX_MEMORY_BYTES)
 
 ENGINE_DIR := ../engine
 REPO_ROOT := ../..
 BUILD_DIR ?= ../../build/html-rt
 ENGINE_BUILD_DIR ?= ../../build/engine
 WAST_GEN_DIR := $(ENGINE_BUILD_DIR)/gen
+
+# Verify the private browser allocator with native sanitizers and bounded memory.
+BROWSER_ALLOCATOR_TEST_DIR := $(abspath $(REPO_ROOT)/build/cli-rt)
+BROWSER_ALLOCATOR_TEST := $(BROWSER_ALLOCATOR_TEST_DIR)/browser-allocator-sanitize
+BROWSER_ALLOCATOR_FLAGS := -std=c11 -O1 -g -Wall -Wextra -Werror \
+	-fsanitize=address,undefined -fno-omit-frame-pointer
+.PHONY: browser-allocator
+browser-allocator: $(BROWSER_ALLOCATOR_TEST)
+	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 $<
+
+$(BROWSER_ALLOCATOR_TEST_DIR)/browser-allocator-sanitize.o: lib/stdlib.c $(REPO_ROOT)/tests/c-browser-allocator-shim.h
+	mkdir -p "$(@D)"
+	$(HOST_CC) $(BROWSER_ALLOCATOR_FLAGS) -Wno-unknown-attributes \
+		-ffunction-sections -fdata-sections -include $(REPO_ROOT)/tests/c-browser-allocator-shim.h -c $< -o $@
+
+$(BROWSER_ALLOCATOR_TEST): $(REPO_ROOT)/tests/c-browser-allocator.c $(BROWSER_ALLOCATOR_TEST_DIR)/browser-allocator-sanitize.o
+	$(HOST_CC) $(BROWSER_ALLOCATOR_FLAGS) -Wl,--gc-sections $^ -o $@
 
 WASM_CC_FLAGS := --target=wasm32 -O2 -std=c11 -Wall -Wextra \
 	-fno-builtin -DYYDEBUG=0 -DWASTE_ENGINE -nostdlib \
@@ -49,6 +68,10 @@ ENGINE_HEADERS := $(ENGINE_DIR)/lib/json.h $(ENGINE_DIR)/wat/types.h $(ENGINE_DI
 
 ENGINE_HEADERS += $(ENGINE_DIR)/process_driver.h $(ENGINE_DIR)/vfs.h $(ENGINE_DIR)/../config.h $(ENGINE_DIR)/guest_posix.h $(ENGINE_DIR)/include/waste.h
 ENGINE_HEADERS += $(ENGINE_DIR)/wast/setup.h
+ENGINE_HEADERS += ../vfs/usr/include/waste/abi/mman.h
+ENGINE_HEADERS += ../vfs/usr/include/waste/abi/fcntl.h
+ENGINE_HEADERS += ../vfs/usr/include/waste/abi/resource.h
+ENGINE_HEADERS += ../vfs/usr/include/waste/abi/posix.h
 ENGINE_HEADERS += $(ENGINE_DIR)/lib/include/kernel.h \
 	$(ENGINE_DIR)/lib/include/select.h $(ENGINE_DIR)/lib/include/path.h
 
@@ -245,6 +268,8 @@ $(BUILD_DIR)/lib_wasm_%.o: lib/%.c
 	mkdir -p $(BUILD_DIR)
 	clang $(WASM_CC_FLAGS) -I$(REPO_ROOT)/src/vfs/usr/include -c $< -o $@
 
+$(BUILD_DIR)/lib_wasm_unistd.o: ../vfs/usr/include/waste/abi/fcntl.h
+
 # ---- Compile generated parser to Wasm objects ----
 
 $(WAST_TAB_WASM_O): $(WAST_TAB_C) $(WAST_TAB_H) $(ENGINE_HEADERS)
@@ -272,13 +297,13 @@ $(BUILD_DIR)/direct-start-check.o: ../system-tests/cli-runtime/direct-start.c $(
 $(BUILD_DIR)/direct-start-check.wasm: $(BUILD_DIR)/direct-start-check.o $(ENGINE_OBJS) \
 		$(WASM_LIB_SHARED_O) $(WASM_LIB_WASM_O) $(WAST_TAB_WASM_O) $(WAST_LEX_WASM_O)
 	env LD_LIBRARY_PATH=$(WASM_LD_LIB) $(WASM_LD) --no-entry --export-memory \
-		--export=malloc --export=free --initial-memory=67108864 --max-memory=536870912 \
+		--export=malloc --export=free --initial-memory=67108864 --max-memory=$(HTML_RUNTIME_MAX_MEMORY) \
 		-z stack-size=8388608 $^ -o $@
 
 $(WAST_WASM_TARGET): $(ENGINE_OBJS) $(RT_OBJS) $(WASM_LIB_SHARED_O) $(WASM_LIB_WASM_O) \
 		$(WAST_TAB_WASM_O) $(WAST_LEX_WASM_O)
 	env LD_LIBRARY_PATH=$(WASM_LD_LIB) $(WASM_LD) --no-entry --export-memory \
-		--initial-memory=67108864 --max-memory=536870912 -z stack-size=8388608 \
+		--initial-memory=67108864 --max-memory=$(HTML_RUNTIME_MAX_MEMORY) -z stack-size=8388608 \
 		$(WASM_LIB_SHARED_O) $(WASM_LIB_WASM_O) \
 		$(ENGINE_OBJS) $(RT_OBJS) \
 		$(WAST_TAB_WASM_O) $(WAST_LEX_WASM_O) \

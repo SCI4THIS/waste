@@ -1,7 +1,10 @@
 ;; Guest counterparts of the pipe/descriptor checks in posix-kernel.c.
 ;; Descriptor selectors: 0 reader, 1 writer, 2 duplicate, 3 target fd 10,
-;; 4 fd 0, 5 closed fd 50, 6 invalid -1, 7 out-of-range 64.
+;; 4 last closed reader, 5 closed fd 50, 6 invalid -1, 7 out-of-range 64.
 ;; Raw HUP/ERR flags, OFD ownership and deterministic capacity remain C gates.
+;; Pipes default to blocking. Only explicitly nonblocking I/O returns EAGAIN;
+;; blocking waits require the full process driver, tested in scheduling WAST.
+;; Test closed pipe endpoints owned by this fixture, independent of initial stdio.
 (module
   (import "env" "pipe" (func $pipe (param i32) (result i32)))
   (import "env" "read" (func $read (param i32 i32 i32) (result i32)))
@@ -10,6 +13,7 @@
   (import "env" "dup" (func $dup (param i32) (result i32)))
   (import "env" "dup2" (func $dup2 (param i32 i32) (result i32)))
   (import "waste_kernel" "fcntl_v1" (func $fcntl (param i32 i32 i32) (result i32)))
+  (import "waste_kernel" "fcntl_varargs_v1" (func $fcntl_varargs (param i32 i32 i32) (result i32)))
   (import "env" "select" (func $select (param i32 i32 i32 i32 i32) (result i32)))
   (memory 1)
   (global $reader (mut i32) (i32.const -1))
@@ -27,7 +31,7 @@
     (if (i32.eq (local.get $which) (i32.const 1)) (then (return (global.get $writer))))
     (if (i32.eq (local.get $which) (i32.const 2)) (then (return (global.get $duplicate))))
     (if (i32.eq (local.get $which) (i32.const 3)) (then (return (i32.const 10))))
-    (if (i32.eq (local.get $which) (i32.const 4)) (then (return (i32.const 0))))
+    (if (i32.eq (local.get $which) (i32.const 4)) (then (return (global.get $reader))))
     (if (i32.eq (local.get $which) (i32.const 5)) (then (return (i32.const 50))))
     (if (i32.eq (local.get $which) (i32.const 6)) (then (return (i32.const -1))))
     (i32.const 64))
@@ -90,6 +94,15 @@
     (call $fcntl (call $fd (local.get 0)) (i32.const 1) (i32.const 0)))
   (func (export "set_flags") (param i32 i32) (result i32)
     (call $fcntl (call $fd (local.get 0)) (i32.const 2) (local.get 1)))
+  (func (export "get_status") (param i32) (result i32)
+    (call $reset_errno)
+    (call $fcntl (call $fd (local.get 0)) (i32.const 3) (i32.const 0)))
+  (func (export "set_status") (param i32 i32) (result i32)
+    (call $reset_errno)
+    (call $fcntl (call $fd (local.get 0)) (i32.const 4) (local.get 1)))
+  (func (export "set_status_varargs") (param i32 i32) (result i32)
+    (i32.store (i32.const 24) (local.get 1))
+    (call $fcntl_varargs (call $fd (local.get 0)) (i32.const 4) (i32.const 24)))
   (func $set_address (param $fd i32) (param $base i32) (result i32)
     (i32.add (local.get $base) (i32.mul (i32.div_u (local.get $fd) (i32.const 32)) (i32.const 4))))
   (func $bit (param $fd i32) (result i32)
@@ -119,6 +132,8 @@
 ;; Initial readiness, byte round trip, empty pipe and zero-count operations.
 (assert_return (invoke "pipe") (i32.const 0))
 (assert_return (invoke "valid_pair") (i32.const 1))
+(assert_return (invoke "get_status" (i32.const 0)) (i32.const 0))
+(assert_return (invoke "get_status" (i32.const 1)) (i32.const 1))
 (assert_return (invoke "poll" (i32.const 0) (i32.const 0)) (i32.const 0))
 (assert_return (invoke "poll_bit" (i32.const 0) (i32.const 0)) (i32.const 0))
 (assert_return (invoke "poll" (i32.const 1) (i32.const 1)) (i32.const 1))
@@ -129,6 +144,8 @@
 (assert_return (invoke "read" (i32.const 0) (i32.const 32)) (i32.const 4))
 (assert_return (invoke "bytes") (i32.const 0x74736574))
 (assert_return (invoke "poll" (i32.const 0) (i32.const 0)) (i32.const 0))
+(assert_return (invoke "set_status" (i32.const 0) (i32.const 2048)) (i32.const 0))
+(assert_return (invoke "get_status" (i32.const 0)) (i32.const 2048))
 (assert_return (invoke "read" (i32.const 0) (i32.const 32)) (i32.const -11))
 (assert_return (invoke "read" (i32.const 0) (i32.const 0)) (i32.const 0))
 (assert_return (invoke "write" (i32.const 1) (i32.const 512) (i32.const 0)) (i32.const 0))
@@ -158,8 +175,14 @@
 ;; Capacity and recovery are visible through write/read/SELECT.
 (assert_return (invoke "pipe") (i32.const 0))
 (assert_return (invoke "fill") (i32.const 4096))
+(assert_return (invoke "set_status_varargs" (i32.const 1) (i32.const 2048)) (i32.const 0))
+(assert_return (invoke "get_status" (i32.const 1)) (i32.const 2049))
 (assert_return (invoke "write" (i32.const 1) (i32.const 512) (i32.const 1)) (i32.const -11))
 (assert_return (invoke "poll" (i32.const 1) (i32.const 1)) (i32.const 0))
+;; One free byte cannot admit an atomic two-byte nonblocking write.
+(assert_return (invoke "read" (i32.const 0) (i32.const 1)) (i32.const 1))
+(assert_return (invoke "write" (i32.const 1) (i32.const 512) (i32.const 2)) (i32.const -11))
+(assert_return (invoke "write" (i32.const 1) (i32.const 4096) (i32.const 1)) (i32.const 1))
 (assert_return (invoke "read" (i32.const 0) (i32.const 64)) (i32.const 64))
 (assert_return (invoke "bytes") (i32.const 0x78787878))
 (assert_return (invoke "poll" (i32.const 1) (i32.const 1)) (i32.const 1))
@@ -235,6 +258,7 @@
 (assert_return (invoke "guarded_read" (i32.const 0) (i32.const 32)) (i32.const 4))
 (assert_return (invoke "bytes") (i32.const 0x74736574))
 (assert_return (invoke "bounds" (i32.const 4)) (i32.const 1))
+(assert_return (invoke "set_status" (i32.const 0) (i32.const 2048)) (i32.const 0))
 (assert_return (invoke "guarded_read" (i32.const 0) (i32.const 32)) (i32.const -11))
 (assert_return (invoke "bounds" (i32.const 0)) (i32.const 1))
 (assert_return (invoke "guarded_read" (i32.const 1) (i32.const 32)) (i32.const -9))
@@ -271,3 +295,30 @@
 (assert_return (invoke "bounds" (i32.const 0)) (i32.const 1))
 (assert_return (invoke "guarded_read" (i32.const 1) (i32.const 32)) (i32.const -9))
 (assert_return (invoke "bounds" (i32.const 0)) (i32.const 1))
+
+;; Status flags belong to the shared OFD; FD_CLOEXEC belongs to each alias.
+(assert_return (invoke "pipe") (i32.const 0))
+(assert_return (invoke "dup" (i32.const 0)) (i32.const 0))
+(assert_return (invoke "set_flags" (i32.const 2) (i32.const 1)) (i32.const 0))
+(assert_return (invoke "set_status_varargs" (i32.const 2) (i32.const 2049)) (i32.const 0))
+(assert_return (invoke "get_status" (i32.const 0)) (i32.const 2048))
+(assert_return (invoke "get_flags" (i32.const 0)) (i32.const 0))
+(assert_return (invoke "get_flags" (i32.const 2)) (i32.const 1))
+(assert_return (invoke "guarded_read" (i32.const 2) (i32.const 1)) (i32.const -11))
+(assert_return (invoke "bounds" (i32.const 0)) (i32.const 1))
+;; Access and creation bits in F_SETFL cannot change the endpoint or truncate it.
+(assert_return (invoke "set_status" (i32.const 0) (i32.const 577)) (i32.const 0))
+(assert_return (invoke "get_status" (i32.const 2)) (i32.const 0))
+(assert_return (invoke "get_status" (i32.const 1)) (i32.const 1))
+(assert_return (invoke "write" (i32.const 1) (i32.const 528) (i32.const 3)) (i32.const 3))
+(assert_return (invoke "guarded_read" (i32.const 2) (i32.const 8)) (i32.const 3))
+(assert_return (invoke "three_bytes") (i32.const 0x636261))
+(assert_return (invoke "bounds" (i32.const 3)) (i32.const 1))
+(assert_return (invoke "close" (i32.const 1)) (i32.const 0))
+(assert_return (invoke "guarded_read" (i32.const 0) (i32.const 8)) (i32.const 0))
+(assert_return (invoke "close" (i32.const 2)) (i32.const 0))
+(assert_return (invoke "close" (i32.const 0)) (i32.const 0))
+(assert_return (invoke "get_status" (i32.const 0)) (i32.const -1))
+(assert_return (invoke "errno") (i32.const 9))
+(assert_return (invoke "set_status" (i32.const 6) (i32.const 2048)) (i32.const -1))
+(assert_return (invoke "errno") (i32.const 9))

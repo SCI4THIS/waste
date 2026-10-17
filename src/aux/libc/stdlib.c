@@ -4,16 +4,6 @@
  * random numbers, and temporary files ---- */
 #include "include/helper.h"
 
-int posix_memalign(void **result, size_t alignment, size_t size) {
-  if (!result || alignment < sizeof(void *) ||
-      (alignment & (alignment - 1)) != 0 || alignment > 16)
-    return 22;
-  void *memory = malloc((u32)size);
-  if (!memory) return 12;
-  *result = memory;
-  return 0;
-}
-
 void *reallocarray(void *pointer, size_t count, size_t size) {
   if (count && size > (size_t)-1 / count) return 0;
   return realloc(pointer, (u32)(count * size));
@@ -61,25 +51,32 @@ char *mkdtemp(char*pattern){mktemp(pattern);*__errno_location()=38;return 0;}
 /* Forward declaration from string.c */
 extern void *memset(void *d, i32 c, u32 n);
 
-static i32 digit_value(i32 c){if(c>='0'&&c<='9')return c-'0';c=lower_ascii(c);return c>='a'&&c<='z'?c-'a'+10:-1;}
-static u64 parse_unsigned(const char*s,char**end,i32 base,i32*negative){while(*s==' '||*s=='\t'||*s=='\n')s++;*negative=0;if(*s=='+'||*s=='-'){*negative=*s=='-';s++;}if((base==0||base==16)&&s[0]=='0'&&(s[1]=='x'||s[1]=='X')){base=16;s+=2;}else if(base==0)base=*s=='0'?8:10;const char*start=s;u64 value=0;i32 d;while((d=digit_value(*s))>=0&&d<base){u64 next=value*(u32)base+(u32)d;if(next<value){value=~0ULL;*__errno_location()=34;}else value=next;s++;}if(end)*end=(char*)(s==start?start:s);return value;}
-i32 strtol(const char*s,char**end,i32 base){i32 neg;u64 v=parse_unsigned(s,end,base,&neg);if(neg)return v>0x80000000ULL?(*__errno_location()=34,0x80000000U):(i32)(0-(u32)v);if(v>0x7fffffffULL){*__errno_location()=34;return 0x7fffffff;}return(i32)v;}
-i64 strtoimax(const char*s,char**end,i32 base){i32 neg;u64 v=parse_unsigned(s,end,base,&neg);if(neg)return v>0x8000000000000000ULL?(*__errno_location()=34,(i64)0x8000000000000000ULL):(i64)(0-v);if(v>0x7fffffffffffffffULL){*__errno_location()=34;return 0x7fffffffffffffffLL;}return(i64)v;}
-u64 strtoumax(const char*s,char**end,i32 base){i32 neg;u64 v=parse_unsigned(s,end,base,&neg);return neg?0-v:v;}
+/* Width-aware integer parsing lives in integer.c. */
+extern long strtol(const char *text, char **end, int base);
 i32 atoi(const char*s){return strtol(s,0,10);}
 i32 abs(i32 value){return value<0?-value:value;}
 long atol(const char *text) { return strtol(text, 0, 10); }
 long labs(long value) { return value < 0 ? -value : value; }
+long long llabs(long long value) { return value < 0 ? -value : value; }
+typedef struct { int quot, rem; } libc_div_t;
+typedef struct { long quot, rem; } libc_ldiv_t;
+typedef struct { long long quot, rem; } libc_lldiv_t;
+libc_div_t div(int numerator, int denominator) {
+  libc_div_t result = {numerator / denominator, numerator % denominator};
+  return result;
+}
+libc_ldiv_t ldiv(long numerator, long denominator) {
+  libc_ldiv_t result = {numerator / denominator, numerator % denominator};
+  return result;
+}
+libc_lldiv_t lldiv(long long numerator, long long denominator) {
+  libc_lldiv_t result = {numerator / denominator, numerator % denominator};
+  return result;
+}
 
-static double power10(i32 exponent){double value=1.0;if(exponent>0)while(exponent--)value*=10.0;else while(exponent++)value/=10.0;return value;}
-double strtod(const char*s,char**end){while(*s==' '||*s=='\t')s++;i32 neg=0;if(*s=='+'||*s=='-'){neg=*s=='-';s++;}const char*start=s;double value=0;while(*s>='0'&&*s<='9')value=value*10+(*s++-'0');if(*s=='.'){s++;double place=.1;while(*s>='0'&&*s<='9'){value+=(*s++-'0')*place;place*=.1;}}if(*s=='e'||*s=='E'){const char*mark=s++;i32 eneg=0;if(*s=='+'||*s=='-'){eneg=*s=='-';s++;}i32 e=0,any=0;while(*s>='0'&&*s<='9'){any=1;e=e*10+(*s++-'0');}if(any)value*=power10(eneg?-e:e);else s=mark;}if(end)*end=(char*)(s==start?start:s);return neg?-value:value;}
-float strtof(const char*s,char**end){return (float)strtod(s,end);}
-
+/* Floating parsing lives in floating.c; quad compiler helpers remain here. */
 static void double_to_quad(u64*out,double value){union{double d;u64 u;}bits;bits.d=value;u64 sign=bits.u>>63,exp=(bits.u>>52)&0x7ff,frac=bits.u&0xfffffffffffffULL;if(exp==0){out[0]=0;out[1]=sign<<63;return;}if(exp==0x7ff){out[0]=0;out[1]=(sign<<63)|(0x7fffULL<<48)|(frac?1ULL<<47:0);return;}u64 qexp=exp-1023+16383;out[0]=frac<<60;out[1]=(sign<<63)|(qexp<<48)|(frac>>4);}
 void __extenddftf2(u64*out,double value){double_to_quad(out,value);}
-long double strtold(const char *text, char **end) {
-  return (long double)strtod(text, end);
-}
 void __floatditf(u64*out,i64 value){u64 sign=value<0,magnitude=sign?(u64)(-(value+1))+1:(u64)value;if(!magnitude){out[0]=out[1]=0;return;}u32 top=0;for(u64 scan=magnitude;scan>>=1;)top++;u64 fraction=magnitude-(1ULL<<top),shift=112-top,low=0,high=0;if(shift>=64)high=fraction<<(shift-64);else{low=fraction<<shift;high=fraction>>(64-shift);}out[0]=low;out[1]=(sign<<63)|((u64)(16383+top)<<48)|high;}
 /* Keep this as explicit word arithmetic.  Clang otherwise recognizes the
    usual 32-bit decomposition and lowers it back to a call to __multi3. */
@@ -137,10 +134,6 @@ i32 pthread_mutex_destroy(void*m){(void)m;return 0;}
 i32 pthread_mutex_lock(void*m){(void)m;return 0;}
 i32 pthread_mutex_unlock(void*m){(void)m;return 0;}
 i32 pthread_mutex_trylock(void*m){(void)m;return 0;}
-
-/* signal() — return SIG_DFL; engine owns signal dispatch. */
-typedef void (*sighandler_t)(i32);
-sighandler_t signal(i32 signum,sighandler_t handler){(void)signum;(void)handler;return (sighandler_t)0;}
 
 /* uselocale — single C.UTF-8 locale. */
 void *uselocale(void *locale){(void)locale;return (void *)0;}

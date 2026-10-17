@@ -13,6 +13,10 @@ typedef struct WasteFile FILE;
 
 #define EOF (-1)
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern FILE *stdin;
 extern FILE *stdout;
 extern FILE *stderr;
@@ -23,6 +27,7 @@ int printf(const char *, ...);
 int vprintf(const char *, va_list);
 int vasprintf(char **, const char *, va_list);
 int snprintf(char *, size_t, const char *, ...);
+int vsnprintf(char *, size_t, const char *, va_list);
 ptrdiff_t vaszprintf(char **, const char *, va_list);
 ptrdiff_t aszprintf(char **, const char *, ...);
 off64_t vfzprintf(FILE *, const char *, va_list);
@@ -30,6 +35,7 @@ off64_t vzprintf(const char *, va_list);
 ptrdiff_t vsnzprintf(char *, size_t, const char *, va_list);
 ptrdiff_t vszprintf(char *, const char *, va_list);
 int sprintf(char *, const char *, ...);
+int vsprintf(char *, const char *, va_list);
 int sscanf(const char *, const char *, ...);
 int fscanf(FILE *, const char *, ...) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 int vsscanf(const char *, const char *, va_list);
@@ -71,6 +77,7 @@ int fgetc(FILE *);
 int getchar(void) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 void perror(const char *);
 const char *strerror(int);
+int remove(const char *);
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -82,5 +89,9 @@ const char *strerror(int);
 #define _IOFBF 0
 #define _IOLBF 1
 #define _IONBF 2
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

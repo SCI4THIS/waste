@@ -66,8 +66,11 @@ def inspect_sdk(repo, root, manifest, library=None):
             ("stdio.h", "stdio"), ("stdio_ext.h", "stdio"), ("pthread.h", "threads"),
             ("netdb.h", "network"), ("sys/socket.h", "network"), ("arpa/inet.h", "network"),
             ("signal.h", "signals"),
+            ("setjmp.h", "non_local_jumps"),
+            ("sys/random.h", "randomness"),
             ("dlfcn.h", "dynamic_loading"), ("sys/mman.h", "mapping"),
-            ("spawn.h", "processes"), ("sys/wait.h", "processes"),
+            ("spawn.h", "processes"), ("sys/wait.h", "processes"), ("waste/process.h", "processes"),
+            ("sys/resource.h", "resources"),
             ("dirent.h", "filesystem"), ("sys/stat.h", "filesystem"), ("fcntl.h", "filesystem"))
             if header in entry["headers"]), "default")
         entry["capability_note"] = policy["capability_notes"][category]

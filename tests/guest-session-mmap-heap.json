@@ -1,0 +1,21 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /root/test/system/libc/mmap-heap.wast; MMAP_HEAP_RESULT=$?; printf '__MMAP_HEAP_%s__\\n' \"$MMAP_HEAP_RESULT\"\n"
+    },
+    {
+      "after": "__MMAP_HEAP_",
+      "text": "exit \"$MMAP_HEAP_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "__MMAP_HEAP_0__\r\n",
+    "WAST: 9 PASS, 0 FAIL, 9 total"
+  ],
+  "assertions": 10,
+  "exitStatus": 0
+}

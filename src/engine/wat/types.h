@@ -4,6 +4,10 @@
 
 #include "include/waste.h"
 
+#if WASM_MAX_TYPES > (WASM_VALTYPE_TYPE_REF_BASE - WASM_VALTYPE_TYPE_REF_NULL_BASE)
+#error WASM_MAX_TYPES exceeds the indexed reference representation
+#endif
+
 #include <stddef.h>
 
 /* WAST assertion NaN/ref matching modes (stored in wasm_value.nan_mode) */
@@ -46,7 +50,7 @@ typedef enum {
 #define WAST_MAX_RESULTS       32
 #define WAST_MAX_ALTERNATIVES  4
 #define WAST_MAX_ARGS          32
-#define WAST_MAX_TYPES         128
+#define WAST_MAX_TYPES         WASM_MAX_TYPES
 #define WAST_MAX_TYPE_FIELDS   64
 #define WAST_MAX_GLOBALS       64
 #define WAST_MAX_MEMORIES      32

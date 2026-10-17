@@ -241,8 +241,10 @@ static int session_input(cli_guest_session *session, exec_error *error) {
     int selecting = error->yield_reason == EXEC_YIELD_SELECT;
     int pumping = error->yield_reason == EXEC_YIELD_PUMP;
     posix_wait_record *initial_wait = &session->store.kernel->wait;
+    uint64_t initial_timeout;
+    int timed = native_process_driver_wait_timeout(&session->store, &initial_timeout);
     if (!session->store.kernel_terminal &&
-        !pumping && (!selecting || !initial_wait->active || !initial_wait->has_deadline)) {
+        !pumping && !timed && (!selecting || !initial_wait->active || !initial_wait->has_deadline)) {
         (void)exec_fail(error, EXEC_ERROR_UNSUPPORTED,
                        "external input waits require a runtime terminal context");
         return 0;
@@ -290,6 +292,20 @@ static int session_input(cli_guest_session *session, exec_error *error) {
             {session->control_fd, POLLIN, 0}, {-1, POLLIN, 0}, {-1, POLLIN, 0}
         };
         int guest_fds[3] = {-1, -1, -1};
+        int terminal_fd = -1;
+        if (!session->host_stdio) {
+            /* The session input capability belongs to the terminal OFD, not
+             * guest fd 0, which may now be closed or name a pipe/file. */
+            for (int fd = 0; fd < POSIX_KERNEL_FD_MAX; fd++) {
+                posix_ofd *ofd = session->store.kernel->fds[fd].ofd;
+                if (ofd && ofd->kind == POSIX_OFD_TERMINAL &&
+                    !ofd->stream_mode && !ofd->terminal.eof) {
+                    terminal_fd = fd;
+                    break;
+                }
+            }
+            if (terminal_fd < 0) descriptors[0].fd = -1;
+        }
         if (session->host_stdio) {
             descriptors[0].fd = -1;
             for (int fd = 0; fd < POSIX_KERNEL_FD_MAX; fd++) {
@@ -317,7 +333,7 @@ static int session_input(cli_guest_session *session, exec_error *error) {
             int applied = session_control_read(session, error);
             if (applied) return applied > 0;
         }
-        int input_index = 0, guest_fd = 0;
+        int input_index = 0, guest_fd = terminal_fd;
         if (session->host_stdio) {
             input_index = -1;
             for (int handle = 0; handle < 3; handle++) {
@@ -763,7 +779,8 @@ native_runtime *native_runtime_create_vfs(const char *root, const waste_vfs *mou
     if (options->cancel_after_ms) session->cancel_deadline = now + (uint64_t)options->cancel_after_ms * 1000000u;
     session->store.execution_control.poll = session_control;
     session->store.execution_control.context = session;
-    session->store.execution_control.pump_quantum_ns = UINT64_C(16000000);
+    session->store.execution_control.pump_quantum_ns =
+        (uint64_t)EXECUTION_DEFAULT_PUMP_QUANTUM_MS * UINT64_C(1000000);
     session->store.execution_control.pump_clock_now = session_pump_now;
     session->store.execution_control.pump_clock_context = session;
     waste_vfs vfs = {0};
@@ -791,8 +808,19 @@ int native_runtime_stage_file(native_runtime *session, const char *guest, unsign
     size_t length = 0;
     uint8_t *bytes = session_read_file(host, NATIVE_EXEC_BYTES_MAX, &length);
     posix_path_metadata metadata = {POSIX_NODE_REGULAR, mode, 0, 0, (int64_t)length, 1000, 0, 0};
-    int failed = !bytes || length > NATIVE_SESSION_SOURCE_MAX_BYTES - session->staged_bytes ||
-        posix_kernel_path_add_data(session->store.kernel, guest, &metadata, bytes, length);
+    if (!bytes) {
+        session_failure(session, "cannot read explicit native input");
+        return -1;
+    }
+    /* Several independently bounded commands may be staged in one session.
+     * Their aggregate belongs to the VFS budget, not the WAT/WAST text limit. */
+    if (session->staged_bytes > VFS_MAX_BYTES ||
+        length > VFS_MAX_BYTES - session->staged_bytes) {
+        free(bytes);
+        session_failure(session, "explicit native inputs exceed configured VFS byte budget");
+        return -1;
+    }
+    int failed = posix_kernel_path_add_data(session->store.kernel, guest, &metadata, bytes, length);
     if (!failed) session->staged_bytes += length;
     free(bytes);
     if (failed) session_failure(session, "cannot stage explicit native input");

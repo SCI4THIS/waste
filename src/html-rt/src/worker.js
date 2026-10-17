@@ -576,12 +576,14 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
     if (![timeout, cancel].every(value => Number.isInteger(value) && value >= 0 && value <= WASTE_CONFIG.EXECUTION_MAX_TIMEOUT_MS) ||
         exp.waste_wast_set_execution_limits?.(timeout, cancel) !== 0)
       throw new Error("Invalid execution limits");
-    const pump = executionLimits.pumpQuantumMs ?? 0;
-    if (pump && (!Number.isInteger(pump) || pump < 0 || pump > WASTE_CONFIG.EXECUTION_MAX_PUMP_QUANTUM_MS ||
-        !exp.waste_wast_set_pump_quantum_ms ||
-        exp.waste_wast_set_pump_quantum_ms(pump) !== 0))
-      throw new Error("Invalid pump quantum");
   }
+  // Interactive Bash and suites use the same scheduling default as native.
+  // A runnable child must let the engine revisit other processes' deadlines.
+  const pump = executionLimits?.pumpQuantumMs ?? WASTE_CONFIG.EXECUTION_DEFAULT_PUMP_QUANTUM_MS;
+  if (!Number.isInteger(pump) || pump < 0 || pump > WASTE_CONFIG.EXECUTION_MAX_PUMP_QUANTUM_MS ||
+      !exp.waste_wast_set_pump_quantum_ms ||
+      exp.waste_wast_set_pump_quantum_ms(pump) !== 0)
+    throw new Error("Invalid pump quantum");
   let scriptPtr, scriptLength;
   if (suiteRequest) {
     const readString = ptr => {
@@ -653,6 +655,11 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
       if (terminated) break;
       yielded = exp.waste_wast_resume();
       flushOutput();
+      // A pump can finish at an external wait. Publish it just as the ordinary
+      // IO resume does, so input/control consumers see the new wait kind.
+      if (yielded && exp.waste_wast_wait_kind() !== 6)
+        self.postMessage({type: "io-ready", pid: exp.waste_wast_process_id?.(),
+          waitKind: exp.waste_wast_wait_kind()});
       continue;
     }
     if (waitKind === 5) { /* EXEC_YIELD_HOST_IO */

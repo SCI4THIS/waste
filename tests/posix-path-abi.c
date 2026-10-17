@@ -23,6 +23,16 @@ int main(void) {
     CHECK(posix_path_metadata_decode(&output, metadata_bytes) == 0);
     CHECK(memcmp(&input, &output, sizeof(input)) == 0);
     CHECK(posix_path_metadata_encode(NULL, &input) < 0);
+    input.kind = POSIX_NODE_NULL;
+    input.size = 0;
+    CHECK(posix_path_metadata_encode(metadata_bytes, &input) == 0);
+    CHECK(metadata_bytes[0] == WASTE_NODE_NULL);
+    CHECK(posix_path_metadata_decode(&output, metadata_bytes) == 0);
+    CHECK(memcmp(&input, &output, sizeof(input)) == 0);
+    input.size = 1;
+    CHECK(posix_path_metadata_validate(&input) < 0);
+    input.kind = POSIX_NODE_NULL + 1;
+    CHECK(posix_path_metadata_validate(&input) < 0);
     input.kind = POSIX_NODE_NONE;
     CHECK(posix_path_metadata_validate(&input) < 0);
 
