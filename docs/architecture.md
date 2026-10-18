@@ -330,9 +330,11 @@ Its private header is not a mounted application SDK header. A borrowed immutable
 capability table and per-store context connect it to platform operations;
 missing callbacks return unsupported errors, not implicit host access.
 `src/html-rt/posix_stubs.c` owns browser imports and wall-clock conversion.
-Upload/download requests yield through `EXEC_YIELD_HOST_IO`, with pending state
+Upload/download and clipboard-copy requests yield through `EXEC_YIELD_HOST_IO`, with pending state
 in `native_store.host_io`. `browser_api.c` exposes the request to `worker.js`;
-`app.js` owns the browser file picker, FileReader and Blob download. The engine
+`app.js` owns the browser file picker, FileReader, Blob download and user-click
+clipboard dialog. Clipboard replies carry request IDs and only acknowledge an
+actual copy/cancel; native clipboard access currently returns failure. The engine
 copies uploaded bytes into owned storage before the worker frees its temporary
 buffer, then commits the file to the guest VFS on resume. Native polling,
 clocks, execution and output live in `src/cli-rt/native_runtime.c`;

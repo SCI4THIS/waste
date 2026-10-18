@@ -53,7 +53,8 @@ var WasteTestSuite = class {
             if (output.length > WASTE_CONFIG.SUITE_OUTPUT_MAX_BYTES)
               complete({error: "test output exceeded configured limit"});
           } else if (data.type === "suite-list" || data.type === "done") complete(data);
-          else if (data.type === "host-upload-request" || data.type === "host-download")
+          else if (data.type === "host-upload-request" || data.type === "host-download" ||
+                   data.type === "host-clipboard-request")
             complete({error: "batch test requested an interactive host transfer"});
         };
         if (suite.mode === "run" && suite.browserNativeSpec) {

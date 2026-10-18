@@ -4,6 +4,8 @@
     "groups": {
       "aux/bash": 1,
       "aux/clang": 1,
+      "aux/clipboard": 2,
+      "aux/clipboard/browser": 1,
       "aux/libc": 27,
       "aux/lld-link": 1,
       "aux/sleep": 1,
@@ -100,7 +102,7 @@
       "wasm-spec/custom/name": 1
     },
     "supported": 293,
-    "tests": 436
+    "tests": 439
   },
   "files": [
     {
@@ -144,6 +146,27 @@
       "sha256": "ce6904073b5dd493489c3ca96d54758e6364a009e7aa4eedb6c3d3510c18080f",
       "size": 3736,
       "source": "src/vfs/root/test/aux/clang/installed.wast"
+    },
+    {
+      "path": "/root/test/aux/clipboard/browser/copy.wast",
+      "role": "test-input",
+      "sha256": "0a462c908c046da1ff413f59b2952d1c0126f304bf54294de5eb74d4bb03bf33",
+      "size": 5610,
+      "source": "src/vfs/root/test/aux/clipboard/browser/copy.wast"
+    },
+    {
+      "path": "/root/test/aux/clipboard/installed.wast",
+      "role": "test-input",
+      "sha256": "c75e338dfbb27ab1cb128316fc224e9d0c1164ae2d6d3cbc4b3faefc48d4a222",
+      "size": 3713,
+      "source": "src/vfs/root/test/aux/clipboard/installed.wast"
+    },
+    {
+      "path": "/root/test/aux/clipboard/native.wast",
+      "role": "test-input",
+      "sha256": "f4d258487cabb9bc7d739729934d79f66d79810ad2c275872724b8d515edf9f4",
+      "size": 1198,
+      "source": "src/vfs/root/test/aux/clipboard/native.wast"
     },
     {
       "path": "/root/test/aux/libc/accounts.wast",
@@ -1228,7 +1251,7 @@
       "role": "test-input",
       "sha256": "c2bcfdcf94a8e49ef43811f12fc432f742c6aa831a380021488f4cff1716b11c",
       "size": 2870,
-      "source": "src/vfs/root/test/system/cli-runtime/binary-handler/results.wast"
+      "source": "src/cli-rt/test/binary-handler/results.wast"
     },
     {
       "path": "/root/test/system/cli-runtime/staged-identities.wast",
@@ -3217,7 +3240,7 @@
       "timeoutScope": "existing dashboard has no per-test deadline"
     }
   },
-  "selection_sha256": "53ec33b3183c1376ec3b7b7e2563fbbaa885bf990c1ad4439d5db3e61c9ef1d6",
+  "selection_sha256": "6b6b0641c125671a1a587cf23cc493383ebeb2b5376fafb01bbbf3f1026346cb",
   "sourceInputs": [
     {
       "hostOnly": true,
@@ -11884,6 +11907,87 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "aux/clipboard/browser/copy.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 5610,
+        "sourcePath": "src/vfs/root/test/aux/clipboard/browser/copy.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/clipboard/browser",
+      "id": "aux/clipboard/browser/copy.wast",
+      "name": "copy.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/clipboard/browser/copy.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/vfs/root/test/aux/clipboard/browser/copy.wast",
+        "sha256": "0a462c908c046da1ff413f59b2952d1c0126f304bf54294de5eb74d4bb03bf33",
+        "size": 5610
+      },
+      "spec_sha256": "2760e7269b3b1375335216bd095e3b7fef4ede8600b91385a869bd31908c5c6f",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/clipboard/installed.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 3713,
+        "sourcePath": "src/vfs/root/test/aux/clipboard/installed.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/clipboard",
+      "id": "aux/clipboard/installed.wast",
+      "name": "installed.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/clipboard/installed.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/vfs/root/test/aux/clipboard/installed.wast",
+        "sha256": "c75e338dfbb27ab1cb128316fc224e9d0c1164ae2d6d3cbc4b3faefc48d4a222",
+        "size": 3713
+      },
+      "spec_sha256": "6f16cb614478c9ff63c8697f2bcd69f89d639e41ed69cb63cc1b05031c0846b5",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/clipboard/native.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 1198,
+        "sourcePath": "src/vfs/root/test/aux/clipboard/native.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/clipboard",
+      "id": "aux/clipboard/native.wast",
+      "name": "native.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/clipboard/native.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/vfs/root/test/aux/clipboard/native.wast",
+        "sha256": "f4d258487cabb9bc7d739729934d79f66d79810ad2c275872724b8d515edf9f4",
+        "size": 1198
+      },
+      "spec_sha256": "0919f457937ef28c189b0e66fed83c4c3e25243e8f18d106b3ab23387f9559d0",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "aux/libc/accounts.wast",
         "mode": "wast-stream",
         "sourceBytes": 3844,
@@ -14908,33 +15012,6 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
-        "file": "system/cli-runtime/binary-handler/results.wast",
-        "mode": "wast-stream",
-        "sourceBytes": 2870,
-        "sourcePath": "src/vfs/root/test/system/cli-runtime/binary-handler/results.wast"
-      },
-      "expectFailure": false,
-      "group": "system/cli-runtime/binary-handler",
-      "id": "system/cli-runtime/binary-handler/results.wast",
-      "name": "results.wast",
-      "nativeParity": "pending-stage-6",
-      "path": "/root/test/system/cli-runtime/binary-handler/results.wast",
-      "requiredFeatures": [],
-      "runtime": "c-wast-stream",
-      "source": {
-        "path": "src/vfs/root/test/system/cli-runtime/binary-handler/results.wast",
-        "sha256": "c2bcfdcf94a8e49ef43811f12fc432f742c6aa831a380021488f4cff1716b11c",
-        "size": 2870
-      },
-      "spec_sha256": "c8a2efa5f1ea36d933ea4e306a506db61f6af983755eb41c5f2b08633f869759",
-      "suite": "system",
-      "unsupported": true,
-      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
-    },
-    {
-      "assets": [],
-      "executionSpec": {
-        "assertionCount": 0,
         "file": "system/cli-runtime/input.wast",
         "mode": "wast-stream",
         "sourceBytes": 385,
@@ -15656,6 +15733,33 @@
         "size": 17996
       },
       "spec_sha256": "dbf72c6c7a512cc0a60e0ea383ed58dbe7c1987b6f98b98f4c919f2574ea8e5b",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/cli-runtime/binary-handler/results.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 2870,
+        "sourcePath": "src/cli-rt/test/binary-handler/results.wast"
+      },
+      "expectFailure": false,
+      "group": "system/cli-runtime/binary-handler",
+      "id": "system/cli-runtime/binary-handler/results.wast",
+      "name": "results.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/cli-runtime/binary-handler/results.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/cli-rt/test/binary-handler/results.wast",
+        "sha256": "c2bcfdcf94a8e49ef43811f12fc432f742c6aa831a380021488f4cff1716b11c",
+        "size": 2870
+      },
+      "spec_sha256": "d88d76064d3dc7412017a6981a9003a93763d4f45b46bb846a683f473fb7989f",
       "suite": "system",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"

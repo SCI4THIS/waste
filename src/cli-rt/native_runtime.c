@@ -383,6 +383,12 @@ static int session_input(cli_guest_session *session, exec_error *error) {
 
 static int session_host_io(cli_guest_session *session, exec_error *error) {
     native_host_io_state *host_io = &session->store.host_io;
+    if (host_io->kind == NATIVE_HOST_IO_CLIPBOARD) {
+        /* No desktop clipboard capability is granted by the native runtime.
+         * Resume the guest with failure rather than terminating its shell. */
+        host_io->result = -1;
+        return 1;
+    }
     if (host_io->kind == NATIVE_HOST_IO_TEST_SUITE) {
         if (session_test_suite(session, error)) return 1;
         const char *message = "waste-test: native batch unavailable or report exceeds 16 MiB\n";

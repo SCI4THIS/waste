@@ -295,7 +295,8 @@ typedef enum {
     NATIVE_HOST_IO_UPLOAD = 1,
     NATIVE_HOST_IO_DOWNLOAD = 2,
     NATIVE_HOST_IO_TEST_SUITE = 3,
-    NATIVE_HOST_IO_RENDER_TEST = 4
+    NATIVE_HOST_IO_RENDER_TEST = 4,
+    NATIVE_HOST_IO_CLIPBOARD = 5
 } native_host_io_kind;
 
 typedef struct {

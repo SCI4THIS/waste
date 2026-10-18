@@ -1,6 +1,7 @@
 "use strict";
 
 let worker = null;
+let cancelClipboard = null;
 let startedAt = null;
 let startedEpoch = null;
 let statusTimer = null;
@@ -115,6 +116,7 @@ function appendRaw(text) {
 }
 
 function finish(message) {
+  cancelClipboard?.();
   const elapsed = startedEpoch ? ((Date.now() - startedEpoch) / 1000).toFixed(3) : "0.000";
   status.textContent = `${message} \u00b7 ${elapsed}s by Date`;
   clearInterval(statusTimer);
@@ -154,9 +156,63 @@ function requestHostUpload(requester, data) {
   input.click();
 }
 
+function requestHostClipboard(requester, data) {
+  cancelClipboard?.();
+  const dialog = document.querySelector("#clipboard-dialog");
+  const field = document.querySelector("#clipboard-text");
+  const copy = document.querySelector("#clipboard-copy");
+  const cancel = document.querySelector("#clipboard-cancel");
+  const note = document.querySelector("#clipboard-status");
+  let replied = false;
+  const reply = ok => {
+    if (replied) return;
+    replied = true;
+    dialog.close();
+    field.value = "";
+    copy.onclick = cancel.onclick = dialog.oncancel = null;
+    cancelClipboard = null;
+    if (worker === requester) {
+      requester.postMessage({type: "host-clipboard-response", id: data.id, ok});
+      terminal.focus({preventScroll: true});
+    }
+  };
+  cancelClipboard = () => reply(false);
+  cancel.onclick = cancelClipboard;
+  dialog.oncancel = event => { event.preventDefault(); reply(false); };
+  try {
+    // A clipboard text item is Unicode, not an arbitrary binary byte stream.
+    // Preserve a UTF-8 BOM as a character; malformed sequences become U+FFFD.
+    field.value = new TextDecoder("utf-8", {ignoreBOM: true}).decode(data.bytes);
+    note.textContent = "Click Copy to allow clipboard access.";
+    copy.disabled = false;
+    copy.onclick = async () => {
+      if (worker !== requester) { reply(false); return; }
+      copy.disabled = true;
+      field.focus();
+      field.select();
+      try {
+        // The synchronous path supports offline Firefox without clipboard
+        // permissions. Both paths run from the user's actual click.
+        let copied = false;
+        try { copied = document.execCommand("copy"); } catch (_) { /* try modern API */ }
+        if (!copied) await navigator.clipboard.writeText(field.value);
+        reply(true);
+      } catch (_) {
+        if (!replied) {
+          note.textContent = "Clipboard access failed. Retry Copy, or cancel.";
+          copy.disabled = false;
+        }
+      }
+    };
+    dialog.showModal();
+    copy.focus();
+  } catch (_) { reply(false); }
+}
+
 async function startShell(event) {
   event?.preventDefault();
   try {
+    cancelClipboard?.();
     if (worker) { worker.postMessage({type: "stop"}); }
     worker?.terminate();
 
@@ -194,7 +250,7 @@ async function startShell(event) {
            cause a browser to leave focus on the document when they return.
            Reclaim keyboard input when a new Bash prompt appears, unless the
            user deliberately selected a diagnostics control. */
-        if (/# /.test(data.text) &&
+        if (!cancelClipboard && /# /.test(data.text) &&
             !document.activeElement?.closest?.(".diagnostics")) {
           terminal.focus({preventScroll: true});
         }
@@ -261,6 +317,9 @@ async function startShell(event) {
       }
       else if (data.type === "host-upload-request") {
         requestHostUpload(worker, data);
+      }
+      else if (data.type === "host-clipboard-request") {
+        requestHostClipboard(worker, data);
       }
       else if (data.type === "done") {
         if (data.error) append(data.error);
@@ -375,7 +434,7 @@ terminal.addEventListener("keydown", handleTerminalKeydown);
    already been handled above, and diagnostics controls retain normal browser
    keyboard behavior. */
 window.addEventListener("keydown", event => {
-  if (event.target === terminal || event.target?.closest?.(".diagnostics")) return;
+  if (event.target === terminal || event.target?.closest?.(".diagnostics, #clipboard-dialog")) return;
   handleTerminalKeydown(event);
 });
 terminal.addEventListener("pointerdown", () => terminal.focus());

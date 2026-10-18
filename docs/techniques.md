@@ -156,6 +156,30 @@ file and inspect it with `cat /tmp/test.txt`; run another upload, cancel the
 picker and immediately check `echo $?` for a nonzero status. Run
 `download /tmp/test.txt` and compare the saved contents.
 
+## Clipboard Copy
+
+`clipboard copy FILE` copies UTF-8 text; `clipboard copy --base64 FILE` encodes
+binary data as padded ASCII before copying. Source/build/install/test ownership
+is in [the clipboard package](../src/aux/clipboard/README.md). The byte limit
+comes from `CLIPBOARD_MAX_BYTES` in `src/config.h` and includes Base64 expansion.
+
+Use the existing explicit host-I/O yield/resume path for clipboard requests.
+`host_clipboard_copy_v1` copies guest bytes into engine-owned storage; the
+worker sends an ID-tagged request and waits for matching acknowledgment before
+resuming. The DOM adapter shows a user-click Copy/Cancel dialog, uses selected
+textarea copying for offline Firefox, and can fall back to the Clipboard API.
+Keep browser permissions and Unicode conversion in the DOM adapter, Base64 in
+the command and ownership/bounds in the engine. Cancel, Escape and worker
+replacement must not acknowledge a stale request. Native execution without a
+desktop clipboard capability fails the command and returns control to Bash.
+
+A text clipboard/editor cannot promise binary identity: invalid UTF-8, NULs,
+and newlines may change. To transfer a Windows executable via Notepad, copy
+Base64, save text, then decode with `certutil -decode hello.exe.b64 hello.exe`.
+Compare SHA-256 against a direct download before treating the transfer as exact.
+Package WAST tests verify encoded bytes and statuses through simulated host
+transport; actual offline paste/permissions require a manual check.
+
 ## Virtual-Memory Ownership and Commit Boundaries
 
 Keep virtual-memory metadata in the engine-owned process capsule, not in a

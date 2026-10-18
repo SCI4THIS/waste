@@ -1,6 +1,7 @@
 "use strict";
 let guestSuitePending = 0, guestSuiteSequence = 0;
 let renderTestPending = 0;
+let clipboardPending = 0;
 
 function decodeB64(text) {
   const raw = atob(text), bytes = new Uint8Array(raw.length);
@@ -678,6 +679,12 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
       } else if (ioKind === 4) { /* browser renderer diagnostic */
         renderTestPending = ++guestSuiteSequence;
         self.postMessage({type: "render-test-request", id: renderTestPending});
+      } else if (ioKind === 5) { /* clipboard: wait for actual user copy/cancel */
+        const ptr = exp.waste_wast_host_io_data_ptr();
+        const len = exp.waste_wast_host_io_data_len();
+        const bytes = new Uint8Array(engineMemory.buffer, ptr, len).slice();
+        clipboardPending = ++guestSuiteSequence;
+        self.postMessage({type: "host-clipboard-request", id: clipboardPending, bytes}, [bytes.buffer]);
       } else if (ioKind === 2) { /* HOST_IO_DOWNLOAD */
         const dataPtr = exp.waste_wast_host_io_data_ptr();
         const dataLen = exp.waste_wast_host_io_data_len();
@@ -698,7 +705,7 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
     const waitTimeoutMs = (waitKind === 1 || waitKind === 2) && exp.waste_wast_wait_timeout_ms ?
       exp.waste_wast_wait_timeout_ms() : waitKind === 2 ? 10 : 0;
     do { await waitForIO(waitTimeoutMs); }
-    while ((guestSuitePending || renderTestPending) && !terminated);
+    while ((guestSuitePending || renderTestPending || clipboardPending) && !terminated);
     if (terminated) break;
     yielded = exp.waste_wast_resume();
     flushOutput();
@@ -881,6 +888,13 @@ self.onmessage = function(e) {
         if (result !== 0) exp.waste_wast_host_io_cancel();
       }
     }
+    wakeIO();
+  } else if (msg.type === "host-clipboard-response") {
+    if (!engineReady || terminated || !clipboardPending || msg.id !== clipboardPending ||
+        exp.waste_wast_host_io_kind() !== 5) return;
+    clipboardPending = 0;
+    if (msg.ok === true) exp.waste_wast_host_io_complete();
+    else exp.waste_wast_host_io_cancel();
     wakeIO();
   } else if (msg.type === "host-upload-response") {
     if (!engineReady || terminated || exp.waste_wast_host_io_kind() !== 1) return;

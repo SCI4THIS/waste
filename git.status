@@ -1,0 +1,26 @@
+git add docs/architecture.md
+git add docs/techniques.md
+git add git.status
+git add src/aux/Makefile
+git add src/cli-rt/native_runtime.c
+git add src/config.h
+git add src/engine/guest_posix.c
+git add src/engine/store.h
+git add src/html-rt/src/app.js
+git add src/html-rt/src/index.html
+git add src/html-rt/src/style.css
+git add src/html-rt/src/test-suite.js
+git add src/html-rt/src/worker.js
+git add src/html-rt/tools/vfs.py
+git add src/vfs/root/app/app.js
+git add src/vfs/root/app/style.css
+git add src/vfs/root/app/test-suite.js
+git add src/vfs/root/app/worker.js
+git add src/vfs/root/test/manifest.json
+git add start.sh
+
+git add src/aux/clipboard/
+git add src/vfs/root/test/aux/clipboard/
+git add src/vfs/root/test/system/cli-runtime/binary-handler/
+git add src/vfs/usr/bin/clipboard
+

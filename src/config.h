@@ -33,6 +33,8 @@
 #define NATIVE_SESSION_MAX_COMMANDS 1024
 #define NATIVE_STAGED_FILE_MAX 64
 #define NATIVE_HOST_IO_REPLY_MAX 16
+/* Maximum text payload accepted by the clipboard command and host ABI. */
+#define CLIPBOARD_MAX_BYTES (16 * 1024 * 1024)
 /* Source-built LLVM tools exceed 16 MiB even without their name section. */
 #define NATIVE_EXEC_BYTES_MAX (128 * 1024 * 1024)
 /* Exec vectors exclude their NULL slots. Bytes count argv + env strings,

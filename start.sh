@@ -466,7 +466,7 @@ generate_c_engine_tests() {
 
 # ── Auxiliary utility build helpers ──────────────────────────────────────
 
-AUX_UTILITIES=(libc true false pwd echo printf basename dirname cat chmod wc ls date sleep bash rogue libncurses ldd upload download vim clang lld-link)
+AUX_UTILITIES=(libc true false pwd echo printf basename dirname cat chmod wc ls date sleep bash rogue libncurses ldd upload download clipboard vim clang lld-link)
 AUX_STAGING="$REPO_ROOT/src/vfs"
 AUX_LOG="$LOG_DIR/aux-build.log"
 
@@ -531,7 +531,7 @@ build_single_aux() {
         return 1
       fi
       ;;
-    libc|ldd|upload|download) ;;
+    libc|ldd|upload|download|clipboard) ;;
     *)
       if ! have_command patch || ! have_command wasm-opt; then
         show_message "Aux build" "patch and wasm-opt are required for Coreutils."

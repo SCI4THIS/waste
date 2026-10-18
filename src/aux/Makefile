@@ -63,7 +63,7 @@ install-rogue: rogue
 
 # Keep publication explicit and serialize concurrent installs.
 # Python is used only for the existing VFS audit/installation machinery.
-install-upload install-download install-ldd install-rogue:
+install-upload install-download install-ldd install-rogue install-clipboard:
 	@set -eu; \
 		utility="$(patsubst install-%,%,$@)"; \
 		artifact="$(BUILD_DIR)/$$utility/$$utility.wasm"; \
@@ -135,6 +135,7 @@ include $(AUX_DIR)/bash/bash.mk
 include $(AUX_DIR)/vim/vim.mk
 include $(AUX_DIR)/clang/clang.mk
 include $(AUX_DIR)/lld-link/lld-link.mk
+include $(AUX_DIR)/clipboard/clipboard.mk
 
 $(BUILD_DIR)/sleep/nanosleep-runtime.o: $(AUX_DIR)/sleep/nanosleep-runtime.c $(SDK_HEADERS)
 	mkdir -p "$(@D)"

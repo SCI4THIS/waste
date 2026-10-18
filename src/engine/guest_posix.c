@@ -3510,6 +3510,44 @@ static exec_status guest_posix_host_download_v1(
     return EXEC_YIELD;
 }
 
+/* Clipboard text is owned across the same explicit host-I/O yield as download.
+ * The platform must acknowledge the actual copy (or cancellation) before resume.
+ * flags is reserved and must be zero; encoding belongs to the guest command. */
+static exec_status guest_posix_host_clipboard_copy_v1(
+        void *data, const wasm_value *args, int arg_count,
+        wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    native_store *store = data;
+    exec_memory *memory = NULL;
+    if (!store || arg_count != 3)
+        return guest_posix_result(-1, results, result_count);
+    native_host_io_state *io = &store->host_io;
+    if (io->kind == NATIVE_HOST_IO_CLIPBOARD && io->result) {
+        int result = io->result == 1 ? 0 : -1;
+        free(io->data);
+        memset(io, 0, sizeof(*io));
+        return guest_posix_result(result, results, result_count);
+    }
+    uint32_t length = (uint32_t)args[1].i32;
+    if (io->kind != NATIVE_HOST_IO_NONE || args[2].i32 ||
+        length > CLIPBOARD_MAX_BYTES ||
+        guest_posix_memory(caller, &memory, error) != EXEC_OK)
+        return guest_posix_result(-1, results, result_count);
+    uint8_t *copy = malloc(length ? length : 1);
+    if (!copy) return guest_posix_result(-1, results, result_count);
+    if (!guest_posix_read_guest(memory, (uint32_t)args[0].i32, copy, length)) {
+        free(copy);
+        return guest_posix_result(-1, results, result_count);
+    }
+    free(io->data);
+    memset(io, 0, sizeof(*io));
+    io->data = copy;
+    io->data_len = length;
+    io->kind = NATIVE_HOST_IO_CLIPBOARD;
+    error->yield_reason = EXEC_YIELD_HOST_IO;
+    return EXEC_YIELD;
+}
+
 /* ---- POSIX function dispatch tables ---- */
 
 static exec_host_func guest_posix_function(const char *module,
@@ -3566,6 +3604,7 @@ static exec_host_func guest_posix_function(const char *module,
         if (strcmp(name, "render_test_v1") == 0) return guest_posix_render_test_v1;
         if (strcmp(name, "host_upload_v1") == 0) return guest_posix_host_upload_v1;
         if (strcmp(name, "host_download_v1") == 0) return guest_posix_host_download_v1;
+        if (strcmp(name, "host_clipboard_copy_v1") == 0) return guest_posix_host_clipboard_copy_v1;
         return (void *)0;
     }
     if (strcmp(module, "env") != 0) return (void *)0;

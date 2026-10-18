@@ -1,8 +1,9 @@
 "use strict";
-globalThis.WASTE_CONFIG = Object.freeze({"BROWSER_RESULT_BYTES":256,"BROWSER_RESULT_ERROR_BYTES":192,"BROWSER_RESULT_ERROR_OFFSET":64,"BROWSER_RESULT_NAME_BYTES":63,"EXECUTION_DEFAULT_PUMP_QUANTUM_MS":16,"EXECUTION_MAX_CONTROL_DEPTH":4096,"EXECUTION_MAX_PUMP_QUANTUM_MS":60000,"EXECUTION_MAX_TIMEOUT_MS":3600000,"GUEST_TEST_MAX_MEMORY_BYTES":33554432,"HTML_RUNTIME_MAX_MEMORY_BYTES":2147483648,"JSON_MAX_DEPTH":64,"LEGACY_BROWSER_TIMEOUT_BULK_MS":60000,"LEGACY_BROWSER_TIMEOUT_CORE_MS":35000,"LEGACY_BROWSER_TIMEOUT_DEFAULT_MS":60000,"LEGACY_BROWSER_TIMEOUT_SIMD_MS":50000,"LEGACY_NATIVE_TIMEOUT_DEFAULT_MS":30000,"NATIVE_EXEC_BYTES_MAX":134217728,"NATIVE_HOST_IO_REPLY_MAX":16,"NATIVE_SESSION_MAX_COMMANDS":1024,"NATIVE_SESSION_SOURCE_MAX_BYTES":67108864,"NATIVE_STAGED_FILE_MAX":64,"NATIVE_TERMINAL_COLUMNS":80,"NATIVE_TERMINAL_ROWS":24,"POSIX_KERNEL_FD_MAX":64,"POSIX_RECORD_LOCK_MAX":64,"PROCESS_EXEC_MAX_ARGS":127,"PROCESS_EXEC_MAX_BYTES":131072,"PROCESS_EXEC_MAX_ENV":255,"PROCESS_INITIAL_MEMORY_PAGES":2,"PROCESS_INITIAL_TABLE_ENTRIES":1,"PROCESS_STDIO_BUFFER_BYTES":4096,"RENDER_TEST_REPLY_MAX_BYTES":65536,"SOURCE_SHEBANG_MAX_BYTES":4096,"SUITE_BROWSER_MAX_JOBS":8,"SUITE_BROWSER_UI_TIMEOUT_MS":60000,"SUITE_GUEST_DEFAULT_JOBS":2,"SUITE_GUEST_MAX_ARGS":64,"SUITE_GUEST_REPLY_MAX_BYTES":16777216,"SUITE_GUEST_REQUEST_MAX_BYTES":4096,"SUITE_NATIVE_MAX_JOBS":64,"SUITE_OUTPUT_MAX_BYTES":16777216,"SUITE_TIMEOUT_CORE_MS":15000,"SUITE_TIMEOUT_DEFAULT_MS":5000,"SUITE_TIMEOUT_HEAVY_MS":10000,"TERMINAL_INPUT_CAPACITY":4096,"VFS_INVENTORY_MAX_BYTES":2097152,"VFS_MAX_BYTES":134217728,"VFS_MAX_ENTRIES":2048,"VFS_PATH_MAX_BYTES":256,"VFS_RUNTIME_NODE_RESERVE":64,"WASM_MAX_FUNCTIONS":262144,"WASM_MAX_IMPORTS":8192,"WASM_MAX_TYPES":512,"WAST_MAX_DATA_SEGS":128,"WAST_MAX_ELEM_SEGS":128,"WAST_SETUP_ERROR_BYTES":256});
+globalThis.WASTE_CONFIG = Object.freeze({"BROWSER_RESULT_BYTES":256,"BROWSER_RESULT_ERROR_BYTES":192,"BROWSER_RESULT_ERROR_OFFSET":64,"BROWSER_RESULT_NAME_BYTES":63,"CLIPBOARD_MAX_BYTES":16777216,"EXECUTION_DEFAULT_PUMP_QUANTUM_MS":16,"EXECUTION_MAX_CONTROL_DEPTH":4096,"EXECUTION_MAX_PUMP_QUANTUM_MS":60000,"EXECUTION_MAX_TIMEOUT_MS":3600000,"GUEST_TEST_MAX_MEMORY_BYTES":33554432,"HTML_RUNTIME_MAX_MEMORY_BYTES":2147483648,"JSON_MAX_DEPTH":64,"LEGACY_BROWSER_TIMEOUT_BULK_MS":60000,"LEGACY_BROWSER_TIMEOUT_CORE_MS":35000,"LEGACY_BROWSER_TIMEOUT_DEFAULT_MS":60000,"LEGACY_BROWSER_TIMEOUT_SIMD_MS":50000,"LEGACY_NATIVE_TIMEOUT_DEFAULT_MS":30000,"NATIVE_EXEC_BYTES_MAX":134217728,"NATIVE_HOST_IO_REPLY_MAX":16,"NATIVE_SESSION_MAX_COMMANDS":1024,"NATIVE_SESSION_SOURCE_MAX_BYTES":67108864,"NATIVE_STAGED_FILE_MAX":64,"NATIVE_TERMINAL_COLUMNS":80,"NATIVE_TERMINAL_ROWS":24,"POSIX_KERNEL_FD_MAX":64,"POSIX_RECORD_LOCK_MAX":64,"PROCESS_EXEC_MAX_ARGS":127,"PROCESS_EXEC_MAX_BYTES":131072,"PROCESS_EXEC_MAX_ENV":255,"PROCESS_INITIAL_MEMORY_PAGES":2,"PROCESS_INITIAL_TABLE_ENTRIES":1,"PROCESS_STDIO_BUFFER_BYTES":4096,"RENDER_TEST_REPLY_MAX_BYTES":65536,"SOURCE_SHEBANG_MAX_BYTES":4096,"SUITE_BROWSER_MAX_JOBS":8,"SUITE_BROWSER_UI_TIMEOUT_MS":60000,"SUITE_GUEST_DEFAULT_JOBS":2,"SUITE_GUEST_MAX_ARGS":64,"SUITE_GUEST_REPLY_MAX_BYTES":16777216,"SUITE_GUEST_REQUEST_MAX_BYTES":4096,"SUITE_NATIVE_MAX_JOBS":64,"SUITE_OUTPUT_MAX_BYTES":16777216,"SUITE_TIMEOUT_CORE_MS":15000,"SUITE_TIMEOUT_DEFAULT_MS":5000,"SUITE_TIMEOUT_HEAVY_MS":10000,"TERMINAL_INPUT_CAPACITY":4096,"VFS_INVENTORY_MAX_BYTES":2097152,"VFS_MAX_BYTES":134217728,"VFS_MAX_ENTRIES":2048,"VFS_PATH_MAX_BYTES":256,"VFS_RUNTIME_NODE_RESERVE":64,"WASM_MAX_FUNCTIONS":262144,"WASM_MAX_IMPORTS":8192,"WASM_MAX_TYPES":512,"WAST_MAX_DATA_SEGS":128,"WAST_MAX_ELEM_SEGS":128,"WAST_SETUP_ERROR_BYTES":256});
 "use strict";
 let guestSuitePending = 0, guestSuiteSequence = 0;
 let renderTestPending = 0;
+let clipboardPending = 0;
 
 function decodeB64(text) {
   const raw = atob(text), bytes = new Uint8Array(raw.length);
@@ -680,6 +681,12 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
       } else if (ioKind === 4) { /* browser renderer diagnostic */
         renderTestPending = ++guestSuiteSequence;
         self.postMessage({type: "render-test-request", id: renderTestPending});
+      } else if (ioKind === 5) { /* clipboard: wait for actual user copy/cancel */
+        const ptr = exp.waste_wast_host_io_data_ptr();
+        const len = exp.waste_wast_host_io_data_len();
+        const bytes = new Uint8Array(engineMemory.buffer, ptr, len).slice();
+        clipboardPending = ++guestSuiteSequence;
+        self.postMessage({type: "host-clipboard-request", id: clipboardPending, bytes}, [bytes.buffer]);
       } else if (ioKind === 2) { /* HOST_IO_DOWNLOAD */
         const dataPtr = exp.waste_wast_host_io_data_ptr();
         const dataLen = exp.waste_wast_host_io_data_len();
@@ -700,7 +707,7 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
     const waitTimeoutMs = (waitKind === 1 || waitKind === 2) && exp.waste_wast_wait_timeout_ms ?
       exp.waste_wast_wait_timeout_ms() : waitKind === 2 ? 10 : 0;
     do { await waitForIO(waitTimeoutMs); }
-    while ((guestSuitePending || renderTestPending) && !terminated);
+    while ((guestSuitePending || renderTestPending || clipboardPending) && !terminated);
     if (terminated) break;
     yielded = exp.waste_wast_resume();
     flushOutput();
@@ -883,6 +890,13 @@ self.onmessage = function(e) {
         if (result !== 0) exp.waste_wast_host_io_cancel();
       }
     }
+    wakeIO();
+  } else if (msg.type === "host-clipboard-response") {
+    if (!engineReady || terminated || !clipboardPending || msg.id !== clipboardPending ||
+        exp.waste_wast_host_io_kind() !== 5) return;
+    clipboardPending = 0;
+    if (msg.ok === true) exp.waste_wast_host_io_complete();
+    else exp.waste_wast_host_io_cancel();
     wakeIO();
   } else if (msg.type === "host-upload-response") {
     if (!engineReady || terminated || exp.waste_wast_host_io_kind() !== 1) return;

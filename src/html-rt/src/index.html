@@ -16,6 +16,13 @@
     </div>
   </div>
   <main>
+    <dialog id="clipboard-dialog" aria-labelledby="clipboard-title">
+      <h2 id="clipboard-title">Copy to clipboard</h2>
+      <p id="clipboard-status" role="status">Click Copy to allow clipboard access.</p>
+      <textarea id="clipboard-text" readonly aria-label="Clipboard contents" rows="6" cols="50"></textarea>
+      <div><button id="clipboard-copy" type="button">Copy to clipboard</button>
+      <button id="clipboard-cancel" type="button">Cancel</button></div>
+    </dialog>
     <section class="terminal-shell" aria-label="WASTE Bash">
       <canvas id="terminal-canvas" tabindex="0" autofocus
         aria-label="WASTE Bash terminal"></canvas>
