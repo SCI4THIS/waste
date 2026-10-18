@@ -18,8 +18,9 @@ def main():
     args = parser.parse_args()
     if args.audit:
         inventory = vfs.load(vfs.ROOT)
-        vfs.audit_tree(vfs.ROOT, inventory)
+        declared = vfs.audit_tree(vfs.ROOT, inventory)
         manifest = json.loads(vfs.local(vfs.ROOT, test_distribution.MANIFEST).read_text())
+        test_distribution.audit(manifest, lambda p: vfs.local(vfs.ROOT, p).read_bytes(), declared)
         test_distribution.verify_sources(vfs.REPO, manifest)
         print(f"Test corpus source/provenance audit passed: {manifest['counts']}")
         return

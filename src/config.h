@@ -34,7 +34,7 @@
 #define NATIVE_STAGED_FILE_MAX 64
 #define NATIVE_HOST_IO_REPLY_MAX 16
 /* Source-built LLVM tools exceed 16 MiB even without their name section. */
-#define NATIVE_EXEC_BYTES_MAX (64 * 1024 * 1024)
+#define NATIVE_EXEC_BYTES_MAX (128 * 1024 * 1024)
 /* Exec vectors exclude their NULL slots. Bytes count argv + env strings,
  * including every terminating NUL; vector storage and path are separate. */
 #define PROCESS_EXEC_MAX_ARGS 127

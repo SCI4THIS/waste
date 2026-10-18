@@ -1213,15 +1213,19 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
     /* Terminal creation replaces the initial noninteractive kernel, so bind
      * packaged metadata only after that optional replacement. */
     for (uint32_t i = 0; i < g_vfs_manifest_count; i++) {
+        /* Staged entries are new nodes, independent of catalogue identities.
+         * Reserve through the shared kernel after its source is mounted. */
+        posix_path_metadata metadata = g_vfs_manifest[i].metadata;
+        metadata.inode = posix_kernel_allocate_inode(g_yield_context.store.kernel);
         int install_status;
         if (g_vfs_manifest[i].metadata.kind == POSIX_NODE_SYMLINK)
             install_status = posix_kernel_path_add_symlink(
                 g_yield_context.store.kernel, g_vfs_manifest[i].path,
-                &g_vfs_manifest[i].metadata, g_vfs_manifest[i].link_target);
+                &metadata, g_vfs_manifest[i].link_target);
         else
             install_status = posix_kernel_path_add_data(
                 g_yield_context.store.kernel, g_vfs_manifest[i].path,
-                &g_vfs_manifest[i].metadata, g_vfs_manifest[i].data,
+                &metadata, g_vfs_manifest[i].data,
                 g_vfs_manifest[i].data_length);
         if (install_status != 0) {
             char error[BROWSER_RESULT_ERROR_BYTES];
@@ -1604,7 +1608,7 @@ int32_t waste_wast_stage_path(uint32_t ptr, uint32_t length,
     entry->metadata.uid = 0;
     entry->metadata.gid = 0;
     entry->metadata.size = size;
-    entry->metadata.inode = 1000u + g_vfs_manifest_count;
+    entry->metadata.inode = 0; /* Assigned by the kernel when installed. */
     g_vfs_manifest_count++;
     return 0;
 }
@@ -1657,7 +1661,7 @@ int32_t waste_wast_stage_symlink(uint32_t path_ptr, uint32_t path_length,
            target_length);
     entry->link_target[target_length] = '\0';
     entry->metadata = (posix_path_metadata){ POSIX_NODE_SYMLINK, mode,
-        0, 0, (int64_t)target_length, 1000u + g_vfs_manifest_count, 0, 0 };
+        0, 0, (int64_t)target_length, 0, 0, 0 };
     g_vfs_manifest_count++;
     return 0;
 }
@@ -1688,7 +1692,7 @@ int32_t waste_wast_stage_file(uint32_t path_ptr, uint32_t path_length,
     if (data_length) memcpy(entry->data, (const void *)(uintptr_t)data_ptr, data_length);
     entry->data_length = data_length;
     entry->metadata = (posix_path_metadata){ POSIX_NODE_REGULAR, mode,
-        0, 0, (int64_t)data_length, 1000u + g_vfs_manifest_count, 0, 0 };
+        0, 0, (int64_t)data_length, 0, 0, 0 };
     g_vfs_manifest_count++;
     return 0;
 }

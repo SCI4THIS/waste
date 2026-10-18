@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/mutex.wasm",
+      "source": "build/system-tests/clang/mutex/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/mutex.wast",
+      "source": "src/vfs/root/test/system/clang/mutex/mutex.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/mutex.wasm > /tmp/mutex.bin; printf '%s\\n' \"$?\" > /tmp/mutex-status.txt; /bin/wast --verbose /tmp/mutex.wast; printf '__MUTEX_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__MUTEX_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__MUTEX_0__\r\n",
+    "WAST: 40 PASS, 0 FAIL, 40 total"
+  ],
+  "assertions": 41,
+  "exitStatus": 0
+}

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run every browser-context WAST fixture with the selected WAST executable.
 # In bash.html these paths resolve in the mounted guest VFS. From the project
-# checkout, use the installed snapshots under src/vfs instead.
+# checkout, use the adjacent html-rt directory instead.
 
 : "${WAST:=wast}"
 
@@ -9,7 +9,7 @@ if [[ -d /root/test/html-rt ]]; then
   test_dir=/root/test/html-rt
 else
   script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-  test_dir="$script_dir/../src/vfs/root/test/html-rt"
+  test_dir="$script_dir/html-rt"
 fi
 
 shopt -s nullglob

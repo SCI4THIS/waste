@@ -106,7 +106,7 @@ function stagingDataPath(filename) {
   if (filename === "payload.json") return g.staging_data_root + "tests/payload.json";
   if (filename === "waste-wast.wasm") return g.staging_data_root + filename;
   if (filename === "vfs-manifest.json") return g.staging_data_root + "bash/vfs-manifest.json";
-  if (filename === "browser-corpus-expected-failures.txt") return "../../../tests/" + filename;
+  if (filename === "browser-corpus-expected-failures.txt") return "../../../src/html-rt/test/" + filename;
   return filename;
 }
 

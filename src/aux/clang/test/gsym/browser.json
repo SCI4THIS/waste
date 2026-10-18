@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/gsym.wasm",
+      "source": "build/system-tests/clang/gsym/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/gsym.wast",
+      "source": "src/vfs/root/test/system/clang/gsym/gsym.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/gsym.wasm > /tmp/gsym.bin; printf '%s\\n' \"$?\" > /tmp/gsym-status.txt; /bin/wast --verbose /tmp/gsym.wast; GSYM_RESULT=$?; printf '__GSYM_%s__\\n' \"$GSYM_RESULT\"\n"
+    },
+    {
+      "after": "__GSYM_",
+      "text": "exit \"$GSYM_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "__GSYM_0__\r\n",
+    "WAST: 117 PASS, 0 FAIL, 117 total"
+  ],
+  "assertions": 118,
+  "exitStatus": 0
+}

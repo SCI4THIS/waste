@@ -8,7 +8,7 @@ do not add another literal and an equality test to keep it synchronized.
 references and arithmetic expressions. The VFS installer uses it for limits
 and prepends generated configuration to the installed worker and suite
 controller. These scripts remain in the compressed VFS inside `bash.html`.
-Node harnesses use `tests/runtime-config.cjs` to load
+Node harnesses use `src/html-rt/test/runtime-config.cjs` to load
 `build/engine/runtime-config.json`, emitted by the same reader during the
 engine build. This does not start a subprocess for each harness invocation.
 Staging builds emit `build/html-rt/runtime-config.js` for the source page.

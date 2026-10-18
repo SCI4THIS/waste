@@ -8,9 +8,15 @@ WAST_LEX_C := $(WAST_GEN_DIR)/wast.lex.c
 DISPATCH_GEN_C := $(WAST_GEN_DIR)/dispatch_gen.c
 DISPATCH_GEN_H := $(WAST_GEN_DIR)/dispatch_gen.h
 
-.PHONY: gen clean
+.PHONY: gen clean test
 
 gen: $(WAST_TAB_C) $(WAST_TAB_H) $(WAST_LEX_C) $(DISPATCH_GEN_C) $(DISPATCH_GEN_H) $(BUILD_DIR)/runtime-config.json
+
+# The engine is a library compiled by the runtime consumers; its tests are the
+# native aggregate owned by src/cli-rt. Delegate so `make -C src/engine test`
+# runs the same corpus and retained private sanitizer/ownership gates.
+test:
+	$(MAKE) -C ../cli-rt test
 
 $(BUILD_DIR)/runtime-config.json: ../config.h ../html-rt/tools/runtime_config.py
 	mkdir -p $(BUILD_DIR)

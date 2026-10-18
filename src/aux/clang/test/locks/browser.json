@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/locks.wasm",
+      "source": "build/system-tests/clang/locks/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/locks.wast",
+      "source": "src/vfs/root/test/system/clang/locks/locks.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/locks.wasm > /tmp/locks.bin; printf '%s\\n' \"$?\" > /tmp/locks-status.txt; /bin/wast --verbose /tmp/locks.wast; result=$?; printf '__LOCKS_%s__\\n' \"$result\"\n"
+    },
+    {
+      "after": "__LOCKS_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__LOCKS_0__\r\n",
+    "WAST: 341 PASS, 0 FAIL, 341 total"
+  ],
+  "assertions": 342,
+  "exitStatus": 0
+}

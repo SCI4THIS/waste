@@ -1,0 +1,39 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/windows-setup.sh",
+      "source": "src/vfs/root/test/aux/lld-link/setup.sh",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/windows-artifacts.wast",
+      "source": "src/vfs/root/test/system/windows-demo/artifacts.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/windows-installed.wast",
+      "source": "src/vfs/root/test/aux/lld-link/installed.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "status=0; WINDOWS_ARTIFACT_WAST=/tmp/windows-artifacts.wast; . /tmp/windows-setup.sh; /bin/wast --verbose /tmp/windows-installed.wast || status=1; WINDOWS_DEMO_RESULT=$status; printf \"__WINDOWS_DEMO_%s__\\n\" \"$WINDOWS_DEMO_RESULT\"\n"
+    },
+    {
+      "after": "__WINDOWS_DEMO_",
+      "text": "exit \"$WINDOWS_DEMO_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "WAST: 16 PASS, 0 FAIL, 16 total",
+    "WAST: 38 PASS, 0 FAIL, 38 total",
+    "__WINDOWS_DEMO_0__\r\n"
+  ],
+  "assertions": 55,
+  "exitStatus": 0,
+  "hostTimeoutMs": 900000
+}

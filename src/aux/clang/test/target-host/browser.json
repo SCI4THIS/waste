@@ -1,0 +1,18 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {"path": "/tmp/target-host.wasm", "source": "build/system-tests/clang/target-host/probe.wasm", "mode": 493},
+    {"path": "/tmp/target-host.wast", "source": "src/vfs/root/test/system/clang/target-host/target-host.wast", "mode": 420}
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/target-host.wasm > /tmp/target-host.txt; printf '%s\\n' \"$?\" > /tmp/target-host-status.txt; /bin/wast --verbose /tmp/target-host.wast; HOST_RESULT=$?; printf '__TARGET_HOST_RESULT_%s__\\n' \"$HOST_RESULT\"\n"
+    },
+    {"after": "__TARGET_HOST_RESULT_", "text": "exit \"$HOST_RESULT\"\n"}
+  ],
+  "contains": ["__TARGET_HOST_RESULT_0__\r\n", "WAST: 2 PASS, 0 FAIL, 2 total"],
+  "assertions": 3,
+  "exitStatus": 0
+}

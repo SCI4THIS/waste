@@ -207,8 +207,15 @@ def main() -> int:
             print(f"error: mounted test source directory not found: {missing[0]}",
                   file=sys.stderr)
             return 1
-        test_entries = [entry for path, suite, prefix in roots
-                        for entry in collect_layout_tests(path, suite, prefix)]
+        seen = set()
+        test_entries = []
+        for path, suite, prefix in roots:
+            for entry in collect_layout_tests(path, suite, prefix):
+                key = (suite, entry["relative"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                test_entries.append(entry)
         test_dirs = [path for path, _, _ in roots]
     else:
         test_entries = [

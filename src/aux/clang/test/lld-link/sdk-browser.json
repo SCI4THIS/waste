@@ -1,0 +1,56 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "hostTimeoutMs": 300000,
+  "executionLimits": {
+    "timeoutMs": 240000
+  },
+  "files": [
+    {
+      "path": "/tmp/wasm-ld",
+      "source": "build/aux/clang/wasm-ld-no-lto.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/lld-link-commands.sh",
+      "source": "src/aux/clang/test/lld-link/sdk-commands.sh",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/sdk.o",
+      "source": "build/system-tests/clang/lld-link/sdk.o",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/sdk-crt.o",
+      "source": "build/system-tests/clang/lld-link/sdk-crt.o",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/bad-signature.o",
+      "source": "build/system-tests/clang/lld-link/bad-signature.o",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/lld-sdk.wast",
+      "source": "src/vfs/root/test/system/clang/lld-link/sdk.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": ". /tmp/lld-link-commands.sh; LLD_NO_LTO_RESULT=$?; printf \"__LLD_SDK_%s__\\n\" \"$LLD_NO_LTO_RESULT\"\n"
+    },
+    {
+      "after": "__LLD_SDK_",
+      "text": "exit \"$LLD_NO_LTO_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "WAST: 9 PASS, 0 FAIL, 9 total",
+    "__LLD_SDK_0__\r\n"
+  ],
+  "assertions": 10,
+  "exitStatus": 0
+}

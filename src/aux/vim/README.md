@@ -57,13 +57,15 @@ work and will require additional patches, provider imports and installed
 runtime data.
 
 Vim is distributed under its own permissive license (see `submodules/vim/LICENSE`);
-retain upstream `LICENSE`. Package tests live under `src/aux/vim/tests/*.wast`
-and run through the installed Bash with `make -C src/aux test-vim`.
+retain upstream `LICENSE`. Package tests live under
+`src/vfs/root/test/aux/vim/*.wast` (exposed to the host harness via
+`src/aux/vim/test/system`) and run through the installed Bash with
+`make -C src/aux test-vim`.
 
-`tests/setup.sh` only supplies Vim inputs and produces the files inspected by
+`test/system/setup.sh` only supplies Vim inputs and produces the files inspected by
 `installed.wast`; the assertions check executable access, actual version output,
 and exact bytes saved by the Ex editor. Run the interactive native/browser/worker
-regression with `python3 tests/guest-session-check.py --scenario vim --page
+regression with `python3 src/engine/test/guest-session/guest-session-check.py --scenario vim --page
 build/html-rt/bash.html`. It starts ordinary `vim FILE` from Bash, types text,
 checks the visible line before Escape, saves with `:wq`, and runs the same
-package WAST assertions. See `src/system-tests/vim` for manual browser steps.
+package WAST assertions. See `src/aux/vim/test/system` for manual browser steps.

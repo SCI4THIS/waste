@@ -54,8 +54,8 @@ not a general correctly rounded transcendental guarantee. Run through Bash
 with `/bin/wast --verbose /root/test/aux/libc/log2f.wast` after refreshing
 installed tests, or run the package with `make -C src/aux test-libc`.
 After packaging `bash.html`, automate the same WAST through the production
-worker with `node tests/guest-session-worker.cjs build/html-rt/bash.html
-src/aux/libc/tests/log2f-browser.json`. For a full sanitizer package run, use
+worker with `node src/html-rt/test/guest-session/worker.cjs build/html-rt/bash.html
+src/vfs/root/test/aux/libc/log2f-browser.json`. For a full sanitizer package run, use
 `ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1
 WASTE_TEST_TIMEOUT_MS=180000 make -C src/aux test-libc
 WASM_RUNNER="$PWD/build/cli-rt/wasm-sanitize"`; the longer budget accommodates
@@ -70,7 +70,7 @@ ENOSYS rather than a synthetic epoch value.
 providers: return counts, truncation, exact fit, one-byte/zero-size buffers,
 empty formatting, mixed wide/promoted arguments, repeated argument areas and
 canaries. Compiler-generated C/C++ `va_list` calls are checked separately by
-`make -C src/system-tests test-stdio`; both clients use the installed provider.
+`make -C src/aux test-stdio`; both clients use the installed provider.
 These checks cover the existing integer/string formatter subset, not every
 printf conversion or flag.
 `reentrant-accounts.wast` checks `getpwnam_r`/`getpwuid_r` against the same
@@ -96,7 +96,7 @@ errno because configured strings have no fixed bound. Other selectors return
 -1/EINVAL. See the POSIX contracts for
 [account lookup](https://pubs.opengroup.org/onlinepubs/9699919799/functions/getpwnam.html)
 and [sysconf](https://pubs.opengroup.org/onlinepubs/9699919799/functions/sysconf.html).
-`make -C src/system-tests test-accounts` checks compiled public C++ calls and
+`make -C src/aux test-accounts` checks compiled public C++ calls and
 their layouts separately; it does not execute the full LLVM Path backend.
 `wide-format.wast` checks the separate bounded `swprintf`/`vswprintf` providers:
 integer flags/lengths, pointer/count conversions, wide strings/characters,
@@ -111,7 +111,7 @@ EINVAL; invalid UTF-8 returns EILSEQ. Success preserves errno. Wide elements
 are copied completely, and UTF-8 precision counts output wchar elements.
 There is no alternate locale, grouping or stateful encoding. The narrow
 formatter's earlier floating-output limitation remains. Compiled C/C++ varargs
-checks run with `make -C src/system-tests test-wide-format`.
+checks run with `make -C src/aux test-wide-format`.
 `integer-conversion.wast` checks all twelve shared integer converters: 32-bit
 `strtol`/`strtoul` and 64-bit `strtoll`/`strtoull`/`strtoimax`/`strtoumax`,
 and their corresponding `wcsto*` APIs. Each ASCII vector runs through both
@@ -150,7 +150,7 @@ inspects both 64-bit words without narrowing. The ordered/NaN return values
 match compiler-rt's Wasm ABI; the existing quad arithmetic/conversion helpers
 still use double internally and do not provide general binary128 precision.
 The public `math.h` classification macros preserve float/double/long-double
-types and evaluate the input once; `make -C src/system-tests test-classification`
+types and evaluate the input once; `make -C src/aux test-classification`
 checks actual C and libc++ `<cmath>` calls, with all assertions in WAST.
 `wide-memory.wast` checks signed four-byte wide-element comparison, copy,
 overlapping move, full-element fill and memory/string searches. Counts are
@@ -159,13 +159,13 @@ NUL while memory operations preserve and search embedded NULs. Reverse, set
 and substring search return the first/last corresponding element pointer or
 null. Comparisons avoid subtraction overflow and use signed guest wchar order.
 The public `wchar.h`/`wctype.h` retain C linkage beneath libc++ wrappers;
-`make -C src/system-tests test-wide` verifies compiled C++ calls with WAST.
+`make -C src/aux test-wide` verifies compiled C++ calls with WAST.
 Wide stream formatted IO remains unavailable, as do the previously annotated
 unsupported classification functions. Bounded wide string formatting is
 provided by `wide-format.c`.
 Kernel/POSIX interaction
-probes live in `src/system-tests/libc`; run them with
-`make -C src/system-tests test-libc`. The CLI's `libc-native` and `libc-sanitize`
+probes live in `src/vfs/root/test/system/libc`; run them with
+`make -C src/aux test-libc-system`. The CLI's `libc-native` and `libc-sanitize`
 compatibility targets run both sets, with the latter selecting ASan/UBSan.
 
 Refresh browser snapshots with `make -C src/html-rt vfs-tests-install`, then
@@ -192,7 +192,7 @@ Production builds need Make, Clang and `wasm-ld`; installation also needs
 Python and `flock`. Tests additionally build/use the public native `wasm` frontend.
 `tools/shared_libc.py` preserves exact signatures while assigning imports,
 and also serves Bash, Coreutils and ncurses. SDK/sysroot checks live under
-`src/system-tests/guest-sdk`. The retired `libc-fixtures` and `libc-sysroot`
+`src/aux/libc/test/sdk`. The retired `libc-fixtures` and `libc-sysroot`
 targets have no replacement inside this package.
 
 `runtime/` remains private freestanding interpreter support, operating on host

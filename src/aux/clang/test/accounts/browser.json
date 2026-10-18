@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/accounts.wasm",
+      "source": "build/system-tests/clang/accounts/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/accounts.wast",
+      "source": "src/vfs/root/test/system/clang/accounts/accounts.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/accounts.wasm > /tmp/accounts.bin; printf '%s\\n' \"$?\" > /tmp/accounts-status.txt; /bin/wast --verbose /tmp/accounts.wast; result=$?; printf '__ACCOUNTS_%s__\\n' \"$result\"\n"
+    },
+    {
+      "after": "__ACCOUNTS_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__ACCOUNTS_0__\r\n",
+    "WAST: 47 PASS, 0 FAIL, 47 total"
+  ],
+  "assertions": 48,
+  "exitStatus": 0
+}

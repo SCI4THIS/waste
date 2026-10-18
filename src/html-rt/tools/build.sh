@@ -79,7 +79,7 @@ echo "=== Building $TARGET ==="
 STAGING="$WORK_DIR/tar-staging"
 mkdir -p "$STAGING"
 
-cp "$REPO_ROOT/tests/browser-corpus-expected-failures.txt" "$STAGING/"
+cp "$REPO_ROOT/src/html-rt/test/browser-corpus-expected-failures.txt" "$STAGING/"
 cp -p "$WASM_FILE" "$STAGING/waste-wast.wasm"
 cp -p "$VFS_ROOT/usr/share/waste/launch.wast" "$STAGING/launch.wast"
 python3 "$SCRIPT_DIR/vfs.py" package --root "$VFS_ROOT" --output "$STAGING"

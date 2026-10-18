@@ -143,7 +143,7 @@ Test fixture:
 # Output: build/aux/libc/libc.so.wasm
 make -C src/aux install-libc
 make -C src/aux test-libc
-make -C src/system-tests test-libc
+make -C src/aux test-libc-system
 ```
 
 ### Shared-Library Libc Roadmap
@@ -207,10 +207,10 @@ The goal is a shared-library model where multiple executables (bash, coreutils, 
 - `src/aux/bash/bash.mk` — Builds Bash from the read-only upstream submodule
 
 ### Tests
-- `tests/diy-posix-test/*.wast` — POSIX regression probes (process control, signals, VFS, clock)
-- `src/aux/NAME/tests/*.wast` — Package runtime assertions (`make -C src/aux test-NAME`)
-- `src/system-tests/` — System interaction WAST and compiler SDK probes
-- `tests/tail-call-smoke.wast` — Minimal Bash smoke test
+- `src/vfs/root/test/diy-posix-test/*.wast` — POSIX regression probes (process control, signals, VFS, clock)
+- `src/vfs/root/test/aux/<pkg>/*.wast` — Package runtime assertions (`make -C src/aux test-NAME`)
+- `src/vfs/root/test/system/` — System interaction WAST
+- `src/vfs/root/test/aux/bash/tail-call-smoke.wast` — Minimal Bash smoke test
 
 ### Build & Configuration
 - `start.sh` — Main interactive/non-interactive build wizard
@@ -343,12 +343,11 @@ If implementing broker-backed capabilities, design the protocol to be versioned,
 │       │   └── stdlib.c, stdio.c, unistd.c
 │       └── tools/                    # HTML packaging, SDK and corpus tools
 │
-├── tests/                             # Test suites
-│   ├── c-engine-*.wast                # Engine regression fixtures
-│   ├── c-engine-*.wat                 # Engine test modules
-│   ├── c-engine-i32-smoke.c           # Sanitizer smoke test source
+├── src/vfs/root/test/                 # Authored guest tests (migrated from tests/)
+│   ├── engine-regressions/            # Engine regression fixtures
 │   ├── diy-posix-test/                # POSIX regression probes
-│   └── tail-call-smoke.wast           # Bash tail-call smoke test
+│   ├── aux/<pkg>/                     # Package WAST tests
+│   └── system/                        # System interaction WAST
 │
 ├── docs/                              # Architecture & planning
 │

@@ -46,7 +46,7 @@ explicitly run `install-bash` before packaging the updated executable. Shared
 engine callbacks resolve caught signal handlers through the process table.
 `make -C src/cli-rt terminal-check terminal-check-sanitize` verifies native
 resize updates to LINES/COLUMNS and terminal restoration. The shared C probe
-and `src/system-tests/cli-runtime/terminal/resize.json` also verify resize in
+and `src/cli-rt/test/terminal/resize.json` also verify resize in
 browser execution. The adjacent `interruptions.json` verifies Ctrl-C at the
 prompt and during a foreground child. The native PTY gate also interrupts a
 CPU-bound child and checks canonical input/echo and terminal restoration.
@@ -65,7 +65,7 @@ packaged production worker:
 
 ```sh
 make -C src/html-rt bash-html
-python3 tests/guest-session-check.py --native build/cli-rt/private/guest-session-sanitize \
+python3 src/engine/test/guest-session/guest-session-check.py --native build/cli-rt/private/guest-session-sanitize \
   --scenario aux-bash --page build/html-rt/bash.html
 ```
 

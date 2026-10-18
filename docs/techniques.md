@@ -29,7 +29,7 @@ library. Compilation does not publish snapshots; use the corresponding
 `ldd` reads Wasm import sections and follows resolved library dependencies
 without executing the inspected modules. Check production dependency listings,
 malformed input and missing libraries with the `shared-dependencies` scenario
-in `tests/guest-session-check.py`.
+in `src/engine/test/guest-session/guest-session-check.py`.
 
 Rogue's package configuration, ncurses Boolean ABI profile, library import
 attributes and patches live in `src/aux/rogue`. Run `make -C src/aux rogue` to
@@ -86,25 +86,25 @@ library only.
 
 `make -C src/aux test-libc` runs package WAST tests against that installed
 library from Bash. Kernel/POSIX interaction tests run with
-`make -C src/system-tests test-libc`. Assertions live in the WAST files;
+`make -C src/aux test-libc-system`. Assertions live in the WAST files;
 the shared shell driver only stages inputs, invokes Bash and preserves status.
 `/bin/wast --verbose FILE` prints a dot or `F` for each result, a totals summary
 and the first failure. Ordinary descriptor writes support redirection into
 `/tmp` and browser download. Quiet invocation preserves its existing behavior.
 See [the libc package notes](../src/aux/libc/README.md) and
-[system test instructions](../src/system-tests/README.md).
+[system test instructions](../docs/system-tests.md).
 
 `src/aux/libc/sources.mk` supplies the ordered C helper list; Make adds
 `allocator.c`. There is one production library, with no static fixture profile
 or generated WAST concatenation. `tools/shared_libc.py` also serves Bash,
 Coreutils and ncurses. SDK policy and generic Wasm inspection remain tools in
-`src/html-rt/tools`; SDK/sysroot tests live under `src/system-tests/guest-sdk`.
+`src/html-rt/tools`; SDK/sysroot tests live under `src/aux/libc/test/sdk`.
 Complete VFS installation before running tests that mount the source tree:
 publication replaces that tree, and simultaneous discovery can observe missing
 paths. For parallel verification, install once and run the common Bash transport
 against stable inputs; running multiple Make test targets can trigger additional
 installations through their prerequisites.
-`make -C src/system-tests sysroot` stages the installed headers and CRT under
+`make -C src/aux sysroot` stages the installed headers and CRT under
 `build/system-tests/guest-sdk/sysroot`. This compiler fixture is independent
 of building libc.
 
@@ -141,9 +141,9 @@ replacement shell worker. Empty files are valid uploads and downloads.
 Focused verification, without launching a browser:
 
 ```sh
-node tests/browser-upload-runtime.cjs
-node tests/c-engine-vfs-transfer.cjs build/html-rt/bash.html
-python3 tests/guest-session-check.py --scenario transfer
+node src/html-rt/test/browser-upload-runtime.cjs
+node src/html-rt/test/vfs-transfer.cjs build/html-rt/bash.html
+python3 src/engine/test/guest-session/guest-session-check.py --scenario transfer
 ```
 
 The first checks DOM/worker failure handling with simulated browser APIs; the
@@ -189,7 +189,7 @@ For mapping regressions, execute ordinary guest programs with a process VM
 capsule and check their captured observations in WAST. An exec'd WAST handler
 has no application engine bound to its capsule; directly importing memory
 does not give it process mapping ownership. The unchanged LLVM mapping-method
-fixture under `src/system-tests/clang/advice` demonstrates this boundary.
+fixture under `src/aux/clang/test/advice` demonstrates this boundary.
 
 ## Deterministic WAST Command Framing
 
@@ -253,7 +253,7 @@ inside shared libc.
 The legacy `usleep` wrapper converts microseconds into that same nanosleep
 timespec and propagates interruption. Zero returns without a wait; intervals
 of one million microseconds or more return EINVAL. Use nanosleep for longer
-intervals. `src/system-tests/clang/timed-locks` advances the existing injected
+intervals. `src/aux/clang/test/timed-locks` advances the existing injected
 clock to just before and onto deadlines, catches a signal, and executes LLVM's
 unchanged timed lock retries under ordinary guest process contention. Keep
 those observations and all runtime expectations in WAST.
@@ -261,9 +261,9 @@ those observations and all runtime expectations in WAST.
 For clock consumers, use shared-libc `clock_gettime` and the versioned kernel
 reader rather than importing platform clocks into guest C++. Realtime and
 monotonic use distinct injected callbacks and the explicit guest timespec ABI.
-`src/aux/libc/tests/clocks.wast` checks real progression after a yielding sleep,
+`src/vfs/root/test/aux/libc/clocks.wast` checks real progression after a yielding sleep,
 normalization, output canaries and errors. The controlled scenario under
-`src/system-tests/clang` advances monotonic time without changing realtime,
+`src/aux/clang/test` advances monotonic time without changing realtime,
 including seconds beyond 2038 and nanosecond precision. Supply large injected
 nanosecond values as JSON strings to avoid JavaScript Number rounding.
 libc++ selects its private `_LIBCPP_HAS_CLOCK_GETTIME` backend through the
@@ -275,7 +275,7 @@ Do not infer guest CPU accounting from available wall/deadline clocks. Public
 shared libc and the legacy env adapter explicitly reject accounting queries
 without touching the output. Keep `HAVE_GETRUSAGE` disabled in the LLVM guest
 profile so its existing fallback owns the zero CPU durations. The
-`src/system-tests/clang/process` fixture compiles unchanged full Process.cpp
+`src/aux/clang/test/process` fixture compiles unchanged full Process.cpp
 and executes its real PID/wall-time calls. Ordinary fork/wait children also
 check `_Exit` through the existing engine exit path. Section collection drops
 unreferenced crash-context methods, so this does not establish complete LLVM
@@ -286,7 +286,7 @@ read-only, unmapped or span a protected page; discovering that after reaping
 loses the child's status. `exec_memory_prepare_write` validates the full range
 and reserves lazy/copy-on-write backing without changing bytes or dirty flags.
 Repeat on every WAITPID retry and retain only the interpreter's integer call
-operands. `src/system-tests/clang/exec-wait` establishes child exit with pipe
+operands. `src/aux/clang/test/exec-wait` establishes child exit with pipe
 EOF, attempts invalid copies, then successfully reaps the same zombie. It also
 checks write-only output, exact-path execv/environment copying and caught/
 restarted waits through the existing signal and sleep paths.
@@ -350,14 +350,20 @@ fork share that description; the inode survives unlink and parent destruction.
 EOF reads and discarded writes are immediately ready in their allowed access
 directions, and do not allocate file storage or call a runtime output capability.
 Begin synthesized inode allocation beyond the configured VFS entry range to
-avoid collisions with automatically numbered native/browser catalogues.
+avoid collisions with automatically numbered native/browser catalogues. Route
+native and browser staged files/directories through the same fork-shared kernel
+allocator after catalogue mounting. Separate staging counters can collide with
+retained or mounted identities: LLVM may then treat different files as the same
+input and omit an import library. Test distinct identical-byte inputs, stable
+descriptor identities and a valid mounted inode that collides with the former
+staging counter.
 Preserve the 48-byte path metadata and 128-byte stat ABI; define node kinds in
 the shared public ABI so directory entries report DT_CHR. Test openat, symlink/
 hard-link resolution, descriptor flags, canaries and error boundaries in WAST.
 Keep private sanitizer guards for codec and orphan ownership. Test actual LLVM
 empty redirects in both synchronous and detached asynchronous children, checking
 their observed stdin, stdout/stderr and metadata through a separate output file.
-See `src/system-tests/devices` and `src/system-tests/clang/program-execution`.
+See `src/vfs/root/test/system/devices` and `src/aux/clang/test/program-execution`.
 
 Separate physical terminal descriptors from controlling-session ownership.
 `setsid` must validate the whole process table before changing SID/PGID and
@@ -402,7 +408,7 @@ progress while Bash waits at its prompt. Use host monotonic time for CPU slices
 even when a test freezes the guest timer clock. WAST handlers need independent
 command contexts and PID-owned definitions/registrations; cleanup must remove
 only their own modules and failed-start engines, including cancellation paths.
-The system probes under `src/system-tests/scheduling` check overlapping timers
+The system probes under `src/vfs/root/test/system/scheduling` check overlapping timers
 at controlled clock boundaries and a CPU spin that requires a sibling to run.
 `aux-bash` checks concurrent handlers using identical module names, nested
 scripts and background sleeps through native, browser API and packaged workers.
@@ -425,7 +431,7 @@ inserts lines with `CSI L` when scrolling back down. Implement index/reverse
 index, line insertion/deletion and explicit scrolling within those margins;
 preserve header/status rows outside them and use the current background for
 new blank cells. Reset margins when clearing a buffer for alternate-screen
-entry or resizing it. `src/system-tests/vim/scroll-session.json` checks visible
+entry or resizing it. `src/aux/vim/test/scroll-session.json` checks visible
 rows in both directions before later input can trigger a full redraw.
 New scroll blanks must have no underline/bold decorations: Vim can scroll
 while its status-line rendition is active. Preserve effective colors without
@@ -442,7 +448,7 @@ insert capability exists, even when its returned string is empty; an empty
 `im` therefore selects an insert path that overwrites visible text. Shared
 libc supplies ANSI insert-mode entry/exit (`CSI 4 h` / `CSI 4 l`), matching the
 browser model and native terminals. The libc `termcap.wast` probe checks these
-capabilities. The system fixture in `src/system-tests/terminal-editing` feeds
+capabilities. The system fixture in `src/html-rt/test/terminal-editing` feeds
 real Bash editing keys and checks screen cells and cursor positions before
 each next key, so a later redisplay cannot conceal an insertion failure.
 
@@ -456,8 +462,8 @@ glyph appearance; do not introduce a raster atlas into the WebGL path.
 The fast checks run without a browser:
 
 ```sh
-node tests/c-engine-terminal-glf.cjs
-node tests/c-engine-terminal-model.cjs
+node src/html-rt/test/terminal-glf.cjs
+node src/html-rt/test/terminal-model.cjs
 ```
 
 For actual WebGL pixels, open the rebuilt `build/html-rt/bash.html` in
@@ -483,16 +489,16 @@ different WAST executable from
 the project checkout, run the same script with:
 
 ```sh
-WAST=build/cli-rt/wast bash tests/html-rt.sh
+WAST=build/cli-rt/wast bash src/vfs/root/test/html-rt.sh
 ```
 
 The loop works with either runner; browser-only capability checks still need
 the browser runtime to pass.
 
-The authored renderer fixture remains `tests/render/terminal.wast`; the test
-corpus installer places it, the browser compatibility kernel fixture and
-Bash-context tests under `src/vfs/root/test/html-rt/` for this browser
-suite. The suite runner source is `tests/html-rt.sh`.
+The authored renderer fixture is `src/vfs/root/test/render/terminal.wast`;
+the test corpus installer publishes it, the browser compatibility kernel
+fixture and Bash-context tests under `src/vfs/root/test/html-rt/` for this
+browser suite. The suite runner source is `src/vfs/root/test/html-rt.sh`.
 The WAST calls the versioned `waste_kernel.render_test_v1` browser capability,
 then writes the reply through ordinary guest descriptors. The DOM adapter uses
 the production GLF renderer to test glyph pixels, blank cells, colors, cursor,
@@ -514,31 +520,31 @@ batch runners. Native and isolated browser stores do not enable this capability;
 `engine-regressions/render-capability.wast` checks the unsupported return.
 The response capacity comes from `src/config.h` and is queried by the guest.
 The wire reply is a little-endian u32 pass flag followed by UTF-8 JSON.
-`tests/render-worker-session.json`, run through `tests/guest-session-worker.cjs`,
+`src/html-rt/test/render-worker-session.json`, run through `src/html-rt/test/guest-session/worker.cjs`,
 uses scripted replies to verify persistence, failure reporting, stale-reply
 rejection and truncation across repeated shell runs. It does not test pixels.
 
 Pixel checks complement the worker-backed shell checks. After building the
 production page, run `./start.sh --html-check` for the focused worker suite.
-For targeted changes, `tests/c-engine-bash-browser-runtime.cjs` accepts
+For targeted changes, `src/html-rt/test/bash-browser-runtime.cjs` accepts
 `--missing-command`, `--pipeline-probe`, `--shared-library` and `--full-package`.
 Run `--missing-command` without `--full-package`: its reduced fixture
 deliberately omits `ls` to check command-not-found recovery.
 The Rogue fixture must enter/leave the alternate screen, consume an arrow and
 a game turn, and return to a usable Bash prompt twice in the same shell.
-`python3 tests/guest-session-check.py --scenario shared-libc` checks explicit
+`python3 src/engine/test/guest-session/guest-session-check.py --scenario shared-libc` checks explicit
 guest `dlopen`/`dlsym`/`dlclose`, error consumption, reference counts and reopen
 through the installed libc/ncurses libraries in both C builds. Its authored
-fixture is `tests/engine-regressions/shared-libc.wast`; the installed copy can
+fixture is `src/vfs/root/test/engine-regressions/shared-libc.wast`; the installed copy can
 also run from Bash with `/bin/waste-test engine-regressions/shared-libc.wast`.
 Use the installed-test runner so this bootstrap test gets an isolated module
 store instead of inheriting the shell's already-loaded libc.
 
 Production packaging also needs a dependency check: a loader fixture alone
 cannot establish that applications use the shared provider. Run
-`python3 tests/shared-library-packaging-check.py` to inspect installed consumers,
+`python3 src/html-rt/test/shared-library-packaging-check.py` to inspect installed consumers,
 then the `shared-dependencies`, `matrix` and `rogue` scenarios in
-`tests/guest-session-check.py` to verify actual `ldd` output and execution
+`src/engine/test/guest-session/guest-session-check.py` to verify actual `ldd` output and execution
 in both C runtimes. `shared_libc.py` rewrites only matching function imports,
 checks the installed provider's exact signatures, and leaves memory, table,
 relocation and kernel imports intact. Coreutils links imported process memory
@@ -741,7 +747,7 @@ Recursive WAT forward references use parser-only placeholders outside the real
 value-type range. Those placeholders must still fit the low 16 bits used by
 storage-type packing; higher bits carry mutability and packed-field metadata.
 Resolve placeholders at group close before encoding, without changing an
-already resolved reference. `tests/engine-regressions/type-capacity.wast`
+already resolved reference. `src/vfs/root/test/engine-regressions/type-capacity.wast`
 exercises high indexes, recursion/growth failures, field mutation and structural
 equivalence through a 230-type chain across modules.
 
@@ -754,7 +760,7 @@ no declared locals keep a null pointer. These arrays are immutable instance
 metadata, shared with decoded instructions by cloned engines and released only
 by the last static owner, including after a failed load. Keep the combined
 parameter/local check in the validator too, before accessing its initialization
-bitmap. `tests/engine-regressions/local-storage.wast` exercises allocation
+bitmap. `src/vfs/root/test/engine-regressions/local-storage.wast` exercises allocation
 boundaries, mixed groups, malformed declarations and recovery after failures.
 
 Grow decoded instruction buffers by the number of instructions, not by raw
@@ -959,7 +965,7 @@ the guest ABI. The public SDK keeps `setjmp` as a caller-local macro and gives
 `longjmp` a real C-linkage declaration/import for libc++'s `std::longjmp` alias.
 Verify compiled C and C++ returns-twice behavior with real stack-pointer reads,
 copied buffers and unchanged global side effects; use WAST for expectations.
-See `src/system-tests/clang/checkpoint`. Bash's private header forwards to this
+See `src/aux/clang/test/checkpoint`. Bash's private header forwards to this
 shared ABI. Signal-mask restoration belongs to the engine-owned kernel, not
 native process state. Nonzero `save_mask` flags copy all guest mask words into
 the evaluator snapshot; zero leaves mask changes intact. Restore only at the
@@ -978,7 +984,7 @@ registration must record only successfully installed handlers so uninstall
 does not overwrite ignored actions with stale previous actions. Native LLVM
 keeps its original backend. These checks establish supported guest signal
 recovery, not host faults, stack symbolication or recovery from all Wasm traps;
-the distinction is documented with `src/system-tests/clang/crash-recovery`.
+the distinction is documented with `src/aux/clang/test/crash-recovery`.
 
 This design avoids native stack-unwinding machinery and permits deterministic
 cleanup on traps, exits, or cancellation.
@@ -1083,7 +1089,7 @@ and checked libc initializer signatures/results. Startup constructors and
 runtime initializers must complete synchronously; normal entry execution may
 yield through the existing process driver. Test a failed start followed by a
 valid one in the same store, including failure after loading a real DSO.
-`src/system-tests/cli-runtime` contains the private native/Wasm ownership
+`src/cli-rt/test` contains the private native/Wasm ownership
 probe and its executable fixtures; ordinary package assertions remain WAST.
 
 Use `native_process_driver_start_with_options` when a file interpreter must
@@ -1114,7 +1120,7 @@ does not implement general realpath. Derive LLVM's private PATH_MAX and engine
 image storage from the existing VFS_PATH_MAX_BYTES configuration. Private
 include_next adapters must follow libc++ wrappers and precede the public SDK;
 the native-generator and C++ bootstrap profiles keep their own header order.
-See `src/system-tests/clang/executable-path` for the actual-source observer.
+See `src/aux/clang/test/executable-path` for the actual-source observer.
 
 When unlink compacts the namespace table, rebase open-description references to
 surviving nodes and detach references to the removed node. An open description
@@ -1139,7 +1145,7 @@ link. Store its original bytes and length, independent of cwd or target existenc
 When rename replaces a regular/link entry, use the unlink lifetime/compaction
 path and re-find the source before moving its name; copying the source record
 over the destination would preserve the wrong name and leave a table hole.
-See `src/system-tests/clang/symlink` for compiled C++ calls, WAST assertions and
+See `src/aux/clang/test/symlink` for compiled C++ calls, WAST assertions and
 Bash execution through final and directory links. Directory-subtree rename and
 symlink transport packaging remain separate capabilities.
 
@@ -1153,7 +1159,7 @@ the caller's writable range, so a protected-page crossing cannot publish a
 partial prefix. The import returns length or negative errno; shared libc handles
 errno and optional malloc-owned output. Derive canonical storage and LLVM's
 private PATH_MAX from `src/config.h`, without introducing a separate inventory
-or a public pathconf capability. See `src/system-tests/clang/realpath` for WAST
+or a public pathconf capability. See `src/aux/clang/test/realpath` for WAST
 assertions, compiled C++ calls and native/sanitized/production-worker steps.
 
 Classify binary Wasm by its `\0asm` magic, not by a filename suffix. Textual
@@ -1202,7 +1208,7 @@ fixture and the aux Bash pipeline/substitution session cover these paths.
 Bind CRT-owned stdin/stdout/stderr through the initialized process-local libc
 accessors before calling `__wasm_call_ctors`, not just before main. Engine stdio
 initialization alone leaves those executable globals null during constructors.
-The compiled [C++ startup fixture](../src/system-tests/clang/startup/README.md)
+The compiled [C++ startup fixture](../src/aux/clang/test/startup/README.md)
 first reproduced 21 failures, then verifies both main-signature variants through
 real prioritized constructors, redirected input/output, environment, existing
 sleep continuations and current C++ archive allocation/ownership. Keep local
@@ -1214,9 +1220,9 @@ registration flags;
 descriptor streams currently write directly, so return output is not buffered
 flush acceptance.
 
-`tests/guest-session-aux-bash.json` explicitly runs the installed source-built
+`src/vfs/root/test/guest-session/aux-bash.json` explicitly runs the installed source-built
 command, including failures, file I/O, child processes and delayed interactive
-input. Run `python3 tests/guest-session-check.py --scenario aux-bash --page
+input. Run `python3 src/engine/test/guest-session/guest-session-check.py --scenario aux-bash --page
 build/html-rt/bash.html` after rebuilding the page. Both runtime startup paths
 execute the installed `/usr/bin/bash` through the small authored launcher. Its
 explicit argv/environment select `--norc -i`, `/root`, `/bin:/usr/bin`, xterm and
@@ -1271,7 +1277,7 @@ CDSort consumers are ELF/BOLT; the Wasm-only guest retains ExtTSP used by
 MachineBlockPlacement. Native profiles keep both algorithms. Do not add a
 private math approximation or fabricate a libc provider for the excluded
 path. Verify complete source profiles, real object imports, option registration
-and required API results. See `src/system-tests/clang/code-layout`; expanding
+and required API results. See `src/aux/clang/test/code-layout`; expanding
 the guest graph requires re-auditing this selection.
 
 For a source-backed output observer, keep LLVM's buffer/formatting implementation
@@ -1387,7 +1393,7 @@ alignment and consumption across double, binary128 and subsequent arguments;
 compiled C++ observations supplement raw argument-blob WAST checks. LLVM's
 inlining statistics can use its raw sink and `format("%.4g", ...)` with these
 shared providers, retaining native/threaded streams. See
-`src/system-tests/clang/inlining` and libc's `narrow-floating-format.wast`.
+`src/aux/clang/test/inlining` and libc's `narrow-floating-format.wast`.
 
 Guest `math.h` classification macros use compiler builtins, preserving the
 operand type and evaluating it once. The five `FP_*` codes are defined in the
@@ -1453,7 +1459,7 @@ constructor parameters derive their types from the actual fields using
 Probe the separate `st_mtime_nsec` member and use its matching access/modify
 nanosecond fields in Unix status conversion. Verify C linkage in both
 `sys/stat.h` and `fcntl.h`, including their shared declarations.
-The compiled observer in `src/system-tests/clang/filesystem` uses real guest
+The compiled observer in `src/aux/clang/test/filesystem` uses real guest
 status calls and actual upstream inline metadata. Keep synthetic large-size
 checks distinct from the VFS's file-size limits, and leave full out-of-line
 LLVM path/status acceptance pending until that source compiles and links.
@@ -1480,7 +1486,7 @@ counts successful `try_lock` calls, and retains noncopyable ownership. Native
 and threaded branches retain their real recursive mutex. These counters are
 valid only for the compiler's single execution thread; engine/kernel scheduling
 and synchronization retain their separate semantics. The compiled observer in
-`src/system-tests/clang/mutex` exercises both wrapper variants and standard scoped
+`src/aux/clang/test/mutex` exercises both wrapper variants and standard scoped
 lock helpers with all functional assertions in WAST. It also links the current
 bootstrap `libc++.a` to execute the real `llvm::call_once`; header compilation
 alone would not establish that archive-backed initialization works.
@@ -1504,7 +1510,7 @@ cache identity, repeated source reads, eager/lazy selection and destruction in
 WAST. A section callback can reenter another cache and yield through shared
 `usleep` while the outer guard is live. Keep complete native/threaded syntax
 checks and the generated guest object rules beside the runtime fixture; see
-`src/system-tests/clang/dwarf-context`.
+`src/aux/clang/test/dwarf-context`.
 
 For GSYM creator and transformer locks, use that same guest mutex wrapper and
 infer each guard's selected type. Check complete native/threaded sources as
@@ -1515,7 +1521,7 @@ names, ownership and error outcomes in WAST. Overwriting the input encoding
 after `GsymReader::copyBuffer` distinguishes copied reader ownership from an
 accidental reference to the caller's storage. Exercise the transformer's
 task-pool branch without interpreting its disabled-thread backend as evidence
-of concurrent compiler execution; see `src/system-tests/clang/gsym`.
+of concurrent compiler execution; see `src/aux/clang/test/gsym`.
 
 For CFG node attributes, replace the omitted string-stream owner with LLVM's
 unbuffered `raw_string_ostream` only in the disabled-thread guest. Preserve the
@@ -1526,7 +1532,7 @@ is unfinished. WAST should check exact bytes, including embedded NULs, empty
 IDs and separators, and retained results after callback-owner destruction.
 An ID callback can yield through shared `usleep` while the raw sink is live.
 Default block frequencies establish cold/unprofiled formatting only; see
-`src/system-tests/clang/cfg-format` for that boundary and complete source gates.
+`src/aux/clang/test/cfg-format` for that boundary and complete source gates.
 Its heat helper needs the shared guest-libc binary64 `log2` and `round`
 providers. Normalize logarithm inputs by their IEEE exponent, including
 subnormals, and reduce the mantissa around one before a bounded atanh series.
@@ -1558,7 +1564,7 @@ or floating exception state. Native builds retain their host function pointers.
 Test complete production objects through public folding APIs: scalar and vector
 declines, exact special values, poison, supported providers, target availability,
 no-builtin/nondeterminism controls and retained call arguments. See
-`src/system-tests/clang/folding` for WAST and full source compatibility gates.
+`src/aux/clang/test/folding` for WAST and full source compatibility gates.
 
 Clang's module cache, dependency filesystem, preamble file owner and driver
 worker pool select compiler-local synchronization aliases. Native/threaded
@@ -1573,7 +1579,7 @@ Single-mutex scoped guards can use `lock_guard` when this libc++ profile omits
 to verify owning buffers, stable cached reads, invalidation keys and generations
 across unsafe unlock and old-owner destruction. Existing controlled clocks and
 signals exercise timed predicates; WAST checks child rejection and parent
-survival. See the [module-cache fixture](../src/system-tests/clang/module-cache/README.md).
+survival. See the [module-cache fixture](../src/aux/clang/test/module-cache/README.md).
 
 Linking the cache's real pruning implementation also retains LLVM directory
 iteration. Check public directory declarations' C linkage in C++: a header that
@@ -1595,7 +1601,7 @@ function with one shared owning callable. Check reentrant capture cleanup,
 service-owned locks outliving temporary cache objects and lock/capture lifetime
 through the existing interrupted POSIX sleep. WAST owns those assertions;
 full worker source compiles establish declaration coverage, not completed
-dependency scanning. See [module task ownership](../src/system-tests/clang/module-tasks/README.md).
+dependency scanning. See [module task ownership](../src/aux/clang/test/module-tasks/README.md).
 
 For LLD's diagnostic owner, adapt the mutex only under that same explicit
 profile and let lock guards deduce its actual type. Keep native/threaded
@@ -1610,7 +1616,7 @@ For full-string validators, also compare the captured full-match length with
 the original string length: anchors alone must not accept a prefix before an
 embedded NUL or trailing newline. Compare real guest results with the original
 native std::regex implementation, including all byte values for narrow character
-ranges. `src/system-tests/clang/spirv-name` checks the actual Driver helper.
+ranges. `src/aux/clang/test/spirv-name` checks the actual Driver helper.
 
 Link LLD's real context and CodeGen/MC option initialization when testing
 fatal diagnostics; do not stub context methods. Verify actual FileOutputBuffer
@@ -1618,7 +1624,7 @@ discard separately from memory lifetime, recover through LLVM's established
 CrashRecoveryContext path, and test ordinary `_exit` in real guest children.
 Managed shutdown, ordinary static callbacks and context cleanup have different
 exit rules. A yielding cleanup callback must resume after arena destruction
-with the context cleared. See the [LLD diagnostic fixture](../src/system-tests/clang/lld-diagnostics/README.md).
+with the context cleared. See the [LLD diagnostic fixture](../src/aux/clang/test/lld-diagnostics/README.md).
 
 LLD's `unlinkAsync` is an optional output-removal optimization. In the explicit
 disabled-thread guest, reuse its upstream one-thread fallback and let the
@@ -1630,7 +1636,7 @@ still read old bytes, and destruction/discard removes only temporary files.
 Separate mapped-memory lifetime from temporary-file lifetime. Existing shared
 sleep can interrupt this ownership interval; no new scheduler is required.
 Exercise ordinary and LTO stream buffering, seek/read/write and device fallback
-through those owners. See [LLD filesystem ownership](../src/system-tests/clang/lld-filesystem/README.md).
+through those owners. See [LLD filesystem ownership](../src/aux/clang/test/lld-filesystem/README.md).
 
 Public pointer-format macros must follow the compiler's actual pointer integer
 aliases. A 32-bit pointer typedef can be `long`, while `uint32_t` is `int`, so
@@ -1647,7 +1653,7 @@ queued captures, nested submissions, joined-error order, errors transferred
 past backend destruction and reentrant cleanup while the owner is still live.
 Suspend a real queued callback through the existing interrupted sleep controls
 with both captures and errors alive. The
-[ThinLTO error fixture](../src/system-tests/clang/lto-errors/README.md) uses the
+[ThinLTO error fixture](../src/aux/clang/test/lto-errors/README.md) uses the
 actual base owner and both production aggregation callers; it does not establish
 bitcode compilation or automatic draining of an unwaited backend.
 
@@ -1719,7 +1725,7 @@ disabled-thread guest boundary keeps an atomic count and checks completion;
 TaskGroup already executes callbacks synchronously in that profile. Reject
 pending waits/destruction and count wrap through real guest abort even under
 `NDEBUG`. Preserve native/threaded blocking synchronization. The source-backed
-observer in `src/system-tests/clang/parallel` tests actual TaskGroup/scalar
+observer in `src/aux/clang/test/parallel` tests actual TaskGroup/scalar
 algorithms, capture lifetime and nested calls. Each invalid latch operation
 runs in a real guest child; WAST checks SIGABRT wait status and parent survival
 through native, sanitized and packaged browser runtimes. This compiler-local
@@ -1731,7 +1737,7 @@ their type from that field; native/threaded branches keep standard mutexes.
 Its function-local vector still requires real `__cxa_atexit`. Do not replace
 that registry with a leaked allocation, suppress static destructors or claim
 full lifecycle acceptance from entry-storage tests. The observer in
-`src/system-tests/clang/time-profiler` includes actual source types and checks
+`src/aux/clang/test/time-profiler` includes actual source types and checks
 owning names/metadata, instant snapshots and moves with current C++ archives.
 Flame-graph helpers truncate each time point to microseconds before subtraction;
 truncating the duration instead changes fractional-boundary results. Check
@@ -1748,14 +1754,14 @@ Delegate allocation observers to the real allocator and use an earlier C
 atexit reporter to check that the actual static vector releases its backing
 allocation once. Sequential finished instances exercise this disabled-thread
 compiler profile; they do not establish concurrent LLVM thread profiling. See
-the [profiler fixture](../src/system-tests/clang/time-profiler/README.md).
+the [profiler fixture](../src/aux/clang/test/time-profiler/README.md).
 
-The observer in `src/system-tests/clang/synchronization` executes the actual
+The observer in `src/aux/clang/test/synchronization` executes the actual
 generic PerThreadAllocator, LLVM's out-of-line atomic ID function and current
 C++ archives with an aligned observer allocator. WAST checks cache/move
 ownership, forwarding and local destruction. It now retains normal static
 registration flags, as does the optional-query fixture's real system_error.cpp.
-The [shutdown fixture](../src/system-tests/clang/shutdown/README.md) verifies
+The [shutdown fixture](../src/aux/clang/test/shutdown/README.md) verifies
 compiler-generated globals/local statics, C callbacks, selective/reentrant
 finalization and actual cache backing-allocation release. Its malloc/free
 observers delegate to real allocation; registration flags and registry ownership
@@ -1780,7 +1786,7 @@ raw double stream uses exponent formatting. Neither reproduces Mustache's
 default six-significant-digit general formatting. The explicit guest numeric
 helper instead calls the real exact wide formatter, bounds/checks its ASCII
 result and returns an owning string; native LLVM retains its original stream.
-`src/system-tests/clang/mustache` checks explicit text/length/terminators for
+`src/aux/clang/test/mustache` checks explicit text/length/terminators for
 37 binary64 bit patterns and complete byte agreement with independently run
 native classic-locale streams. Both observers record results; WAST owns all
 assertions. The fixture also checks heap-backed concatenation, copy/move
@@ -1795,7 +1801,7 @@ order. Nested constructors register dependencies before their owners, so an
 owner's destructor can still use its dependency. Adapt the unavailable recursive
 mutex only under the explicit disabled-thread guest profile, retaining the
 native/threaded standard backend and upstream registry code. The source-backed
-observer in `src/system-tests/clang/managed-static` checks repeated empty
+observer in `src/aux/clang/test/managed-static` checks repeated empty
 shutdown, reuse, custom/array deleters and claimed-object lifetime with normal
 static-registration flags. A claim transfers the object's lifetime but leaves
 its registration until shutdown; do not reconstruct the handle before that
@@ -1807,7 +1813,7 @@ Its guest-only LLVM-owned result retains a shared deferred callable and value,
 reference or void storage. Submission/destruction do not execute it; wait/get
 or the executor's queued thunk execute once. Keep native/threaded standard
 futures and avoid types in `std`. The actual source-backed observer in
-`src/system-tests/clang/thread-pool` verifies move-only capture/result lifetime,
+`src/aux/clang/test/thread-pool` verifies move-only capture/result lifetime,
 aligned storage, shared references, recursive submissions and draining on
 destruction. Preserve upstream queue semantics: a single-thread group wait
 drains all groups, while a future get may force its task before earlier queued
@@ -1828,7 +1834,7 @@ after EINTR: the current libc remainder does not accurately describe time left.
 Other wait failures and failed random reads terminate through real guest abort.
 
 Compile actual `ExponentialBackoff.cpp` with current C++ archives and the
-production CRT/libc. The observer in `src/system-tests/clang/backoff` records
+production CRT/libc. The observer in `src/aux/clang/test/backoff` records
 values only; WAST checks range/variation, expired timeouts and a live minimum
 sleep. Its controlled scenario advances the injected monotonic clock early,
 interrupts a wait and checks exact intervals plus the final deadline clamp.
@@ -1848,7 +1854,7 @@ errors or infer remote process death from the local namespace. Propagate failed
 host identity during lock creation; unavailable identity during liveness checks
 requires a conservative answer. Do not add a fabricated session-ID provider.
 
-The observer in `src/system-tests/clang/lock-owner` executes the actual private
+The observer in `src/aux/clang/test/lock-owner` executes the actual private
 LLVM helper and real guest imports. Keep assertions in WAST. Use two pipes to
 hold a child in READ, query it without interruption, release it and observe EOF
 from process exit. Query the still-allocated zombie before reaping; then verify
@@ -1862,7 +1868,7 @@ Keep public math constants separate from function availability. Guest
 `FP_ILOGB0` and `FP_ILOGBNAN` derive from `INT_MIN` and `INT_MAX`; they are
 integer constant expressions and do not imply an `ilogb` provider. LLVM's
 private APFloat helpers consume them in overlay mode. The compiled observer in
-`src/system-tests/clang/logb` uses the actual staged exponent helpers with
+`src/aux/clang/test/logb` uses the actual staged exponent helpers with
 APFloat's no-errno/no-exception configuration and volatile binary32/64/128
 inputs. Assert subnormal exponents and special-value sentinels in WAST without
 narrowing long double or substituting a host implementation. Check the actual
@@ -2002,7 +2008,7 @@ make -C src/cli-rt terminal-check terminal-check-sanitize
 ```
 
 Their authored WAT fixture and Python driver live under
-`src/system-tests/cli-runtime/terminal`. They use private PTYs, compare restored
+`src/cli-rt/test/terminal`. They use private PTYs, compare restored
 termios exactly, inspect stream identity and alias routing, and verify binary
 input, Readline editing/EOF, dimensions, timeout and host-signal cleanup.
 The ordinary gate also leaves Bash idle for 31 seconds before another command.
@@ -2012,8 +2018,8 @@ the signal: receiving command output alone does not establish that boundary.
 The resize and interruption contracts also run against the packaged worker:
 
 ```sh
-node tests/guest-session-worker.cjs build/html-rt/bash.html src/system-tests/cli-runtime/terminal/resize.json
-node tests/guest-session-worker.cjs build/html-rt/bash.html src/system-tests/cli-runtime/terminal/interruptions.json
+node src/html-rt/test/guest-session/worker.cjs build/html-rt/bash.html src/cli-rt/test/terminal/resize.json
+node src/html-rt/test/guest-session/worker.cjs build/html-rt/bash.html src/cli-rt/test/terminal/interruptions.json
 ```
 
 Reports go under
@@ -2023,14 +2029,14 @@ fixtures; real host identity belongs to application startup.
 
 The application host-boundary checks use
 authored WAT fixtures and a Python driver under
-`src/system-tests/cli-runtime/entrypoints`, with generated fixtures/results
+`src/cli-rt/test/entrypoints`, with generated fixtures/results
 under `build/system-tests/cli-runtime/entrypoints`. They require no Node or
 GUI browser. Standalone WAST uses the complete streaming conformance runner:
 
 ```sh
 build/cli-rt/wast --verbose src/vfs/root/test/aux/libc/allocator.wast
-build/cli-rt/wast --json tests/engine-regressions/shared-libc.wast
-build/cli-rt/wast --suite --jobs=2 --expected-failures=tests/native-corpus-expected-failures.txt --results=build/cli-rt/corpus-results.json
+build/cli-rt/wast --json src/vfs/root/test/engine-regressions/shared-libc.wast
+build/cli-rt/wast --suite --jobs=2 --expected-failures=src/cli-rt/test/native-corpus-expected-failures.txt --results=build/cli-rt/corpus-results.json
 make -C src/cli-rt wast-check wast-check-sanitize
 ```
 
@@ -2056,7 +2062,7 @@ without a Bash bootstrap or static test libc.
 Language scripts can resume finite SELECT deadlines; external terminal input
 requires runtime context. Standalone scripts and batch children cannot launch
 nested host batches. The private host boundary driver and authored WAST fixtures
-live under `src/system-tests/cli-runtime/wast`, with reports under the matching
+live under `src/cli-rt/test/wast`, with reports under the matching
 `build/system-tests` path. It verifies CLI, evidence, namespace and isolation
 contracts; package assertions remain in package WAST files.
 
@@ -2138,7 +2144,7 @@ kernel blocking EAGAIN registers a wait; nonblocking EAGAIN does not. Guest
 adapters yield only for the registered wait. Keep `F_GETFL`/`F_SETFL` state on
 the shared OFD and `FD_CLOEXEC` on the descriptor. Check status changes through
 aliases and fork, immutable access mode, append placement, and both fixed and
-variadic import arguments. `src/system-tests/scheduling/pipe-modes.wast` checks
+variadic import arguments. `src/vfs/root/test/system/scheduling/pipe-modes.wast` checks
 restored blocking reads, EOF wakeup and append aliases; `cpu.wast` checks
 blocking transfer backpressure. Test closed descriptors owned by the fixture;
 initial stdio differs between language and production terminal contexts, and
@@ -2177,7 +2183,7 @@ Preserve existing wire records when adding metadata fields. `fstatat_v1` and
 `path_stat_v1` retain their 48-byte metadata record; `fstatat_v2` returns the
 existing 128-byte guest stat layout with namespace link counts. Validate the
 complete destination before copying a successful result, and leave it untouched
-on failure. The [hard-link fixture](../src/system-tests/clang/hardlink/README.md)
+on failure. The [hard-link fixture](../src/aux/clang/test/hardlink/README.md)
 checks both layouts and canaries in WAST, with ordinary-CRT C++ observations
 including fork/wait. Opaque inode ownership and clone teardown remain private
 sanitizer checks.
@@ -2202,7 +2208,7 @@ and no third argument for queries. Fixed `fcntl_v1`/legacy env calls receive
 the record pointer directly; compiled variadic calls pass a slot containing it
 through libc or `fcntl_varargs_v1`. Validate complete input/output spans before
 copying, including output crossing a protected page. The
-[record-lock fixture](../src/system-tests/clang/locks/README.md) checks actual
+[record-lock fixture](../src/aux/clang/test/locks/README.md) checks actual
 LLVM blocking methods and ordinary processes in WAST; opaque owner/wait/refcount
 and admission invariants remain native sanitizer checks. Timed tryLockFile and
 full Path/C++ shutdown need separate acceptance.
@@ -2245,13 +2251,16 @@ allocation failure silently truncate the report or turn a failed setup into PASS
 
 ## Installed Corpus Workflow
 
-Treat `src/vfs/root/test` as installed snapshots. Edit official inputs
-only through a pinned upstream update, authored regressions under `tests/`,
-package tests under `src/aux/NAME/tests`, or system tests under
-`src/system-tests`. These WAST sources are copied directly; submodules remain
-read-only. Package/system snapshots mount under `tests/aux/NAME` and
-`tests/system`. They require Bash process context and are listed as skipped
-in isolated language batches; run them with `/bin/wast --verbose` from Bash.
+Authored guest tests live in `src/vfs/root/test/` as the single authored
+source. The pinned spec submodule continues to supply the external corpus and
+remains read-only. The in-progress test tree migration in
+`docs/active-test-migration.md` is still consolidating per-package
+`src/aux/NAME/tests` directories; during that slice, edit tests at whichever
+of the two possible homes is authoritative, since the corpus collector
+prefers the legacy source and falls back to the canonical VFS location.
+Package and system WAST mount under `/root/test/aux/NAME` and
+`/root/test/system`, require Bash process context, are listed as skipped in
+isolated language batches and are run with `/bin/wast --verbose` from Bash.
 
 ```sh
 make -C src/html-rt vfs-tests-install
@@ -2300,8 +2309,8 @@ Keep page generation, focused checks and browser acceptance separate:
 ```sh
 ./start.sh --html-bash
 ./start.sh --html-check
-python3 tests/test-corpus-bash.py build/html-rt/bash.html
-node tests/c-engine-vfs-browser.cjs build/html-rt/bash.html
+python3 src/html-rt/test/test-corpus-bash.py build/html-rt/bash.html
+node src/html-rt/test/vfs-browser.cjs build/html-rt/bash.html
 make -C src/cli-rt vfs-check
 ```
 
@@ -2331,7 +2340,7 @@ Verify guest redirection as well as lower-level VFS access.
 
 Check a public formatter declaration against both the provider's Wasm signature
 and real compiler-generated variadic calls. `vsnprintf.wast` covers bounded
-shared-libc output; `src/system-tests/clang/stdio` compiles C and C++ `<cstdio>`
+shared-libc output; `src/aux/clang/test/stdio` compiles C and C++ `<cstdio>`
 clients that record observations, with all assertions in WAST. Test count-only
 calls, truncation and exact fit, untouched canaries, errno and reusing the same
 `va_list` before reading its original first argument. Put libc++ headers before
@@ -2346,7 +2355,7 @@ attribute redeclaration can leave `std::vsnprintf` bound to an earlier raw
 import. Explicit C linkage for a fixture main matches the C CRT under
 `-ffreestanding`; the full C++ driver entry and constructors still need separate
 startup acceptance. Do not infer complete printf conformance from this subset.
-`src/system-tests/clang/wide-format` adds real `<wchar.h>`/`<cwchar>` calls,
+`src/aux/clang/test/wide-format` adds real `<wchar.h>`/`<cwchar>` calls,
 including mixed 4/8/16-byte variadic arguments and direct `swprintf` calls.
 Keep the beginning of synthetic WAST argument areas aligned to the widest
 argument: an eight-byte-aligned area can pass double cases while every
@@ -2371,6 +2380,16 @@ successful linking and execution of the emitted module. See the
 [non-LTO LLD trial](../src/aux/clang/lld-no-lto.md). This does not remove the
 optimizer from Clang itself or implement deferred loading of LTO support.
 
+A compiler's hosting format and output target are separate. Wasm-hosted Clang
+can emit AMD64 COFF when its X86 backend is built. Bypass Wasm-specific
+`clang.cfg` defaults with `--no-default-config` for a freestanding cross-target
+compile; do not pass the guest Wasm CRT or libc to the Windows link. Keep the
+COFF linker in its own package/profile, rejecting unsupported LTO/PDB requests,
+and reuse LLVM's existing deferred-task ownership for guest-only future adapters.
+Host object preflights do not prove guest compilation; inspect real guest
+outputs with bounded WAST checks, then verify the downloaded executable on the
+target OS. See the [minimal COFF package](../src/aux/lld-link/README.md).
+
 Guest linking must also produce the runtime's library namespaces. WASTE
 registers a `.so.wasm` provider under its basename without that suffix. The
 private LLD named-import profile resolves actual shared-provider symbols and
@@ -2379,7 +2398,7 @@ Fixed-address commands import process memory and can use this binding without
 PIE relocation globals. Verify that local definitions and raw kernel imports
 retain their existing bindings, reject incompatible provider signatures, and
 execute the emitted file without a host rewrite. The
-[SDK link fixture](../src/system-tests/clang/lld-link/README.md) tests this
+[SDK link fixture](../src/aux/clang/test/lld-link/README.md) tests this
 compiler/linker/runtime boundary; host-compiled inputs do not prove guest
 compiler execution.
 
@@ -2399,16 +2418,16 @@ After native gates pass, run focused WAST worker tests from their generated
 payload and exercise the unified offline Bash/test page:
 
 ```sh
-node tests/c-engine-browser-runtime.cjs
+node src/html-rt/test/browser-runtime.cjs
 ./start.sh --html-bash
-node tests/c-engine-offline-browser.cjs --page=bash
+node src/html-rt/test/offline-browser.cjs --page=bash
 ```
 
 Interactive runtime changes also run:
 
 ```sh
 ./start.sh --html-bash
-node tests/c-engine-bash-browser-runtime.cjs build/html-rt/bash.html
+node src/html-rt/test/bash-browser-runtime.cjs build/html-rt/bash.html
 ```
 
 Supported official Wasm/WAT/WAST language tests may be cross-checked against
@@ -2603,7 +2622,7 @@ frames, preserving the synchronous-callback guard. While restoring a saved
 blocking call chain, let the import own its EINTR/restart decision; do not
 consume its signal at an earlier caller opcode checkpoint. Keep unsigned
 alarm results separate from negative errors with the widened versioned ABI.
-The full upstream `Watchdog.cpp` fixture under `src/system-tests/clang/watchdog`
+The full upstream `Watchdog.cpp` fixture under `src/aux/clang/test/watchdog`
 checks ordinary libc, CPU work, fork/exec and concurrent timer delivery; its
 controlled WAST checks exact below/on-deadline behavior and masked pending
 signals through existing injected clocks. No host alarm or LLVM-local timer
@@ -2623,8 +2642,9 @@ with signal 6 if the handler returns or the signal is ignored. Recursive
 abort from a handler forces termination without invoking the handler again.
 The legacy `env.abort` import uses the same implementation. Preserve raw
 signal status for waitpid; never call host abort or terminate the browser.
-`src/system-tests/abort` captures compiled C handler/fork observations and
-asserts them in WAST from the surviving Bash on both runtimes.
+`src/engine/test/abort` compiles the C handler/fork probe (`probe.c`,
+`run.sh`); `src/vfs/root/test/system/abort/abort.wast` captures the
+observations and asserts them from the surviving Bash on both runtimes.
 Stop/continue lifecycle states and asynchronous caught handlers during CPU-only
 work still require implementation beyond runnable process selection.
 
@@ -2701,7 +2721,7 @@ Compare effects using distinct source functions/data and an untouched peer
 table; successful setup alone cannot prove the instruction was emitted. Check
 both address widths, repeated drops, post-drop traps and zero-length operations.
 Pair invalid-module assertions with quoted malformed-text assertions.
-`tests/test-suite-flat-bulk.wast` supplies the portable checks; keep ordinary
+`src/engine/test/test-suite/flat-bulk.wast` supplies the portable checks; keep ordinary
 rejection probes and resource-bound failures explicit too.
 
 
@@ -2717,7 +2737,7 @@ Copy addresses use each table's width. The count is i64 only when both tables
 are table64, otherwise i32; fill uses its table's width for address and count.
 Check both overlap directions with distinct entries, no writes after a bounds
 trap, zero-length boundary behavior, nulls, reference identity/nullability and
-cross-module function owners. `tests/test-suite-table-copy-fill.wast` covers
+cross-module function owners. `src/engine/test/test-suite/table-copy-fill.wast` covers
 portable valid/invalid/malformed cases; retain ordinary rejection probes
 and sanitizer/leak gates.
 
@@ -2730,7 +2750,7 @@ funcref (elem ...))` and table64 `(table (export "name") i64 funcref (elem
 element segment to the just-declared table, and emit the inline export through
 the ordinary table export metadata. Test both address widths with indirect
 calls, then import the exported table from a second module to verify aliasing
-and shared contents. `tests/test-suite-exported-table-shorthand.wast` covers
+and shared contents. `src/engine/test/test-suite/exported-table-shorthand.wast` covers
 these paths in native C and the production browser runtime.
 
 When increasing the control nesting bound, keep the validator's temporary

@@ -30,6 +30,7 @@ def spec_sha(spec):
 
 def entries(repo):
     result = []
+    seen = set()
     for root, suite, prefix in layout_roots(repo):
         if not root.is_dir():
             if suite == "wasm-spec":
@@ -37,7 +38,12 @@ def entries(repo):
                 result.extend(collect_layout_tests(root, suite, prefix))
                 continue
             raise ValueError(f"missing test source directory: {root}")
-        result.extend(collect_layout_tests(root, suite, prefix))
+        for test in collect_layout_tests(root, suite, prefix):
+            key = (suite, test["relative"])
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(test)
     return result
 
 
@@ -129,10 +135,10 @@ def prepare(repo, output, payload_path, baseline=None):
                           nativeParity=("shared-engine" if entry["suite"] in ("wasm-spec", "engine-regressions")
                                         or (entry["suite"] == "diy-posix-test" and spec["mode"] == "wast-stream")
                                         else "pending-stage-6")))
-    runner = repo / "tests/html-rt.sh"
+    runner = repo / "src/vfs/root/test/html-rt.sh"
     if not runner.is_file() or runner.is_symlink():
         raise ValueError(f"missing browser test runner source: {runner}")
-    add(TEST_ROOT + "/html-rt.sh", runner.read_bytes(), "test-runner", "tests/html-rt.sh")
+    add(TEST_ROOT + "/html-rt.sh", runner.read_bytes(), "test-runner", "src/vfs/root/test/html-rt.sh")
     if baseline:
         old = previous
         if set(old) != {t["id"] for t in tests}:
@@ -150,7 +156,7 @@ def prepare(repo, output, payload_path, baseline=None):
                     or previous["expect_failure"] != t["expectFailure"] or previous["unsupported"] != t["unsupported"]):
                 raise ValueError(f"test bytes/policy differ from retained baseline: {t['id']}")
     inputs = []
-    for directory in ("tests/diy-posix-test",):
+    for directory in ("src/vfs/root/test/diy-posix-test",):
         for path in sorted((repo / directory).rglob("*")):
             if not path.is_file() or path.suffix == ".wast":
                 continue
@@ -234,7 +240,13 @@ def audit(manifest, read, declared):
                   groups=dict(sorted(Counter(t["group"] for t in tests).items())))
     if actual != manifest["counts"] or sha(encoded(selection(tests))) != manifest["selection_sha256"]:
         raise ValueError("test selection/count/policy metadata differs")
-    if {p for p, e in declared.items() if e["kind"] == 1 and p.startswith(test_root + "/")} != set(files) - {LICENSE} | {manifest_path}:
+    mounted = {p for p, e in declared.items() if e["kind"] == 1 and p.startswith(test_root + "/")}
+    required = set(files) - {LICENSE} | {manifest_path}
+    support_root = test_root + "/.support/"
+    # Authored companions and unselected tests may coexist with the manifest.
+    # The generated support namespace remains exact and fully accounted for.
+    if not required <= mounted or {p for p in mounted if p.startswith(support_root)} != {
+            p for p in files if p.startswith(support_root)}:
         raise ValueError("unlisted or omitted test corpus files")
     return manifest
 

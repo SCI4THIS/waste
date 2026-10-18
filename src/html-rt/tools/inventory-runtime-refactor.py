@@ -123,9 +123,9 @@ def collect(root: Path) -> dict:
     generator = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(generator)
     roots = (("submodules/wasm-spec/test", "wasm-spec", ""),
-             ("tests/diy-posix-test", "diy-posix-test", "diy-posix-test"),
+             ("src/vfs/root/test/diy-posix-test", "diy-posix-test", "diy-posix-test"),
              ("src/aux/libc/tests", "aux", "aux/libc"),
-             ("src/system-tests/libc", "system", "system/libc"))
+             ("src/vfs/root/test/system/libc", "system", "system/libc"))
     payload_path = root / "build/html-rt/tests/payload.json"
     payload = json.loads(payload_path.read_text())["tests"] if payload_path.is_file() else []
     packaged = {test["path"]: test for test in payload}
@@ -217,7 +217,8 @@ def collect(root: Path) -> dict:
                 ("submodules/coreutils/COPYING",
                  "/usr/share/licenses/coreutils/COPYING"))],
             "test_support": [fingerprint(root, path) for directory in (
-                "tests/diy-posix-test", "src/aux/libc/tests", "src/system-tests")
+                "src/vfs/root/test/diy-posix-test", "src/aux/libc/tests",
+                "src/vfs/root/test/system")
                 for path in sorted((root / directory).rglob("*"))
                 if path.is_file() and path.suffix != ".wast"],
             "installed_vfs": installed_vfs,
@@ -232,7 +233,7 @@ def measure(root: Path, output: Path, report: dict, selection: str | None) -> No
                  [str(root / "build/cli-rt/wast"), "--json", test["source"]], 60)
                 for test in report["corpus"] if test["group"] == "core"]
     commands += [("bash-" + str(index),
-                  ["node", "tests/c-engine-bash-browser-runtime.cjs",
+                  ["node", "src/html-rt/test/bash-browser-runtime.cjs",
                    "build/html-rt/bash.html", *args], 45)
                  for index, args in enumerate(BASH_SCENARIOS)]
     vfs = vfs_tool.load(root / "src/vfs")
@@ -251,13 +252,13 @@ def measure(root: Path, output: Path, report: dict, selection: str | None) -> No
             "WASTE_COREUTILS_LS_COMMAND=" + guest_command,
             "WASTE_COREUTILS_LS_EXPECT=" + expected,
             "WASTE_COREUTILS_LS_EXPECT_COUNT=" + str(count),
-            "node", "tests/c-engine-bash-browser-runtime.cjs",
+            "node", "src/html-rt/test/bash-browser-runtime.cjs",
             "build/html-rt/bash.html",
             "--coreutils-ls", "--full-package"], 45))
     commands += [("browser-workers",
-                  ["node", "tests/c-engine-browser-runtime.cjs"], 300),
-                 ("terminal-model", ["node", "tests/c-engine-terminal-model.cjs"], 30),
-                 ("terminal-glf", ["node", "tests/c-engine-terminal-glf.cjs"], 30)]
+                  ["node", "src/html-rt/test/browser-runtime.cjs"], 300),
+                 ("terminal-model", ["node", "src/html-rt/test/terminal-model.cjs"], 30),
+                 ("terminal-glf", ["node", "src/html-rt/test/terminal-glf.cjs"], 30)]
     for name, command, timeout in commands:
         if selection and selection not in name:
             continue

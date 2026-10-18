@@ -95,10 +95,10 @@ uint32_t posix_kernel_file_link_count(const posix_kernel *kernel,
     return count;
 }
 
-static uint64_t inode_allocate(posix_kernel *kernel) {
+uint64_t posix_kernel_allocate_inode(posix_kernel *kernel) {
     /* Fork shares this allocator, not mutable engine-global state. Deleted
      * entries and independently created child files cannot reuse an inode. */
-    if (!kernel->inode_sequence || kernel->inode_sequence->next == UINT64_MAX)
+    if (!kernel || !kernel->inode_sequence || kernel->inode_sequence->next == UINT64_MAX)
         return 0;
     return kernel->inode_sequence->next++;
 }
@@ -481,7 +481,7 @@ int posix_kernel_symlinkat(posix_kernel *kernel,
     memcpy(copy, target, target_length);
     copy[target_length] = 0;
     posix_path_metadata metadata = { POSIX_NODE_SYMLINK, 0777, 0, 0,
-        (int64_t)target_length, inode_allocate(kernel), 0, 0 };
+        (int64_t)target_length, posix_kernel_allocate_inode(kernel), 0, 0 };
     metadata_set_now(kernel, &metadata);
     return posix_kernel_path_add_symlink(kernel, normalized, &metadata, copy);
 }
@@ -503,7 +503,7 @@ int posix_kernel_path_mkdir(posix_kernel *kernel, const uint8_t *path,
     if (path_prefix_is_file(kernel, normalized)) return -POSIX_ENOTDIR;
     posix_path_metadata metadata = { POSIX_NODE_DIRECTORY,
         (uint32_t)(mode ? mode : 0777), 0, 0, 0,
-        inode_allocate(kernel), 0, 0 };
+        posix_kernel_allocate_inode(kernel), 0, 0 };
     metadata_set_now(kernel, &metadata);
     return posix_kernel_path_add_data(kernel, normalized, &metadata, NULL, 0);
 }
@@ -1073,10 +1073,10 @@ posix_kernel *posix_kernel_create(int interactive) {
         POSIX_NODE_DIRECTORY, 0755, 0, 0, 0, 2, 0, 0
     };
     const posix_path_metadata devices = {
-        POSIX_NODE_DIRECTORY, 0755, 0, 0, 0, inode_allocate(k), 0, 0
+        POSIX_NODE_DIRECTORY, 0755, 0, 0, 0, posix_kernel_allocate_inode(k), 0, 0
     };
     const posix_path_metadata null_device = {
-        POSIX_NODE_NULL, 0666, 0, 0, 0, inode_allocate(k), 0, 0
+        POSIX_NODE_NULL, 0666, 0, 0, 0, posix_kernel_allocate_inode(k), 0, 0
     };
     if (posix_kernel_path_add(k, "/", &root) < 0 ||
         posix_kernel_path_add(k, "/bin", &directory) < 0 ||
@@ -2061,7 +2061,7 @@ static int kernel_open_at(posix_kernel *kernel, int directory, const uint8_t *pa
         if (!(flags & POSIX_O_CREAT)) return -POSIX_ENOENT;
         posix_path_metadata metadata = { POSIX_NODE_REGULAR,
             ((uint32_t)mode & 07777u) & ~kernel->creation_mask, 0, 0, 0,
-            inode_allocate(kernel), 0, 0 };
+            posix_kernel_allocate_inode(kernel), 0, 0 };
         metadata_set_now(kernel, &metadata);
         result = posix_kernel_path_add_data(kernel, normalized, &metadata, NULL, 0);
         if (result < 0) return result;
@@ -2124,7 +2124,7 @@ int posix_kernel_shm_open(posix_kernel *kernel, const uint8_t *name,
         posix_path_metadata metadata = { POSIX_NODE_REGULAR,
             ((uint32_t)(mode ? mode : 0666) & 0777u) & ~kernel->creation_mask,
             kernel->uid, kernel->gid,
-            0, inode_allocate(kernel), 0, 0 };
+            0, posix_kernel_allocate_inode(kernel), 0, 0 };
         metadata_set_now(kernel, &metadata);
         object->file = file_object_create(NULL, 0, &metadata);
         if (!object->file) {

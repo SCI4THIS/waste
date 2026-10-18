@@ -1,0 +1,37 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/staged-first",
+      "source": "src/vfs/root/test/system/cli-runtime/staged-identities.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/staged-second",
+      "source": "src/vfs/root/test/system/cli-runtime/staged-identities.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/staged-identities.wast",
+      "source": "src/vfs/root/test/system/cli-runtime/staged-identities.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /tmp/staged-identities.wast; STAGED_IDENTITIES_RESULT=$?; printf \"__STAGED_IDENTITIES_%s__\\n\" \"$STAGED_IDENTITIES_RESULT\"\n"
+    },
+    {
+      "after": "__STAGED_IDENTITIES_",
+      "text": "exit \"$STAGED_IDENTITIES_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "WAST: 6 PASS, 0 FAIL, 6 total",
+    "__STAGED_IDENTITIES_0__\r\n"
+  ],
+  "assertions": 7,
+  "exitStatus": 0
+}

@@ -14,9 +14,9 @@ implemented. The original `wasm-ld.wasm` remains the LTO-enabled comparison.
 
 ```sh
 make -C src/aux clang-lld-no-lto
-make -C src/system-tests test-lld-link-no-lto
+make -C src/aux test-lld-link-no-lto
 ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
-  make -C src/system-tests test-lld-link-no-lto \
+  make -C src/aux test-lld-link-no-lto \
   WASM_RUNNER="$PWD/build/cli-rt/wasm-sanitize"
 ```
 
@@ -39,7 +39,7 @@ imports use the provider's basename without `.so.wasm`, matching the existing
 engine loader registration. Upstream symbol resolution and signature checks
 still apply, local definitions stay local, and unresolved kernel calls keep
 their original namespaces. The original upstream profile remains unchanged.
-`make -C src/system-tests test-lld-sdk` checks public-header calls, the shared
+`make -C src/aux test-lld-sdk` checks public-header calls, the shared
 CRT, emitted import namespaces, output/exit status and signature rejection,
 without a host-side rewrite of the guest link result.
 
@@ -50,7 +50,7 @@ layout used by the original driver/common objects; variant-local bitcode helper
 state is not instantiated in the disabled path.
 
 All runtime expectations live in system WAST under
-`src/system-tests/clang/lld-link`: ten assertions cover real object/archive
+`src/aux/clang/test/lld-link`: ten assertions cover real object/archive
 linking and execution of the result; six more cover nonzero bitcode diagnostics
 and absence of output for direct and archived bitcode. The shell files only
 stage inputs, record command observations and combine WAST runner statuses.
@@ -75,8 +75,8 @@ The production-worker scenario stages the same artifact and inputs into the
 packaged offline page, without installing them in the source VFS:
 
 ```sh
-node tests/guest-session-worker.cjs build/html-rt/bash.html \
-  src/system-tests/clang/lld-link/no-lto-browser.json
+node src/html-rt/test/guest-session/worker.cjs build/html-rt/bash.html \
+  src/aux/clang/test/lld-link/no-lto-browser.json
 ```
 
 Its host wait budget is 240 seconds and guest execution deadline is 180 seconds.

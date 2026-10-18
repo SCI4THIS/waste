@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/folding.wasm",
+      "source": "build/system-tests/clang/folding/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/folding.wast",
+      "source": "src/vfs/root/test/system/clang/folding/folding.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/folding.wasm > /tmp/folding.bin; printf '%s\\n' \"$?\" > /tmp/folding-status.txt; /bin/wast --verbose /tmp/folding.wast; FOLDING_RESULT=$?; printf '__FOLDING_%s__\\n' \"$FOLDING_RESULT\"\n"
+    },
+    {
+      "after": "__FOLDING_",
+      "text": "exit \"$FOLDING_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "__FOLDING_0__\r\n",
+    "WAST: 63 PASS, 0 FAIL, 63 total"
+  ],
+  "assertions": 64,
+  "exitStatus": 0
+}

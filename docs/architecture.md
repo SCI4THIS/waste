@@ -34,7 +34,6 @@ src/cli-rt/    native CLI/session drivers, mmap harness, platform library,
                and Makefile
 src/aux/libc/  guest libc.so.wasm, guest CRT, private interpreter support,
                package WAST tests, shared-import tools and Make rules
-src/system-tests/  system interaction WAST and compiler SDK probes
 src/html-rt/   browser API, browser POSIX adapter, HTML tools,
                and Wasm Makefile
 ```
@@ -83,6 +82,14 @@ accessors. There is no embedded executable or WAT-rewriting build path. Guest-li
 are under `src/aux/libc/`, and browser packaging tools are under
 `src/html-rt/tools/`. Nothing under `build/` is a source of truth.
 
+The guest Clang in `src/aux/clang` runs as Wasm and includes WebAssembly and
+X86 output backends, with Wasm defaults preserved. `src/aux/lld-link` owns a
+separate COFF-only guest linker and small KERNEL32/USER32 import libraries for
+the freestanding Windows x64 GUI demo. It emits PE32+ for download and execution on
+Windows; PE loading and Windows syscalls are not added to the engine. No Windows
+SDK, target CRT or DLL is bundled. See the
+[COFF package](../src/aux/lld-link/README.md) for build and guest commands.
+
 Authored browser assets are flattened under `src/html-rt/src/`: the shell/test
 page uses `index.html`, `app.js`, `worker.js`, and `style.css`, with shared
 `test-suite.js` for installed-corpus execution. Focused Node worker conformance
@@ -98,8 +105,10 @@ as are `/bin/wat` and `/bin/wast` interpreter nodes when absent.
 Guest-created hard links share engine-owned inode contents and metadata, including
 symlink target bytes. Descriptor and mapping references retain that object after
 unlink; they do not increase `st_nlink`. Counts describe the current kernel's
-pathname table. Fork shares inode objects and their monotonic allocator, while
-its pathname table remains a clone reconciled at reap. Immediate cross-process
+pathname table. Fork shares inode objects and their monotonic allocator.
+Runtime-staged files and directories also allocate through that sequence after
+mounting the catalogue.
+The pathname table remains a clone reconciled at reap. Immediate cross-process
 namespace visibility and deletion reconciliation remain follow-ups. The original
 48-byte path-metadata imports remain stable; `fstatat_v2` returns the established
 128-byte guest stat layout with link counts. This does not change HTML transport
@@ -142,12 +151,14 @@ assertions across READ/SELECT/HOST_IO/PUMP resumes and mapping failed child asse
 exit status without stopping the parent shell. See `native-guest-session.md`.
 Host engine assets and generated transport metadata are not guest VFS nodes.
 
-`src/vfs/root/test` holds explicitly installed snapshots of the WebAssembly corpus
-and authored `tests/engine-regressions/*.wast`, with a mounted policy/provenance
-manifest and companion assets. Sources remain in the pinned spec submodule,
-top-level regression directories, package `src/aux/NAME/tests` directories and
-`src/system-tests`. The
-corpus collector shares selection/grouping logic with the installer.
+`src/vfs/root/test` mounts the installed WebAssembly corpus, generated manifest
+and companion assets at `/root/test`. Authored guest tests live under
+`src/vfs/root/test/` as the single authored source; the pinned spec submodule
+remains the authoritative source for its external corpus. The corpus collector
+discovers legacy per-package `src/aux/NAME/tests` directories during the
+in-progress migration (`docs/active-test-migration.md`) and falls back to the
+canonical VFS location when the legacy source is removed. The collector shares
+selection/grouping logic with the installer.
 `wast --suite` delegates scheduling to the private `test-suite` companion, which
 consumes `/root/test/manifest.json` and
 WAST/support bytes from an installed directory without Node or an HTML payload.
@@ -375,7 +386,7 @@ Packaged applications execute through the engine's VFS and process-owned
 address spaces. Coreutils pipelines and redirection use kernel descriptors;
 process exit closes pipe endpoints so readers can observe EOF. Rogue and
 ncurses use the shared-library loader and the same TTY path. The portable
-`tests/engine-regressions/shared-libc.wast` regression exercises explicit guest
+`src/vfs/root/test/engine-regressions/shared-libc.wast` regression exercises explicit guest
 `dlopen`, `dlsym`, final `dlclose`, and reopening the installed libraries.
 
 ## Input and Module Pipeline
@@ -757,7 +768,7 @@ and execution on multiple host cores; pthread creation/join and simultaneous
 host-core execution still require implementation.
 Acceptance uses C native/browser contracts.
 
-The scheduling regressions in `src/system-tests/scheduling` cover overlapping
+The scheduling regressions in `src/vfs/root/test/system/scheduling` cover overlapping
 timers, CPU time slices, pipe backpressure, concurrent WAST command namespaces,
 and process-group termination. The group-kill probe creates a child, places it
 in its own process group, then sends SIGTERM and verifies wait status 15 in
@@ -922,9 +933,9 @@ without executing code, reporting the installed library paths, built-in
 adapters and unresolved libraries. Bash imports `lseek` and `__fpurge` directly
 from shared libc using the public SDK signatures.
 
-Package WAST tests under `src/aux/libc/tests` import the installed `libc` and
+Package WAST tests under `src/vfs/root/test/aux/libc` import the installed `libc` and
 Bash's existing `waste-runtime` memory/table. System interactions are tested
-under `src/system-tests/libc`. Both run through `/bin/wast` inside native or
+under `src/vfs/root/test/system/libc`. Both run through `/bin/wast` inside native or
 browser Bash; they inherit the actual loaded production library rather than
 constructing a separate test library. Cross-module pointers, callbacks,
 allocator metadata and errno use the same aliases as applications. Compiler
@@ -1044,7 +1055,7 @@ output. LLVM's guest profile disables `HAVE_GETRUSAGE` and selects its existing
 wall-time/zero-CPU fallback. Resource-limit storage is a compatibility facade
 and does not enforce kernel limits. Shared `_Exit` delegates to the existing
 engine `_exit` path for termination, low-eight-bit status and descriptor
-teardown; the [static shutdown fixture](../src/system-tests/clang/shutdown/README.md)
+teardown; the [static shutdown fixture](../src/aux/clang/test/shutdown/README.md)
 verifies normal C/C++ exit registration and finalization separately.
 
 Shared-libc `execv` passes the current guest `environ` to the existing execve

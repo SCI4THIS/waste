@@ -134,6 +134,7 @@ include $(AUX_DIR)/libncurses/libncurses.mk
 include $(AUX_DIR)/bash/bash.mk
 include $(AUX_DIR)/vim/vim.mk
 include $(AUX_DIR)/clang/clang.mk
+include $(AUX_DIR)/lld-link/lld-link.mk
 
 $(BUILD_DIR)/sleep/nanosleep-runtime.o: $(AUX_DIR)/sleep/nanosleep-runtime.c $(SDK_HEADERS)
 	mkdir -p "$(@D)"
@@ -142,4 +143,4 @@ $(BUILD_DIR)/sleep/nanosleep-runtime.o: $(AUX_DIR)/sleep/nanosleep-runtime.c $(S
 .PHONY: test-sleep
 test-sleep: install-sleep aux-test-runner
 	bash "$(AUX_DIR)/run-wast-tests.sh" "$(REPO_ROOT)" "$(VFS_ROOT)" sleep \
-		"$(AUX_DIR)/sleep/tests" "$(abspath $(BUILD_DIR)/sleep/tests)" "$(abspath $(WASM_RUNNER))"
+		"$(AUX_DIR)/sleep/test/system" "$(abspath $(BUILD_DIR)/sleep/tests)" "$(abspath $(WASM_RUNNER))"

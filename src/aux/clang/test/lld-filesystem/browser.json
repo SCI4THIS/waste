@@ -1,0 +1,39 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/lld-filesystem.wasm",
+      "source": "build/system-tests/clang/lld-filesystem/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/lld-filesystem.wast",
+      "source": "src/vfs/root/test/system/clang/lld-filesystem/filesystem.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/lld-filesystem.wasm > /tmp/lld-filesystem.bin; printf '%s\\n' \"$?\" > /tmp/lld-filesystem-status.txt; /bin/wast --verbose /tmp/lld-filesystem.wast; FILE_STATUS=$?; printf '__LLD_FILE_RESULT_%s__\\n' \"$FILE_STATUS\"\n"
+    },
+    {
+      "after": "__LLD_FILE_COMMIT_SLEEP__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 42001000000
+    },
+    {
+      "after": "__LLD_FILE_RESULT_",
+      "text": "exit \"$FILE_STATUS\"\n"
+    }
+  ],
+  "contains": [
+    "__LLD_FILE_RESULT_0__\r\n",
+    "WAST: 196 PASS, 0 FAIL, 196 total"
+  ],
+  "assertions": 197,
+  "exitStatus": 0,
+  "clockRealtimeNs": "4294967296123456789",
+  "clockMonotonicNs": 42000000000
+}

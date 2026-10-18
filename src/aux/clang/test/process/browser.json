@@ -1,0 +1,38 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/process.wasm",
+      "source": "build/system-tests/clang/process/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/process.wast",
+      "source": "src/vfs/root/test/system/clang/process/process.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/resource-usage.wast",
+      "source": "src/vfs/root/test/aux/libc/resource-usage.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /tmp/resource-usage.wast; /tmp/process.wasm > /tmp/process.bin; printf '%s\\n' \"$?\" > /tmp/process-status.txt; /bin/wast --verbose /tmp/process.wast; result=$?; printf '__CLANG_PROCESS_%s__\\n' \"$result\"\n"
+    },
+    {
+      "after": "__CLANG_PROCESS_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__CLANG_PROCESS_0__\r\n",
+    "WAST: 55 PASS, 0 FAIL, 55 total",
+    "WAST: 42 PASS, 0 FAIL, 42 total"
+  ],
+  "assertions": 98,
+  "exitStatus": 0
+}

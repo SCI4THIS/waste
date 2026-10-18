@@ -1,6 +1,6 @@
 # Retained native kernel coverage
 
-Current CHECK inventory of `tests/posix-kernel.c`: **27 helpers, 200 retained
+Current CHECK inventory of `src/vfs/root/test/diy-posix-test/posix-kernel.c`: **27 helpers, 200 retained
 CHECK sites and 340 successful runtime checks**. See
 [test boundary selection](techniques.md#test-boundary-selection) for the
 distinction between guest outcomes and private C invariants.

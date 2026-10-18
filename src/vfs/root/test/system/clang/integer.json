@@ -1,0 +1,27 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/integer-conversion.wast",
+      "source": "src/vfs/root/test/aux/libc/integer-conversion.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /tmp/integer-conversion.wast; printf '__INTEGER_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__INTEGER_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__INTEGER_0__\r\n",
+    "WAST: 77 PASS, 0 FAIL, 77 total"
+  ],
+  "assertions": 78,
+  "exitStatus": 0
+}

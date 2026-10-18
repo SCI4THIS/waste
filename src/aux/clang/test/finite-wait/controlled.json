@@ -1,0 +1,144 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/finite-wait-controlled.wasm",
+      "source": "build/system-tests/clang/finite-wait/controlled.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/finite-wait-controlled.wast",
+      "source": "src/vfs/root/test/system/clang/finite-wait/controlled.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/finite-wait-controlled.wasm > /tmp/finite-wait-controlled.bin; printf '%s\\n' \"$?\" > /tmp/finite-wait-controlled-status.txt; /bin/wast --verbose /tmp/finite-wait-controlled.wast; printf '__FINITE_WAIT_CONTROLLED_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__FINITE_WAIT_1__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 42999999999,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 43000000000
+    },
+    {
+      "after": "__FINITE_WAIT_2__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 44000000000,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 44999999999,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 45000000000
+    },
+    {
+      "after": "__FINITE_WAIT_3__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 46000000000,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 47999999999,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 48000000000
+    },
+    {
+      "after": "__FINITE_WAIT_4__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 49000000000,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 50999999999,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 51000000000
+    },
+    {
+      "after": "__FINITE_WAIT_5__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 52000000000
+    },
+    {
+      "after": "__FINITE_WAIT_6__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 52999999999,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 53000000000
+    },
+    {
+      "after": "__FINITE_WAIT_7__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 53999999999,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 54000000000
+    },
+    {
+      "after": "__FINITE_WAIT_8__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 54999999999,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 55000000000
+    },
+    {
+      "after": "__FINITE_WAIT_CLEANUP__\r\n",
+      "waitKind": 2,
+      "monotonicNs": 56000000000,
+      "stillWaiting": true
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 57000000000
+    },
+    {
+      "after": "__FINITE_WAIT_CONTROLLED_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "WAST: 135 PASS, 0 FAIL, 135 total",
+    "__FINITE_WAIT_CONTROLLED_0__\r\n"
+  ],
+  "assertions": 136,
+  "exitStatus": 0,
+  "clockMonotonicNs": 42000000000
+}

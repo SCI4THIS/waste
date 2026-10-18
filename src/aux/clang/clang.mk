@@ -60,7 +60,7 @@ $(CLANG_CXX_BUILD)/.headers: $(CLANG_CXX_BUILD)/.configured
 	$(CLANG_ENV) "$(CLANG_CMAKE)" --build "$(@D)" --parallel "$(CLANG_JOBS)" --target generate-cxx-headers generate-cxxabi-headers
 	touch "$@"
 
-$(CLANG_BUILD)/probes/cxx-sdk.o: $(REPO_ROOT)/src/system-tests/clang/cxx-sdk.cpp $(CLANG_CXX_BUILD)/.headers $(SDK_HEADERS)
+$(CLANG_BUILD)/probes/cxx-sdk.o: $(CLANG_DIR)/test/cxx-sdk.cpp $(CLANG_CXX_BUILD)/.headers $(SDK_HEADERS)
 	mkdir -p "$(@D)"
 	$(CLANG_CXX) --target=wasm32-unknown-unknown -std=c++17 -ffreestanding -fno-builtin \
 		-fPIC -fno-exceptions -fno-rtti -nostdinc -nostdlib \
@@ -134,8 +134,9 @@ install-clang: clang
 	flock "$(BUILD_DIR)/.vfs-install.lock" bash -c 'mkdir -p "$$1/usr/share/licenses/clang" && install -m 644 "$$2/LICENSE.TXT" "$$1/usr/share/licenses/clang/LICENSE.TXT"' -- "$(VFS_ROOT)" "$(CLANG_SOURCE)"
 
 test-clang: install-clang aux-test-runner
-	bash "$(CLANG_DIR)/tests/run.sh" "$(REPO_ROOT)" "$(VFS_ROOT)" clang \
-		"$(CLANG_DIR)/tests" "$(CLANG_BUILD)/tests" "$(abspath $(WASM_RUNNER))" "$(CLANG_DIR)/tests/setup.sh"
+	bash "$(CLANG_DIR)/test/system/run.sh" "$(REPO_ROOT)" "$(VFS_ROOT)" clang \
+		"$(CLANG_DIR)/test/system" "$(CLANG_BUILD)/tests" "$(abspath $(WASM_RUNNER))" "$(CLANG_DIR)/test/system/setup.sh"
 
 include $(CLANG_DIR)/lld-no-lto.mk
 include $(CLANG_DIR)/sdk.mk
+include $(CLANG_DIR)/system.mk

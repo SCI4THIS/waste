@@ -1,0 +1,37 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/spirv-name.wasm",
+      "source": "build/system-tests/clang/spirv-name/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/spirv-name-reference.bin",
+      "source": "build/system-tests/clang/spirv-name/reference.bin",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/spirv-name.wast",
+      "source": "src/vfs/root/test/system/clang/spirv-name/spirv-name.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/spirv-name.wasm > /tmp/spirv-name.bin; printf '%s\\n' \"$?\" > /tmp/spirv-name-status.txt; /bin/wast --verbose /tmp/spirv-name.wast; SPIRV_NAME_RESULT=$?; printf '__SPIRV_NAME_%s__\\n' \"$SPIRV_NAME_RESULT\"\n"
+    },
+    {
+      "after": "__SPIRV_NAME_",
+      "text": "exit \"$SPIRV_NAME_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "__SPIRV_NAME_0__\r\n",
+    "WAST: 34 PASS, 0 FAIL, 34 total"
+  ],
+  "assertions": 35,
+  "exitStatus": 0
+}

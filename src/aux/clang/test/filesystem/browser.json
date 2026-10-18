@@ -1,0 +1,40 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/filesystem.wasm",
+      "source": "build/system-tests/clang/filesystem/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/filesystem.wast",
+      "source": "src/vfs/root/test/system/clang/filesystem/filesystem.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/filesystem-clock.wast",
+      "source": "src/vfs/root/test/system/clang/filesystem/clock.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/filesystem.wasm > /tmp/filesystem.bin; printf '%s\\n' \"$?\" > /tmp/filesystem-status.txt; /bin/wast --verbose /tmp/filesystem.wast && /bin/wast --verbose /tmp/filesystem-clock.wast; printf '__FILESYSTEM_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__FILESYSTEM_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__FILESYSTEM_0__\r\n",
+    "WAST: 63 PASS, 0 FAIL, 63 total",
+    "WAST: 5 PASS, 0 FAIL, 5 total"
+  ],
+  "assertions": 69,
+  "exitStatus": 0,
+  "clockRealtimeNs": "4294967313123456789",
+  "clockMonotonicNs": 42000000000
+}

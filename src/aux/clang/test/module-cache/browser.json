@@ -1,0 +1,54 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/module-cache.wasm",
+      "source": "build/system-tests/clang/module-cache/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/module-cache.wast",
+      "source": "src/vfs/root/test/system/clang/module-cache/module-cache.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/module-cache.wasm > /tmp/module-cache.bin; printf '%s\\n' \"$?\" > /tmp/module-cache-status.txt; /bin/wast --verbose /tmp/module-cache.wast; CACHE_STATUS=$?; printf '__MODULE_CACHE_RESULT_%s__\\n' \"$CACHE_STATUS\"\n"
+    },
+    {
+      "after": "__MODULE_CACHE_TIMEOUT__\r\n",
+      "waitKind": 2,
+      "signal": 10
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 43000000000
+    },
+    {
+      "after": "__MODULE_CACHE_NOTIFY__\r\n",
+      "waitKind": 2,
+      "signal": 10
+    },
+    {
+      "after": "",
+      "waitKind": 2,
+      "monotonicNs": 43010000000
+    },
+    {
+      "after": "__MODULE_CACHE_RESULT_",
+      "text": "exit \"$CACHE_STATUS\"\n"
+    }
+  ],
+  "contains": [
+    "__MODULE_CACHE_RESULT_0__\r\n",
+    "WAST: 108 PASS, 0 FAIL, 108 total"
+  ],
+  "assertions": 109,
+  "exitStatus": 0,
+  "clockRealtimeNs": "4294967296123456789",
+  "clockMonotonicNs": 42000000000
+}

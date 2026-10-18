@@ -14,9 +14,9 @@ mkdir -p "$PACKAGE_STAGE/bash-source" "$PACKAGE_STAGE/waste"
 tar -C "$REPO_ROOT/submodules/bash" --exclude=.git -cf - . |
   tar -C "$PACKAGE_STAGE/bash-source" -xf -
 chmod -R u+w "$PACKAGE_STAGE/bash-source"
-for INPUT in start.sh .gitmodules src/config.h src/aux src/engine src/cli-rt src/html-rt src/system-tests \
-  src/vfs/usr/include src/vfs/usr/lib/waste/cc/include src/vfs/usr/share/licenses/clang \
-  tests docs/architecture.md docs/techniques.md docs/guest-sdk.md; do
+for INPUT in start.sh .gitmodules src/config.h src/aux src/engine src/cli-rt src/html-rt \
+  src/vfs/root/test src/vfs/usr/include src/vfs/usr/lib/waste/cc/include \
+  src/vfs/usr/share/licenses/clang docs/architecture.md docs/techniques.md docs/guest-sdk.md; do
   mkdir -p "$PACKAGE_STAGE/waste/$(dirname -- "$INPUT")"
   cp -a "$REPO_ROOT/$INPUT" "$PACKAGE_STAGE/waste/$INPUT"
 done

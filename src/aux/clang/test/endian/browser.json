@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/endian.wasm",
+      "source": "build/system-tests/clang/endian/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/endian.wast",
+      "source": "src/vfs/root/test/system/clang/endian/endian.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/endian.wasm > /tmp/endian.bin; printf '%s\\n' \"$?\" > /tmp/endian-status.txt; /bin/wast --verbose /tmp/endian.wast; printf '__ENDIAN_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__ENDIAN_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__ENDIAN_0__\r\n",
+    "WAST: 21 PASS, 0 FAIL, 21 total"
+  ],
+  "assertions": 22,
+  "exitStatus": 0
+}

@@ -36,6 +36,6 @@ After installation, verify the SDK and both production runtimes:
 
 ```sh
 make -C src/html-rt guest-sdk-check bash-html
-python3 tests/guest-session-check.py --scenario rogue-fresh --scenario rogue \
+python3 src/engine/test/guest-session/guest-session-check.py --scenario rogue-fresh --scenario rogue \
   --scenario shared-dependencies --page build/html-rt/bash.html
 ```

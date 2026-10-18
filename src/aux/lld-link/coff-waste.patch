@@ -1,0 +1,390 @@
+--- a/Driver.h
++++ b/Driver.h
+@@ -21,6 +21,10 @@
+ #include "llvm/Option/ArgList.h"
+ #include "llvm/Support/FileSystem.h"
+ #include "llvm/Support/TarWriter.h"
++#include "llvm/Config/llvm-config.h"
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++#include "llvm/Support/ThreadPool.h"
++#endif
+ #include "llvm/WindowsDriver/MSVCPaths.h"
+ #include <memory>
+ #include <optional>
+@@ -190,6 +194,9 @@
+   void enqueueTask(std::function<void()> task);
+   bool run();
+ 
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  llvm::SingleThreadExecutor fileTaskExecutor;
++#endif
+   std::list<std::function<void()>> taskQueue;
+   std::vector<MemoryBufferRef> resources;
+ 
+--- a/Driver.cpp
++++ b/Driver.cpp
+@@ -50,7 +50,9 @@
+ #include "llvm/TargetParser/Triple.h"
+ #include "llvm/ToolDrivers/llvm-lib/LibDriver.h"
+ #include <algorithm>
++#if !(defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS)
+ #include <future>
++#endif
+ #include <memory>
+ #include <optional>
+ #include <tuple>
+@@ -150,11 +152,20 @@
+ // return an error here, but for the moment that would cost us a file descriptor
+ // (a limited resource on Windows) for the duration that the future is pending.
+ using MBErrPair = std::pair<std::unique_ptr<MemoryBuffer>, std::error_code>;
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++using MBFuture = llvm::ThreadPoolFuture<std::shared_ptr<MBErrPair>>;
++#else
++using MBFuture = std::future<MBErrPair>;
++#endif
+ 
+ // Create a std::future that opens and maps a file using the best strategy for
+ // the host platform.
+-static std::future<MBErrPair> createFutureForFile(std::string path,
+-                                                  bool prefetchInputs) {
++static MBFuture createFutureForFile(std::string path, bool prefetchInputs
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++                                   , llvm::SingleThreadExecutor &executor
++#endif
++) {
++#if !(defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS)
+ #if _WIN64
+   // On Windows, file I/O is relatively slow so it is best to do this
+   // asynchronously.  But 32-bit has issues with potentially launching tons
+@@ -163,7 +174,8 @@
+ #else
+   auto strategy = std::launch::deferred;
+ #endif
+-  return std::async(strategy, [=]() {
++#endif
++  auto read = [=]() {
+     auto mbOrErr = MemoryBuffer::getFile(path, /*IsText=*/false,
+                                          /*RequiresNullTerminator=*/false);
+     if (!mbOrErr)
+@@ -172,7 +184,16 @@
+     if (prefetchInputs)
+       (*mbOrErr)->willNeedIfMmap();
+     return MBErrPair{std::move(*mbOrErr), std::error_code()};
++  };
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++  // The shared deferred task owns the result until this file's queued
++  // consumer moves it once. No std::future/thread runtime is introduced.
++  return executor.async([read = std::move(read)]() {
++    return std::make_shared<MBErrPair>(read());
+   });
++#else
++  return std::async(strategy, std::move(read));
++#endif
+ }
+ 
+ llvm::Triple::ArchType LinkerDriver::getArch() {
+@@ -407,12 +428,20 @@
+ }
+ 
+ void LinkerDriver::enqueuePath(StringRef path, bool lazy, InputOpt inputOpt) {
+-  auto future = std::make_shared<std::future<MBErrPair>>(
+-      createFutureForFile(std::string(path), ctx.config.prefetchInputs));
++  auto future = std::make_shared<MBFuture>(
++      createFutureForFile(std::string(path), ctx.config.prefetchInputs
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++                          , fileTaskExecutor
++#endif
++                          ));
+   std::string pathStr = std::string(path);
+   enqueueTask([=]() {
+     llvm::TimeTraceScope timeScope("File: ", path);
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    auto [mb, ec] = std::move(*future->get());
++#else
+     auto [mb, ec] = future->get();
++#endif
+     if (ec) {
+       // Retry reading the file (synchronously) now that we may have added
+       // winsysroot search paths from SymbolTable::addFile().
+@@ -472,7 +501,13 @@
+   if (magic == file_magic::coff_object) {
+     obj = addObjectFile(ctx, mb, parentName, offsetInArchive, lazy);
+   } else if (magic == file_magic::bitcode) {
++#if defined(LLD_WASTE_NO_LTO)
++    Fatal(ctx) << mb.getBufferIdentifier()
++               << ": LLVM bitcode/LTO support is disabled; compile COFF objects";
++    return;
++#else
+     obj = BitcodeFile::create(ctx, mb, parentName, offsetInArchive, lazy);
++#endif
+     obj->parentName = parentName;
+     addFile(obj);
+   } else if (magic == file_magic::coff_cl_gl_object) {
+@@ -527,10 +562,18 @@
+       CHECK(c.getFullName(),
+             "could not get the filename for the member defining symbol " +
+                 toCOFFString(ctx, sym));
+-  auto future = std::make_shared<std::future<MBErrPair>>(
+-      createFutureForFile(childName, ctx.config.prefetchInputs));
++  auto future = std::make_shared<MBFuture>(
++      createFutureForFile(childName, ctx.config.prefetchInputs
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++                          , fileTaskExecutor
++#endif
++                          ));
+   enqueueTask([=]() {
++#if defined(LLVM_WASTE_GUEST) && !LLVM_ENABLE_THREADS
++    auto mbOrErr = std::move(*future->get());
++#else
+     auto mbOrErr = future->get();
++#endif
+     if (mbOrErr.second)
+       reportBufferError(errorCodeToError(mbOrErr.second));
+     llvm::TimeTraceScope timeScope("Archive: ",
+@@ -1601,26 +1644,60 @@
+   ScopedTimer rootTimer(ctx.rootTimer);
+   Configuration *config = &ctx.config;
+ 
+-  // Needed for LTO.
++  // Needed only for LTO, not for linking existing COFF machine code.
++#if !defined(LLD_WASTE_NO_LTO)
+   InitializeAllTargetInfos();
+   InitializeAllTargets();
+   InitializeAllTargetMCs();
+   InitializeAllAsmParsers();
+   InitializeAllAsmPrinters();
++#endif
+ 
+   // If the first command line argument is "/lib", link.exe acts like lib.exe.
+   // We call our own implementation of lib.exe that understands bitcode files.
+   if (argsArr.size() > 1 &&
+       (StringRef(argsArr[1]).equals_insensitive("/lib") ||
+        StringRef(argsArr[1]).equals_insensitive("-lib"))) {
++#if defined(LLD_WASTE_NO_LTO)
++    Fatal(ctx) << "archive creation (/lib) is unsupported by this guest COFF linker";
++#else
+     if (llvm::libDriverMain(argsArr.slice(1)) != 0)
+       Fatal(ctx) << "lib failed";
++#endif
+     return;
+   }
+ 
+   // Parse command line options.
+   ArgParser parser(ctx);
+   opt::InputArgList args = parser.parse(argsArr);
++#if defined(LLD_WASTE_NO_LTO)
++  // Use canonical parsed option names, including response-file arguments
++  // and link.exe's alternate option prefixes. Input filenames are not options.
++  for (const opt::Arg *arg : args) {
++    if (arg->getOption().getKind() == opt::Option::InputClass)
++      continue;
++    StringRef option = arg->getOption().getName();
++    if (option.starts_with("lldlto") || option.starts_with("thinlto") ||
++        option.starts_with("lto") || option.starts_with("fat-lto-objects") ||
++        option.starts_with("lldsavetemps") || option == "dwodir:" ||
++        (option == "lldemit:" && !StringRef(arg->getValue()).equals_insensitive("obj")))
++      Fatal(ctx) << "LLVM bitcode/LTO support is disabled in this guest linker";
++    if (arg->getOption().getID() == OPT_opt) {
++      SmallVector<StringRef, 8> optimizations;
++      StringRef(arg->getValue()).split(optimizations, ',');
++      for (StringRef optimization : optimizations)
++        if (optimization.starts_with_insensitive("lldlto") ||
++            optimization.starts_with_insensitive("lto") ||
++            optimization.starts_with_insensitive("nolto"))
++          Fatal(ctx) << "LLVM bitcode/LTO support is disabled in this guest linker";
++    }
++    if (option.starts_with("pdb") || option == "natvis:" ||
++        (option.starts_with("debug") &&
++         !(arg->getOption().getID() == OPT_debug_opt &&
++           StringRef(arg->getValue()).equals_insensitive("none"))))
++      Fatal(ctx) << "debug/PDB generation is disabled in this guest linker";
++  }
++#endif
+ 
+   // Initialize time trace profiler.
+   config->timeTraceEnabled = args.hasArg(OPT_time_trace_eq);
+@@ -2731,12 +2808,14 @@
+         // file's symbol table. If any of those library functions are defined in
+         // a bitcode file in an archive member, we need to arrange to use LTO to
+         // compile those archive members by adding them to the link beforehand.
++#if !defined(LLD_WASTE_NO_LTO)
+         if (!symtab.bitcodeFileInstances.empty()) {
+           llvm::Triple TT(
+               symtab.bitcodeFileInstances.front()->obj->getTargetTriple());
+           for (auto *s : lto::LTO::getRuntimeLibcallSymbols(TT))
+             symtab.addLibcall(s);
+         }
++#endif
+ 
+         // Windows specific -- if __load_config_used can be resolved, resolve
+         // it.
+--- a/InputFiles.cpp
++++ b/InputFiles.cpp
+@@ -197,9 +197,14 @@
+           machine = MachineTypes(COFFImportFile(mb).getMachine());
+           break;
+         case file_magic::bitcode: {
++#if defined(LLD_WASTE_NO_LTO)
++          Fatal(ctx) << mb.getBufferIdentifier()
++                     << ": LLVM bitcode/LTO support is disabled";
++#else
+           std::unique_ptr<lto::InputFile> obj =
+               check(lto::InputFile::create(mb));
+           machine = BitcodeFile::getMachineType(obj.get());
++#endif
+           break;
+         }
+         default:
+@@ -1362,6 +1367,7 @@
+   }
+ }
+ 
++#if !defined(LLD_WASTE_NO_LTO)
+ BitcodeFile::BitcodeFile(SymbolTable &symtab, MemoryBufferRef mb,
+                          std::unique_ptr<lto::InputFile> &o, bool lazy)
+     : InputFile(symtab, BitcodeKind, mb, lazy) {
+@@ -1487,6 +1493,18 @@
+   }
+ }
+ 
++#else
++BitcodeFile *BitcodeFile::create(COFFLinkerContext &ctx, MemoryBufferRef mb,
++                               StringRef, uint64_t, bool) {
++  Fatal(ctx) << mb.getBufferIdentifier()
++             << ": LLVM bitcode/LTO support is disabled; compile COFF objects";
++  return nullptr;
++}
++BitcodeFile::~BitcodeFile() = default;
++void BitcodeFile::parse() { llvm_unreachable("bitcode disabled"); }
++void BitcodeFile::parseLazy() { llvm_unreachable("bitcode disabled"); }
++#endif
++
+ std::string lld::coff::replaceThinLTOSuffix(StringRef path, StringRef suffix,
+                                             StringRef repl) {
+   if (path.consume_back(suffix))
+--- a/InputFiles.h
++++ b/InputFiles.h
+@@ -409,11 +409,17 @@
+   static bool classof(const InputFile *f) { return f->kind() == BitcodeKind; }
+   ArrayRef<Symbol *> getSymbols() { return symbols; }
+   MachineTypes getMachineType() const override {
++#if !defined(LLD_WASTE_NO_LTO)
+     return getMachineType(obj.get());
++#else
++    llvm_unreachable("bitcode disabled");
++#endif
+   }
+   static MachineTypes getMachineType(const llvm::lto::InputFile *obj);
+   void parseLazy();
++#if !defined(LLD_WASTE_NO_LTO)
+   std::unique_ptr<llvm::lto::InputFile> obj;
++#endif
+ 
+ private:
+   void parse() override;
+--- a/SymbolTable.cpp
++++ b/SymbolTable.cpp
+@@ -94,6 +94,7 @@
+   return candidate;
+ }
+ 
++#if !defined(LLD_WASTE_NO_LTO)
+ static std::vector<std::string> getSymbolLocations(BitcodeFile *file) {
+   std::string res("\n>>> referenced by ");
+   StringRef source = file->obj->getSourceFileName();
+@@ -102,6 +103,7 @@
+   res += toString(file);
+   return {res};
+ }
++#endif
+ 
+ static std::optional<std::pair<StringRef, uint32_t>>
+ getFileLineDwarf(const SectionChunk *c, uint32_t addr) {
+@@ -192,6 +194,7 @@
+ getSymbolLocations(InputFile *file, uint32_t symIndex, size_t maxStrings) {
+   if (auto *o = dyn_cast<ObjFile>(file))
+     return getSymbolLocations(o, symIndex, maxStrings);
++#if !defined(LLD_WASTE_NO_LTO)
+   if (auto *b = dyn_cast<BitcodeFile>(file)) {
+     std::vector<std::string> symbolLocations = getSymbolLocations(b);
+     size_t numLocations = symbolLocations.size();
+@@ -199,6 +202,7 @@
+       symbolLocations.resize(maxStrings);
+     return std::make_pair(symbolLocations, numLocations);
+   }
++#endif
+   llvm_unreachable("unsupported file type passed to getSymbolLocations");
+   return std::make_pair(std::vector<std::string>(), (size_t)0);
+ }
+@@ -811,6 +815,7 @@
+   f->makeImport(sym);
+ }
+ 
++#if !defined(LLD_WASTE_NO_LTO)
+ static std::string getSourceLocationBitcode(BitcodeFile *file) {
+   std::string res("\n>>> defined at ");
+   StringRef source = file->obj->getSourceFileName();
+@@ -819,6 +824,7 @@
+   res += toString(file);
+   return res;
+ }
++#endif
+ 
+ static std::string getSourceLocationObj(ObjFile *file, SectionChunk *sc,
+                                         uint32_t offset, StringRef name) {
+@@ -843,8 +849,10 @@
+     return "";
+   if (auto *o = dyn_cast<ObjFile>(file))
+     return getSourceLocationObj(o, sc, offset, name);
++#if !defined(LLD_WASTE_NO_LTO)
+   if (auto *b = dyn_cast<BitcodeFile>(file))
+     return getSourceLocationBitcode(b);
++#endif
+   return "\n>>> defined at " + toString(file);
+ }
+ 
+@@ -1473,6 +1481,9 @@
+   if (bitcodeFileInstances.empty())
+     return;
+ 
++#if defined(LLD_WASTE_NO_LTO)
++  Fatal(ctx) << "LLVM bitcode/LTO support is disabled";
++#else
+   // Collect the bitcode library functions that are not safe to call because
+   // they were not yet brought in the link. (Such symbols are lazy.)
+   llvm::BumpPtrAllocator alloc;
+@@ -1509,11 +1520,14 @@
+     obj->parse();
+     ctx.objFileInstances.push_back(obj);
+   }
++#endif
+ }
+ 
+ void SymbolTable::waitForLTOCleanup() {
++#if !defined(LLD_WASTE_NO_LTO)
+   if (lto)
+     lto->waitForLTOCleanup();
++#endif
+ }
+ 
+ } // namespace lld::coff
+--- a/LTO.h
++++ b/LTO.h
+@@ -38,6 +38,7 @@
+ class InputFile;
+ class COFFLinkerContext;
+ 
++#if !defined(LLD_WASTE_NO_LTO)
+ class BitcodeCompiler {
+ public:
+   BitcodeCompiler(COFFLinkerContext &ctx);
+@@ -61,6 +62,9 @@
+ 
+   COFFLinkerContext &ctx;
+ };
++#else
++class BitcodeCompiler {};
++#endif
+ }
+ 
+ #endif

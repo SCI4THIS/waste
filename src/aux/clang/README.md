@@ -71,8 +71,11 @@ static code ownership; decoded functions stay alive until the last owner is
 released. This is generic engine behavior, with no compiler-specific cache.
 See [execution techniques](../../../docs/techniques.md).
 
-LLVM's guest build generates WebAssembly code and disables compiler-internal
-threads, exceptions, optional host libraries and machine backtraces. The private
+LLVM runs as a WebAssembly guest with WebAssembly and X86 output backends.
+Wasm remains the default target. The separate [COFF linker](../lld-link/README.md)
+supports the freestanding Windows x64 demo when the default configuration is
+explicitly bypassed; no Windows SDK or CRT is installed. The guest build disables
+compiler-internal threads, exceptions, optional host libraries and machine backtraces. The private
 single-thread adapters retain LLVM ownership semantics and preserve upstream
 native/threaded branches. They do not replace WASTE's concurrent process/thread
 scheduler. LLVM waits, clocks, alarms, child processes and I/O use the existing
@@ -80,7 +83,8 @@ shared libc/kernel paths, including the yielding sleep implementation. Optional
 unavailable host capabilities return explicit errors; arbitrary POSIX host
 functionality and general C++ exception/localization support are not claimed.
 
-All seven package assertions live in `tests/installed.wast`. `tests/setup.sh`
+All seven package assertions live in `src/vfs/root/test/aux/clang/installed.wast`.
+Its `setup.sh`
 only prepares inputs and captures observations: actual installed compiler
 version, invalid C diagnostics, valid SDK compilation/linking, emitted-command
 output/exit status and parent-shell recovery. The valid input also checks
@@ -98,8 +102,8 @@ Refresh installed snapshots and rebuild the offline page after installation:
 
 ```sh
 make -C src/html-rt vfs-tests-install vfs-tests-check bash-html
-node tests/guest-session-worker.cjs build/html-rt/bash.html \
-  src/aux/clang/tests/browser.json
+node src/html-rt/test/guest-session/worker.cjs build/html-rt/bash.html \
+  src/vfs/root/test/aux/clang/browser.json
 ```
 
 The production-worker scenario uses the installed compiler/linker and WAST
@@ -108,7 +112,7 @@ seven WAST results plus the outer Bash launch. It checks browser-engine
 execution, without requiring Chromium or a GUI.
 
 Compiler/libc/kernel interactions and actual upstream-source regressions live
-under `src/system-tests/clang`, with assertions in WAST. In particular,
+under `src/aux/clang/test/<topic>/` with assertions in VFS WAST. In particular,
 `test-unsafe-buffer` exercises real compiler-generated C++ fix-its; the linker
 fixtures check object/archive linking, shared imports and bitcode rejection.
 Each fixture owns its source, native driver, browser scenario and instructions.

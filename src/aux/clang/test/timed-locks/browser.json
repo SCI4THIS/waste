@@ -1,0 +1,38 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/timed-locks.wasm",
+      "source": "build/system-tests/clang/timed-locks/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/timed-locks.wast",
+      "source": "src/vfs/root/test/system/clang/timed-locks/timed-locks.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/usleep.wast",
+      "source": "src/vfs/root/test/aux/libc/usleep.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/bin/wast --verbose /tmp/usleep.wast; /tmp/timed-locks.wasm > /tmp/timed-locks.bin; printf '%s\\n' \"$?\" > /tmp/timed-locks-status.txt; /bin/wast --verbose /tmp/timed-locks.wast; result=$?; printf '__TIMED_LOCKS_%s__\\n' \"$result\"\n"
+    },
+    {
+      "after": "__TIMED_LOCKS_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__TIMED_LOCKS_0__\r\n",
+    "WAST: 53 PASS, 0 FAIL, 53 total",
+    "WAST: 9 PASS, 0 FAIL, 9 total"
+  ],
+  "assertions": 63,
+  "exitStatus": 0
+}

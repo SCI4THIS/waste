@@ -31,14 +31,16 @@ Coreutils commands use per-command `src/aux/NAME/sources.mk` files and shared
 `src/aux/coreutils` staging, private headers and Make rules. Build with
 `make -C src/aux NAME`, install with `install-NAME`, and test with
 `test-NAME`; package WAST tests and instructions belong under `src/aux/NAME`.
-System interaction tests belong under `src/system-tests`. Generated outputs live
-under `build/aux`. Generate release corresponding source explicitly with
+System interaction WAST belongs under `src/vfs/root/test/system`, with
+host-side probes and runners under the owning runtime directory (e.g.
+`src/engine/test`, `src/cli-rt/test`, `src/aux/libc/test`). Generated outputs
+live under `build/aux`. Generate release corresponding source explicitly with
 `make -C src/aux coreutils-source-package`.
 Portable support needed by the interpreter itself lives in `src/aux/libc/runtime/`
 and is statically linked into each runtime; kernel semantics stay in `src/engine/`.
-Architecture notes are in `docs/`, and project probes
-are in `tests/`, package WAST tests in `src/aux/NAME/tests`, and system
-interaction/SDK probes in `src/system-tests/`.
+Architecture notes are in `docs/`, and authored guest tests live under
+`src/vfs/root/test/` (engine-regressions, diy-posix-test, render, aux/NAME,
+system). Host probes and runners belong under the owning runtime directory.
 Treat all of `build/` as generated output. Shared generated engine sources and
 logs go under `build/engine/`, native executables under `build/cli-rt/`, and
 browser artifacts under `build/html-rt/`.
@@ -58,15 +60,18 @@ snapshots live in `src/vfs/usr/lib/waste/cc/include`. Keep engine/native headers
 and libc `helper.h` private. Use `guest-sdk-check` for explicit header/ABI/provider
 checks; `guest-sdk-install` refreshes selected dependency headers when requested.
 See `docs/guest-sdk.md` for informational SDK metadata and build profiles.
-Test files in `src/vfs/root/test` are installed distribution snapshots,
-not authored sources. They mount at `/root/test`. Refresh with
-`vfs-tests-install` and audit with `vfs-tests-check`; the single `bash.html`
-page runs browser corpus diagnostics from these mounted snapshots. See
-`docs/techniques.md` (Installed Corpus Workflow).
-Authored portable executor regressions live in `tests/engine-regressions/*.wast`;
-`docs/techniques.md` (Test Boundary Selection) explains the retained private
-checks. The `i32-smoke`, `caller-instance` and `continuation` gates require their
-installed regression snapshots to match authored inputs.
+Test files in `src/vfs/root/test` mount at `/root/test`. Authored guest tests
+live under `src/vfs/root/test/` as the single authored source; the reviewed
+test layout is documented in `docs/active-test-migration.md`. Package
+`test/system` aliases point to these canonical inputs. Corpus tooling retains
+legacy per-package discovery for compatibility when such directories exist. Refresh with `vfs-tests-install` and audit with
+`vfs-tests-check`; the single `bash.html` page runs browser corpus
+diagnostics from the mounted result. See `docs/techniques.md`
+(Installed Corpus Workflow).
+Authored portable executor regressions live in
+`src/vfs/root/test/engine-regressions/*.wast`; `docs/techniques.md` (Test Boundary Selection) explains the retained
+private checks. The `i32-smoke`, `caller-instance` and `continuation` gates
+execute these canonical regression inputs directly.
 
 ## POSIX Capability Policy
 
@@ -120,21 +125,21 @@ this explicit return path as stack unwinding/rewinding.
   same engine semantics for the browser.
 - `build/cli-rt/wast --parse-only FILE...`: rapidly parse selected WAST
   files without Node or a browser.
-- `node tests/c-engine-browser-runtime.cjs`: exercise focused WAST payloads
+- `node src/html-rt/test/browser-runtime.cjs`: exercise focused WAST payloads
   through the worker harness without generating an HTML dashboard.
-- `node tests/c-engine-bash-browser-runtime.cjs build/html-rt/bash.html`: verify
+- `node src/html-rt/test/bash-browser-runtime.cjs build/html-rt/bash.html`: verify
   delayed input, command execution, a second prompt, and exit in C-engine Bash.
-- `node tests/c-engine-frontend-packaging.cjs`: check flattened frontend paths,
+- `node src/html-rt/test/frontend-packaging.cjs`: check flattened frontend paths,
   embedded package bytes, offline references, corpus metadata, and guest mtimes.
-- `node tests/c-engine-offline-browser.cjs`: use headless Chromium to verify the
+- `node src/html-rt/test/offline-browser.cjs`: use headless Chromium to verify the
   actual `bash.html` `file://` page, DOM/worker boot, Bash input/output, and no
   external runtime requests. Override the executable with `WASTE_CHROMIUM`.
 - Open **Diagnostics → Installed tests** in `build/html-rt/bash.html` to list,
   select, run or cancel the mounted corpus and download assertion JSON without
-  Node. `node tests/c-engine-offline-browser.cjs --suite-full` is the focused
+  Node. `node src/html-rt/test/offline-browser.cjs --suite-full` is the focused
   automation gate for full production-browser batch execution.
 - `make -C src/aux test-libc`: run package WAST tests in native Bash.
-- `make -C src/system-tests test-libc`: run libc/kernel interaction WAST tests.
+- `make -C src/aux test-libc-system`: run libc/kernel interaction WAST tests.
 - `make -C src/cli-rt libc-sanitize`: run both sets with ASan/UBSan.
 
 Retired dashboard options (`--html-test`, `--c-engine-html`, and
@@ -157,7 +162,7 @@ execution paths allocation-free and place optional counters behind
 
 ## Testing Guidelines
 
-Name DIY fixtures `tests/diy-posix-test/*.wast`. Test native and browser C
+Name DIY fixtures `src/vfs/root/test/diy-posix-test/*.wast`. Test native and browser C
 artifacts when changing shared engine semantics. Browser changes must continue
 to work as a single offline `file://` document; do not introduce a server,
 external assets, or cross-origin-isolation requirements. Treat local POSIX
@@ -165,9 +170,12 @@ fixtures as regression probes. Broader conformance work should trace tests to
 The Open Group suites. Revisit LTP's `testcases/open_posix_testsuite` after a
 guest C compiler works; then record upstream revisions and keep licensing and
 Wasm-adaptation patches separate.
-Keep package test assertions entirely in `src/aux/NAME/tests/*.wast`;
-run them from Bash with `/bin/wast --verbose`. Stage system-level WAST tests
-and compiler-boundary checks under `src/system-tests`.
+Keep package test assertions entirely in `src/aux/NAME/tests/*.wast` (or the
+migrated canonical copy under `src/vfs/root/test/aux/NAME/*.wast`); run them
+from Bash with `/bin/wast --verbose`. Stage system-level WAST tests and
+compiler-boundary checks under `src/vfs/root/test/system`, with host runners
+under the owning runtime directory (`src/engine/test`, `src/cli-rt/test`,
+`src/aux/libc/test`).
 The OCaml reference interpreter (`./start.sh --ocaml-reference`) may be used
 to cross-check WAT/WAST language behavior on supported official tests; see
 [OCaml reference interpreter build](docs/techniques.md#ocaml-reference-interpreter-build).

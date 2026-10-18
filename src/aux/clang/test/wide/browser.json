@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/wide.wasm",
+      "source": "build/system-tests/clang/wide/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/wide.wast",
+      "source": "src/vfs/root/test/system/clang/wide/wide.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/wide.wasm > /tmp/wide.bin; printf '%s\\n' \"$?\" > /tmp/wide-status.txt; /bin/wast --verbose /tmp/wide.wast; printf '__WIDE_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__WIDE_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__WIDE_0__\r\n",
+    "WAST: 64 PASS, 0 FAIL, 64 total"
+  ],
+  "assertions": 65,
+  "exitStatus": 0
+}

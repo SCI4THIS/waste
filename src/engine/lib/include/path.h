@@ -130,6 +130,9 @@ int posix_guest_stat_decode(posix_guest_stat *stat, const uint8_t *bytes);
  * byte span and is never retained. Results are zero or a negative POSIX
  * errno. */
 struct posix_kernel;
+/* Reserve an identity for a runtime-staged node from the same kernel-owned
+ * sequence used by guest creation and shared across fork. Zero means failure. */
+uint64_t posix_kernel_allocate_inode(struct posix_kernel *kernel);
 int posix_kernel_path_add(struct posix_kernel *kernel, const char *path,
                           const posix_path_metadata *metadata);
 int posix_kernel_path_add_data(struct posix_kernel *kernel, const char *path,

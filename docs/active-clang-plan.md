@@ -1287,9 +1287,11 @@ for the first executable; no Asyncify or alternate C libc is planned.
 
 ## Acceptance and evidence
 
-Package version/diagnostic assertions belong under `src/aux/clang/tests`.
+Package version/diagnostic assertions belong under
+`src/vfs/root/test/aux/clang/`.
 C++ SDK and compiler/linker/executor boundary probes belong under
-`src/system-tests/clang`. Functional assertions remain in WAST and execute
+`src/aux/clang/test/<topic>/` with WAST assertions in
+`src/vfs/root/test/system/clang/<topic>/`. Functional assertions remain in WAST and execute
 inside Bash, with setup scripts supplying inputs and capturing outputs only.
 
 Run supported slice regressions through cli-rt automatically and save their
@@ -1329,7 +1331,7 @@ Clang's own package/system tests have not run because the compiler has not built
 
 ### Abort prerequisite slice
 
-- `make -C src/system-tests test-abort`: eight WAST assertions pass from Bash.
+- `make -C src/aux test-abort`: eight WAST assertions pass from Bash.
   The C input fixture only configures scenarios and captures observations;
   WAST checks default, ignored, blocked, caught/returning, recursive and legacy
   abort, including raw wait status 6 and continued parent execution.
@@ -1348,7 +1350,7 @@ Clang's own package/system tests have not run because the compiler has not built
 Current build diagnostics are in `build/aux/clang/cxx-build.log`; abort/native/
 sanitizer/SDK/corpus/cache logs are `build/aux/clang/abort-*.log`. Browser
 evidence is `build/engine/logs/clang-browser-abort-results.json`. See
-[abort test instructions](../src/system-tests/abort/README.md) for reproduction
+[abort test instructions](../src/engine/test/abort/README.md) for reproduction
 and an optional manual Firefox check; no manual browser evidence is needed
 to diagnose the then-current clock-backend compile failure.
 
@@ -1378,7 +1380,7 @@ Logs are `build/aux/clang/alignment-*.log`, with retained copies under
 `build/engine/logs/clang-*`. The current C++ compile diagnostic remains in
 `build/aux/clang/cxx-build.log`; browser evidence is
 `build/engine/logs/clang-browser-alignment-results.json`. See
-[alignment/browser instructions](../src/system-tests/clang/README.md) for
+[alignment/browser instructions](../src/aux/clang/test/README.md) for
 reproduction and optional manual download steps. No manual browser evidence
 is required for this slice's remaining compile-time blocker.
 
@@ -1408,7 +1410,7 @@ Logs are `build/aux/clang/fenv-*.log`, with retained copies under
 `build/engine/logs/clang-*`. Current compile diagnostics remain in
 `build/aux/clang/cxx-build.log`; browser evidence is
 `build/engine/logs/clang-browser-fenv-results.json`. See
-[fenv/browser instructions](../src/system-tests/clang/README.md) for reproduction
+[fenv/browser instructions](../src/aux/clang/test/README.md) for reproduction
 and optional download steps. No manual browser test is required for the then-current
 clock-backend compile failure.
 
@@ -1457,7 +1459,7 @@ Logs are `build/aux/clang/clock-*.log`, with retained copies under
 `build/aux/clang/cxx-build.log`; browser evidence is
 `build/engine/logs/clang-browser-clock-results.json` and
 `build/engine/logs/clang-browser-clock-controlled-results.json`. See
-[clock reproduction/manual download instructions](../src/system-tests/clang/README.md).
+[clock reproduction/manual download instructions](../src/aux/clang/test/README.md).
 No manual browser test is required for this slice or its then-current stdio
 compile blocker.
 
@@ -1469,7 +1471,7 @@ compile blocker.
 - Ten package WAST assertions pass for full-length reporting, truncation, exact
   fit, one-byte/zero-size output, null sizing, empty formats, mixed promoted/wide
   arguments, repeated argument areas and the public `vsprintf` provider.
-- `make -C src/system-tests test-stdio` builds real C and `<cstdio>` C++ clients
+- `make -C src/aux test-stdio` builds real C and `<cstdio>` C++ clients
   against guest headers and checks their six shared-libc imports. Both call
   `vsnprintf` twice with the same `va_list`, then capture its original first
   argument, return counts, errno and complete sentinel-filled buffers. Nineteen
@@ -1501,7 +1503,7 @@ Logs are `build/aux/clang/stdio-*.log`, with retained copies under
 `build/engine/logs/clang-*`; the latest compile diagnostic remains in
 `build/aux/clang/cxx-build.log`. Browser evidence is
 `build/engine/logs/clang-browser-stdio-results.json`. See
-[compiled formatter/browser instructions](../src/system-tests/clang/stdio/README.md)
+[compiled formatter/browser instructions](../src/aux/clang/test/stdio/README.md)
 for reproduction and optional upload/download evidence. These compiler-boundary
 probes do not link libc++ runtime archives or establish its constructor behavior.
 No manual browser check was required for this slice or its then-current integer
@@ -1546,7 +1548,7 @@ Logs are `build/aux/clang/integer-*.log`, with retained copies under
 `build/aux/clang/cxx-build.log`. Browser evidence is
 `build/engine/logs/clang-browser-integer-results.json` and
 `build/engine/logs/clang-browser-integer-stdio-results.json`. See
-[integer reproduction/manual download instructions](../src/system-tests/clang/README.md).
+[integer reproduction/manual download instructions](../src/aux/clang/test/README.md).
 No manual browser test was required for this slice or its then-current
 classification compile failure.
 
@@ -1557,7 +1559,7 @@ classification compile failure.
   Existing math declarations retain C linkage in C++; INFINITY/NAN are float,
   and HUGE_VAL/HUGE_VALF/HUGE_VALL have their corresponding standard types.
   Unimplemented math function annotations remain intact.
-- `make -C src/system-tests test-classification` builds real C and `<cmath>`
+- `make -C src/aux test-classification` builds real C and `<cmath>`
   C++ observers and checks their eight shared-libc imports. Eighty-three WAST
   assertions verify report lengths, normal process exits, metadata, all three
   guest widths, thirteen cases per width, six individual argument evaluation
@@ -1605,7 +1607,7 @@ the current configure failure is in `build/aux/clang/guest-build.log` and
 `build/aux/clang/guest/CMakeFiles/CMakeConfigureLog.yaml`. Browser evidence is
 `build/engine/logs/clang-browser-classification-results.json` and
 `build/engine/logs/clang-browser-classification-stdio-results.json`. See
-[compiled classification/browser instructions](../src/system-tests/clang/classification/README.md).
+[compiled classification/browser instructions](../src/aux/clang/test/classification/README.md).
 No manual browser check was required for that prerequisite slice or its
 then-current guest configure failure.
 
@@ -1656,7 +1658,7 @@ then continue the POSIX/C++ capability, startup and compiler acceptance work.
   include path. A configure-cache audit confirms that native generators and
   bootstrap libc++ retain their original toolchains/header paths. Make tracks
   the private header/toolchain inputs, and the observer tracks included headers.
-- `make -C src/system-tests test-endian` builds a real C++ observer of staged
+- `make -C src/aux test-endian` builds a real C++ observer of staged
   `llvm/ADT/bit.h`, verifies its four shared CRT/libc imports, then runs 21 WAST
   assertions in native Bash. Checks cover the 128-byte report, normal exit,
   public/private byte-order tags, LLVM's native order, actual Wasm target,
@@ -1687,7 +1689,7 @@ The latest source failure is in `build/aux/clang/endian-build.log`, also copied
 to `guest-build.log`. Retained build, native, sanitizer, profile, corpus, SDK
 and cache logs are under `build/engine/logs/clang-endian-*`. Browser evidence is
 `build/engine/logs/clang-browser-endian-results.json`. See
-[compiled endian/browser instructions](../src/system-tests/clang/endian/README.md)
+[compiled endian/browser instructions](../src/aux/clang/test/endian/README.md)
 for reproduction and optional upload/download evidence. No manual browser check
 is needed for this slice or the remaining compile-time blockers. The next slice
 should address real wide-string support, followed by the LLVM guest POSIX
@@ -1717,7 +1719,7 @@ profile and the outstanding startup/compiler acceptance checks above.
   staged LLVM `ConvertUTF.h` passes an isolated syntax check using generated
   libc++/guest headers and the existing guest LLVM configuration. Its former
   missing-type errors are resolved without removing UTF conversion declarations.
-- `make -C src/system-tests test-wide` passes 34 WAST assertions against a real
+- `make -C src/aux test-wide` passes 34 WAST assertions against a real
   compiled C++ observer: non-ASCII `wstring_view` searches/comparisons,
   character-traits copy/move/fill, shared API calls, overlap and canaries.
   The observer needs libc++'s diagnostic-abort helper; it compiles the original
@@ -1748,7 +1750,7 @@ The current build failure is `build/aux/clang/wide-final-build.log`, copied to
 Native, sanitizer, SDK, corpus, cache and packaging logs use the
 `build/engine/logs/clang-wide-*` prefix. Browser evidence is
 `clang-browser-wide-results.json` and `clang-browser-wide-memory-results.json`
-in that directory. See [compiled wide-string/browser instructions](../src/system-tests/clang/wide/README.md)
+in that directory. See [compiled wide-string/browser instructions](../src/aux/clang/test/wide/README.md)
 for reproduction and optional upload/download evidence. Continue with the wide
 numeric/formatting providers, then resume `make -C src/aux clang`; retain the
 POSIX capability audit and real owning-string/startup/compiler acceptance gates.
@@ -1803,8 +1805,8 @@ in `clang-wide-integer-verification.json`. Browser evidence in that directory
 is `clang-browser-wide-integer-results.json` and
 `clang-browser-wide-integer-cxx-results.json`. The page is 4,538,804 bytes with
 a 3,295,721-byte compressed tar. See the updated
-[compiled wide/browser instructions](../src/system-tests/clang/wide/README.md)
-and [integer/browser instructions](../src/system-tests/clang/README.md).
+[compiled wide/browser instructions](../src/aux/clang/test/wide/README.md)
+and [integer/browser instructions](../src/aux/clang/test/README.md).
 Continue with the audited floating/formatting providers above, then resume
 the real runtime/compiler build and retain the remaining acceptance gates.
 
@@ -1871,8 +1873,8 @@ Native/sanitizer/SDK/corpus/cache/packaging logs use the
 `clang-browser-floating-results.json` and
 `clang-browser-floating-cxx-results.json`. The page is 4,555,896 bytes with a
 3,308,539-byte compressed tar. See the updated
-[floating/browser instructions](../src/system-tests/clang/README.md) and
-[compiled wide/browser instructions](../src/system-tests/clang/wide/README.md).
+[floating/browser instructions](../src/aux/clang/test/README.md) and
+[compiled wide/browser instructions](../src/aux/clang/test/wide/README.md).
 
 ### Wide formatting and runtime archive slice
 
@@ -1901,7 +1903,7 @@ Native/sanitizer/SDK/corpus/cache/packaging logs use the
   NaN/infinity, ties, carries, subnormal/normal limits and binary128 low bits.
   Synthetic variadic areas retain the compiler's 4/8/16-byte alignment;
   making only their base eight-byte aligned initially misread all quad values.
-- Added `src/system-tests/clang/wide-format` with actual C and libc++ `<cwchar>`
+- Added `src/aux/clang/test/wide-format` with actual C and libc++ `<cwchar>`
   observers, `wide-format-fixture`/`test-wide-format`, dependency tracking and
   native/sanitizer/worker instructions. Its 21 WAST assertions check nine
   guarded records from each executable, including mixed int/double/binary128/
@@ -1944,7 +1946,7 @@ Native/sanitizer/SDK/corpus/cache/HTML logs use the latter directory's
 `clang-wide-format-*` prefix; aggregate counts and artifact identities are in
 `clang-wide-format-verification.json`. Production-worker evidence is
 `clang-browser-wide-format-results.json`. See the
-[wide-format reproduction and optional browser steps](../src/system-tests/clang/wide-format/README.md).
+[wide-format reproduction and optional browser steps](../src/aux/clang/test/wide-format/README.md).
 
 ### Initial LLVM guest POSIX and metadata slice
 
@@ -1968,7 +1970,7 @@ Native/sanitizer/SDK/corpus/cache/HTML logs use the latter directory's
   The generated guest headers show both platform flags enabled, the real
   nanosecond-member probe enabled, and all four unsupported flags undefined.
   Function/provider auditing beyond these flags remains incomplete.
-- Added `src/system-tests/clang/filesystem` with a compiled observer, dependency
+- Added `src/aux/clang/test/filesystem` with a compiled observer, dependency
   tracking, `filesystem-fixture`, `test-filesystem` and
   `test-filesystem-controlled`. All 63 ordinary functional assertions live in
   WAST: profile flags, public/private widths, inline LLVM size/constructor
@@ -2009,7 +2011,7 @@ to `guest-build.log` and `build/engine/logs/clang-platform-build.log`.
 Verification logs use `clang-platform-*`; aggregate results and artifact
 identities are in `clang-platform-verification.json`. Production-worker
 evidence is `clang-browser-filesystem-results.json`. See the
-[filesystem reproduction and optional browser steps](../src/system-tests/clang/filesystem/README.md).
+[filesystem reproduction and optional browser steps](../src/aux/clang/test/filesystem/README.md).
 No manual browser check is required to reproduce this slice's execution gate.
 
 
@@ -2023,7 +2025,7 @@ No manual browser check is required to reproduce this slice's execution gate.
   No standard-library type, pthread provider, engine synchronization or shared
   capacity change was added. These counters are valid only for the compiler's
   single execution thread, not WASTE's concurrent scheduler.
-- Added `src/system-tests/clang/mutex` with a compiled observer, dependency
+- Added `src/aux/clang/test/mutex` with a compiled observer, dependency
   tracking, `mutex-fixture`, `test-mutex`, instructions and a worker scenario.
   All 40 functional assertions are WAST. They verify profile flags, ownership,
   both SmartMutex variants, recursive lock/try/unlock, nested scoped guards,
@@ -2054,7 +2056,7 @@ No manual browser check is required to reproduce this slice's execution gate.
   header/type-interface compilation passes with warnings as errors.
 - Rebuilt both native table generators and the current wide-enabled C++
   archives, refreshed guest configuration, and passed the documented
-  `make -C src/system-tests test-mutex` target. The fixture and archives remain
+  `make -C src/aux test-mutex` target. The fixture and archives remain
   byte-identical to those tested through the production worker. Repeating
   source/C++/generator/SDK targets performs no build work; the fixture also caches.
 - The aux build now compiles actual `LLVMSupport` before full Clang/LLD targets,
@@ -2078,7 +2080,7 @@ one-job attempt is `build/aux/clang/mutex-support-build.log`, copied to
 The earlier generator-rebuild attempt remains in `mutex-build.log`.
 Aggregate counts and artifact identities are in `clang-mutex-verification.json`.
 Production-worker results are `clang-browser-mutex-results.json`. See the
-[mutex reproduction and optional browser steps](../src/system-tests/clang/mutex/README.md).
+[mutex reproduction and optional browser steps](../src/aux/clang/test/mutex/README.md).
 
 ### Integer exponent constants and LLVM helper slice
 
@@ -2086,7 +2088,7 @@ Production-worker results are `clang-browser-mutex-results.json`. See the
   from `INT_MIN` and `INT_MAX` through the compiler-support limits header.
   They are integer constant expressions of type `int`. No `ilogb` declaration,
   provider, unsupported annotation change or shared capacity change was added.
-- Added `src/system-tests/clang/logb` with `logb-fixture`, `test-logb`, dependency
+- Added `src/aux/clang/test/logb` with `logb-fixture`, `test-logb`, dependency
   tracking, compiled C/C++ observations, WAST assertions, a worker scenario and
   reproduction instructions. The C observer uses constant-expression enums
   and `_Generic`; C++ verifies exact types and the real LLVM int/long sentinels.
@@ -2098,7 +2100,7 @@ Production-worker results are `clang-browser-mutex-results.json`. See the
   normals, largest finite values, ordinary signed values, infinities and NaNs.
   The 516-byte report includes preserved shared-libc errno. This establishes
   the selected exponent-helper boundary, not general LLVM math accuracy.
-- `make -C src/system-tests test-logb` passes 131 native assertions; the final
+- `make -C src/aux test-logb` passes 131 native assertions; the final
   fixture passes the same 131 under ASan/UBSan. Existing compiled C/C++
   classification passes 83 native assertions. The rebuilt production worker
   passes 132/132 exponent results including Bash bootstrap, and the existing
@@ -2128,7 +2130,7 @@ The current full-build attempt is `build/aux/clang/logb-build.log`, copied to
 use `build/engine/logs/clang-logb-*`; aggregate counts and artifact identities
 are in `clang-logb-verification.json`. The production-worker evidence is
 `clang-browser-logb-results.json`. See the
-[exponent reproduction and optional browser steps](../src/system-tests/clang/logb/README.md).
+[exponent reproduction and optional browser steps](../src/aux/clang/test/logb/README.md).
 
 ### Compiler synchronization declarations and local ownership slice
 
@@ -2141,7 +2143,7 @@ are in `clang-logb-verification.json`. The production-worker evidence is
   mutex/condition-variable fields unused by its existing disabled-thread methods.
   Native and threaded backends remain intact; no `std` type, pthread provider,
   kernel synchronization or shared capacity change was introduced.
-- Added `src/system-tests/clang/synchronization` with a compiled observer,
+- Added `src/aux/clang/test/synchronization` with a compiled observer,
   header/template instantiation and native/threaded declaration gates, Make
   targets, WAST, a worker scenario and instructions. All 97 functional
   assertions remain in WAST. Both reader/writer variants exercise counted
@@ -2196,7 +2198,7 @@ counts, limitations and artifact identities are in
 reproduced by `build/system-tests/clang/synchronization/static-exit/probe.wasm`
 and recorded in `clang-synchronization-static-exit-repro.log`; the first failed
 run remains in `clang-synchronization-static-exit-blocker.log`. See the
-[synchronization reproduction and optional browser steps](../src/system-tests/clang/synchronization/README.md).
+[synchronization reproduction and optional browser steps](../src/aux/clang/test/synchronization/README.md).
 
 ### LLVM deferred task result slice
 
@@ -2207,7 +2209,7 @@ run remains in `clang-synchronization-static-exit-blocker.log`. See the
   wait/get or the actual executor's queued thunk executes it once. Native and
   threaded branches retain standard shared futures and deferred async, verified
   by declaration/instantiation gates with warnings as errors.
-- Added `src/system-tests/clang/thread-pool` with 79 WAST assertions over a
+- Added `src/aux/clang/test/thread-pool` with 79 WAST assertions over a
   308-byte compiled report. The observer compiles real LLVM ThreadPool.cpp and
   Threading.cpp and links current libc++/libc++abi archives, CRT and shared libc.
   Link-time optimization removes unused diagnostic paths using the actual
@@ -2256,7 +2258,7 @@ The first attempt is retained in `clang-thread-pool-first-build.log`.
 Verification logs use `build/engine/logs/clang-thread-pool-*`; aggregate counts,
 limitations and artifact identities are in `clang-thread-pool-verification.json`.
 Production-worker evidence is `clang-browser-thread-pool-results.json`.
-See the [task-boundary reproduction and optional browser steps](../src/system-tests/clang/thread-pool/README.md).
+See the [task-boundary reproduction and optional browser steps](../src/aux/clang/test/thread-pool/README.md).
 
 ### Public checkpoint and crash-context source slice
 
@@ -2312,7 +2314,7 @@ attempt is retained in `checkpoint-first-build.log`. Verification logs use
 `build/engine/logs/clang-checkpoint-*`; counts, limitations and artifact hashes
 are in `clang-checkpoint-verification.json`. Production-worker evidence is
 `clang-browser-checkpoint-results.json`. See the
-[checkpoint reproduction and optional browser steps](../src/system-tests/clang/checkpoint/README.md).
+[checkpoint reproduction and optional browser steps](../src/aux/clang/test/checkpoint/README.md).
 
 ### LLVM yielding backoff slice
 
@@ -2372,7 +2374,7 @@ attempt is retained in `backoff-first-build.log`. Verification logs use
 are in `clang-backoff-verification.json`. Production-worker evidence is
 `clang-browser-backoff-results.json` and
 `clang-browser-backoff-controlled-results.json`. See the
-[backoff reproduction and optional browser steps](../src/system-tests/clang/backoff/README.md).
+[backoff reproduction and optional browser steps](../src/aux/clang/test/backoff/README.md).
 
 ### LLVM lock-owner and null-signal query slice
 
@@ -2438,7 +2440,7 @@ attempt is retained in `lock-owner-first-build.log`. Verification logs use
 `build/engine/logs/clang-lock-owner-*`; counts, limitations and artifact hashes
 are in `clang-lock-owner-verification.json`. Production-worker evidence is
 `clang-browser-lock-owner-results.json`. See the
-[lock-owner reproduction and optional browser steps](../src/system-tests/clang/lock-owner/README.md).
+[lock-owner reproduction and optional browser steps](../src/aux/clang/test/lock-owner/README.md).
 
 
 ### LLVM managed static registry slice
@@ -2448,7 +2450,7 @@ are in `clang-lock-owner-verification.json`. Production-worker evidence is
   `SmartMutex<true>`. Native/threaded profiles retain `std::recursive_mutex`;
   registration, object publication and reverse shutdown stay upstream code.
 - Added the source-backed observer and all 91 assertions under
-  `src/system-tests/clang/managed-static`. It records nested lazy construction,
+  `src/aux/clang/test/managed-static`. It records nested lazy construction,
   const/mutable identity, last-registration destruction/recreation, destructor
   dependency lifetime, empty/repeated shutdown, scoped shutdown, custom/array
   deletion and claimed ownership without double destruction. Its 356-byte
@@ -2489,7 +2491,7 @@ Native/sanitized runs and packaging checks use
 `build/engine/logs/clang-managed-static-*`; counts and artifact hashes are in
 `clang-managed-static-verification.json`. Production-worker evidence is
 `clang-browser-managed-static-results.json`. See the
-[managed registry reproduction and optional browser steps](../src/system-tests/clang/managed-static/README.md).
+[managed registry reproduction and optional browser steps](../src/aux/clang/test/managed-static/README.md).
 
 
 ### LLVM Mustache numeric interpolation slice
@@ -2503,7 +2505,7 @@ Native/sanitized runs and packaging checks use
   formatting, so neither was substituted. Localization stays disabled and no
   unavailable annotation or standard-library/provider type was fabricated.
 - Added 37 shared exact IEEE bit-pattern inputs and all 96 WAST assertions in
-  `src/system-tests/clang/mustache`. Explicit expected text, lengths and NULs
+  `src/aux/clang/test/mustache`. Explicit expected text, lengths and NULs
   cover exact ties, carries at fixed/scientific boundaries, signed zeros,
   binary64 extremes, normal/subnormal minima and signed/payload special values.
   A generated native classic-stream report independently matches every byte;
@@ -2547,7 +2549,7 @@ Native/sanitized runs and packaging checks use
 `build/engine/logs/clang-mustache-*`; counts and artifact hashes are in
 `clang-mustache-verification.json`. Production-worker evidence is
 `clang-browser-mustache-results.json`. See the
-[numeric interpolation reproduction and optional browser steps](../src/system-tests/clang/mustache/README.md).
+[numeric interpolation reproduction and optional browser steps](../src/aux/clang/test/mustache/README.md).
 
 
 ### LLVM Parallel latch and scalar algorithm slice
@@ -2560,7 +2562,7 @@ Native/sanitized runs and packaging checks use
   no unavailable SDK annotation, standard type or capability was fabricated.
   TaskGroup already runs callbacks immediately in this compiler profile; WASTE's
   concurrent process/thread scheduler is unchanged.
-- Added all 124 functional assertions in `src/system-tests/clang/parallel`.
+- Added all 124 functional assertions in `src/aux/clang/test/parallel`.
   The observer compiles actual staged Parallel.cpp without LTO, linking current
   C++ archives, production CRT and shared libc. It records 122 values (488 bytes)
   for WAST to check: counts, nested/recursive TaskGroups, shared captures and
@@ -2603,7 +2605,7 @@ Native/sanitized runs and packaging checks use
 `build/engine/logs/clang-parallel-*`; counts and artifact hashes are in
 `clang-parallel-verification.json`. Production-worker evidence is
 `clang-browser-parallel-results.json`. See the
-[parallel reproduction and optional browser steps](../src/system-tests/clang/parallel/README.md).
+[parallel reproduction and optional browser steps](../src/aux/clang/test/parallel/README.md).
 
 
 ### LLVM TimeProfiler mutex and entry-storage slice
@@ -2615,7 +2617,7 @@ Native/sanitized runs and packaging checks use
   vector, event algorithms and JSON emission remain upstream code; no leaked
   allocation, static-destructor suppression, fake standard type or unsupported
   capability was introduced. WASTE's scheduler is unchanged.
-- Added all 74 functional assertions in `src/system-tests/clang/time-profiler`.
+- Added all 74 functional assertions in `src/aux/clang/test/time-profiler`.
   The observer includes actual staged TimeProfiler.cpp to inspect private entry
   types, links current C++ archives/CRT/shared libc, and records 72 values
   (288 bytes). WAST checks the actual local registry field/guard type, timing
@@ -2663,7 +2665,7 @@ Native/sanitized runs and packaging checks use
 `build/engine/logs/clang-time-profiler-*`; counts and artifact hashes are in
 `clang-time-profiler-verification.json`. Production-worker evidence is
 `clang-browser-time-profiler-results.json`. See the
-[profiler storage reproduction and optional browser steps](../src/system-tests/clang/time-profiler/README.md).
+[profiler storage reproduction and optional browser steps](../src/aux/clang/test/time-profiler/README.md).
 
 ### Public uppercase integer-format macro slice
 
@@ -2714,7 +2716,7 @@ Native/sanitized, SDK, snapshot and packaging evidence uses
 `clang-inttypes-verification.json`. Production-worker evidence is
 `clang-browser-inttypes-results.json`. The isolated YAML compile command/log
 and object are under `build/system-tests/clang/stdio/source`. See the updated
-[compiled formatter reproduction and optional browser steps](../src/system-tests/clang/stdio/README.md).
+[compiled formatter reproduction and optional browser steps](../src/aux/clang/test/stdio/README.md).
 
 ### Guest stream-component and memory-output slice
 
@@ -2726,7 +2728,7 @@ and object are under `build/system-tests/clang/stdio/source`. See the updated
   Native builds retain the adapter, and a full native source compile passes.
   Localization remains disabled. Re-audit if the selected tool graph expands.
 - Added the compiled observer and all 51 assertions under
-  src/system-tests/clang/raw-stream. It compiles actual raw_ostream.cpp and
+  src/aux/clang/test/raw-stream. It compiles actual raw_ostream.cpp and
   NativeFormatting.cpp without LTO and links current C++ archives/CRT/shared
   libc. A nonterminal sink records callbacks; LLVM owns buffering, flushes,
   positions, pwrite dispatch, integer/hex formatting and escaping. The real
@@ -2775,7 +2777,7 @@ Native/sanitized, cache, snapshot and packaging evidence uses
 build/engine/logs/clang-raw-stream-*; counts and artifact hashes are in
 clang-raw-stream-verification.json. Production-worker evidence is
 clang-browser-raw-stream-results.json. See the
-[raw-stream reproduction and optional browser steps](../src/system-tests/clang/raw-stream/README.md).
+[raw-stream reproduction and optional browser steps](../src/aux/clang/test/raw-stream/README.md).
 
 
 ### Guest socket-stream scope slice
@@ -2818,7 +2820,7 @@ platform source commands and diagnostics use `clang-socket-stream-*` under
 `build/engine/logs`. Native/sanitized and worker evidence is summarized in
 `clang-socket-stream-verification.json`, with worker results in
 `clang-browser-socket-stream-results.json`. The retained
-[raw-stream reproduction instructions](../src/system-tests/clang/raw-stream/README.md)
+[raw-stream reproduction instructions](../src/aux/clang/test/raw-stream/README.md)
 now describe both optional components.
 
 ### Optional filesystem queries and C++ provider slice
@@ -2838,7 +2840,7 @@ now describe both optional components.
   mmap signature. Production DynamicLibrary/Memory objects and complete fresh
   compiles without PCH are byte-identical at 8,926/11,696 bytes and now import
   unmangled dlopen/dlsym/dlclose/dlerror and mmap/munmap/mprotect names.
-- Added the compiled platform observer under src/system-tests/clang/platform.
+- Added the compiled platform observer under src/aux/clang/test/platform.
   All 81 functional assertions are in platform.wast. A 512-byte capture records
   78 observations: existing/missing paths, valid/invalid descriptors, error
   category, errno/output preservation, anonymous zero initialization and
@@ -2892,7 +2894,7 @@ audits, full platform compile commands, symbols and diagnostics use
 clang-platform-* under build/engine/logs. Native/sanitized, SDK, snapshot,
 cache and packaging evidence is summarized in clang-platform-verification.json;
 production-worker results are in clang-browser-platform-results.json. See the
-[platform reproduction and optional browser steps](../src/system-tests/clang/platform/README.md).
+[platform reproduction and optional browser steps](../src/aux/clang/test/platform/README.md).
 
 
 ### Loaded executable identity and shared path-limit slice
@@ -2921,7 +2923,7 @@ production-worker results are in clang-browser-platform-results.json. See the
   Fork accepts detached regular descriptions; writes avoid absent namespace
   metadata, and fstat retains file size/inode. General unlinked metadata and
   directory lifetime still need broader acceptance.
-- Added src/system-tests/clang/executable-path. The generator extracts the
+- Added src/aux/clang/test/executable-path. The generator extracts the
   actual unchanged getMainExecutable definition from staged Unix/Path.inc,
   preserves the license, records the complete source hash and rejects changed
   extraction boundaries. Its diagnostic unit does not replace production Path
@@ -2975,7 +2977,7 @@ Path commands/diagnostics, debugger findings, SDK, snapshots and cache logs use
 clang-executable-path-* under build/engine/logs. Native/sanitized, packaging and
 compiler evidence is summarized in clang-executable-path-verification.json;
 worker results are in clang-browser-executable-path-results.json. See the
-[executable-path reproduction and optional browser steps](../src/system-tests/clang/executable-path/README.md).
+[executable-path reproduction and optional browser steps](../src/aux/clang/test/executable-path/README.md).
 The next slice should address actual link/symlink providers and resolution,
 then the remaining required Path boundaries. Blocking retries must reuse the
 engine's existing readiness, clocks and explicit yield/resume path used by sleep.
@@ -3008,7 +3010,7 @@ engine's existing readiness, clocks and explicit yield/resume path used by sleep
   validated descriptor constructor directly. Their namespace, credentials,
   flags, retained file ownership and offset-independent mapping behavior remain
   shared kernel facilities.
-- Added src/system-tests/clang/symlink with an ordinary-CRT C++ observer and
+- Added src/aux/clang/test/symlink with an ordinary-CRT C++ observer and
   two authored WAST files. All 189 functional assertions live in WAST: C++
   declaration/ABI and wrapper calls, errno, configured pathname bounds,
   relative/intermediate/dangling links, loops, null/invalid/unterminated pointers,
@@ -3057,7 +3059,7 @@ guest-build.log and build/engine/logs/clang-symlink-build.log. Full Path command
 and diagnostics, SDK, snapshots, runtime and cache logs use clang-symlink-*
 under build/engine/logs. Aggregate evidence is clang-symlink-verification.json;
 worker reports use clang-browser-symlink-*. See the
-[symbolic-link reproduction and optional browser steps](../src/system-tests/clang/symlink/README.md).
+[symbolic-link reproduction and optional browser steps](../src/aux/clang/test/symlink/README.md).
 The next slice should implement hard links with shared inode/file lifetime,
 metadata and link-count observations. Preserve the current stat ABI deliberately
 when extending its boundary. Any eventual blocking locks or retries must reuse
@@ -3091,7 +3093,7 @@ existing engine readiness, clocks and the explicit yield/resume path used by sle
   stat/lstat/fstatat use it. Legacy env stat/lstat/fstat report the same counts;
   fstat reads retained inode attributes even after all names are removed. Failed
   v2 queries preserve the output, and WAST checks exact sizes and canaries.
-- Added src/system-tests/clang/hardlink: ordinary-CRT C++ observations and one
+- Added src/aux/clang/test/hardlink: ordinary-CRT C++ observations and one
   authored WAST file. All 269 reported checks live in WAST: public ABI/errno,
   inode identity, shared bytes/permissions/truncation, unlink lifetime, rename,
   symbolic-link flags/targets, directory descriptors, invalid pointers and both
@@ -3138,7 +3140,7 @@ guest-build.log and build/engine/logs/clang-hardlink-build.log. Full Path comman
 SDK, snapshots, runtime and cache logs use clang-hardlink-* under
 build/engine/logs. Aggregate evidence is clang-hardlink-verification.json;
 worker reports use clang-browser-hardlink-*. See the
-[hard-link reproduction and optional browser steps](../src/system-tests/clang/hardlink/README.md).
+[hard-link reproduction and optional browser steps](../src/aux/clang/test/hardlink/README.md).
 The next slice should resolve the reentrant account lookup boundary using the
 existing guest account data/providers. Mapping advice, realpath and record locks
 follow. Eventual blocking locks/retries and usleep must reuse engine readiness,
@@ -3161,7 +3163,7 @@ clocks and explicit yield/resume used by sleep.
   allowing LLVM's existing 16,384-byte fallback. Invalid selectors return
   -1/EINVAL instead of the former fabricated 1,024. No kernel/runtime hooks,
   compiler-specific account store or static-exit no-op were added.
-- Added 84 package WAST assertions and `src/system-tests/clang/accounts` with
+- Added 84 package WAST assertions and `src/aux/clang/test/accounts` with
   47 compiled public C++ observations checked entirely in WAST. They cover
   exact/undersized buffers, canaries, positive error returns, independent
   results, account replacement, missing/null entries, enumeration preservation,
@@ -3202,7 +3204,7 @@ commands, runtime, SDK, snapshots, package-byte and cache logs use
 `clang-accounts-*` under `build/engine/logs`; worker reports use
 `clang-browser-accounts-*`. Aggregate evidence is
 `build/engine/logs/clang-accounts-verification.json`. See the
-[account reproduction and optional browser steps](../src/system-tests/clang/accounts/README.md).
+[account reproduction and optional browser steps](../src/aux/clang/test/accounts/README.md).
 The next slice should resolve mapping advice, followed by realpath and descriptor
 locks. Eventual blocking locks/retries and usleep must reuse the existing engine
 readiness, clocks and explicit yield/resume path used by sleep.
@@ -3219,7 +3221,7 @@ readiness, clocks and explicit yield/resume path used by sleep.
   Linux's destructive `madvise(MADV_DONTNEED)` is not advertised. Native/browser
   builds depend on the same ABI header; no compiler-local VM implementation,
   platform syscall, time/thread subsystem or static-exit workaround was added.
-- Added `src/system-tests/clang/advice` with unchanged licensed LLVM mapping
+- Added `src/aux/clang/test/advice` with unchanged licensed LLVM mapping
   methods extracted from staged Unix/Path.inc and Path.cpp, with source hashes.
   WAST checks real construction, three advice methods, accessors, move/unmap,
   empty-object guards and failed construction (38 checks), plus public C++
@@ -3263,7 +3265,7 @@ commands, SDK, snapshots, runtime, import/package-byte and cache logs use
 `clang-advice-*` under `build/engine/logs`; the worker report is
 `clang-browser-advice-results.json`. Aggregate evidence is
 `build/engine/logs/clang-advice-verification.json`. See the
-[mapping reproduction and optional browser steps](../src/system-tests/clang/advice/README.md).
+[mapping reproduction and optional browser steps](../src/aux/clang/test/advice/README.md).
 The next slice should implement realpath using the existing guest component
 resolver and namespace, then descriptor locks and yielding usleep. Blocking
 locks/retries must reuse engine readiness, clocks and explicit yield/resume
@@ -3287,7 +3289,7 @@ used by sleep. Full C++ exit registration remains a separate required boundary.
   The separate bounded input-reader limit remains intact. Public pathconf
   limits and GNU canonicalize_file_name remain unsupported; public callers can
   request an allocated result with NULL output.
-- Added `src/system-tests/clang/realpath` with 213 WAST assertions covering
+- Added `src/aux/clang/test/realpath` with 213 WAST assertions covering
   direct libc/kernel calls and ordinary compiled public C++ observations.
   Cases include chained/absolute/intermediate links, errors and errno, empty/
   null/invalid/unterminated inputs, canonical bounds, exact/short/raw buffers,
@@ -3330,7 +3332,7 @@ commands, SDK, snapshots, runtime, import/package-byte and cache logs use
 `clang-realpath-*` under `build/engine/logs`; the worker report is
 `clang-browser-realpath-results.json`. Aggregate evidence is
 `build/engine/logs/clang-realpath-verification.json`. See the
-[canonical-path reproduction and optional browser steps](../src/system-tests/clang/realpath/README.md).
+[canonical-path reproduction and optional browser steps](../src/aux/clang/test/realpath/README.md).
 The next slice should implement record-lock ownership/ranges over retained
 kernel file identity, including nonblocking contention and blocking readiness,
 then yielding usleep through the existing sleep/time path. Blocking locks and
@@ -3368,7 +3370,7 @@ Full C++ exit registration remains a separate required boundary.
   libc and the explicit variadic kernel adapter read its argument slot.
   Complete input/output validation precedes copies, including protected-page
   output. Existing import signatures remain unchanged.
-- Added `src/system-tests/clang/locks` with 341 WAST assertions over direct
+- Added `src/aux/clang/test/locks` with 341 WAST assertions over direct
   adapters and ordinary public C++ process observations. The fixture compiles
   unchanged LLVM `lockFile`/`unlockFile` methods extracted from staged source,
   retains its license/hash, and links the ordinary CRT/current C++ archives.
@@ -3414,7 +3416,7 @@ commands, SDK, snapshot, runtime, import/package-byte and cache logs use
 `clang-locks-*` under `build/engine/logs`; the worker report is
 `clang-browser-locks-results.json`. Aggregate evidence is
 `build/engine/logs/clang-locks-verification.json`. See the
-[record-lock reproduction and optional browser steps](../src/system-tests/clang/locks/README.md).
+[record-lock reproduction and optional browser steps](../src/aux/clang/test/locks/README.md).
 The next slice should provide yielding usleep through the existing sleep/time
 path, verify unchanged LLVM timed tryLockFile retries and retry full Support.
 Full Path, Clang/LLD and production C++ exit registration/finalization remain
@@ -3441,7 +3443,7 @@ required boundaries.
   or test expectation was weakened.
 - Extended the existing test-only LLVM method extraction to include unchanged
   tryLockFile, preserving source license/hash and its real Errc dependency.
-  `src/system-tests/clang/timed-locks` compiles those methods against the current
+  `src/aux/clang/test/timed-locks` compiles those methods against the current
   CRT and C++ archives. Its 53 WAST assertions check public C++ types/linkage,
   immediate success, invalid fd, concurrent shared readers, zero-timeout
   contention, finite timeout despite a caught signal and successful acquisition
@@ -3498,7 +3500,7 @@ Path/Process commands, SDK, snapshots, import/package-byte and cache logs use
 `clang-browser-timed-locks-results.json`; controlled worker evidence is
 `clang-browser-usleep-controlled-results.json`. Aggregate evidence is
 `build/engine/logs/clang-usleep-verification.json`. See the
-[timed-lock and sleep reproduction steps](../src/system-tests/clang/timed-locks/README.md).
+[timed-lock and sleep reproduction steps](../src/aux/clang/test/timed-locks/README.md).
 The next slice should resolve the rusage/timeval and `_Exit` boundaries,
 verify actual LLVM Process behavior and retry the one-job Support build.
 Production C++ exit registration/finalization and complete Clang/LLD acceptance
@@ -3522,7 +3524,7 @@ remain required boundaries.
   legacy env._Exit alias. The public declarations are nonreturning. Existing
   process status, signal and descriptor teardown are reused; no alternate
   scheduler or termination state was introduced.
-- Added `src/system-tests/clang/process`. Its public C++ observer compiles the
+- Added `src/aux/clang/test/process`. Its public C++ observer compiles the
   complete unchanged LLVM Process.cpp and links the ordinary CRT/current C++
   archives. Static checks establish layouts and typed declarations; 55 WAST
   assertions cover actual PID/time calls, bounded wall time, LLVM's CPU fallback,
@@ -3575,7 +3577,7 @@ use `clang-process-*` under `build/engine/logs`. Worker evidence is
 `clang-browser-process-results.json` and
 `clang-browser-process-timed-locks-results.json`. Aggregate evidence is
 `build/engine/logs/clang-process-verification.json`. See the
-[process reproduction and optional browser steps](../src/system-tests/clang/process/README.md).
+[process reproduction and optional browser steps](../src/aux/clang/test/process/README.md).
 The next slice should resolve public execv/waiting through the existing
 execve/environment and waitpid paths and verify actual LLVM child execution.
 Audit optional child statistics/detachment honestly; subsequent timeout and
@@ -3604,7 +3606,7 @@ required acceptance boundaries.
   Resumed waits revalidate the integer address; no guest pointer survives a
   yield. NULL status is legal, and write-only fresh pages work. Both invalid
   final-copy paths consistently return -1/EFAULT with guest errno.
-- Added `src/system-tests/clang/exec-wait`. Its C++ observer uses public headers,
+- Added `src/aux/clang/test/exec-wait`. Its C++ observer uses public headers,
   the ordinary CRT and current C++ archives; all 234 behavioral assertions live
   in WAST. Besides replacement, it covers any-child ordering, WNOHANG,
   interruption/restart, single consumption, parent survival and invalid,
@@ -3660,7 +3662,7 @@ native/sanitizer, SDK, corpus, cache and package-byte evidence uses
 `clang-exec-wait-*` under `build/engine/logs`. Worker reports use
 `clang-browser-exec-wait*-results.json`; the initial timing failure is retained
 separately. The raw-pipe comparison is `clang-exec-wait-smoke-baseline.json`.
-See the [exec/wait reproduction and optional browser steps](../src/system-tests/clang/exec-wait/README.md).
+See the [exec/wait reproduction and optional browser steps](../src/aux/clang/test/exec-wait/README.md).
 
 The next slice should resolve LLVM Program's child-wait/statistics selection
 through the existing waitpid path and verify actual LLVM calls. Its Unix code
@@ -3686,7 +3688,7 @@ production C++ startup/shutdown remain required acceptance work.
   killing or changing SIGALRM state; ExecuteAndWait checks them before fork so
   a rejected request cannot launch a child. The shared guest-only helper is
   tracked by the compiler build's dependency stamp.
-- Added `src/system-tests/clang/program-wait`. Its source extractor preserves
+- Added `src/aux/clang/test/program-wait`. Its source extractor preserves
   the actual staged Wait definition, ProcessInfo constructor and Unix error
   helper, with upstream license, checked unique/ordered boundaries and source/
   generated hashes. The full unchanged Errno.cpp supplies real error strings.
@@ -3741,7 +3743,7 @@ The actual build log is `clang-program-wait-guest-build.log`, also copied to
 guest/native commands and logs, native/sanitizer sessions, extraction, SDK,
 snapshot, package-byte and cache evidence use `clang-program-wait-*` under
 `build/engine/logs`. Worker evidence is `clang-browser-program-wait-results.json`.
-See the [actual LLVM Wait reproduction and optional browser steps](../src/system-tests/clang/program-wait/README.md).
+See the [actual LLVM Wait reproduction and optional browser steps](../src/aux/clang/test/program-wait/README.md).
 
 The next slice should implement real argument-budget queries and LLVM's
 argument-fit selection. Derive coordinated quantities from src/config.h,
@@ -3783,7 +3785,7 @@ required after the translation unit links.
   SmallVector allocation. Native LLVM retains its original calculation.
   A previous successful fit is advisory: an enlarged environment still fails
   at the authoritative exec boundary.
-- Added `src/system-tests/clang/argument-limits`. Its extractor preserves both
+- Added `src/aux/clang/test/argument-limits`. Its extractor preserves both
   actual staged overloads and upstream license, verifies unique/ordered and EOF
   boundaries, and records source/generated hashes. Identity, duplicate-boundary
   and trailing-source rejection checks pass. No extracted fragment replaces
@@ -3834,7 +3836,7 @@ Build, fresh whole-source guest/native commands, sessions, extraction, SDK,
 snapshot, package-byte, cache and final-check evidence use
 `clang-argument-limits-*` under `build/engine/logs`. Worker evidence is
 `clang-browser-argument-limits-results.json`. See the
-[argument-budget reproduction and optional browser steps](../src/system-tests/clang/argument-limits/README.md).
+[argument-budget reproduction and optional browser steps](../src/aux/clang/test/argument-limits/README.md).
 
 The next slice should resolve session/detachment using existing engine-owned
 process/session/terminal state, then link and exercise actual LLVM child
@@ -3871,7 +3873,7 @@ startup, execution and shutdown acceptance remains required.
   delivery, which can destroy the device's final reference.
   Full POSIX setpgid/job-control, terminal acquisition, session-leader exit
   hangups and orphan-group stop/continue are not established by this slice.
-- Added `src/system-tests/clang/session` with an ordinary compiled C++ observer,
+- Added `src/aux/clang/test/session` with an ordinary compiled C++ observer,
   public declaration/type checks and all 86 runtime expectations in WAST.
   Native and ASan/UBSan Bash pass 86/86, exit zero and report no handler errors
   or timeouts. Nested fork/exec, retained aliases, repeat rejection, parent
@@ -3916,7 +3918,7 @@ Aggregate evidence is `build/engine/logs/clang-session-verification.json`.
 Build, whole-source guest/native commands, native/sanitizer sessions, SDK,
 snapshot/package bytes, caches and final guards use `clang-session-*` under
 `build/engine/logs`; worker evidence is `clang-browser-session-results.json`.
-See the [session reproduction and optional browser steps](../src/system-tests/clang/session/README.md).
+See the [session reproduction and optional browser steps](../src/aux/clang/test/session/README.md).
 
 The next slice should audit LLVM Signals.cpp against the existing shared signal
 and dynamic-loading capabilities, preserving native branches and reporting
@@ -3951,7 +3953,7 @@ remain required.
   and keeps any nonrestart decision. Raw language probes retain their existing
   one-notification-per-boundary behavior. No compiler-local scheduler, platform
   timer or process table was added.
-- Added src/system-tests/clang/signals. The checked extractor preserves actual
+- Added src/aux/clang/test/signals. The checked extractor preserves actual
   ordinary registration/dispatch, file-list cleanup and RunSignalHandlers source,
   upstream license and hashes; identity and duplicate-boundary rejection checks
   pass without changing output on failure. It links real ManagedStatic.cpp,
@@ -4007,7 +4009,7 @@ Actual build, whole-source guest/native commands, fixture/source extraction,
 SDK, native/sanitizer sessions, retained guards, snapshots/package bytes, caches
 and final checks use clang-signals-* under build/engine/logs. Main worker
 results are clang-browser-signals-results.json. See the
-[signal reproduction and optional browser steps](../src/system-tests/clang/signals/README.md).
+[signal reproduction and optional browser steps](../src/aux/clang/test/signals/README.md).
 
 The alarm/watchdog prerequisite is completed in the following slice. Actual
 LLVM execution methods, finite child waits and complete compiler acceptance
@@ -4036,7 +4038,7 @@ remain required.
   a successful application mask update now delivers unblocked pending signals
   before returning, preventing an old notification from interrupting a later
   READ. Table-free language probes retain their raw signal conventions.
-- Added src/system-tests/clang/watchdog with the complete staged upstream
+- Added src/aux/clang/test/watchdog with the complete staged upstream
   Watchdog.cpp/Unix implementation, ordinary C++ observers and production CRT,
   libc and C++ archives. No source extractor or substitute watchdog supplies
   its behavior. All runtime expectations live in WAST: 65 live assertions and
@@ -4094,7 +4096,7 @@ sessions, clock parity, retained guards, SDK, snapshots/package bytes, caches
 and final checks use clang-alarm-* under build/engine/logs. Main worker results
 are clang-browser-watchdog-results.json and
 clang-browser-watchdog-controlled-results.json. See the
-[watchdog reproduction and optional browser steps](../src/system-tests/clang/watchdog/README.md).
+[watchdog reproduction and optional browser steps](../src/aux/clang/test/watchdog/README.md).
 
 The archive-linked execution slice below completes that method gate and records
 its filesystem and loader boundaries before changing C++ lifecycle behavior. Positive child waits must reuse the
@@ -4181,7 +4183,7 @@ Actual builds, full source commands, native/sanitizer sessions, retained guards,
 SDK, snapshots/package bytes, caches and final checks use clang-execution-* under
 build/engine/logs. Main worker results are
 clang-browser-program-execution-results.json. See the
-[execution reproduction and optional browser steps](../src/system-tests/clang/program-execution/README.md).
+[execution reproduction and optional browser steps](../src/aux/clang/test/program-execution/README.md).
 
 The shared device slice below accepts actual LLVM empty redirect paths. Finite
 child waits remain next, using existing clocks, process/signal state and
@@ -4209,7 +4211,7 @@ browser Clang/LLD compilation, linking and execution acceptance remain.
   preserve the existing 48-byte path and 128-byte stat layouts; stat reports
   character type and readdir reports DT_CHR. Both runtime Makefiles track this
   shared ABI header.
-- Added src/system-tests/devices/null.wast and test-devices. Its 67 assertions
+- Added src/engine/test/devices/null.wast and test-devices. Its 67 assertions
   cover type/size/inode identity, EOF/canaries, discarded and zero-count writes,
   access-mode failures/readiness, seeks, descriptor aliases/flags, openat,
   directory entries, symlinks, hard-link/rename/unlink lifetime and path errors.
@@ -4259,8 +4261,8 @@ browser Clang/LLD compilation, linking and execution acceptance remain.
 Evidence uses clang-null-* under build/engine/logs. Production-worker results
 are clang-browser-null-results.json and clang-browser-null-execution-results.json.
 The aggregate is clang-null-verification.json. See the
-[shared-device reproduction](../src/system-tests/devices/README.md) and
-[actual LLVM execution steps](../src/system-tests/clang/program-execution/README.md).
+[shared-device reproduction](../src/engine/test/devices/README.md) and
+[actual LLVM execution steps](../src/aux/clang/test/program-execution/README.md).
 
 Next implement finite child waits through shared process/signal state,
 monotonic clocks and the existing readiness scheduler. Requested statistics,
@@ -4290,7 +4292,7 @@ link and execution acceptance remain.
   timeout. Completed, erroneous and interrupted calls clear the wait record
   while preserving independent alarms. Retries prepare the entire output again;
   no guest pointers or platform timer state are retained by the engine.
-- Added src/system-tests/clang/child-deadline with ordinary C observations,
+- Added src/aux/clang/test/child-deadline with ordinary C observations,
   a public C++ declaration probe, two WAST files, live/controlled manifests and
   Make targets. All runtime expectations live in WAST. Native and ASan/UBSan
   Bash each pass 107 live assertions: expiry/polling, raw/public errors, status/
@@ -4328,7 +4330,7 @@ Evidence uses clang-deadline-* under build/engine/logs. Production worker
 results are clang-browser-child-deadline-results.json and
 clang-browser-child-deadline-controlled-results.json. Aggregate evidence is
 clang-deadline-verification.json. See the
-[shared wait reproduction and scope](../src/system-tests/clang/child-deadline/README.md).
+[shared wait reproduction and scope](../src/aux/clang/test/child-deadline/README.md).
 
 Next adapt guest LLVM Wait and ExecuteAndWait to this accepted shared API:
 compute one checked absolute deadline, retain live children on polling expiry,
@@ -4350,7 +4352,7 @@ acceptance also remain.
   unrelated ready sibling's status. ExecuteAndWait checks clock availability
   before fork; requested statistics, memory budgets and affinity remain
   explicitly unsupported. Native LLVM branches retain their implementation.
-- Added src/system-tests/clang/finite-wait with actual archive-linked
+- Added src/aux/clang/test/finite-wait with actual archive-linked
   Wait/ExecuteAndWait/ExecuteNoWait, current CRT/C++/libc, three authored WAST
   files, live/controlled manifests and Make targets. C++ records observations;
   runtime expectations stay entirely in WAST. The unchanged LLVM error helper
@@ -4410,7 +4412,7 @@ are clang-browser-finite-wait-results.json, clang-browser-finite-wait-controlled
 clang-browser-finite-wait-saturation-results.json, clang-browser-finite-program-wait-results.json
 and clang-browser-finite-program-execution-results.json. The aggregate is
 clang-finite-verification.json. See the
-[actual LLVM finite-wait reproduction](../src/system-tests/clang/finite-wait/README.md).
+[actual LLVM finite-wait reproduction](../src/aux/clang/test/finite-wait/README.md).
 
 Next reconcile the retained standalone blocking-pipe regression with shared
 blocking/nonblocking readiness and restore its full gates. Crash-context
@@ -4489,7 +4491,7 @@ The aggregate is clang-pipe-verification.json; final native gates are recorded
 in clang-pipe-native-gates-final.log. Shared session evidence is in
 clang-pipe-session-results.json and clang-pipe-root-session-results.json, with
 individual production-worker result JSON alongside them. See the
-[scheduler and public CLI reproduction](../src/system-tests/scheduling/README.md).
+[scheduler and public CLI reproduction](../src/engine/test/scheduling/README.md).
 
 Next verify actual LLVM crash-context setup, cleanup, recovery and signal
 interactions, including nonzero sigsetjmp signal-mask saving/restoration.
@@ -4513,7 +4515,7 @@ No Clang/LLD executable has been installed by this slice.
   pending signal before a fresh sleep, independent of opcode delivery timing.
   The standalone setjmp-buffer-copy regression now has 12 assertions, including
   zero/positive/negative save flags and copied tokens with higher signal bits.
-- Added src/system-tests/clang/crash-recovery with a normal C++ observer linked
+- Added src/aux/clang/test/crash-recovery with a normal C++ observer linked
   against the complete Support/Demangle/C++ archives and production CRT/libc.
   All 125 expectations live in WAST. Actual LLVM methods verify disabled,
   repeated and nested contexts, safe completion, explicit HandleExit and
@@ -4562,8 +4564,8 @@ Evidence uses clang-recovery-* and clang-browser-recovery-* under
 build/engine/logs. The aggregate is clang-recovery-verification.json; final
 native gates are in clang-recovery-native-gates-final.log and shared runtime
 reports in clang-recovery-session-final-results.json. See the
-[actual LLVM recovery reproduction and limits](../src/system-tests/clang/crash-recovery/README.md)
-and [compiled checkpoint checks](../src/system-tests/clang/checkpoint/README.md).
+[actual LLVM recovery reproduction and limits](../src/aux/clang/test/crash-recovery/README.md)
+and [compiled checkpoint checks](../src/aux/clang/test/checkpoint/README.md).
 
 Next establish a real C++ startup/standard-stream ordering baseline, then
 provide static exit registration/finalization and verify shutdown. TimeProfiler
@@ -4574,7 +4576,7 @@ this accepted guest signal slice. No Clang/LLD executable has been installed.
 
 ## Accepted C++ constructor startup and stream ordering slice
 
-- Added src/system-tests/clang/startup with an ordinary compiled C++ observer
+- Added src/aux/clang/test/startup with an ordinary compiled C++ observer
   linked against the current libc++/libc++abi archives, production CRT and shared
   libc. Runtime expectations are entirely in startup.wast: 86 assertions over
   82 recorded values, exact redirected output and the main return status.
@@ -4617,7 +4619,7 @@ this accepted guest signal slice. No Clang/LLD executable has been installed.
 Evidence uses clang-startup-* and clang-browser-startup-* under
 build/engine/logs. The aggregate is clang-startup-verification.json; native and
 sanitizer output is in clang-startup-native.log and clang-startup-sanitize.log.
-See the [startup fixture and optional Firefox steps](../src/system-tests/clang/startup/README.md).
+See the [startup fixture and optional Firefox steps](../src/aux/clang/test/startup/README.md).
 No manual browser test or Chromium launch is required.
 
 Next provide real C++ static exit registration/finalization and verify shutdown,
@@ -4644,7 +4646,7 @@ acceptance remain. No Clang/LLD executable has been installed.
   bypass callbacks. Legacy env exit/registration imports resolve to the loaded
   process-local libc unless an explicit registered provider overrides them.
   Removed the fake browser/engine atexit acknowledgement and updated SDK policy.
-- Added src/system-tests/clang/shutdown, linked against current complete LLVM
+- Added src/aux/clang/test/shutdown, linked against current complete LLVM
   Support/Demangle, libc++/libc++abi, production CRT and shared libc with normal
   static-registration flags. All expectations are WAST: 305 assertions over
   277 observations, exact byte counts and nine statuses per artifact. The
@@ -4700,7 +4702,7 @@ Evidence uses clang-shutdown-* and clang-browser-shutdown-* under
 build/engine/logs. The aggregate is clang-shutdown-verification.json; final
 native/sanitizer fixture output is in clang-shutdown-retained-native-final.log
 and clang-shutdown-retained-sanitize-final.log. See the
-[shutdown fixture and optional Firefox steps](../src/system-tests/clang/shutdown/README.md).
+[shutdown fixture and optional Firefox steps](../src/aux/clang/test/shutdown/README.md).
 No manual browser test or Chromium launch is required.
 
 Next verify actual LLVM TimeProfiler global initialization, begin/end aggregation,
@@ -4776,7 +4778,7 @@ Evidence uses clang-profiler-* and clang-browser-profiler-* under
 build/engine/logs. The aggregate is clang-profiler-verification.json; native
 and sanitizer lifecycle results/transcripts are also retained under
 build/system-tests/clang/time-profiler. See the
-[profiler reproduction and optional browser steps](../src/system-tests/clang/time-profiler/README.md).
+[profiler reproduction and optional browser steps](../src/aux/clang/test/time-profiler/README.md).
 No manual browser test or Chromium launch is required.
 
 Next resume the actual Clang/LLD build graph with one job and resolve its next
@@ -4850,7 +4852,7 @@ Evidence uses clang-cache-* and clang-browser-module-cache.json under
 build/engine/logs; the aggregate is clang-cache-verification.json. Latest
 native/sanitizer results and all original transcripts are retained under
 build/system-tests/clang/module-cache. See the
-[module-cache reproduction steps](../src/system-tests/clang/module-cache/README.md).
+[module-cache reproduction steps](../src/aux/clang/test/module-cache/README.md).
 
 Next resolve the confirmed six-error production failure in
 DependencyScanningWorker.cpp: AsyncModuleCompiles still owns unguarded standard
@@ -4915,7 +4917,7 @@ Evidence uses `clang-module-tasks-*` and `clang-browser-module-tasks*` under
 `build/engine/logs`; the aggregate is `clang-module-tasks-verification.json`.
 Native/sanitizer results and original transcripts remain under
 `build/system-tests/clang/module-tasks`. See the
-[module task reproduction steps](../src/system-tests/clang/module-tasks/README.md).
+[module task reproduction steps](../src/aux/clang/test/module-tasks/README.md).
 No manual browser test or GUI launch is required for this boundary.
 
 The following diagnostic/driver-selection slice resolves this one-error LLD
@@ -4992,7 +4994,7 @@ Evidence uses `clang-lld-diagnostics-*` and `clang-browser-lld-diagnostics*`
 under `build/engine/logs`; the aggregate is
 `clang-lld-diagnostics-verification.json`. Original native/sanitizer results
 and transcripts remain under `build/system-tests/clang/lld-diagnostics`.
-See [LLD diagnostic reproduction and scope](../src/system-tests/clang/lld-diagnostics/README.md).
+See [LLD diagnostic reproduction and scope](../src/aux/clang/test/lld-diagnostics/README.md).
 
 The following filesystem slice resolves this five-error removal-helper blocker
 and advances the production Common/Wasm source checks. Full compiler/linker
@@ -5065,7 +5067,7 @@ Evidence uses `clang-lld-filesystem-*` and `clang-browser-lld-filesystem*` under
 `build/engine/logs`; the aggregate is `clang-lld-filesystem-verification.json`.
 Original native/sanitizer results and transcripts remain under
 `build/system-tests/clang/lld-filesystem`. See
-[LLD filesystem reproduction and scope](../src/system-tests/clang/lld-filesystem/README.md).
+[LLD filesystem reproduction and scope](../src/aux/clang/test/lld-filesystem/README.md).
 
 The following slice resolves the ThinLTO error owner, its two production
 aggregation callers and the former Wasm source blocker. Full LLD driver/IR
@@ -5125,8 +5127,8 @@ acceptance remain. No Clang or LLD executable is installed.
   LLVM and Bash submodules are clean; shell syntax, Python bytecode and diff
   checks pass.
 
-Reproduce the focused owner with `make -C src/system-tests test-lto-errors`;
-see [ThinLTO owner reproduction and scope](../src/system-tests/clang/lto-errors/README.md).
+Reproduce the focused owner with `make -C src/aux test-lto-errors`;
+see [ThinLTO owner reproduction and scope](../src/aux/clang/test/lto-errors/README.md).
 Source and result evidence is retained under `build/engine/logs/clang-lto-errors-*`
 and `build/system-tests/clang/lto-errors/`. The next step is to continue the
 full Clang/LLD guest graph through linking, imported-symbol validation and
@@ -5170,8 +5172,8 @@ checks do not establish those outcomes.
   Native source syntax, WAST parsing, Python bytecode and diff checks pass;
   LLVM remains clean.
 
-Reproduce the focused boundary with `make -C src/system-tests test-target-host`;
-see [guest host identity reproduction](../src/system-tests/clang/target-host/README.md).
+Reproduce the focused boundary with `make -C src/aux test-target-host`;
+see [guest host identity reproduction](../src/aux/clang/test/target-host/README.md).
 The original and resumed graph probes, native/sanitizer results, worker JSON,
 package audit and cache evidence are under `build/engine/logs/clang-target-host-*`
 and `build/system-tests/clang/target-host/`. Full Clang/LLD linking, imported-
@@ -5190,8 +5192,8 @@ No Clang or LLD executable is installed.
   `uint8_t`/`uint16_t` arguments. Existing `PRIx32` remains `x`, while
   `PRIx64` remains `llx`. A compiled C and C++ observer now records a mixed
   small/32/64-bit lowercase format call; its two new expectations live in
-  `src/system-tests/clang/stdio/format.wast`.
-- `make -C src/system-tests test-stdio` and the same fixture through the
+  `src/vfs/root/test/system/clang/stdio/format.wast`.
+- `make -C src/aux test-stdio` and the same fixture through the
   ASan/UBSan native runtime each pass 37/37 WAST assertions. After refreshing
   the public-header PCH, the exact formerly failing DWARF production object
   compiles. The refreshed installed snapshot matches its authored WAST. The
@@ -5227,7 +5229,7 @@ No Clang or LLD executable is installed.
   string keys, sorted enumeration, enabled/disabled callbacks and fresh owner
   state. An enabled callback yields through the existing shared `usleep`
   provider while its guard is live. All functional expectations are in
-  `src/system-tests/clang/dwarf-verifier/dwarf-verifier.wast`. Native and
+  `src/vfs/root/test/system/clang/dwarf-verifier/dwarf-verifier.wast`. Native and
   ASan/UBSan Bash sessions pass 35/35 assertions; the packaged production
   worker passes 36/36 including launch and exits zero. These checks accept the
   diagnostic aggregator, not the private compile-unit access map, full DWARF
@@ -5246,9 +5248,9 @@ No Clang or LLD executable is installed.
   retain native/threaded semantics, and add actual context behavior coverage
   before continuing the full build.
 
-Reproduce with `make -C src/system-tests test-dwarf-verifier` and the source
+Reproduce with `make -C src/aux test-dwarf-verifier` and the source
 targets documented in
-[DWARF verifier reproduction and scope](../src/system-tests/clang/dwarf-verifier/README.md).
+[DWARF verifier reproduction and scope](../src/aux/clang/test/dwarf-verifier/README.md).
 Native/sanitizer/worker, package and cache evidence is under
 `build/engine/logs/clang-dwarf-verifier-*`; the full graph log is
 `clang-dwarf-next-graph.log`, and the next context failure is retained in
@@ -5280,7 +5282,7 @@ No Clang or LLD executable is installed.
   maximum unsigned widths with default argument promotion. Native and current
   ASan/UBSan runners pass 39/39 assertions; the packaged worker passes 50/50
   including package and launch checks.
-- Added `src/system-tests/clang/dwarf-context`. Its observer includes the actual
+- Added `src/aux/clang/test/dwarf-context`. Its observer includes the actual
   context implementation and links production archives. Valid DWARF 4 inputs
   exercise normal and DWO units, cached object identities, recursive cache
   entry while a callback yields through the existing `usleep` path, eager versus
@@ -5308,9 +5310,9 @@ No Clang or LLD executable is installed.
   diff checks pass; installed WAST snapshots match authored sources. The LLVM
   submodule remains unchanged.
 
-Reproduce with `make -C src/system-tests test-dwarf-context`; native/threaded,
+Reproduce with `make -C src/aux test-dwarf-context`; native/threaded,
 guest-object, sanitizer, worker and manual browser commands are in
-[DWARF context reproduction and scope](../src/system-tests/clang/dwarf-context/README.md).
+[DWARF context reproduction and scope](../src/aux/clang/test/dwarf-context/README.md).
 The current sanitizer acceptance log is
 `build/engine/logs/clang-dwarf-context-sanitize-final.log`; source, native,
 worker, package and cache evidence is under
@@ -5338,7 +5340,7 @@ remain pending. No compiler or linker executable is installed.
   `LLVMDebugInfoGSYM` archive builds and is 678,046 bytes. Eight complete
   native/threaded translation-unit checks pass, including the changed creator
   header, together with the four actual guest-object rules.
-- Added `src/system-tests/clang/gsym`, linked against the real GSYM/DWARF and
+- Added `src/aux/clang/test/gsym`, linked against the real GSYM/DWARF and
   supporting archives. Two authored DWARF 4 units exercise conversion,
   creator string/file interning, copied string ownership, finalization, both
   GSYM versions and byte orders, decoded function names/addresses/ranges,
@@ -5372,9 +5374,9 @@ remain pending. No compiler or linker executable is installed.
   and DWARF archives, and four adapted production objects. Cache evidence is in
   `build/engine/logs/clang-gsym-cache-result.json`.
 
-Reproduce with `make -C src/system-tests test-gsym` and the source, sanitizer,
+Reproduce with `make -C src/aux test-gsym` and the source, sanitizer,
 worker and manual browser commands in
-[GSYM reproduction and scope](../src/system-tests/clang/gsym/README.md).
+[GSYM reproduction and scope](../src/aux/clang/test/gsym/README.md).
 Accepted runtime evidence is in `build/engine/logs/clang-gsym-native-cache.log`,
 `clang-gsym-sanitize.log` and `clang-gsym-browser.json`. Build/source/package/SDK
 checks are under `build/engine/logs/clang-gsym-*`; the original full-graph
@@ -5405,7 +5407,7 @@ acceptance remain pending. No compiler or linker executable is installed.
   Complete native/threaded CFG printer source checks and four real guest
   Analysis object rules pass. No engine, kernel or scheduling implementation
   change was needed.
-- Added `src/system-tests/clang/cfg-format`, linking the complete production
+- Added `src/aux/clang/test/cfg-format`, linking the complete production
   CFGPrinter, HeatUtils, BlockFrequencyInfo and BlockFrequencyInfoImpl objects,
   real Core/Support dependencies and current C++ libraries. Eleven cases check
   absent/null/empty IDs, copied identifiers after source mutation, embedded
@@ -5460,9 +5462,9 @@ acceptance remain pending. No compiler or linker executable is installed.
   override warnings occur. Cache evidence is in
   `build/engine/logs/clang-cfg-cache-result.json`.
 
-Reproduce with `make -C src/system-tests test-cfg-format` and the source,
+Reproduce with `make -C src/aux test-cfg-format` and the source,
 sanitizer, worker and manual steps in
-[CFG formatting reproduction and scope](../src/system-tests/clang/cfg-format/README.md).
+[CFG formatting reproduction and scope](../src/aux/clang/test/cfg-format/README.md).
 Accepted reports are `build/engine/logs/clang-cfg-native-final.log`,
 `clang-cfg-sanitize-final.log`, `clang-cfg-libc-native-final.log`,
 `clang-cfg-libc-sanitize-final.log` and `clang-cfg-browser-final.json`.
@@ -5519,7 +5521,7 @@ compiler or linker executable is installed.
   sizing, maximum count and overflow. Real file output and allocating calls
   check successful bytes and errors. This accepts the tested floating
   boundary, not every printf extension.
-- Added `src/system-tests/clang/inlining`. Its observer includes the complete
+- Added `src/aux/clang/test/inlining`. Its observer includes the complete
   production statistics source to call the private formatter and public
   graph API, and links current Core/Support and C++ archives. Eight helper
   outputs cover zero denominators, scientific notation, negative/large
@@ -5561,9 +5563,9 @@ compiler or linker executable is installed.
   inventory, not proof that present artifacts are current or that remaining
   sources compile. See `build/engine/logs/clang-inlining-final-inventory.json`.
 
-Reproduce with `make -C src/system-tests test-inlining`; source, sanitizer,
+Reproduce with `make -C src/aux test-inlining`; source, sanitizer,
 worker and manual steps are in
-[Inlining statistics reproduction and scope](../src/system-tests/clang/inlining/README.md).
+[Inlining statistics reproduction and scope](../src/aux/clang/test/inlining/README.md).
 Accepted reports are `build/engine/logs/clang-inlining-native-final.log`,
 `clang-inlining-sanitize-final.log`, `clang-inlining-libc-native-final.log`,
 `clang-inlining-libc-sanitize-final.log` and `clang-inlining-browser-final.json`.
@@ -5598,7 +5600,7 @@ unfinished. No compiler or linker executable is installed.
   logarithm special values, signed zero, poison and supported sqrt/log2 paths
   remain intact. The math-call side-effect query also declines an unevaluated
   power rather than treating a fabricated result as permission to delete it.
-- Added `src/system-tests/clang/folding`, initially linking complete production
+- Added `src/aux/clang/test/folding`, initially linking complete production
   ConstantFolding, TargetLibraryInfo, ValueTracking, VectorUtils,
   AssumptionCache, AssumeBundleQueries, GuardUtils,
   FloatingPointPredicateUtils and TargetTransformInfo objects against real
@@ -5651,9 +5653,9 @@ unfinished. No compiler or linker executable is installed.
   archives, C++ archives and shared libc artifacts. No recipe override
   warnings occur. See `build/engine/logs/clang-folding-cache-results.json`.
 
-Reproduce with `make -C src/system-tests test-folding`; source, sanitizer,
+Reproduce with `make -C src/aux test-folding`; source, sanitizer,
 worker and manual steps are in
-[Optional folding reproduction and scope](../src/system-tests/clang/folding/README.md).
+[Optional folding reproduction and scope](../src/aux/clang/test/folding/README.md).
 Accepted reports are `build/engine/logs/clang-folding-native-make-final.log`,
 `clang-folding-sanitize-final.log`, `clang-folding-browser-final.json` and
 `clang-folding-retained-inlining-browser.json`. Source compatibility and real
@@ -5689,7 +5691,7 @@ acceptance remain unfinished. No compiler or linker executable is installed.
   math provider, configure success, SDK availability, kernel or scheduler
   behavior was fabricated or changed. Enabling additional guest targets or
   linker drivers requires re-auditing this source selection.
-- Added `src/system-tests/clang/code-layout`, linking the complete production
+- Added `src/aux/clang/test/code-layout`, linking the complete production
   CodeLayout object, actual Support/Demangle and current C++/libc providers.
   Its observer is 414,285 bytes with 49 verified libc imports, no unresolved
   C++ functions and no `pow` import. Other imports use existing kernel/POSIX
@@ -5738,9 +5740,9 @@ acceptance remain unfinished. No compiler or linker executable is installed.
   C++ archives, CRT and shared libc artifacts. No recipe override warnings
   occur. See `build/engine/logs/clang-code-layout-cache-results.json`.
 
-Reproduce with `make -C src/system-tests test-code-layout`; source, sanitizer,
+Reproduce with `make -C src/aux test-code-layout`; source, sanitizer,
 worker and manual steps are in
-[Code-layout reproduction and scope](../src/system-tests/clang/code-layout/README.md).
+[Code-layout reproduction and scope](../src/aux/clang/test/code-layout/README.md).
 Accepted reports are `build/engine/logs/clang-code-layout-native-final.log`,
 `clang-code-layout-sanitize-final.log`, `clang-code-layout-browser-final.json`
 and `clang-code-layout-retained-folding-browser.json`. Source/import/symbol
@@ -5812,7 +5814,7 @@ is installed.
   analysis and option handling remain unchanged. No SDK capability, provider,
   kernel or scheduling change is needed. The complete patch applies to a fresh
   staged source with zero fuzz; the submodule stays read-only.
-- Added `src/system-tests/clang/assignment-format`. The observer includes the
+- Added `src/aux/clang/test/assignment-format`. The observer includes the
   complete production source and uses test-only `-fno-access-control` to call
   the private formatter with real IR arguments and interval maps. Production
   compilation retains normal access checks and has no test hooks. The observer
@@ -5850,9 +5852,9 @@ is installed.
   shared libc providers. No recipe override warnings occur. See
   `build/engine/logs/clang-assignment-format-cache-results.json`.
 
-Reproduce with `make -C src/system-tests test-assignment-format`; complete source,
+Reproduce with `make -C src/aux test-assignment-format`; complete source,
 sanitizer, worker and manual steps are in
-[Assignment formatter reproduction and scope](../src/system-tests/clang/assignment-format/README.md).
+[Assignment formatter reproduction and scope](../src/aux/clang/test/assignment-format/README.md).
 Accepted reports are `build/engine/logs/clang-assignment-format-native.log`,
 `clang-assignment-format-sanitize.log` and `clang-assignment-format-browser.json`.
 Import/source checks are in `clang-assignment-format-link-audit.json` and
@@ -5973,9 +5975,9 @@ no compiler or linker executable was installed.
   establish freshness of every earlier artifact or resolved imports. See
   `build/engine/logs/clang-shadow-callbacks-final-inventory.json`.
 
-Reproduce with `make -C src/system-tests test-shadow-callbacks`. Source,
+Reproduce with `make -C src/aux test-shadow-callbacks`. Source,
 sanitizer, worker and manual steps are in
-[Shadow callback declarations](../src/system-tests/clang/shadow-callbacks/README.md).
+[Shadow callback declarations](../src/aux/clang/test/shadow-callbacks/README.md).
 The user-supplied `build/engine/logs/shadow-callback-cli.txt` confirms the full
 `test-shadow-callbacks` Make target: 36 libc imports verified, 47 PASS and zero
 failures. The user reports exit status zero. Its hash and review are recorded
@@ -6047,7 +6049,7 @@ check. No compiler or linker executable was installed.
 - The full production guest object and native/native-threaded/guest-threaded
   source checks pass. The observer is 273,443 bytes, with 33 checked shared-libc
   function imports and no unresolved C++ function imports. The agent ran
-  `make -C src/system-tests test-memprof-format` through cli-rt automatically:
+  `make -C src/aux test-memprof-format` through cli-rt automatically:
   34 PASS, zero failures and Make exit zero. ASan/UBSan also pass 34 assertions;
   the packaged worker passes 35/35 results including launch, with exit zero.
   The installed WAST matches its authored input and corpus/package checks pass.
@@ -6070,9 +6072,9 @@ check. No compiler or linker executable was installed.
   establish freshness of every earlier artifact or resolved imports. See
   `build/engine/logs/clang-memprof-format-final-inventory.json`.
 
-Reproduce through cli-rt with `make -C src/system-tests test-memprof-format`.
+Reproduce through cli-rt with `make -C src/aux test-memprof-format`.
 Complete source, sanitizer and worker commands are in
-[MemProf graph identifiers](../src/system-tests/clang/memprof-format/README.md).
+[MemProf graph identifiers](../src/aux/clang/test/memprof-format/README.md).
 This diagnostic boundary is accepted through cli-rt and the production worker;
 it adds no manual browser check. Existing GSYM and shadow-callback manual
 browser checks remain pending. At this checkpoint, the next build work was to
@@ -6369,8 +6371,8 @@ unfinished. No compiler or linker was installed.
 Reproduce with `build/cli-rt/wast --verbose
 tests/engine-regressions/type-capacity.wast`, or run
 `wast --verbose /root/test/engine-regressions/type-capacity.wast` inside Bash.
-The automated worker scenario is `tests/guest-session-type-capacity.json`;
-commands are in [the Clang system-test README](../src/system-tests/clang/README.md).
+The automated worker scenario is `src/vfs/root/test/guest-session/type-capacity.json`;
+commands are in [the Clang system-test README](../src/aux/clang/test/README.md).
 Next, scale per-function local/metadata and import/declaration storage, audit
 combined function indexes, and measure decoded-instruction memory before
 raising the function cap. Keep coordinated limits in shared configuration.
@@ -6421,7 +6423,7 @@ Native cli-rt and native Bash pass all 16. Four official local-variable files
 (`local_get`, `local_set`, `local_tee`, `local_init`) pass all 192 assertions;
 the prior type-capacity regression still passes all 15. The rebuilt production
 browser worker passes 17/17 results including launch using
-`tests/guest-session-local-storage.json`. Installed snapshots and provenance
+`src/vfs/root/test/guest-session/local-storage.json`. Installed snapshots and provenance
 checks pass. ASan/UBSan passes all 223 assertions across the new regression,
 the four official files and the type-capacity regression. Native and sanitizer
 Bash each also run two regression children: 32/32 assertions, two forks, two
@@ -6485,7 +6487,7 @@ Validation:
 - Native and sanitizer Bash each run two copies of the new regression:
   52/52 assertions, two forks, two execs and two reaped children, exit 0.
 - The rebuilt packaged production worker passes 27/27 results including launch
-  using `tests/guest-session-instruction-storage.json`. Installed snapshot
+  using `src/vfs/root/test/guest-session/instruction-storage.json`. Installed snapshot
   bytes, corpus/provenance checks, `git diff --check` and `bash -n start.sh`
   pass. LLVM and wasm-spec submodules remain clean. Leak detection is disabled
   in the restricted sanitizer environment.
@@ -6627,7 +6629,7 @@ retained regressions and eight official import/export/reference/element/global/
 call/start files. Native Bash runs two copies: 26/26 assertions, two forks,
 two execs and two reaped children, exit 0. The rebuilt packaged production
 worker passes 14/14 results including launch using
-`tests/guest-session-function-metadata.json`. Installed snapshots and
+`src/vfs/root/test/guest-session/function-metadata.json`. Installed snapshots and
 corpus/provenance checks pass. ASan/UBSan passes the same 728 assertions with
 identical per-file counts, the 26-assertion Bash fork case and the native
 metadata/clone ownership probe. The probe confirms calls through shared
@@ -6719,7 +6721,7 @@ Acceptance:
 - Native and sanitizer Bash each run two copies of the new regression:
   16/16 assertions, two forks, two execs and two reaped children, exit 0.
 - The rebuilt production worker passes 9/9 results including launch using
-  `tests/guest-session-function-envelope.json`. Installed bytes and the
+  `src/vfs/root/test/guest-session/function-envelope.json`. Installed bytes and the
   corpus/provenance audit pass.
 - Eight diagnostic scope/payload inputs agree normally and under sanitizers:
   a trapping start is not executed, a semantic stack error is deliberately not
@@ -6877,13 +6879,13 @@ Checks and evidence:
 
 ## Native object/archive link and heap/mapping separation
 
-`make -C src/system-tests test-lld-link` now exercises the real guest LLD rather
+`make -C src/aux test-clang-lld-link` now exercises the real guest LLD rather
 than a helper fixture or version command. Host Clang emits a freestanding entry
 object and an answer object, and host `llvm-ar` puts the answer object in an
 archive. Installed Bash stages the existing guest `wasm-ld`, links the object
 against the archive, marks the emitted module executable, and runs it. The
 result calls shared libc exit with status 37. All ten runtime expectations live
-in `src/system-tests/clang/lld-link/link.wast`: link/chmod statuses, execution
+in `src/vfs/root/test/system/clang/lld-link/link.wast`: link/chmod statuses, execution
 status and the exact Wasm magic/version bytes. Sources, orchestration and Make
 rules live beside that WAST file; each run keeps its evidence under a fresh
 `build/system-tests/clang/lld-link/run-*` directory. The build-only fixture is
@@ -6986,14 +6988,14 @@ full SDK compilation or a browser heap budget. Generic object readers still
 retain IR/Core and BitReader code; this does not remove every LLVM IR utility.
 The map contains no SelectionDAG, Vectorize, LTO or Passes functions.
 
-`make -C src/system-tests test-lld-link-no-lto` reuses the real object/archive
+`make -C src/aux test-lld-link-no-lto` reuses the real object/archive
 link fixture. Its original ten WAST assertions verify successful linking, the
 Wasm header, executable permissions and execution with status 37. Six new
 assertions in `no-lto.wast` verify exit status, explanatory diagnostics and no
 output file for direct and archived bitcode. All 16 pass in native and
 ASan/UBSan Bash; leak detection is disabled. The preserved original linker
 still passes the ten positive assertions. Source assertions and orchestration
-stay under `src/system-tests/clang/lld-link`; snapshots are refreshed and
+stay under `src/aux/clang/test/lld-link`; snapshots are refreshed and
 audited through the ordinary corpus workflow.
 
 The target reuses the existing configured archives and is deliberately separate
@@ -7077,7 +7079,7 @@ function symbols. It keeps upstream type/symbol resolution and leaves local
 definitions and unresolved kernel imports alone. Native/upstream LLD and the
 checked-out sources are unchanged.
 
-`make -C src/system-tests test-lld-sdk` links actual public-header input objects
+`make -C src/aux test-lld-sdk` links actual public-header input objects
 and the shared guest CRT against `/lib/libc.so.wasm` with guest LLD. The emitted
 file is executed directly; no host import-rewrite helper processes it. Its C
 program calls memcpy, strlen, printf and fflush through shared libc and write
@@ -7234,7 +7236,7 @@ browser-worker results including launch. Leak detection was disabled. The
 fixture covers exact formatting and owned results across shared sleep, negative
 time, 2038 boundaries, leap day, years 1 and 9999, absent calendar data, exact
 comparison against the original native stream formatter, and at least 100 ms of
-monotonic elapsed pragma time. See `src/system-tests/clang/timestamp/README.md`.
+monotonic elapsed pragma time. See `src/aux/clang/test/timestamp/README.md`.
 Evidence: `build/engine/logs/clang-timestamp-pragma-*`.
 
 The actual package acceptance input now requests that pragma and expands
@@ -7269,7 +7271,7 @@ Bash and ASan/UBSan with leak detection disabled. Exact text includes an actual
 independence pair, uncovered and folded conditions, permuted condition IDs,
 true/false/don't-care rows, unexecuted numbering, empty and twelve-condition
 headers, UINT32_MAX coordinates, and strings retained after record destruction
-and shared sleep. See `src/system-tests/clang/coverage-format/README.md`.
+and shared sleep. See `src/aux/clang/test/coverage-format/README.md`.
 
 The first fixture link exposed its own main/CRT signature mismatch; the
 observer now uses the installed CRT's two-argument main. The corrected build
@@ -7304,7 +7306,7 @@ retaining uppercase padded bytes and the same separators. The native/threaded
 stream branch and final RecordsSlice::copyString ownership stay unchanged.
 No duplicate formatter, parser, libc or kernel implementation is introduced.
 
-The new `src/system-tests/clang/dylib-uuid` observer includes the production
+The new `src/aux/clang/test/dylib-uuid` observer includes the production
 reader to reach its private header reader and supplies real Mach-O objects
 through MachOObjectFile::create. Its WAST expectations cover zero, all-ones,
 mixed high-bit and absent UUIDs in both byte orders and word sizes, plus owned
@@ -7315,7 +7317,7 @@ leak detection disabled; the rebuilt production browser worker passes all 36
 results including launch. The public native test target performs no new
 compile/link commands. Corpus refresh/audit, installed snapshots, shell syntax
 and whitespace checks pass. Both LLVM and wasm-spec submodules remain clean.
-See `src/system-tests/clang/dylib-uuid/README.md` and
+See `src/aux/clang/test/dylib-uuid/README.md` and
 `build/engine/logs/clang-dylib-uuid-verification.json` for scope and evidence.
 
 The complete compiler build is running again with one job in session `2160`,
@@ -7343,7 +7345,7 @@ now uses LLVM's existing raw string sink; native/threaded streams and the
 entire token-selection loop remain unchanged. The source patch applies only
 to the staged LLVM checkout.
 
-The new `src/system-tests/clang/issue-hash` fixture uses actual SourceManager,
+The new `src/aux/clang/test/issue-hash` fixture uses actual SourceManager,
 FileManager, diagnostics, Lexer, normalization and MD5 code. WAST expectations
 cover comments, whitespace, source-line selection, quoted spaces/escapes, blank
 lines, a long identifier, EOF behavior, copied strings and hashes across source
@@ -7361,7 +7363,7 @@ whitespace checks pass; LLVM and wasm-spec submodules remain unchanged.
 
 This accepts the changed normalizer and actual MD5 helper, not all public
 issue-signature paths or a guest compiler invocation. See
-`src/system-tests/clang/issue-hash/README.md` and
+`src/aux/clang/test/issue-hash/README.md` and
 `build/engine/logs/clang-issue-hash-verification.json` for scope and evidence.
 
 The full build resumed with one job in session `47655`, logging to
@@ -7393,7 +7395,7 @@ headers fixes that gate without changing production code. Evidence is under
 `build/engine/logs/clang-thread-safety-*`, including the final source log and
 verification JSON. There is no new functional WAST test for this unused-header
 compatibility exclusion; actual compiler package/runtime acceptance remains
-open. See `src/system-tests/clang/thread-safety/README.md` for reproduction.
+open. See `src/aux/clang/test/thread-safety/README.md` for reproduction.
 
 A dated inventory of the real Clang CMake dependency closure found 328 reachable
 targets, 2,376 required object files and 357 missing objects before this failure.
@@ -7424,14 +7426,14 @@ disabled. The complete production object, a full guest-debug syntax check
 and all three full native/threaded source profiles now pass. This verifies all
 seven source owners, not actual compiler-generated fix-its at runtime.
 
-The new `src/system-tests/clang/unsafe-buffer` acceptance scenario deliberately
+The new `src/aux/clang/test/unsafe-buffer` acceptance scenario deliberately
 invokes the actual installed compiler instead of substituting a copied
 formatter. Its thirteen WAST assertions inspect ten exact parseable fix-it
 ranges/texts, compiler status and parent-shell survival. Inputs exercise local
 span declaration/initialization, zero/nonzero array addresses, preincrement,
 parameter replacement, new overload declarations and old overload wrappers.
 These runtime gates remain pending until guest Clang is built and installed:
-`make -C src/system-tests test-unsafe-buffer`, the same target with
+`make -C src/aux test-unsafe-buffer`, the same target with
 `WASM_RUNNER=.../wasm-sanitize`, and the production-worker browser.json scenario
 (expect fourteen results including launch).
 
@@ -7440,7 +7442,7 @@ host Clang 22 preflight targeting Wasm accepts the inputs/options and produces
 the expected ten fix-it forms. This is only test-input preparation; it does not
 close guest runtime acceptance or the broader owning-string/formatting gate.
 The debug-only owner is source-checked, not executed by the release compiler
-runtime scenario. See `src/system-tests/clang/unsafe-buffer/README.md`.
+runtime scenario. See `src/aux/clang/test/unsafe-buffer/README.md`.
 
 
 Source evidence is in `build/engine/logs/clang-unsafe-buffer-source.log` and
@@ -7477,7 +7479,7 @@ final LF, an empty first line and a 4097-byte line. Retained strings outlive
 closed files, freed getline buffers and a shared sleep yield. The public
 native test repeats without compiling or linking. Corpus/snapshot audits,
 shell syntax and whitespace checks pass; submodule sources stay untouched.
-See `src/system-tests/clang/seed-file/README.md` and
+See `src/aux/clang/test/seed-file/README.md` and
 `build/engine/logs/clang-seed-file-verification.json` for scope and evidence.
 
 This accepts the reader boundary, not an execution of guest Clang itself.
@@ -7562,7 +7564,7 @@ results within its external 60-second bound, plus the seed/control/mmap worker
 gates above. Sanitizer runs disable leak detection. Corpus/provenance, VFS and
 offline packaging audits, shell syntax and whitespace checks pass.
 
-See src/system-tests/clang/layout-override/README.md and
+See src/aux/clang/test/layout-override/README.md and
 build/engine/logs/clang-layout-input-verification.json for exact artifacts and
 log paths. The verified link is retained under
 build/system-tests/clang/layout-override-verify. The public fixture's regenerated
@@ -7616,7 +7618,7 @@ Frontend/Driver/FrontendTool owners in that checkpoint. The direct syntax checks
 2 GiB native compiler address-space bound; they establish syntax compatibility,
 not full executable linkage or runtime acceptance. Other LLVM/Clang components still require the real build.
 
-See src/system-tests/clang/spirv-name/README.md and
+See src/aux/clang/test/spirv-name/README.md and
 build/engine/logs/clang-spirv-name-verification.json for commands, exact
 artifacts and evidence. The full compiler build is running with one job in
 session `6804`, logging to
@@ -7696,7 +7698,7 @@ natively, under ASan/UBSan and through the production worker (23/23 with Bash
 exit). LLVM's fixed-point builder only needs powers of two; the guest adaptation
 uses existing `ldexp(1.0, exponent)` instead of unsupported general `pow`, while
 native/threaded paths keep upstream behavior. The source-backed
-`src/system-tests/clang/compiler-imports` fixture exercises both fixed-point
+`src/aux/clang/test/compiler-imports` fixture exercises both fixed-point
 conversion directions and the public C++ ioctl declaration; its build and
 verification are the current pending boundary.
 

@@ -94,5 +94,5 @@ install-vim: vim $(VIM_DIR)/defaults.vim
 .PHONY: test-vim
 test-vim: install-vim aux-test-runner
 	bash "$(AUX_DIR)/run-wast-tests.sh" "$(REPO_ROOT)" "$(VFS_ROOT)" vim \
-		"$(VIM_DIR)/tests" "$(abspath $(VIM_BUILD)/tests)" "$(abspath $(WASM_RUNNER))" \
-		"$(VIM_DIR)/tests/setup.sh"
+		"$(VIM_DIR)/test/system" "$(abspath $(VIM_BUILD)/tests)" "$(abspath $(WASM_RUNNER))" \
+		"$(VIM_DIR)/test/system/setup.sh"

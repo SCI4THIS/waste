@@ -1,0 +1,37 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/exec-wait.wasm",
+      "source": "build/system-tests/clang/exec-wait/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/exec-wait-copy.wasm",
+      "source": "build/system-tests/clang/exec-wait/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/exec-wait.wast",
+      "source": "src/vfs/root/test/system/clang/exec-wait/exec-wait.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/exec-wait.wasm > /tmp/exec-wait.bin; printf '%s\\n' \"$?\" > /tmp/exec-wait-status.txt; /bin/wast --verbose /tmp/exec-wait.wast; result=$?; printf '__EXEC_WAIT_%s__\\n' \"$result\"\n"
+    },
+    {
+      "after": "__EXEC_WAIT_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "WAST: 234 PASS, 0 FAIL, 234 total",
+    "__EXEC_WAIT_0__\r\n"
+  ],
+  "assertions": 235,
+  "exitStatus": 0
+}

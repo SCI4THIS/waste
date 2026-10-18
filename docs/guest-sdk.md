@@ -65,8 +65,8 @@ HTML packaging neither installs headers nor checks SDK provenance freshness.
 
 ## Build profiles and ABI
 
-`make -C src/system-tests sysroot` delegates to
-`src/system-tests/guest-sdk/build-sysroot.py`, which copies the mounted public/compiler tree for its
+`make -C src/aux sysroot` delegates to
+`src/aux/libc/test/sdk/build-sysroot.py`, which copies the mounted public/compiler tree for its
 default wrapper. It uses `-ffreestanding -nostdinc -nostdlib`; no host C include
 directory or implicit Clang resource path is permitted. Compiler predefined
 types/limits, builtin `va_list`, attributes, and `push_macro`/`pop_macro` remain
@@ -114,12 +114,12 @@ or new POSIX capabilities.
 
 ## Verification
 
-`make -C src/system-tests check-sdk` runs
-`src/system-tests/guest-sdk/check.py` to check standalone headers, include orders, hermetic
+`make -C src/aux check-sdk` runs
+`src/aux/libc/test/sdk/check.py` to check standalone headers, include orders, hermetic
 dependencies, ABI sizes/offsets, real Wasm variadic execution and negative
 host/private-header cases. Native directory-mount sanitizer tests verify all
-mounted bytes/metadata; `tests/guest-sdk-mounted.wast` checks public presence
-and private exclusion in both runtimes. `tests/c-engine-vfs-browser.cjs` also
+mounted bytes/metadata; `src/engine/test/guest-sdk/mounted.wast` checks public presence
+and private exclusion in both runtimes. `src/html-rt/test/vfs-browser.cjs` also
 compiles with the installed-only sysroot and executes variadic, stat-buffer
 canary, signal-set/mask canary and assertion-trap probes through the compiled C engine. The SDK check
 rejects every unavailable declaration on address-taking and tests missing

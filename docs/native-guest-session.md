@@ -101,7 +101,7 @@ the worker to regain its event loop; this is not immediate interruption of
 runnable synchronous guest code.
 
 ```sh
-python3 tests/guest-session-terminal-check.py --page build/html-rt/bash.html
+python3 src/engine/test/guest-session/guest-session-terminal-check.py --page build/html-rt/bash.html
 ```
 
 The shared `terminal-control` scenario verifies nine assertions through native,
@@ -189,9 +189,9 @@ WAST command kinds fail visibly; use `wast` for the full language corpus.
 
 ```sh
 make -C src/html-rt wast-browser
-python3 tests/guest-session-check.py --page build/html-rt/bash.html
+python3 src/engine/test/guest-session/guest-session-check.py --page build/html-rt/bash.html
 make -C src/cli-rt guest-session-sanitize
-python3 tests/guest-session-check.py --native build/cli-rt/private/guest-session-sanitize
+python3 src/engine/test/guest-session/guest-session-check.py --native build/cli-rt/private/guest-session-sanitize
 ```
 
 The same JSON interaction contracts, current files and generated mount metadata drive native and
@@ -309,7 +309,7 @@ Execution-limit regression gate:
 
 ```sh
 make -C src/cli-rt guest-session-sanitize
-python3 tests/guest-session-control-check.py --page build/html-rt/bash.html
+python3 src/engine/test/guest-session/guest-session-control-check.py --page build/html-rt/bash.html
 ```
 
 The authored `guest-session-control-*` fixtures cover runnable loops, linked
@@ -346,7 +346,7 @@ for guest options and explicit installation.
 
 ## Deterministic wait-event contract
 
-Stage 6B.27 adds `tests/guest-session-waits.wast` and its JSON contract: 24
+Stage 6B.27 adds `src/vfs/root/test/guest-session/waits.wast` and its JSON contract: 24
 shared checks covering ready-before-wait, real delayed terminal input,
 exact/repeated SELECT deadlines and post-yield pselect handler/mask restoration.
 The fixture needs a session driver; ordinary installed batch execution cannot
@@ -355,8 +355,8 @@ observations; `stillWaiting` requires a subdeadline event to publish no progress
 
 ```sh
 make -C src/cli-rt posix-wait
-python3 tests/guest-session-wait-check.py
-python3 tests/guest-session-check.py --scenario waits --page build/html-rt/bash.html
+python3 src/engine/test/guest-session/guest-session-wait-check.py
+python3 src/engine/test/guest-session/guest-session-check.py --scenario waits --page build/html-rt/bash.html
 ```
 
 The Make gate uses ASan/UBSan with LeakSanitizer disabled for ptrace. The
@@ -382,7 +382,7 @@ No new signal handler ABI or scheduler is introduced.
 
 ## Shared terminal readiness contract
 
-Stage 6B.29 adds `tests/guest-session-terminal-readiness.wast` and its JSON
+Stage 6B.29 adds `src/vfs/root/test/guest-session/terminal-readiness.wast` and its JSON
 contract with 76 checks; Stage 6B.37 extends it to 90. Native, browser exports
 and the production worker use the same real guest imports, input bytes and
 expected transcript. Actual offline
@@ -390,8 +390,8 @@ Chromium runs the same contract in an independent worker alongside the shell.
 
 ```sh
 make -C src/cli-rt terminal-readiness
-python3 tests/guest-session-readiness-check.py
-python3 tests/guest-session-check.py --scenario terminal-readiness --page build/html-rt/bash.html
+python3 src/engine/test/guest-session/guest-session-readiness-check.py
+python3 src/engine/test/guest-session/guest-session-check.py --scenario terminal-readiness --page build/html-rt/bash.html
 ```
 
 The native-only Make gate uses ASan/UBSan without LeakSanitizer for ptrace;
@@ -424,7 +424,7 @@ relative order, with fourteen new assertions and the same successful exit.
 
 ## Shared terminal timing/output contract
 
-Stage 6B.30 adds `tests/guest-session-terminal-timing.wast` and its JSON
+Stage 6B.30 adds `src/vfs/root/test/guest-session/terminal-timing.wast` and its JSON
 contract with 46 checks. The same source, post-yield clock/input events and
 exact transcript run natively, through browser exports, the production worker
 and actual offline Chromium. The session JSON retains the output-byte
@@ -432,8 +432,8 @@ expectations in the host transcript alongside guest assertions.
 
 ```sh
 make -C src/cli-rt terminal-timing
-python3 tests/guest-session-timing-check.py
-python3 tests/guest-session-check.py --scenario terminal-timing --page build/html-rt/bash.html
+python3 src/engine/test/guest-session/guest-session-timing-check.py
+python3 src/engine/test/guest-session/guest-session-check.py --scenario terminal-timing --page build/html-rt/bash.html
 ```
 
 The native-only gate is also required by `posix-kernel`; its standalone checker
@@ -464,14 +464,14 @@ outside the unchanged installed batch. No runtime API or timer model changed.
 
 ## Shared process-group contract
 
-Stage 6B.34 adds `tests/guest-session-process-groups.wast` and its JSON event
+Stage 6B.34 adds `src/vfs/root/test/guest-session/process-groups.wast` and its JSON event
 contract, with 71 checks through real process/foreground-group, termios,
 pselect and signal-handler imports.
 
 ```sh
 make -C src/cli-rt process-groups
-python3 tests/guest-session-process-group-check.py
-python3 tests/guest-session-check.py --scenario process-groups --page build/html-rt/bash.html
+python3 src/engine/test/guest-session/guest-session-process-group-check.py
+python3 src/engine/test/guest-session/guest-session-check.py --scenario process-groups --page build/html-rt/bash.html
 ```
 
 The Make gate is also required by `posix-kernel` and needs no Node or browser
@@ -497,7 +497,7 @@ signal queues, host enqueue and raw kernel EINTR remain direct C checks; see
 
 ## Shared terminal descriptor contract
 
-Stage 6B.35 adds `tests/guest-session-terminal-descriptors.wast` and its JSON
+Stage 6B.35 adds `src/vfs/root/test/guest-session/terminal-descriptors.wast` and its JSON
 event contract: 119 guest assertions plus successful exit, totaling 120 checks.
 It uses real dup/dup2, close, read/write, SELECT and termios imports to verify
 terminal aliasing, shared input/settings, failed-operation preservation,
@@ -505,8 +505,8 @@ closing either alias and restoring stdin.
 
 ```sh
 make -C src/cli-rt terminal-descriptors
-python3 tests/guest-session-terminal-descriptor-check.py
-python3 tests/guest-session-check.py --scenario terminal-descriptors --page build/html-rt/bash.html
+python3 src/engine/test/guest-session/guest-session-terminal-descriptor-check.py
+python3 src/engine/test/guest-session/guest-session-check.py --scenario terminal-descriptors --page build/html-rt/bash.html
 ```
 
 The native-only Make gate is required by `posix-kernel` and saves ASan/UBSan

@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/memprof-format.wasm",
+      "source": "build/system-tests/clang/memprof-format/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/memprof-format.wast",
+      "source": "src/vfs/root/test/system/clang/memprof-format/memprof-format.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/memprof-format.wasm > /tmp/memprof-format.bin; printf '%s\\n' \"$?\" > /tmp/memprof-format-status.txt; /bin/wast --verbose /tmp/memprof-format.wast; MEMPROF_FORMAT_RESULT=$?; printf '__MEMPROF_FORMAT_%s__\\n' \"$MEMPROF_FORMAT_RESULT\"\n"
+    },
+    {
+      "after": "__MEMPROF_FORMAT_",
+      "text": "exit \"$MEMPROF_FORMAT_RESULT\"\n"
+    }
+  ],
+  "contains": [
+    "__MEMPROF_FORMAT_0__\r\n",
+    "WAST: 34 PASS, 0 FAIL, 34 total"
+  ],
+  "assertions": 35,
+  "exitStatus": 0
+}

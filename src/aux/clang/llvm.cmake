@@ -1,6 +1,6 @@
 # Restrict generated code to Wasm and disable optional host dependencies.
 set(LLVM_ENABLE_PROJECTS "clang;lld" CACHE STRING "")
-set(LLVM_TARGETS_TO_BUILD WebAssembly CACHE STRING "")
+set(LLVM_TARGETS_TO_BUILD "WebAssembly;X86" CACHE STRING "")
 set(LLVM_DEFAULT_TARGET_TRIPLE wasm32-unknown-unknown CACHE STRING "")
 set(LLVM_ENABLE_THREADS OFF CACHE BOOL "")
 set(LLVM_ENABLE_EH OFF CACHE BOOL "")

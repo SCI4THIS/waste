@@ -98,13 +98,16 @@ current VFS tree and must not build or reinstall the command.
 
 ## Package tests
 
-Keep functional test logic entirely in authored `.wast` files under
-`src/aux/NAME/tests/`. Store package-specific test instructions and supporting
-inputs beside those files. Load the installed binary or library; do not generate
+Keep functional test logic entirely in authored `.wast` files. The canonical
+location is `src/vfs/root/test/aux/NAME/`; the package owns host harness
+assets under `src/aux/NAME/test/` with a `test/system` symlink into the VFS
+directory. Store package-specific test instructions and supporting inputs
+beside those files. Load the installed binary or library; do not generate
 an embedded copy of libc or substitute host implementations. For a command,
 invoke `/usr/bin/NAME` explicitly so a Bash builtin cannot mask it.
 
-Use `src/aux/libc/tests` and `test-libc` as the shared-library pattern. Tests
+Use `src/vfs/root/test/aux/libc/` (exposed to the libc package via
+`src/aux/libc/test/system`) and `test-libc` as the shared-library pattern. Tests
 import Bash’s `waste-runtime` process memory/table and the loaded `libc` provider.
 Make `test-NAME` depend on `install-NAME` and `aux-test-runner`; include
 `src/aux/test.mk` for that runner prerequisite.
@@ -120,10 +123,13 @@ Publish snapshots with `vfs-tests-install`, then run the same authored tests in
 `bash.html` at `/root/test/aux/NAME/FILE.wast`.
 
 Tests of interactions between packages, the kernel, runtimes, or the compiler
-SDK belong under `src/system-tests/`, with system test instructions and inputs
-there. Do not make a package test own a copied SDK/sysroot or a generated libc
-fixture profile. Preserve necessary compiler/declaration boundary checks as
-system checks; runtime assertions belong in WAST.
+SDK belong under `src/vfs/root/test/system/<area>/` for WAST and under
+`src/<area>/test/` (for example `src/engine/test/`, `src/cli-rt/test/`,
+`src/html-rt/test/`, or `src/aux/<pkg>/test/`) for host harnesses, with the
+corresponding instructions and inputs. Do not make a package test own a copied
+SDK/sysroot or a generated libc fixture profile. Preserve necessary
+compiler/declaration boundary checks as system checks; runtime assertions
+belong in WAST.
 
 ## Verify the result
 

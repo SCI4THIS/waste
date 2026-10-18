@@ -1,0 +1,48 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/format-c.wasm",
+      "source": "build/system-tests/clang/stdio/probe-c.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/format-cxx.wasm",
+      "source": "build/system-tests/clang/stdio/probe-cxx.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/format.wast",
+      "source": "src/vfs/root/test/system/clang/stdio/format.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/vsnprintf.wast",
+      "source": "src/vfs/root/test/aux/libc/vsnprintf.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/format-c.wasm > /tmp/format-c.bin; printf '%s\\n' \"$?\" > /tmp/format-c-status.txt; /tmp/format-cxx.wasm > /tmp/format-cxx.bin; printf '%s\\n' \"$?\" > /tmp/format-cxx-status.txt; /bin/wast --verbose /tmp/format.wast; printf '__FORMAT_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__FORMAT_0__\r\n",
+      "text": "/bin/wast --verbose /tmp/vsnprintf.wast; printf '__VSNPRINTF_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "__VSNPRINTF_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__FORMAT_0__\r\n",
+    "__VSNPRINTF_0__\r\n",
+    "WAST: 39 PASS, 0 FAIL, 39 total",
+    "WAST: 10 PASS, 0 FAIL, 10 total"
+  ],
+  "assertions": 50,
+  "exitStatus": 0
+}

@@ -1,0 +1,32 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/program-wait.wasm",
+      "source": "build/system-tests/clang/program-wait/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/program-wait.wast",
+      "source": "src/vfs/root/test/system/clang/program-wait/program-wait.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/program-wait.wasm > /tmp/program-wait.bin; printf '%s\\n' \"$?\" > /tmp/program-wait-status.txt; /bin/wast --verbose /tmp/program-wait.wast; result=$?; printf '__PROGRAM_WAIT_%s__\\n' \"$result\"\n"
+    },
+    {
+      "after": "__PROGRAM_WAIT_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "WAST: 254 PASS, 0 FAIL, 254 total",
+    "__PROGRAM_WAIT_0__\r\n"
+  ],
+  "assertions": 255,
+  "exitStatus": 0
+}

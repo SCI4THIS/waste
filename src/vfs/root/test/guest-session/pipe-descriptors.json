@@ -1,0 +1,9 @@
+{
+  "fixture": "src/vfs/root/test/engine-regressions/pipe-descriptors.wast",
+  "events": [],
+  "assertions": 170,
+  "exited": false,
+  "exitStatus": 0,
+  "processes": 0,
+  "output": ""
+}

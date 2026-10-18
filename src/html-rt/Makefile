@@ -19,12 +19,12 @@ BROWSER_ALLOCATOR_FLAGS := -std=c11 -O1 -g -Wall -Wextra -Werror \
 browser-allocator: $(BROWSER_ALLOCATOR_TEST)
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 $<
 
-$(BROWSER_ALLOCATOR_TEST_DIR)/browser-allocator-sanitize.o: lib/stdlib.c $(REPO_ROOT)/tests/c-browser-allocator-shim.h
+$(BROWSER_ALLOCATOR_TEST_DIR)/browser-allocator-sanitize.o: lib/stdlib.c $(REPO_ROOT)/src/html-rt/test/c-browser-allocator-shim.h
 	mkdir -p "$(@D)"
 	$(HOST_CC) $(BROWSER_ALLOCATOR_FLAGS) -Wno-unknown-attributes \
-		-ffunction-sections -fdata-sections -include $(REPO_ROOT)/tests/c-browser-allocator-shim.h -c $< -o $@
+		-ffunction-sections -fdata-sections -include $(REPO_ROOT)/src/html-rt/test/c-browser-allocator-shim.h -c $< -o $@
 
-$(BROWSER_ALLOCATOR_TEST): $(REPO_ROOT)/tests/c-browser-allocator.c $(BROWSER_ALLOCATOR_TEST_DIR)/browser-allocator-sanitize.o
+$(BROWSER_ALLOCATOR_TEST): $(REPO_ROOT)/src/html-rt/test/c-browser-allocator.c $(BROWSER_ALLOCATOR_TEST_DIR)/browser-allocator-sanitize.o
 	$(HOST_CC) $(BROWSER_ALLOCATOR_FLAGS) -Wl,--gc-sections $^ -o $@
 
 WASM_CC_FLAGS := --target=wasm32 -O2 -std=c11 -Wall -Wextra \
@@ -290,7 +290,7 @@ wast-browser: gen $(WAST_WASM_TARGET)
 .PHONY: direct-start-probe
 direct-start-probe: gen $(BUILD_DIR)/direct-start-check.wasm
 
-$(BUILD_DIR)/direct-start-check.o: ../system-tests/cli-runtime/direct-start.c $(ENGINE_HEADERS)
+$(BUILD_DIR)/direct-start-check.o: ../cli-rt/test/direct-start.c $(ENGINE_HEADERS)
 	mkdir -p $(BUILD_DIR)
 	clang $(WASM_CC_FLAGS) -c $< -o $@
 
@@ -324,21 +324,21 @@ coreutils-stage build-coreutils coreutils-wasm coreutils-install coreutils-sourc
 	$(MAKE) -C ../aux BUILD_DIR="$(abspath $(AUX_BUILD_DIR))" \
 		$(if $(filter coreutils-stage coreutils-source-package,$@),$@,$(if $(filter coreutils-install,$@),install-coreutils,coreutils))
 
-# Compiler/SDK system probes are owned by src/system-tests.
+# Compiler/SDK system probes are owned by src/aux/libc.
 coreutils-sysroot:
-	$(MAKE) -C ../system-tests sysroot
+	$(MAKE) -C ../aux sysroot
 
 coreutils-crt-fixture:
-	$(MAKE) -C ../system-tests crt-fixture
+	$(MAKE) -C ../aux crt-fixture
 
 .PHONY: vfs-audit vfs-install-launch vfs-install-app vfs-tests-install vfs-tests-check
 vfs-tests-install: wast-browser
 	$(PYTHON) tools/build-test-corpus.py --install
 
 vfs-tests-check:
-	$(PYTHON) $(REPO_ROOT)/tests/runtime-config-check.py
+	$(PYTHON) $(REPO_ROOT)/src/html-rt/test/runtime-config-check.py
 	$(PYTHON) tools/build-test-corpus.py --audit
-	$(PYTHON) $(REPO_ROOT)/tests/test-corpus-check.py
+	$(PYTHON) $(REPO_ROOT)/src/html-rt/test/test-corpus-check.py
 
 vfs-audit:
 	$(PYTHON) tools/vfs.py audit
@@ -349,7 +349,7 @@ guest-sdk-install:
 
 guest-sdk-check:
 	$(PYTHON) tools/build-guest-sdk.py --audit
-	$(PYTHON) $(REPO_ROOT)/src/system-tests/guest-sdk/check.py
+	$(PYTHON) $(REPO_ROOT)/src/aux/libc/test/sdk/check.py
 	$(PYTHON) tools/audit-guest-providers.py
 
 

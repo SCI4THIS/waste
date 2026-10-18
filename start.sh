@@ -29,11 +29,11 @@ C_ENGINE_CORE_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core"
 C_ENGINE_RELAXED_SIMD_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/relaxed-simd"
 C_ENGINE_MEMORY64_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/memory64"
 C_ENGINE_BULK_MEMORY_TESTS="$REPO_ROOT/submodules/wasm-spec/test/core/bulk-memory"
-C_ENGINE_DIY_POSIX_TESTS="$REPO_ROOT/tests/diy-posix-test"
-C_ENGINE_BROWSER_TEST="$REPO_ROOT/tests/c-engine-browser-runtime.cjs"
+C_ENGINE_DIY_POSIX_TESTS="$REPO_ROOT/src/vfs/root/test/diy-posix-test"
+C_ENGINE_BROWSER_TEST="$REPO_ROOT/src/html-rt/test/browser-runtime.cjs"
 C_ENGINE_BASH_GENERATOR="$REPO_ROOT/src/html-rt/tools/generate-c-engine-bash-html.py"
-C_ENGINE_BASH_BROWSER_TEST="$REPO_ROOT/tests/c-engine-bash-browser-runtime.cjs"
-C_ENGINE_TERMINAL_MODEL_TEST="$REPO_ROOT/tests/c-engine-terminal-model.cjs"
+C_ENGINE_BASH_BROWSER_TEST="$REPO_ROOT/src/html-rt/test/bash-browser-runtime.cjs"
+C_ENGINE_TERMINAL_MODEL_TEST="$REPO_ROOT/src/html-rt/test/terminal-model.cjs"
 C_ENGINE_BASH_HTML="$HTML_BUILD/bash.html"
 C_ENGINE_BASH_LOG="$LOG_DIR/c-engine-bash.log"
 C_ENGINE_BUILD_SH="$REPO_ROOT/src/html-rt/tools/build.sh"
@@ -466,7 +466,7 @@ generate_c_engine_tests() {
 
 # ── Auxiliary utility build helpers ──────────────────────────────────────
 
-AUX_UTILITIES=(libc true false pwd echo printf basename dirname cat chmod wc ls date sleep bash rogue libncurses ldd upload download vim clang)
+AUX_UTILITIES=(libc true false pwd echo printf basename dirname cat chmod wc ls date sleep bash rogue libncurses ldd upload download vim clang lld-link)
 AUX_STAGING="$REPO_ROOT/src/vfs"
 AUX_LOG="$LOG_DIR/aux-build.log"
 
@@ -511,13 +511,17 @@ build_single_aux() {
         return 1
       fi
       ;;
-    clang)
+    clang|lld-link)
       if ! have_command clang++ || ! have_command llvm-ar || ! have_command llvm-ranlib || ! have_command llvm-objcopy; then
         show_message "Aux build" "clang++, llvm-ar, llvm-ranlib, and llvm-objcopy are required for Clang and its C++ runtime."
         return 1
       fi
       if ! have_command cmake && [[ ! -x "$REPO_ROOT/build/aux/clang/cmake-4.1.3-linux-x86_64/bin/cmake" ]]; then
         show_message "Aux build" "CMake is required for Clang. Install it or set CLANG_CMAKE to its path when invoking make."
+        return 1
+      fi
+      if [[ "$utility" == lld-link ]] && { ! have_command llvm-dlltool || ! have_command patch; }; then
+        show_message "Aux build" "llvm-dlltool and patch are required for the COFF linker and demo import library."
         return 1
       fi
       ;;
@@ -803,7 +807,7 @@ check_c_engine_bash() {
 
 check_c_engine_browser_full() {
   if ! have_command node || [[ ! -f "$C_ENGINE_BASH_HTML" ||
-       ! -f "$REPO_ROOT/tests/c-engine-offline-browser.cjs" ]]; then
+       ! -f "$REPO_ROOT/src/html-rt/test/offline-browser.cjs" ]]; then
     show_message "Full browser check" \
       "Node.js and a generated bash.html are required. Build the page with ./start.sh --html-bash."
     return 1
@@ -812,7 +816,7 @@ check_c_engine_browser_full() {
   printf 'Full offline-browser acceptance\nStarted: %s\n\n' \
     "$(date --iso-8601=seconds)" >>"$C_ENGINE_BASH_LOG"
   run_logged_step "Run full offline-browser acceptance" "$C_ENGINE_BASH_LOG" \
-    node "$REPO_ROOT/tests/c-engine-offline-browser.cjs" --suite-full
+    node "$REPO_ROOT/src/html-rt/test/offline-browser.cjs" --suite-full
 }
 
 generate_c_engine_core_tests() {

@@ -1,0 +1,38 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/symlink.wasm",
+      "source": "build/system-tests/clang/symlink/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/symlink.wast",
+      "source": "src/vfs/root/test/system/clang/symlink/symlink.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/symlink-loader.wast",
+      "source": "src/vfs/root/test/system/clang/symlink/symlink-loader.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/symlink.wasm > /tmp/symlink.bin; printf '%s\\n' \"$?\" > /tmp/symlink-status.txt; /bin/wast --verbose /tmp/symlink.wast; result=$?; /tmp/symlink-command; printf '%s\\n' \"$?\" > /tmp/symlink-loader.txt; /tmp/symlink-bin/true; printf '%s\\n' \"$?\" >> /tmp/symlink-loader.txt; /bin/wast --verbose /tmp/symlink-loader.wast; last=$?; printf '__SYMLINK_%s__\\n' \"$((result | last))\"\n"
+    },
+    {
+      "after": "__SYMLINK_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__SYMLINK_0__\r\n",
+    "WAST: 187 PASS, 0 FAIL, 187 total",
+    "WAST: 2 PASS, 0 FAIL, 2 total"
+  ],
+  "assertions": 190,
+  "exitStatus": 0
+}

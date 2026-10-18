@@ -33,7 +33,7 @@ BLESSED_SYMLINKS = {
     "/root/test/wasm-spec/custom": "submodules/wasm-spec/test/custom",
 }
 COREUTILS = "true false pwd echo printf basename dirname cat chmod wc ls date sleep".split()
-COMMANDS = COREUTILS + ["bash", "vim", "clang", "wasm-ld", "rogue", "ldd", "upload", "download", "waste-probe"]
+COMMANDS = COREUTILS + ["bash", "vim", "clang", "wasm-ld", "lld-link", "rogue", "ldd", "upload", "download", "waste-probe"]
 OPTIONAL_COMMANDS = ["waste-test"]
 BIN_COMMANDS = {"waste-probe", "waste-test"}
 COMPONENTS = COMMANDS + OPTIONAL_COMMANDS + ["libncurses", "libc", "launch", "app"]
@@ -235,6 +235,26 @@ def audit_tree(root, manifest=None, upgrading_app=False):
     return {e["path"]: e for e in current["entries"]}
 
 
+# Legacy subtrees that may still be wholesale-removed during migration. The
+# live test tree /root/test must never be removed as a whole directory,
+# because authored guest tests now live there.
+_REMOVABLE_SUBTREES = ("/tests",)
+
+
+def _audit_removes(remove):
+    for path in remove:
+        parsed = PurePosixPath(path)
+        if not parsed.is_absolute() or ".." in parsed.parts:
+            raise ValueError(f"noncanonical VFS cleanup path: {path}")
+        path = parsed.as_posix()
+        if path in _REMOVABLE_SUBTREES:
+            continue
+        if path == test_distribution.MANIFEST or path == "/root/test/.support" or path.startswith("/root/test/.support/"):
+            continue
+        if path == "/root/test" or path.startswith("/root/test/"):
+            raise ValueError(f"refusing removal of authored guest tests: {path}")
+
+
 def publish(root, changes, remove=()):
     """Preflight inputs and publish one complete directory, preserving other files."""
     if root.exists():
@@ -250,6 +270,7 @@ def publish(root, changes, remove=()):
             staged_link = stage / vfs_path.lstrip("/")
             if staged_link.is_symlink():
                 saved_links[vfs_path] = os.readlink(staged_link)
+        _audit_removes(remove)
         for path in remove:
             target = stage / path.lstrip("/")
             if target.is_symlink() or target.is_file():
@@ -322,13 +343,29 @@ def install_sdk(root, source, sdk, library=None):
 
 
 def install_tests(root, source, corpus):
-    # Validate candidate corpus coherence as an explicit fixture operation.
-    # Existing local edits or changed selections do not prevent its installation.
+    # Candidate metadata and generated assets must agree before publication.
+    # Canonical VFS inputs are authored, so a staged copy cannot replace them.
     test_distribution.audit(corpus, lambda p: local(source, p).read_bytes(), audit_tree(source))
-    paths = [e["path"] for e in corpus["files"] if not _under_blessed(e["path"])]
-    paths.append(test_distribution.MANIFEST)
-    publish(root, [(p, local(source, p).read_bytes(), 0o644) for p in paths],
-            remove=(test_distribution.TEST_ROOT, test_distribution.LEGACY_TEST_ROOT))
+    changes = []
+    for entry in corpus["files"]:
+        path = entry["path"]
+        if _under_blessed(path):
+            continue
+        data = local(source, path).read_bytes()
+        target = root / path.lstrip("/")
+        if entry["source"] == "src/vfs" + path and (target.exists() or target.is_symlink()):
+            if target.is_symlink() or not target.is_file() or target.read_bytes() != data:
+                raise ValueError(f"authored test changed during preparation; regenerate corpus metadata: {path}")
+            continue
+        changes.append((path, data, 0o644))
+    changes.append((test_distribution.MANIFEST, local(source, test_distribution.MANIFEST).read_bytes(), 0o644))
+    # This namespace is generated exclusively; republish it from the candidate
+    # rather than trusting an old manifest to own any authored test paths.
+    stale = ["/root/test/.support"]
+    legacy_root = root / test_distribution.LEGACY_TEST_ROOT.lstrip("/")
+    if legacy_root.exists():
+        stale.append(test_distribution.LEGACY_TEST_ROOT)
+    publish(root, changes, remove=tuple(stale))
 
 
 def package(root, output):

@@ -75,8 +75,8 @@ make -C src/html-rt wast-browser
 The current continuation regression is covered by both browser Bash modes:
 
 ```sh
-node tests/c-engine-bash-browser-runtime.cjs
-node tests/c-engine-bash-browser-runtime.cjs --missing-command
+node src/html-rt/test/bash-browser-runtime.cjs
+node src/html-rt/test/bash-browser-runtime.cjs --missing-command
 ```
 
 The second mode verifies Bash's canonical diagnostic, status 127, a later
@@ -165,7 +165,7 @@ parsed; multi-value signatures are reused or synthesized in the module type
 section. Dedicated folded-start tokens keep body instructions out of the
 nullable block-field decision.
 
-`tests/c-engine-stage7-front-end.wast` covers nested comments and annotations,
+`src/engine/test/wat-frontend/stage7-front-end.wast` covers nested comments and annotations,
 annotation-transparent folded operators and module fields, integer-spelled
 floating constants, exact data-string bytes, and raw binary modules. The
 reentrant parser gate also checks exact raw payload bytes and diagnostics for

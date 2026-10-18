@@ -807,7 +807,8 @@ int native_runtime_stage_file(native_runtime *session, const char *guest, unsign
     if (!session || session->stopped) return -1;
     size_t length = 0;
     uint8_t *bytes = session_read_file(host, NATIVE_EXEC_BYTES_MAX, &length);
-    posix_path_metadata metadata = {POSIX_NODE_REGULAR, mode, 0, 0, (int64_t)length, 1000, 0, 0};
+    posix_path_metadata metadata = {POSIX_NODE_REGULAR, mode, 0, 0, (int64_t)length,
+        posix_kernel_allocate_inode(session->store.kernel), 0, 0};
     if (!bytes) {
         session_failure(session, "cannot read explicit native input");
         return -1;
@@ -836,7 +837,8 @@ int native_runtime_stage_input(native_runtime *session, const char *guest, const
     const char *directory = "/tmp/waste-cli-input";
     int present = posix_kernel_path_access(session->store.kernel, (const uint8_t *)directory,
                                          strlen(directory), POSIX_F_OK, 0);
-    posix_path_metadata metadata = {POSIX_NODE_DIRECTORY, 0700, 0, 0, 0, 1000, 0, 0};
+    posix_path_metadata metadata = {POSIX_NODE_DIRECTORY, 0700, 0, 0, 0,
+        posix_kernel_allocate_inode(session->store.kernel), 0, 0};
     if (present != -POSIX_ENOENT ||
         posix_kernel_path_add(session->store.kernel, directory, &metadata)) {
         session_failure(session, "temporary guest input namespace already exists or is unavailable");
@@ -845,6 +847,7 @@ int native_runtime_stage_input(native_runtime *session, const char *guest, const
     metadata.kind = POSIX_NODE_REGULAR;
     metadata.mode = mode;
     metadata.size = (int64_t)length;
+    metadata.inode = posix_kernel_allocate_inode(session->store.kernel);
     int status = posix_kernel_path_add_data(session->store.kernel, guest, &metadata, bytes, length);
     if (status) session_failure(session, "cannot stage explicit native input");
     return status;

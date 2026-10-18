@@ -1,0 +1,38 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {
+      "path": "/tmp/advice.wasm",
+      "source": "build/system-tests/clang/advice/probe.wasm",
+      "mode": 493
+    },
+    {
+      "path": "/tmp/advice.wast",
+      "source": "src/vfs/root/test/system/clang/advice/advice.wast",
+      "mode": 420
+    },
+    {
+      "path": "/tmp/advice-ranges.wast",
+      "source": "src/vfs/root/test/system/clang/advice/ranges.wast",
+      "mode": 420
+    }
+  ],
+  "events": [
+    {
+      "after": "# ",
+      "text": "/tmp/advice.wasm > /tmp/advice.bin; printf '%s\\n' \"$?\" > /tmp/advice-status.txt; /bin/wast --verbose /tmp/advice.wast; cpp=$?; /bin/wast --verbose /tmp/advice-ranges.wast; ranges=$?; result=$((cpp | ranges)); printf '__ADVICE_%s__\\n' \"$result\"\n"
+    },
+    {
+      "after": "__ADVICE_0__\r\n",
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__ADVICE_0__\r\n",
+    "WAST: 38 PASS, 0 FAIL, 38 total",
+    "WAST: 161 PASS, 0 FAIL, 161 total"
+  ],
+  "assertions": 200,
+  "exitStatus": 0
+}

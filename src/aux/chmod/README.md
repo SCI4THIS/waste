@@ -10,7 +10,7 @@ configuration, private headers and linking rules live in
 The command uses shared guest libc and the engine-owned VFS; it changes guest
 permission metadata rather than host permissions. Numeric and symbolic modes,
 `umask`, `--reference`, verbose output and recursive traversal are exercised in
-`tests/guest-session-chmod.json` across native and packaged browser workers.
+`src/vfs/root/test/guest-session/chmod.json` across native and packaged browser workers.
 The recursive walker uses directory-relative `openat`, `fstatat`, `fchmodat`
 and guest directory streams. Symlink permission updates with
 `AT_SYMLINK_NOFOLLOW` return `EOPNOTSUPP`. Full POSIX symlink traversal is

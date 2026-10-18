@@ -5,29 +5,51 @@ from pathlib import Path
 
 def browser_bash_snapshot(suite, relative):
     """Return the browser-only installed path for tests excluded from CLI batches."""
-    if suite == "system" and relative == "cli-runtime/wast/unlinkable.wast":
+    if suite == "system" and relative in {"cli-runtime/unlinkable.wast", "cli-runtime/wast/unlinkable.wast"}:
         return None
     if suite == "diy-posix-test" and relative == "posix-kernel.wast":
         return "html-rt/posix-kernel.wast"
     if suite == "render" and relative == "terminal.wast":
         return "html-rt/terminal.wast"
     if suite == "system" and (
-            relative in {f"cli-runtime/wast/{name}.wast" for name in
-                         ("input", "language", "output", "providers", "runtime")} or
+            relative in {f"{prefix}/{name}.wast" for prefix in ("cli-runtime", "cli-runtime/wast")
+                         for name in ("input", "language", "output", "providers", "runtime")} or
             relative in {f"wast/{name}.wast" for name in ("pass", "report-files", "report.fail")}):
         return "html-rt/" + Path(relative).name
     return None
 
 
+def _preferred_root(repo, legacy, canonical):
+    """Return the legacy source during transition; fall back to canonical VFS."""
+    legacy_path = repo / legacy
+    if legacy_path.is_dir():
+        return legacy_path
+    return repo / canonical
+
+
 def layout_roots(repo):
     roots = [(repo / "submodules/wasm-spec/test", "wasm-spec", "wasm-spec"),
-             (repo / "tests/diy-posix-test", "diy-posix-test", "diy-posix-test"),
-             (repo / "tests/engine-regressions", "engine-regressions", "engine-regressions"),
-             (repo / "tests/render", "render", "render")]
-    roots.extend((package / "tests", "aux", "aux/" + package.name)
-                 for package in sorted((repo / "src/aux").iterdir())
-                 if (package / "tests").is_dir())
-    roots.append((repo / "src/system-tests", "system", "system"))
+             (_preferred_root(repo, "tests/diy-posix-test",
+                              "src/vfs/root/test/diy-posix-test"),
+              "diy-posix-test", "diy-posix-test"),
+             (_preferred_root(repo, "tests/engine-regressions",
+                              "src/vfs/root/test/engine-regressions"),
+              "engine-regressions", "engine-regressions"),
+             (_preferred_root(repo, "tests/render",
+                              "src/vfs/root/test/render"),
+              "render", "render")]
+    for package in sorted((repo / "src/aux").iterdir()):
+        legacy = package / "tests"
+        canonical = repo / "src/vfs/root/test/aux" / package.name
+        chosen = legacy if legacy.is_dir() else canonical
+        if chosen.is_dir():
+            roots.append((chosen, "aux", "aux/" + package.name))
+    system_root = repo / "src/vfs/root/test/system"
+    if system_root.is_dir():
+        roots.append((system_root, "system", "system"))
+    binary_handler = repo / "src/cli-rt/test/binary-handler"
+    if binary_handler.is_dir():
+        roots.append((binary_handler, "system", "system/cli-runtime/binary-handler"))
     return roots
 
 

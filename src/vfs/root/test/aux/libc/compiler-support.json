@@ -1,0 +1,16 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {"path": "/tmp/libc-division.wast", "source": "src/vfs/root/test/aux/libc/division.wast", "mode": 420},
+    {"path": "/tmp/libc-remove.wast", "source": "src/vfs/root/test/system/libc/remove.wast", "mode": 420}
+  ],
+  "events": [
+    {"after": "# ", "text": "/bin/wast --verbose /tmp/libc-division.wast; printf '__DIVISION_%s__\\n' \"$?\"\n"},
+    {"after": "__DIVISION_0__\r\n", "text": "/bin/wast --verbose /tmp/libc-remove.wast; printf '__REMOVE_%s__\\n' \"$?\"\n"},
+    {"after": "__REMOVE_0__\r\n", "text": "exit 0\n"}
+  ],
+  "contains": ["__DIVISION_0__\r\n", "__REMOVE_0__\r\n", "WAST: 4 PASS, 0 FAIL, 4 total"],
+  "assertions": 9,
+  "exitStatus": 0
+}

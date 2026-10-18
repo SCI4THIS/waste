@@ -1,0 +1,14 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "files": [
+    {"path": "/tmp/fenv.wast", "source": "src/vfs/root/test/aux/libc/fenv.wast", "mode": 420}
+  ],
+  "events": [
+    {"after": "# ", "text": "/bin/wast --verbose /tmp/fenv.wast; printf '__FENV_%s__\\n' \"$?\"\n"},
+    {"after": "__FENV_0__\r\n", "text": "exit 0\n"}
+  ],
+  "contains": ["__FENV_0__\r\n", "WAST: 9 PASS, 0 FAIL, 9 total"],
+  "assertions": 10,
+  "exitStatus": 0
+}
