@@ -21,8 +21,12 @@ Native applications start it directly with `build/cli-rt/wasm src/vfs/usr/bin/ba
 Bash chooses interactive or script execution from its arguments and stdin.
 The browser and private compatibility harness use `launch.wast`, installed by
 `install-bash` at `/usr/share/waste/launch.wast`. The small authored launcher
-calls `execve` with `/usr/bin/bash --norc -i` and an explicit environment,
-including `PS1='# '`. Shared libc and stdio are initialized by the guest CRT.
+calls `execve` with `/usr/bin/bash --rcfile /etc/bash.bashrc -i` and an explicit
+environment, including `PS1='# '`. The guest startup file displays readable
+`/etc/motd` before the first prompt using Bash builtins, without interpreting
+its contents as shell commands. Missing/unreadable messages are skipped; later
+prompts do not repeat the message. Edit `src/vfs/etc/motd` to change it.
+Shared libc and stdio are initialized by the guest CRT.
 `install-bash-launch` refreshes the launcher independently; HTML packaging
 reads the installed tree without compiling or reinstalling Bash.
 

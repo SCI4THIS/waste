@@ -75,7 +75,9 @@ need this refactor.
 and compatibility harness use the authored
 `src/aux/bash/launch.wast`, installed at `/usr/share/waste/launch.wast`, to
 replace the initial process with that binary through `execve`. Native `wasm`
-loads it directly through the same process/library initialization path. Bash
+loads it directly through the same process/library initialization path. The
+browser launcher selects `/etc/bash.bashrc`, which displays readable `/etc/motd`
+as literal text before the first prompt. Bash
 uses the shared guest CRT/libc and engine kernel imports;
 libc owns the default root account/hostname records and the CRT binds its stream
 accessors. There is no embedded executable or WAT-rewriting build path. Guest-libc sources

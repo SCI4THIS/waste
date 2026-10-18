@@ -31,6 +31,10 @@ shared-libc imports and publishes:
 - `/usr/lib/waste/windows-demo/{kernel32.lib,user32.lib}`
 - `/usr/share/licenses/lld-link/{LICENSE.TXT,kernel32.def,user32.def,README.md}`
 
+For the supplied demo, `/root/demo/windows-hello-build.sh` runs the compile/link
+steps below and creates `windows-hello.obj` and `windows-hello.exe` in the current
+guest directory. Run `download windows-hello.exe` to save the executable.
+
 The X86-enabled guest Clang preserves its default Wasm configuration. In guest
 Bash, bypass that configuration explicitly for the Windows demo:
 
