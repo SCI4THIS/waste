@@ -59,8 +59,8 @@ const wait = async predicate => {
     'status=0; . /tmp/clipboard-setup.sh; /bin/wast --verbose /tmp/clipboard-installed.wast || status=1; /bin/wast --verbose /tmp/clipboard-copy.wast || status=1; exit "$status"\n')}});
   await wait(() => done);
   assert.equal(done.ok, true, output);
-  assert.equal(done.passed, 29, output);
-  assert.equal(done.total, 29, output);
+  assert.equal(done.passed, 38, output);
+  assert.equal(done.total, 38, output);
   assert.equal(requests, 9);
   assert.equal(captures.length, 0);
   console.log(JSON.stringify({runtime:"production-worker-session", passed:done.passed,

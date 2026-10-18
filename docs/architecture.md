@@ -334,9 +334,10 @@ missing callbacks return unsupported errors, not implicit host access.
 `src/html-rt/posix_stubs.c` owns browser imports and wall-clock conversion.
 Upload/download and clipboard-copy requests yield through `EXEC_YIELD_HOST_IO`, with pending state
 in `native_store.host_io`. `browser_api.c` exposes the request to `worker.js`;
-`app.js` owns the browser file picker, FileReader, Blob download and user-click
-clipboard dialog. Clipboard replies carry request IDs and only acknowledge an
-actual copy/cancel; native clipboard access currently returns failure. The engine
+`app.js` owns the browser file picker, FileReader, Blob download and automatic
+clipboard copying with a temporary off-screen textarea fallback. Clipboard
+replies carry request IDs and only acknowledge an actual copy or failure;
+native clipboard access currently returns failure. The engine
 copies uploaded bytes into owned storage before the worker frees its temporary
 buffer, then commits the file to the guest VFS on resume. Native polling,
 clocks, execution and output live in `src/cli-rt/native_runtime.c`;

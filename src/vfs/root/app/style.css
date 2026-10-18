@@ -23,9 +23,6 @@ button:disabled { cursor:not-allowed; opacity:.48; }
 #terminal-transcript { max-height:9rem; overflow:auto; margin:10px 0 0; padding:8px; border:1px solid #263449; border-radius:8px; background:#070b10; color:#b8c7b0; white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
 #terminal-form { margin-top:10px; }
 code { color:#b9ddff; }
-#clipboard-dialog { max-width:90vw; background:#111923; color:#e8edf4; border:1px solid #52647a; border-radius:8px; }
-#clipboard-dialog::backdrop { background:#0009; }
-#clipboard-text { display:block; box-sizing:border-box; max-width:80vw; margin-bottom:12px; }
 #installed-tests { margin:10px 0; }
 #installed-tests summary { cursor:pointer; }
 #suite-jobs { width:4.5rem; }
@@ -40,3 +37,5 @@ code { color:#b9ddff; }
 #loading-overlay h2 { font-size: 20px; margin: 0 0 10px; }
 #loading-status { color: var(--muted); }
 #loading-detail { color: var(--muted); font-size: .85em; margin-top: 4px; }
+
+.clipboard-buffer { position:fixed; left:-9999px; top:0; width:1px; height:1px; opacity:0; }

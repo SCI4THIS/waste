@@ -150,8 +150,8 @@
     {
       "path": "/root/test/aux/clipboard/browser/copy.wast",
       "role": "test-input",
-      "sha256": "0a462c908c046da1ff413f59b2952d1c0126f304bf54294de5eb74d4bb03bf33",
-      "size": 5610,
+      "sha256": "d779fc138c7edf4821d5c9a88482f22e78002a6814653e1be3433a5d6758da04",
+      "size": 8166,
       "source": "src/vfs/root/test/aux/clipboard/browser/copy.wast"
     },
     {
@@ -164,8 +164,8 @@
     {
       "path": "/root/test/aux/clipboard/native.wast",
       "role": "test-input",
-      "sha256": "f4d258487cabb9bc7d739729934d79f66d79810ad2c275872724b8d515edf9f4",
-      "size": 1198,
+      "sha256": "87e0273d4227e2efd13cc1c46a06544c04ad51df045cb23da60e5abb2e6834ea",
+      "size": 1467,
       "source": "src/vfs/root/test/aux/clipboard/native.wast"
     },
     {
@@ -1251,7 +1251,7 @@
       "role": "test-input",
       "sha256": "c2bcfdcf94a8e49ef43811f12fc432f742c6aa831a380021488f4cff1716b11c",
       "size": 2870,
-      "source": "src/cli-rt/test/binary-handler/results.wast"
+      "source": "src/vfs/root/test/system/cli-runtime/binary-handler/results.wast"
     },
     {
       "path": "/root/test/system/cli-runtime/staged-identities.wast",
@@ -3240,7 +3240,7 @@
       "timeoutScope": "existing dashboard has no per-test deadline"
     }
   },
-  "selection_sha256": "6b6b0641c125671a1a587cf23cc493383ebeb2b5376fafb01bbbf3f1026346cb",
+  "selection_sha256": "f216acf081e6131b859643b2911ec55a5d97b19dfdb2336b72797e6c2e4e61c6",
   "sourceInputs": [
     {
       "hostOnly": true,
@@ -11909,7 +11909,7 @@
         "assertionCount": 0,
         "file": "aux/clipboard/browser/copy.wast",
         "mode": "wast-stream",
-        "sourceBytes": 5610,
+        "sourceBytes": 8166,
         "sourcePath": "src/vfs/root/test/aux/clipboard/browser/copy.wast"
       },
       "expectFailure": false,
@@ -11922,10 +11922,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "src/vfs/root/test/aux/clipboard/browser/copy.wast",
-        "sha256": "0a462c908c046da1ff413f59b2952d1c0126f304bf54294de5eb74d4bb03bf33",
-        "size": 5610
+        "sha256": "d779fc138c7edf4821d5c9a88482f22e78002a6814653e1be3433a5d6758da04",
+        "size": 8166
       },
-      "spec_sha256": "2760e7269b3b1375335216bd095e3b7fef4ede8600b91385a869bd31908c5c6f",
+      "spec_sha256": "69f88cec69e8ca3aa3361720ae52299750cbc88a0ba30646d21ef344b80d147d",
       "suite": "aux",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
@@ -11963,7 +11963,7 @@
         "assertionCount": 0,
         "file": "aux/clipboard/native.wast",
         "mode": "wast-stream",
-        "sourceBytes": 1198,
+        "sourceBytes": 1467,
         "sourcePath": "src/vfs/root/test/aux/clipboard/native.wast"
       },
       "expectFailure": false,
@@ -11976,10 +11976,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "src/vfs/root/test/aux/clipboard/native.wast",
-        "sha256": "f4d258487cabb9bc7d739729934d79f66d79810ad2c275872724b8d515edf9f4",
-        "size": 1198
+        "sha256": "87e0273d4227e2efd13cc1c46a06544c04ad51df045cb23da60e5abb2e6834ea",
+        "size": 1467
       },
-      "spec_sha256": "0919f457937ef28c189b0e66fed83c4c3e25243e8f18d106b3ab23387f9559d0",
+      "spec_sha256": "b73d16089f856ace6ec92efbcbf71fbdccc2cdffeb939243c0737dcacf8ffe1d",
       "suite": "aux",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
@@ -15012,6 +15012,33 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "system/cli-runtime/binary-handler/results.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 2870,
+        "sourcePath": "src/vfs/root/test/system/cli-runtime/binary-handler/results.wast"
+      },
+      "expectFailure": false,
+      "group": "system/cli-runtime/binary-handler",
+      "id": "system/cli-runtime/binary-handler/results.wast",
+      "name": "results.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/cli-runtime/binary-handler/results.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/vfs/root/test/system/cli-runtime/binary-handler/results.wast",
+        "sha256": "c2bcfdcf94a8e49ef43811f12fc432f742c6aa831a380021488f4cff1716b11c",
+        "size": 2870
+      },
+      "spec_sha256": "c8a2efa5f1ea36d933ea4e306a506db61f6af983755eb41c5f2b08633f869759",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "system/cli-runtime/input.wast",
         "mode": "wast-stream",
         "sourceBytes": 385,
@@ -15733,33 +15760,6 @@
         "size": 17996
       },
       "spec_sha256": "dbf72c6c7a512cc0a60e0ea383ed58dbe7c1987b6f98b98f4c919f2574ea8e5b",
-      "suite": "system",
-      "unsupported": true,
-      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
-    },
-    {
-      "assets": [],
-      "executionSpec": {
-        "assertionCount": 0,
-        "file": "system/cli-runtime/binary-handler/results.wast",
-        "mode": "wast-stream",
-        "sourceBytes": 2870,
-        "sourcePath": "src/cli-rt/test/binary-handler/results.wast"
-      },
-      "expectFailure": false,
-      "group": "system/cli-runtime/binary-handler",
-      "id": "system/cli-runtime/binary-handler/results.wast",
-      "name": "results.wast",
-      "nativeParity": "pending-stage-6",
-      "path": "/root/test/system/cli-runtime/binary-handler/results.wast",
-      "requiredFeatures": [],
-      "runtime": "c-wast-stream",
-      "source": {
-        "path": "src/cli-rt/test/binary-handler/results.wast",
-        "sha256": "c2bcfdcf94a8e49ef43811f12fc432f742c6aa831a380021488f4cff1716b11c",
-        "size": 2870
-      },
-      "spec_sha256": "d88d76064d3dc7412017a6981a9003a93763d4f45b46bb846a683f473fb7989f",
       "suite": "system",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"

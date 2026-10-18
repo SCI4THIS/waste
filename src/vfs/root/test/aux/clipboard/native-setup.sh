@@ -23,5 +23,5 @@ printf '%s\n' "$?" > /tmp/clipboard-directory-status
 /usr/bin/clipboard --help > /tmp/clipboard-help-output 2>&1
 printf '%s\n' "$?" > /tmp/clipboard-help-status
 
-/usr/bin/clipboard copy /tmp/clipboard-text
+/usr/bin/clipboard copy /tmp/clipboard-text > /tmp/clipboard-native-output
 printf '%s\n' "$?" > /tmp/clipboard-native-status

@@ -166,12 +166,16 @@ comes from `CLIPBOARD_MAX_BYTES` in `src/config.h` and includes Base64 expansion
 Use the existing explicit host-I/O yield/resume path for clipboard requests.
 `host_clipboard_copy_v1` copies guest bytes into engine-owned storage; the
 worker sends an ID-tagged request and waits for matching acknowledgment before
-resuming. The DOM adapter shows a user-click Copy/Cancel dialog, uses selected
-textarea copying for offline Firefox, and can fall back to the Clipboard API.
-Keep browser permissions and Unicode conversion in the DOM adapter, Base64 in
-the command and ownership/bounds in the engine. Cancel, Escape and worker
-replacement must not acknowledge a stale request. Native execution without a
-desktop clipboard capability fails the command and returns control to Bash.
+resuming. The DOM adapter copies automatically through the Clipboard API, with
+a temporary selected off-screen textarea as an `execCommand` fallback. It
+removes the textarea and restores focus after the fallback. Browser permission
+and recent-user-activation requirements still apply; hiding an element does not
+bypass them. The command prints `Copied` only after a successful reply, and
+returns failure without success output if both methods are denied. Keep Unicode
+conversion in the DOM adapter, Base64 in the command and ownership/bounds in
+the engine. Worker replacement must not acknowledge a stale request. Native
+execution without a desktop clipboard capability fails the command and returns
+control to Bash.
 
 A text clipboard/editor cannot promise binary identity: invalid UTF-8, NULs,
 and newlines may change. To transfer a Windows executable via Notepad, copy

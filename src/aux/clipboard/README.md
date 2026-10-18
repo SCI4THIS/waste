@@ -14,13 +14,19 @@ clipboard copy /tmp/hello.exe
 clipboard copy --base64 /tmp/hello.exe
 ```
 
-Each command opens a browser dialog. Press **Copy to clipboard** to authorize
-copying, or **Cancel** / Escape to return a nonzero status. Bash resumes after
-copy/cancellation. The selected text remains visible for inspection or retry
-if clipboard access is denied. The page supports offline Firefox using a
-selected textarea and `document.execCommand('copy')` from an actual click;
-`navigator.clipboard.writeText` is the alternative where available. No server
-or browser extension is needed. Restart/stop discards pending UI replies.
+The command copies automatically and prints **Copied** to guest stdout only
+after the browser confirms success. No modal or extra click is shown. The
+adapter first tries `navigator.clipboard.writeText`; when unavailable or denied,
+it tries a temporary off-screen, selected textarea with
+`document.execCommand('copy')`, then removes it and restores keyboard focus.
+A `display:none` or HTML-hidden element cannot support selected-text copying.
+
+Browser permissions and user-activation rules still apply. Running the command
+with Enter normally provides recent interaction, but a hidden element cannot
+bypass restrictions. If both methods fail, the command returns 1 with an error
+and never prints Copied. Automated/background use can be denied, especially
+in Firefox; see [Clipboard API security considerations](https://developer.mozilla.org/en-US/docs/Web/API/Clipboard_API#security_considerations).
+The page stays self-contained and offline; no extension or server is added.
 
 Plain copy treats file bytes as UTF-8 text (malformed sequences become replacement
 characters). It accepts binary files for experimentation, but a text clipboard,
@@ -30,7 +36,7 @@ Base64 emits ASCII with standard padding and no added newline, preserving every
 input byte after decoding. Empty files are valid. `--` permits filenames starting
 with a dash. The maximum outgoing payload is `CLIPBOARD_MAX_BYTES` in
 `src/config.h`; Base64 expansion counts toward that limit. Only regular files
-are accepted. Success is quiet; errors go to stderr and return 1.
+are accepted. Success prints `Copied`; errors go to stderr and return 1.
 
 For a Windows executable, use Base64, paste into Notepad and save as
 `hello.exe.b64` (choose **All files** and UTF-8). In Windows Command Prompt or
@@ -64,7 +70,7 @@ Bash continues. It does not silently write clipboard escape sequences to stdout.
 setup captures invalid command/file cases and unsupported-host behavior; WAST
 owns the assertions, including invalid ABI flags, pointer and length handling.
 The browser setup exercises text, binary/Base64, all padding lengths, empty
-files, UTF-8 and cancellation. Its host harness returns captured clipboard
+files, UTF-8, rejected host replies and exact success output. Its host harness returns captured clipboard
 payloads through the existing upload transport for WAST byte/status assertions.
 
 ```sh
@@ -77,5 +83,7 @@ APIs. The second runs the installed command in production guest Bash/worker;
 it does not modify the host clipboard. Real offline clipboard permission and
 paste behavior still require a manual browser check. `browser/setup.sh` uses
 scripted upload responses and is for the transport harness, not manual sourcing.
-For manual acceptance, copy a known text file, try cancellation and `echo $?`,
-then copy a downloaded executable as Base64, decode on Windows and compare hashes.
+For manual acceptance, copy a known text file, confirm `Copied` and exit 0,
+and paste into an editor. Then copy a downloaded executable as Base64, decode
+on Windows and compare hashes. Permission denial must return nonzero without
+printing Copied.

@@ -22,29 +22,29 @@ printf '%s\n' "$?" > /tmp/clipboard-missing-file-status
 printf '%s\n' "$?" > /tmp/clipboard-directory-status
 /usr/bin/clipboard --help > /tmp/clipboard-help-output 2>&1
 printf '%s\n' "$?" > /tmp/clipboard-help-status
-/usr/bin/clipboard copy /tmp/clipboard-text
+/usr/bin/clipboard copy /tmp/clipboard-text > /tmp/clipboard-text-copy-output
 printf '%s\n' "$?" > /tmp/clipboard-text-copy-status
 upload /tmp/clipboard-text-captured
-/usr/bin/clipboard copy --base64 /tmp/clipboard-binary
+/usr/bin/clipboard copy --base64 /tmp/clipboard-binary > /tmp/clipboard-binary-copy-output
 printf '%s\n' "$?" > /tmp/clipboard-binary-copy-status
 upload /tmp/clipboard-binary-captured
-/usr/bin/clipboard copy --base64 /tmp/clipboard-empty
+/usr/bin/clipboard copy --base64 /tmp/clipboard-empty > /tmp/clipboard-empty-copy-output
 printf '%s\n' "$?" > /tmp/clipboard-empty-copy-status
 upload /tmp/clipboard-empty-captured
-/usr/bin/clipboard copy --base64 /tmp/clipboard-one
+/usr/bin/clipboard copy --base64 /tmp/clipboard-one > /tmp/clipboard-one-copy-output
 printf '%s\n' "$?" > /tmp/clipboard-one-copy-status
 upload /tmp/clipboard-one-captured
-/usr/bin/clipboard copy --base64 /tmp/clipboard-two
+/usr/bin/clipboard copy --base64 /tmp/clipboard-two > /tmp/clipboard-two-copy-output
 printf '%s\n' "$?" > /tmp/clipboard-two-copy-status
 upload /tmp/clipboard-two-captured
-/usr/bin/clipboard copy --base64 /tmp/clipboard-three
+/usr/bin/clipboard copy --base64 /tmp/clipboard-three > /tmp/clipboard-three-copy-output
 printf '%s\n' "$?" > /tmp/clipboard-three-copy-status
 upload /tmp/clipboard-three-captured
-/usr/bin/clipboard copy /tmp/clipboard-utf8
+/usr/bin/clipboard copy /tmp/clipboard-utf8 > /tmp/clipboard-utf8-copy-output
 printf '%s\n' "$?" > /tmp/clipboard-utf8-copy-status
 upload /tmp/clipboard-utf8-captured
-/usr/bin/clipboard copy /tmp/clipboard-binary
+/usr/bin/clipboard copy /tmp/clipboard-binary > /tmp/clipboard-raw-binary-copy-output
 printf '%s\n' "$?" > /tmp/clipboard-raw-binary-copy-status
 upload /tmp/clipboard-raw-binary-captured
-/usr/bin/clipboard copy /tmp/clipboard-text
+/usr/bin/clipboard copy /tmp/clipboard-text > /tmp/clipboard-cancel-copy-output
 printf '%s\n' "$?" > /tmp/clipboard-cancel-status

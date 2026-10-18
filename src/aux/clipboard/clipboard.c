@@ -91,5 +91,6 @@ int main(int argc, char **argv, char **envp) {
         fprintf(stderr, "clipboard: copy cancelled, denied, or unavailable in this runtime\n");
         return 1;
     }
+    printf("Copied\n");
     return 0;
 }

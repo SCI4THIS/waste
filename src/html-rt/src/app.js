@@ -156,56 +156,45 @@ function requestHostUpload(requester, data) {
   input.click();
 }
 
-function requestHostClipboard(requester, data) {
+async function requestHostClipboard(requester, data) {
   cancelClipboard?.();
-  const dialog = document.querySelector("#clipboard-dialog");
-  const field = document.querySelector("#clipboard-text");
-  const copy = document.querySelector("#clipboard-copy");
-  const cancel = document.querySelector("#clipboard-cancel");
-  const note = document.querySelector("#clipboard-status");
   let replied = false;
   const reply = ok => {
     if (replied) return;
     replied = true;
-    dialog.close();
-    field.value = "";
-    copy.onclick = cancel.onclick = dialog.oncancel = null;
     cancelClipboard = null;
-    if (worker === requester) {
+    if (worker === requester)
       requester.postMessage({type: "host-clipboard-response", id: data.id, ok});
-      terminal.focus({preventScroll: true});
-    }
   };
   cancelClipboard = () => reply(false);
-  cancel.onclick = cancelClipboard;
-  dialog.oncancel = event => { event.preventDefault(); reply(false); };
   try {
-    // A clipboard text item is Unicode, not an arbitrary binary byte stream.
-    // Preserve a UTF-8 BOM as a character; malformed sequences become U+FFFD.
-    field.value = new TextDecoder("utf-8", {ignoreBOM: true}).decode(data.bytes);
-    note.textContent = "Click Copy to allow clipboard access.";
-    copy.disabled = false;
-    copy.onclick = async () => {
-      if (worker !== requester) { reply(false); return; }
-      copy.disabled = true;
-      field.focus();
+    // The command's Enter key supplies recent user activation where required.
+    // This is text: malformed UTF-8 becomes U+FFFD; Base64 preserves binary.
+    const text = new TextDecoder("utf-8", {ignoreBOM: true}).decode(data.bytes);
+    try {
+      await navigator.clipboard.writeText(text);
+      reply(true);
+      return;
+    } catch (_) { /* Try the offline compatibility path below. */ }
+    if (replied || worker !== requester) { reply(false); return; }
+    const previousFocus = document.activeElement;
+    const field = document.createElement("textarea");
+    field.className = "clipboard-buffer";
+    field.readOnly = true;
+    field.tabIndex = -1;
+    field.setAttribute("aria-hidden", "true");
+    field.value = text;
+    try {
+      // A display:none/hidden node cannot be selected for execCommand copy.
+      document.body.appendChild(field);
+      field.focus({preventScroll: true});
       field.select();
-      try {
-        // The synchronous path supports offline Firefox without clipboard
-        // permissions. Both paths run from the user's actual click.
-        let copied = false;
-        try { copied = document.execCommand("copy"); } catch (_) { /* try modern API */ }
-        if (!copied) await navigator.clipboard.writeText(field.value);
-        reply(true);
-      } catch (_) {
-        if (!replied) {
-          note.textContent = "Clipboard access failed. Retry Copy, or cancel.";
-          copy.disabled = false;
-        }
-      }
-    };
-    dialog.showModal();
-    copy.focus();
+      reply(document.execCommand("copy") === true);
+    } finally {
+      field.value = "";
+      field.remove();
+      previousFocus?.focus({preventScroll: true});
+    }
   } catch (_) { reply(false); }
 }
 
@@ -434,7 +423,7 @@ terminal.addEventListener("keydown", handleTerminalKeydown);
    already been handled above, and diagnostics controls retain normal browser
    keyboard behavior. */
 window.addEventListener("keydown", event => {
-  if (event.target === terminal || event.target?.closest?.(".diagnostics, #clipboard-dialog")) return;
+  if (event.target === terminal || event.target?.closest?.(".diagnostics, .clipboard-buffer")) return;
   handleTerminalKeydown(event);
 });
 terminal.addEventListener("pointerdown", () => terminal.focus());
