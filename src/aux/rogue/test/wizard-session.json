@@ -1,0 +1,94 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "comparison": "markers",
+  "normalization": "Check password rejection, wizard entry/exit, startup authentication and shell recovery without comparing random dungeon layouts.",
+  "events": [
+    {
+      "after": "# ",
+      "pid": 1,
+      "text": "rogue; printf '__ROGUE_WIZARD_GAME_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "Level:",
+      "pid": 2,
+      "text": "+"
+    },
+    {
+      "after": "Wizard's Password:",
+      "pid": 2,
+      "text": "wrong\n"
+    },
+    {
+      "after": "Sorry",
+      "pid": 2,
+      "text": "+"
+    },
+    {
+      "after": "Wizard's Password:",
+      "pid": 2,
+      "text": "wizard\n"
+    },
+    {
+      "after": "suddenly as smart as Ken Arnold",
+      "pid": 2,
+      "text": "+"
+    },
+    {
+      "after": "wizard any more",
+      "pid": 2,
+      "text": "Qy"
+    },
+    {
+      "after": "[Press return to continue]",
+      "pid": 2,
+      "text": "\n"
+    },
+    {
+      "after": "# ",
+      "pid": 1,
+      "text": "rogue \"\"; printf '__ROGUE_WIZARD_BAD_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "wizard's password:",
+      "pid": 3,
+      "text": "wrong\n"
+    },
+    {
+      "after": "# ",
+      "pid": 1,
+      "text": "rogue \"\"; printf '__ROGUE_WIZARD_START_%s__\\n' \"$?\"\n"
+    },
+    {
+      "after": "wizard's password:",
+      "pid": 4,
+      "text": "wizard\n"
+    },
+    {
+      "after": "Level:",
+      "pid": 4,
+      "text": "Qy"
+    },
+    {
+      "after": "[Press return to continue]",
+      "pid": 4,
+      "text": "\n"
+    },
+    {
+      "after": "# ",
+      "pid": 1,
+      "text": "exit 0\n"
+    }
+  ],
+  "contains": [
+    "__ROGUE_WIZARD_GAME_0__\r\n",
+    "__ROGUE_WIZARD_BAD_1__\r\n",
+    "__ROGUE_WIZARD_START_0__\r\n",
+    "Sorry",
+    "suddenly as smart as Ken Arnold",
+    "wizard any more",
+    "welcome to dungeon #"
+  ],
+  "assertions": 1,
+  "exitStatus": 0,
+  "processes": 3
+}

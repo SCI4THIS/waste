@@ -38,7 +38,7 @@ ROGUE_SOURCES := armor.c chase.c command.c daemon.c daemons.c \
 	rings.c rip.c rooms.c save.c scrolls.c state.c sticks.c things.c vers.c \
 	weapons.c wizard.c xcrypt.c
 ROGUE_INPUTS := $(addprefix $(ROGUE_UPSTREAM)/,$(ROGUE_SOURCES) rogue.h extern.h score.h)
-ROGUE_PATCHES := $(ROGUE_DIR)/platform.patch $(ROGUE_DIR)/debug-dump.patch $(ROGUE_DIR)/rogue-waste.patch
+ROGUE_PATCHES := $(ROGUE_DIR)/platform.patch $(ROGUE_DIR)/debug-dump.patch $(ROGUE_DIR)/rogue-waste.patch $(ROGUE_DIR)/wizard-password.patch
 ROGUE_STAMP := $(ROGUE_BUILD)/src/.prepared
 ROGUE_OBJECTS := $(addprefix $(ROGUE_BUILD)/objects/,$(ROGUE_SOURCES:.c=.o))
 ROGUE_CFLAGS := -DHAVE_CONFIG_H \

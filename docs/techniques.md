@@ -2249,7 +2249,7 @@ WAST does not remove the need to test private state or the browser boundary:
 | Boundary | Retained verification |
 | --- | --- |
 | Language and guest-visible POSIX outcomes | Authored engine/package/system WAST and installed corpus execution |
-| Post-yield input, clocks, signals, fork/exec and terminal transcripts | Shared `tests/guest-session-*.wast`/JSON contracts; see [native sessions](native-guest-session.md) |
+| Post-yield input, clocks, signals, fork/exec and terminal transcripts | Shared `src/vfs/root/test/guest-session/*.{wast,json}` contracts with host checkers in `src/engine/test/guest-session/`; see [native sessions](native-guest-session.md) |
 | C API and ownership | Direct sanitizer gates for callback identity, decode-once instances, snapshot/replay, clone binding, page aliases, atomic exec transitions, handler cursors and teardown |
 | Compiler ABI | Compiled guest C probes for public header widths, offsets, alignment, varargs and callback signatures; do not translate away the compiler being checked |
 | Host adapters | Worker/DOM tests for message ordering, malformed controls, cancellation, FileReader, Blob downloads and allocation failures |

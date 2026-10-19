@@ -43,10 +43,14 @@
 /* #undef HAVE_PROCESS_H */
 /* #undef HAVE_SYS_IOCTL_H */
 
-/* No scoreboard, lockfile, wizard mode, load/user limits. */
+/* Enable the upstream wizard commands and password checks (password: wizard).
+ * Keep the hash explicit: the upstream default is an incomplete DES hash. */
+#define MASTER 1
+#define PASSWD "mTWFQjGrcrlb2"
+
+/* No scoreboard, lockfile or load/user limits. */
 /* #undef SCOREFILE */
 /* #undef LOCKFILE */
-/* #undef MASTER */
 /* #undef MAXLOAD */
 /* #undef MAXUSERS */
 /* #undef CHECKTIME */
