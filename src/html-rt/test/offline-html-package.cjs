@@ -7,11 +7,10 @@ const zlib = require("node:zlib");
 
 function readOfflinePackage(filename) {
   const html = fs.readFileSync(filename, "utf8");
-  const match = html.match(/var MANIFEST_URLS = \[([\s\S]*?)\];/);
-  if (!match) throw new Error(`no embedded archive in ${filename}`);
-  const urls = JSON.parse("[" + match[1] + "]");
-  const compressed = Buffer.concat(urls.map(url => {
-    const data = /^data:application\/octet-stream;base64,([A-Za-z0-9+/=]+)$/.exec(url);
+  const matches = [...html.matchAll(/MANIFEST_URLS\.push\("(data:[^"]+)"\)/g)];
+  if (!matches.length) throw new Error(`no embedded archive in ${filename}`);
+  const compressed = Buffer.concat(matches.map(match => {
+    const data = /^data:application\/octet-stream;base64,([A-Za-z0-9+/=]+)$/.exec(match[1]);
     if (!data) throw new Error("offline archive has an external/invalid URL");
     return Buffer.from(data[1], "base64");
   }));

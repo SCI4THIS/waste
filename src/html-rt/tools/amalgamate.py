@@ -87,24 +87,57 @@ def main() -> int:
             (terminal_renderer_js, '<script src="terminal/renderer.js"></script>')]:
         inline(tag, "")
 
-    # 5. Split manifest.tar.gz into chunks and base64 encode as data URIs
+    # 5. Emit the manifest and zlibaux as a sequence of small <script> tags.
+    # One <script>MANIFEST_URLS.push("data:…")</script> per chunk, each
+    # followed by a <script>__wasteSetLoad(…)</script> status poke. Browsers
+    # yield to the compositor between inline scripts, so the loading overlay
+    # paints after the first script instead of after the whole HTML download,
+    # and the status line updates as more bytes stream in.
     tar_data = args.manifest_tar_gz.read_bytes()
     chunk_size = args.chunk_size
     chunks = []
     for i in range(0, len(tar_data), chunk_size):
-        chunk = tar_data[i:i + chunk_size]
-        b64 = base64.b64encode(chunk).decode("ascii")
-        chunks.append(f'"data:application/octet-stream;base64,{b64}"')
+        chunks.append(base64.b64encode(tar_data[i:i + chunk_size]).decode("ascii"))
+    total = len(chunks)
 
-    manifest_urls = ",\n".join(chunks)
-    html = html.replace('"manifest.tar.gz"', manifest_urls)
-    print(f"  Manifest: {len(tar_data):,} bytes -> {len(chunks)} chunk(s)")
-
-    # 6. Base64 encode zlibaux.wasm as data URI
     zlibaux_data = args.zlibaux_wasm.read_bytes()
     zlibaux_b64 = base64.b64encode(zlibaux_data).decode("ascii")
-    zlibaux_uri = f"data:application/wasm;base64,{zlibaux_b64}"
-    html = html.replace('"zlibaux.wasm.b64"', f'"{zlibaux_uri}"')
+
+    progressive = []
+    progressive.append(
+        '<script>window.MANIFEST_URLS=[];'
+        'window.__wasteSetLoad=function(m){'
+        'var s=document.getElementById("loading-status");'
+        'if(s)s.textContent=m;'
+        '};'
+        f'__wasteSetLoad("Loading application (0 of {total} chunks)\\u2026");'
+        '</script>'
+    )
+    for i, b64 in enumerate(chunks):
+        progressive.append(
+            f'<script>MANIFEST_URLS.push("data:application/octet-stream;base64,{b64}");</script>'
+        )
+        progressive.append(
+            f'<script>__wasteSetLoad("Loading application ({i + 1} of {total} chunks)\\u2026");</script>'
+        )
+    progressive.append(
+        f'<script>var ZLIBAUX_URL="data:application/wasm;base64,{zlibaux_b64}";</script>'
+    )
+
+    original_block = (
+        '  <script>\n'
+        '  var MANIFEST_URLS = [\n'
+        '"manifest.tar.gz"\n'
+        '  ];\n'
+        '  var ZLIBAUX_URL =\n'
+        '"zlibaux.wasm.b64"\n'
+        '  ;\n'
+        '  </script>'
+    )
+    if html.count(original_block) != 1:
+        raise ValueError(f"expected manifest/zlib block in {index_html}")
+    html = html.replace(original_block, "\n".join(progressive))
+    print(f"  Manifest: {len(tar_data):,} bytes -> {total} progressive chunk(s)")
     print(f"  zlibaux.wasm: {len(zlibaux_data):,} bytes ({len(zlibaux_b64):,} chars base64)")
 
     # 7. Flip is_staging to false
