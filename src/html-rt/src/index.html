@@ -11,7 +11,7 @@
   <div id="loading-overlay">
     <div class="loading-content">
       <h2>WASTE Bash</h2>
-      <p id="loading-status">Initializing&hellip;</p>
+      <p id="loading-status" role="status">Loading&hellip;</p>
       <p id="loading-detail"></p>
     </div>
   </div>
@@ -66,8 +66,6 @@
       </details>
     </section>
   </main>
-  <script src="tarball.js"></script>
-  <script src="loader.js"></script>
   <script>
   var MANIFEST_URLS = [
 "manifest.tar.gz"
@@ -76,6 +74,8 @@
 "zlibaux.wasm.b64"
   ;
   </script>
+  <script src="tarball.js"></script>
+  <script src="loader.js"></script>
   <script src="terminal/model.js"></script>
   <script src="terminal/glf.js"></script>
   <script src="terminal/renderer.js"></script>

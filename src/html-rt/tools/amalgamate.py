@@ -33,6 +33,9 @@ def main() -> int:
                         help="Chunk size for base64 splitting (default: 1MB)")
     args = parser.parse_args()
 
+    if args.chunk_size <= 0:
+        parser.error("--chunk-size must be positive")
+
     page_dir = args.page_dir
     index_html = page_dir / "index.html"
     style_css = page_dir / "style.css"
@@ -87,12 +90,9 @@ def main() -> int:
             (terminal_renderer_js, '<script src="terminal/renderer.js"></script>')]:
         inline(tag, "")
 
-    # 5. Emit the manifest and zlibaux as a sequence of small <script> tags.
-    # One <script>MANIFEST_URLS.push("data:…")</script> per chunk, each
-    # followed by a <script>__wasteSetLoad(…)</script> status poke. Browsers
-    # yield to the compositor between inline scripts, so the loading overlay
-    # paints after the first script instead of after the whole HTML download,
-    # and the status line updates as more bytes stream in.
+    # 5. Keep the styled loading markup before the payload, and expose progress
+    # after each complete chunk as the HTML arrives. Painting is scheduled by
+    # the browser; separate inline scripts do not force a paint between chunks.
     tar_data = args.manifest_tar_gz.read_bytes()
     chunk_size = args.chunk_size
     chunks = []
@@ -110,7 +110,7 @@ def main() -> int:
         'var s=document.getElementById("loading-status");'
         'if(s)s.textContent=m;'
         '};'
-        f'__wasteSetLoad("Loading application (0 of {total} chunks)\\u2026");'
+        f'__wasteSetLoad("Loading application (0 of {total} chunks)\u2026");'
         '</script>'
     )
     for i, b64 in enumerate(chunks):
@@ -118,7 +118,7 @@ def main() -> int:
             f'<script>MANIFEST_URLS.push("data:application/octet-stream;base64,{b64}");</script>'
         )
         progressive.append(
-            f'<script>__wasteSetLoad("Loading application ({i + 1} of {total} chunks)\\u2026");</script>'
+            f'<script>__wasteSetLoad("Loading application ({i + 1} of {total} chunks)\u2026");</script>'
         )
     progressive.append(
         f'<script>var ZLIBAUX_URL="data:application/wasm;base64,{zlibaux_b64}";</script>'
