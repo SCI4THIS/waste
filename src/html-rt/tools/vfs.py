@@ -33,10 +33,10 @@ BLESSED_SYMLINKS = {
     "/root/test/wasm-spec/custom": "submodules/wasm-spec/test/custom",
 }
 COREUTILS = "true false pwd echo printf basename dirname cat chmod wc ls date sleep".split()
-COMMANDS = COREUTILS + ["bash", "vim", "clang", "wasm-ld", "lld-link", "rogue", "ldd", "upload", "download", "clipboard", "waste-probe"]
+COMMANDS = COREUTILS + ["bash", "openssl", "vim", "clang", "wasm-ld", "lld-link", "rogue", "ldd", "upload", "download", "clipboard", "waste-probe"]
 OPTIONAL_COMMANDS = ["waste-test"]
 BIN_COMMANDS = {"waste-probe", "waste-test"}
-COMPONENTS = COMMANDS + OPTIONAL_COMMANDS + ["libncurses", "libc", "launch", "app"]
+COMPONENTS = COMMANDS + OPTIONAL_COMMANDS + ["libncurses", "libc", "libcrypto", "launch", "app"]
 APP_FILES = {name: name for name in (
     "app.js", "worker.js", "test-suite.js", "style.css", "terminal/model.js",
     "terminal/glf.js", "terminal/renderer.js", "terminal/render-test.js")}
@@ -98,7 +98,8 @@ console.log(JSON.stringify({imports:WebAssembly.Module.imports(m),exports:WebAss
         raise ValueError(f"Asyncify is forbidden: {source}")
     exports = {e["name"]: e["kind"] for e in contract["exports"]}
     required = (["malloc", "free", "memcpy", "strcpy", "printf", "dlopen", "dlsym", "dlclose"]
-                if library == "libc" else ["initscr", "endwin", "wrefresh"] if library else ["_start"])
+                if library == "libc" else ["SHA256", "RAND_bytes", "EVP_EncryptInit_ex", "X509_new"]
+                if library == "libcrypto" else ["initscr", "endwin", "wrefresh"] if library else ["_start"])
     if any(exports.get(n) != "function" for n in required):
         raise ValueError(f"missing required function exports {required}: {source}")
     return {"imports": sorted(names), "required_exports": required}
@@ -324,11 +325,11 @@ def install(root, legacy=None, component=None, source=None):
             if not src.is_file():
                 raise ValueError(f"missing compiler result: {src}")
             if name != "launch":
-                wasm_contract(src, name if name in ("libc", "libncurses") else False)
+                wasm_contract(src, name if name in ("libc", "libncurses", "libcrypto") else False)
             paths = (["/lib/" + name + ".so.wasm", "/usr/lib/" + name + ".so.wasm"]
-                     if name in ("libc", "libncurses") else ["/usr/share/waste/launch.wast"]
+                     if name in ("libc", "libncurses", "libcrypto") else ["/usr/share/waste/launch.wast"]
                      if name == "launch" else [command_path(name)])
-            changes.extend((path, src.read_bytes(), 0o644 if name in ("libc", "libncurses", "launch") else 0o755)
+            changes.extend((path, src.read_bytes(), 0o644 if name in ("libc", "libncurses", "libcrypto", "launch") else 0o755)
                            for path in paths)
     publish(root, changes)
 

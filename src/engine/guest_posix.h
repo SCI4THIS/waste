@@ -11,6 +11,8 @@ typedef struct guest_posix_platform {
     int32_t (*read)(void *, int32_t, void *, uint32_t);
     int32_t (*write)(void *, int32_t, const void *, uint32_t);
     void (*trace)(void *, const char *);
+    /* Fill host-owned bytes with cryptographic entropy, or negative errno. */
+    int32_t (*random)(void *, void *, uint32_t);
 } guest_posix_platform;
 
 int guest_posix_host_resolver(const char *module, const char *name,

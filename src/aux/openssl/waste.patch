@@ -1,0 +1,30 @@
+--- a/providers/implementations/rands/seeding/rand_unix.c
++++ b/providers/implementations/rands/seeding/rand_unix.c
+@@ -11,6 +11,9 @@
+ #define _GNU_SOURCE
+ #endif
+ #include "internal/e_os.h"
++#ifdef OPENSSL_SYS_WASTE
++#include <sys/random.h>
++#endif
+ #include <stdio.h>
+ #include "internal/cryptlib.h"
+ #include <openssl/rand.h>
+@@ -329,6 +332,9 @@
+  */
+ static ssize_t syscall_random(void *buf, size_t buflen)
+ {
++#ifdef OPENSSL_SYS_WASTE
++    return getrandom(buf, buflen, 0);
++#else
+     /*
+      * Note: 'buflen' equals the size of the buffer which is used by the
+      * get_entropy() callback of the RAND_DRBG. It is roughly bounded by
+@@ -402,6 +408,7 @@
+     errno = ENOSYS;
+     return -1;
+ #endif
++#endif /* OPENSSL_SYS_WASTE */
+ }
+ #endif /* defined(OPENSSL_RAND_SEED_GETRANDOM) */
+ 

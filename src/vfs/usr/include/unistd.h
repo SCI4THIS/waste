@@ -30,6 +30,7 @@ extern char **environ;
 int access(const char *, int);
 int eaccess(const char *, int);
 int faccessat(int, const char *, int, int);
+int getentropy(void *, size_t);
 int close(int);
 _Noreturn void _exit(int);
 int dup(int);
@@ -81,6 +82,8 @@ int pause(void) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, 
 int getpid(void);
 uid_t getuid(void);
 uid_t geteuid(void);
+gid_t getgid(void);
+gid_t getegid(void);
 pid_t fork(void);
 pid_t vfork(void) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 int getdtablesize(void);

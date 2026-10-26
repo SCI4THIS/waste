@@ -13,7 +13,7 @@ const screen = scenario.events.some(event => event.screen)
   const floating = (p, n) => Number(Buffer.from(new Uint8Array(exp.memory.buffer, p, n)).toString());
   const {instance} = await WebAssembly.instantiate(fs.readFileSync(process.argv[2]), {waste_host: {
     strtod: floating, strtof: floating, posix_open: () => -1,
-    posix_close: () => 0, posix_read: () => -1, wall_clock_ms: () => Date.now(),
+    posix_close: () => 0, posix_read: () => -1, random_bytes: () => -38, wall_clock_ms: () => Date.now(),
     posix_write: (_fd, p, n) => {
       const text = Buffer.from(new Uint8Array(exp.memory.buffer, p, n)).toString();
       output += text;

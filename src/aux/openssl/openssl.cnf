@@ -1,0 +1,20 @@
+# Minimal offline defaults; commands may supply their own -config file.
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = providers
+
+[providers]
+default = default_provider
+
+[default_provider]
+activate = 1
+
+[req]
+distinguished_name = req_dn
+default_bits = 2048
+default_md = sha256
+
+[req_dn]
+commonName = Common Name
+commonName_default = localhost

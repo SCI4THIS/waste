@@ -466,7 +466,7 @@ generate_c_engine_tests() {
 
 # ── Auxiliary utility build helpers ──────────────────────────────────────
 
-AUX_UTILITIES=(libc true false pwd echo printf basename dirname cat chmod wc ls date sleep bash rogue libncurses ldd upload download clipboard vim clang lld-link)
+AUX_UTILITIES=(libc libcrypto openssl true false pwd echo printf basename dirname cat chmod wc ls date sleep bash rogue libncurses ldd upload download clipboard vim clang lld-link)
 AUX_STAGING="$REPO_ROOT/src/vfs"
 AUX_LOG="$LOG_DIR/aux-build.log"
 
@@ -475,6 +475,7 @@ aux_staged_path() {
   local utility="$1"
   case "$utility" in
     libc)       printf '%s' "$AUX_STAGING/lib/libc.so.wasm" ;;
+    libcrypto)  printf '%s' "$AUX_STAGING/lib/libcrypto.so.wasm" ;;
     libncurses) printf '%s' "$AUX_STAGING/lib/libncurses.so.wasm" ;;
     *)          printf '%s' "$AUX_STAGING/usr/bin/${utility}" ;;
   esac
@@ -531,6 +532,12 @@ build_single_aux() {
         return 1
       fi
       ;;
+    libcrypto|openssl)
+      if ! have_command perl || ! have_command llvm-ar || ! have_command llvm-ranlib || ! have_command patch; then
+        show_message "Aux build" "Perl, llvm-ar, llvm-ranlib, and patch are required for OpenSSL."
+        return 1
+      fi
+      ;;
     libc|ldd|upload|download|clipboard) ;;
     *)
       if ! have_command patch || ! have_command wasm-opt; then
@@ -549,8 +556,11 @@ build_single_aux() {
     return 1
   fi
   local aux_out="$REPO_ROOT/build/aux/${utility}/${utility}.wasm"
-  if [[ "$utility" == libc || "$utility" == libncurses ]]; then
+  if [[ "$utility" == libc || "$utility" == libncurses || "$utility" == libcrypto ]]; then
     aux_out="$REPO_ROOT/build/aux/${utility}/${utility}.so.wasm"
+  fi
+  if [[ "$utility" == libcrypto ]]; then
+    aux_out="$REPO_ROOT/build/aux/openssl/libcrypto.so.wasm"
   fi
   printf 'Installed %s → %s\n' "$aux_out" "$(aux_staged_path "$utility")"
 }

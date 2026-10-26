@@ -140,3 +140,16 @@ intmax_t wcstoimax(const wchar_t *text, wchar_t **end, int base) {
 uintmax_t wcstoumax(const wchar_t *text, wchar_t **end, int base) {
   return unsigned_value(parse_wide(text, end, base, UINTMAX_MAX, 0));
 }
+
+/* wasm32 compiler-rt ABI for a 128-bit left shift: hidden result pointer,
+ * low/high words, then the shift. Avoid generating a recursive i128 libcall. */
+void __ashlti3(uint64_t *out, uint64_t low, uint64_t high, int shift) {
+    if (shift == 0) { out[0] = low; out[1] = high; }
+    else if ((unsigned int)shift < 64) {
+        out[0] = low << shift;
+        out[1] = (high << shift) | (low >> (64 - shift));
+    } else if ((unsigned int)shift < 128) {
+        out[0] = 0;
+        out[1] = low << (shift - 64);
+    } else { out[0] = out[1] = 0; }
+}

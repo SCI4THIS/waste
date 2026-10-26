@@ -423,6 +423,12 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
     posix_read: posixRead,
     posix_write: posixWrite,
     wall_clock_ms: () => Date.now(),
+    random_bytes: (ptr, count) => {
+      try {
+        globalThis.crypto.getRandomValues(new Uint8Array(engineMemory.buffer, ptr, count));
+        return count;
+      } catch (_) { return -5; }
+    },
   }};
   const {instance} = await WebAssembly.instantiate(wasmBytes, imports);
   exp = instance.exports;

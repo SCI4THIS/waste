@@ -58,8 +58,14 @@ static int32_t browser_write(void *data, int32_t fd, const void *bytes, uint32_t
 static void browser_trace(void *data, const char *event) {
     (void)data; waste_browser_record_transition(event);
 }
+__attribute__((import_module("waste_host"), import_name("random_bytes")))
+extern int32_t waste_host_random_bytes(void *, uint32_t);
+static int32_t browser_random(void *data, void *bytes, uint32_t length) {
+    (void)data;
+    return waste_host_random_bytes(bytes, length);
+}
 static const guest_posix_platform browser_platform = {
-    browser_open, browser_close, browser_read, browser_write, browser_trace
+    browser_open, browser_close, browser_read, browser_write, browser_trace, browser_random
 };
 int browser_host_resolver(const char *module, const char *name, void *context, native_host_binding *out) {
     native_store *store = context;

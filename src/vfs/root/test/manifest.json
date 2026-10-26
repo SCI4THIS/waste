@@ -6,8 +6,9 @@
       "aux/clang": 1,
       "aux/clipboard": 2,
       "aux/clipboard/browser": 1,
-      "aux/libc": 27,
+      "aux/libc": 29,
       "aux/lld-link": 1,
+      "aux/openssl": 2,
       "aux/sleep": 1,
       "aux/vim": 1,
       "diy-posix-test": 6,
@@ -85,6 +86,7 @@
       "system/cli-runtime": 7,
       "system/cli-runtime/binary-handler": 1,
       "system/devices": 1,
+      "system/entropy": 1,
       "system/libc": 10,
       "system/scheduling": 5,
       "system/wast": 3,
@@ -102,7 +104,7 @@
       "wasm-spec/custom/name": 1
     },
     "supported": 293,
-    "tests": 439
+    "tests": 444
   },
   "files": [
     {
@@ -211,6 +213,13 @@
       "source": "src/vfs/root/test/aux/libc/entropy-messages.wast"
     },
     {
+      "path": "/root/test/aux/libc/entropy-sockets.wast",
+      "role": "test-input",
+      "sha256": "49d58f3c2158c7ff530d9fd023d71d97a599741febea71e62b52e38ada70d851",
+      "size": 2032,
+      "source": "src/vfs/root/test/aux/libc/entropy-sockets.wast"
+    },
+    {
       "path": "/root/test/aux/libc/fenv.wast",
       "role": "test-input",
       "sha256": "3980449424d32a49c85fb9e59322bd4a9aee461b3a2c41d5a9f518f217edc9c7",
@@ -230,6 +239,13 @@
       "sha256": "18c6f264e19f7ea722f39051f03b99ccb79004327c78221f8a5ff16391a3422b",
       "size": 23522,
       "source": "src/vfs/root/test/aux/libc/integer-conversion.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/integer-shift.wast",
+      "role": "test-input",
+      "sha256": "c42a8d99595559c71065c742c755f5d8a269e7f1096246fb529b01c2fe083474",
+      "size": 1246,
+      "source": "src/vfs/root/test/aux/libc/integer-shift.wast"
     },
     {
       "path": "/root/test/aux/libc/locale-wide.wast",
@@ -363,6 +379,20 @@
       "sha256": "cd4194c1fd98162d543668fa31d4ff22c34c9c6b40c0e4d7aad1ae9b38692f2a",
       "size": 11775,
       "source": "src/vfs/root/test/aux/lld-link/installed.wast"
+    },
+    {
+      "path": "/root/test/aux/openssl/cli.wast",
+      "role": "test-input",
+      "sha256": "45fa87aafd5175e6a6236fbae96e23e2598635d4083202b53feb4799ef961406",
+      "size": 4149,
+      "source": "src/vfs/root/test/aux/openssl/cli.wast"
+    },
+    {
+      "path": "/root/test/aux/openssl/library.wast",
+      "role": "test-input",
+      "sha256": "f827a95c5d6bd12e1271e44ad057d30013d2165f60d6fc8127c8b152bfb61172",
+      "size": 1734,
+      "source": "src/vfs/root/test/aux/openssl/library.wast"
     },
     {
       "path": "/root/test/aux/sleep/nanosleep.wast",
@@ -1273,6 +1303,13 @@
       "sha256": "66498d0ff5712179d61f0115508baa61ee306c41a0f120a21e4ff9925c4b4ff3",
       "size": 12930,
       "source": "src/vfs/root/test/system/devices/null.wast"
+    },
+    {
+      "path": "/root/test/system/entropy/getrandom.wast",
+      "role": "test-input",
+      "sha256": "63e512a0c37d751d23737c65748df06b0d64c39d97ac71f3b1de0e1ed3733c2f",
+      "size": 1005,
+      "source": "src/vfs/root/test/system/entropy/getrandom.wast"
     },
     {
       "path": "/root/test/system/libc/environment-boundaries.wast",
@@ -3240,7 +3277,7 @@
       "timeoutScope": "existing dashboard has no per-test deadline"
     }
   },
-  "selection_sha256": "f216acf081e6131b859643b2911ec55a5d97b19dfdb2336b72797e6c2e4e61c6",
+  "selection_sha256": "9020fb4322149cd403953aaa718672378bd3929a1a50c9f628028ffd4dd8823d",
   "sourceInputs": [
     {
       "hostOnly": true,
@@ -12150,6 +12187,33 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "aux/libc/entropy-sockets.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 2032,
+        "sourcePath": "src/vfs/root/test/aux/libc/entropy-sockets.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/entropy-sockets.wast",
+      "name": "entropy-sockets.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/entropy-sockets.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/vfs/root/test/aux/libc/entropy-sockets.wast",
+        "sha256": "49d58f3c2158c7ff530d9fd023d71d97a599741febea71e62b52e38ada70d851",
+        "size": 2032
+      },
+      "spec_sha256": "5fd5567aa430a7df641b532e954244cc25eee728fd90c784123ce714548c8658",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "aux/libc/fenv.wast",
         "mode": "wast-stream",
         "sourceBytes": 6209,
@@ -12223,6 +12287,33 @@
         "size": 23522
       },
       "spec_sha256": "7d0578d98be9630c23aa564948e7c508f82cf946b49d9eff1a795c63282b0032",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/integer-shift.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 1246,
+        "sourcePath": "src/vfs/root/test/aux/libc/integer-shift.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/integer-shift.wast",
+      "name": "integer-shift.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/integer-shift.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/vfs/root/test/aux/libc/integer-shift.wast",
+        "sha256": "c42a8d99595559c71065c742c755f5d8a269e7f1096246fb529b01c2fe083474",
+        "size": 1246
+      },
+      "spec_sha256": "4fcc4da3e889798814c8022a38ae2821d1d59ec0d864f38bfdb5d6d091eb0258",
       "suite": "aux",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
@@ -12736,6 +12827,60 @@
         "size": 11775
       },
       "spec_sha256": "596930cd0cfeb45303534eac7703b08aa1c488fcc394af8e23e3aad07328ec9f",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/openssl/cli.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4149,
+        "sourcePath": "src/vfs/root/test/aux/openssl/cli.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/openssl",
+      "id": "aux/openssl/cli.wast",
+      "name": "cli.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/openssl/cli.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/vfs/root/test/aux/openssl/cli.wast",
+        "sha256": "45fa87aafd5175e6a6236fbae96e23e2598635d4083202b53feb4799ef961406",
+        "size": 4149
+      },
+      "spec_sha256": "f8750551e16dbb009760e5aee01fb4530738e0240c31a2a3676e1b710c24266b",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/openssl/library.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 1734,
+        "sourcePath": "src/vfs/root/test/aux/openssl/library.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/openssl",
+      "id": "aux/openssl/library.wast",
+      "name": "library.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/openssl/library.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/vfs/root/test/aux/openssl/library.wast",
+        "sha256": "f827a95c5d6bd12e1271e44ad057d30013d2165f60d6fc8127c8b152bfb61172",
+        "size": 1734
+      },
+      "spec_sha256": "3b75281cbb974af91f9f765423ea6172b0a370d332f02d34a9bceeb57283cf79",
       "suite": "aux",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
@@ -15247,6 +15392,33 @@
         "size": 12930
       },
       "spec_sha256": "b47bee36362dcd9098344768e62e2965e65972e4c486edfa9b879d85d6db9408",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/entropy/getrandom.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 1005,
+        "sourcePath": "src/vfs/root/test/system/entropy/getrandom.wast"
+      },
+      "expectFailure": false,
+      "group": "system/entropy",
+      "id": "system/entropy/getrandom.wast",
+      "name": "getrandom.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/entropy/getrandom.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/vfs/root/test/system/entropy/getrandom.wast",
+        "sha256": "63e512a0c37d751d23737c65748df06b0d64c39d97ac71f3b1de0e1ed3733c2f",
+        "size": 1005
+      },
+      "spec_sha256": "25ac38706242dd984c0918315180c1e2c51e32d00c90e12d890ce1624a52b62b",
       "suite": "system",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"

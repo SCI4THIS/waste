@@ -36,6 +36,7 @@ int mbscasecmp(const char *, const char *);
 char *strchr(const char *, int);
 char *strnul(const char *);
 char *strrchr(const char *, int);
+char *strpbrk(const char *, const char *);
 char *strstr(const char *, const char *);
 char *strdup(const char *);
 char *strtok(char *, const char *);

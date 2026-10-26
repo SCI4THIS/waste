@@ -78,7 +78,7 @@ const self = {postMessage(message) {
   }
   if (message.type === "done") done = message;
 }};
-vm.runInContext(page.read("root/app/worker.js").toString(), vm.createContext({self,
+vm.runInContext(page.read("root/app/worker.js").toString(), vm.createContext({self, crypto: require("node:crypto").webcrypto,
   WebAssembly, Uint8Array, DataView, TextDecoder, TextEncoder, Promise, Math,
   Number, String, Date, Error, setTimeout, clearTimeout, console,
   atob: value => Buffer.from(value, "base64").toString("binary")}));

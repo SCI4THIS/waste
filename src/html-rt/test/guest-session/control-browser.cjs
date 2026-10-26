@@ -15,7 +15,7 @@ const bytes = value => value.buffer.slice(value.byteOffset, value.byteOffset + v
   const {instance} = await WebAssembly.instantiate(wasm, {waste_host: {
     strtod: () => 0, strtof: () => 0, posix_open: () => -1,
     posix_close: () => 0, posix_read: () => -1, posix_write: (_fd, _p, n) => n,
-    wall_clock_ms: () => ++clock
+    random_bytes: () => -38, wall_clock_ms: () => ++clock
   }});
   exp = instance.exports;
   const allocate = data => {

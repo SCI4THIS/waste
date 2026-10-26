@@ -145,3 +145,5 @@ $(BUILD_DIR)/sleep/nanosleep-runtime.o: $(AUX_DIR)/sleep/nanosleep-runtime.c $(S
 test-sleep: install-sleep aux-test-runner
 	bash "$(AUX_DIR)/run-wast-tests.sh" "$(REPO_ROOT)" "$(VFS_ROOT)" sleep \
 		"$(AUX_DIR)/sleep/test/system" "$(abspath $(BUILD_DIR)/sleep/tests)" "$(abspath $(WASM_RUNNER))"
+
+include $(AUX_DIR)/openssl/openssl.mk

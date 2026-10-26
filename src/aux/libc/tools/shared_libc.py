@@ -1,4 +1,4 @@
-"""Assign guest function imports to the installed, signature-checked libc.
+"""Assign guest function imports to a signature-checked shared provider.
 
 Memory, table, relocation globals and kernel imports retain their namespaces.
 The binary rewrite preserves function indices and every non-import section.
@@ -26,8 +26,8 @@ def name_bytes(value):
     return leb(len(encoded)) + encoded
 
 
-def rewrite(path, provider, output=None, kernel_functions=()):
-    """Route matching env functions to libc; reject incompatible guest ABIs."""
+def rewrite(path, provider, output=None, kernel_functions=(), namespace="libc"):
+    """Route matching env functions to a provider; reject incompatible ABIs."""
     path, provider = Path(path), Path(provider)
     signatures = inspect(path)["imports"]
     exports = inspect(provider)["exports"]
@@ -63,8 +63,8 @@ def rewrite(path, provider, output=None, kernel_functions=()):
                 if (kind == 0 and module == "env" and name in exports
                         and name not in kernel_functions):
                     if signatures[module + ":" + name] != exports[name]:
-                        raise ValueError(f"{path}: incompatible libc signature for {name}")
-                    module = "libc"
+                        raise ValueError(f"{path}: incompatible {namespace} signature for {name}")
+                    module = namespace
                     rewritten += 1
                 rebuilt.extend(name_bytes(module) + name_bytes(name) + bytes([kind]) + descriptor)
             if section.at != len(section.data):
@@ -110,6 +110,6 @@ if __name__ == "__main__":
                     if name.isascii() and name.isidentifier()))
         print(f"Wrote provider function answers to {args.configure_cache}")
     elif args.rewrite:
-        print(f"Assigned {rewrite(args.rewrite, args.provider, args.output)} shared libc imports")
+        print(f"Assigned {rewrite(args.rewrite, args.provider, args.output, namespace=args.namespace)} {args.namespace} imports")
     else:
         print(f"Verified {check_imports(args.check_imports, args.provider, args.namespace)} {args.namespace} imports")

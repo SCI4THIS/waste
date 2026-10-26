@@ -45,7 +45,7 @@ async function wait(predicate) {
   ({instance: {exports: exp}} = await WebAssembly.instantiate(page.read("waste-wast.wasm"),
     {waste_host: {strtod: () => 0, strtof: () => 0, posix_open: () => -1,
       posix_close: () => 0, posix_read: () => -1, posix_write: (_fd, _p, n) => n,
-      wall_clock_ms: () => Date.now()}}));
+      random_bytes: () => -38, wall_clock_ms: () => Date.now()}}));
   const allocate = bytes => {
     const p = exp.waste_wast_alloc(bytes.length);
     assert(p);

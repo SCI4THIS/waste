@@ -368,3 +368,5 @@ long double wcstold(const wchar_t *text, wchar_t **end) {
   union { uint64_t bits[2]; long double value; } result = {{value.low, value.high}};
   return result.value;
 }
+
+double atof(const char *text) { return strtod(text, 0); }

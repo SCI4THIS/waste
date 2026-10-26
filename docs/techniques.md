@@ -68,6 +68,24 @@ interactive screen and return to Bash in both runtimes. Executable access
 alone cannot verify that an installed module's imports resolve or its entry
 function runs. See [the Vim package notes](../src/aux/vim/README.md).
 
+## OpenSSL Guest Package
+
+`make -C src/aux openssl libcrypto` stages upstream OpenSSL under
+`build/aux/openssl`, configures the Wasm profile and builds archives using the
+upstream Makefile. Final PIC links produce the shared libcrypto and CLI;
+shared_libc.py assigns and signature-checks the libc and libcrypto namespaces.
+`install-openssl` explicitly publishes the command, library, public headers,
+configuration and license. The library install preserves unchanged headers so
+publishing does not invalidate cross-build configuration. The installed guest
+SDK is always used without host-header fallback.
+
+`test-openssl` runs setup commands in guest Bash, records exit statuses in guest
+files, then runs canonical package WAST assertions. Keep process creation in
+Bash setup: the `/bin/wast` child handler cannot itself execute nested fork/exec
+transitions. The shared provider test explicitly dlopens libcrypto before
+importing its namespace in a later module. See the package README for native
+and production-worker verification and supported capabilities.
+
 ## Shared Guest Libc Build
 
 `make -C src/aux libc` compiles the production guest library directly with Clang

@@ -1133,3 +1133,21 @@ one-shot errno.  JavaScript sees only terminal/select/input waits: internal
 fork, exec, exit, wake, and process-selection transitions never become browser
 callbacks.  This design does not use Asyncify, JSPI, native stack copying, or
 `setjmp`/`longjmp`.
+
+## Guest OpenSSL and entropy
+
+`src/aux/openssl` stages OpenSSL 3.5 from its read-only submodule. The guest
+CLI imports shared `libcrypto.so.wasm` and libc, with libssl code linked into
+the CLI. Its profile supports filesystem cryptography and certificates and
+disables socket commands, threads, async jobs and dynamic provider modules.
+Headers, configuration, license and binaries are explicitly installed into the
+VFS; HTML packaging consumes those installed snapshots.
+
+`waste_kernel.getrandom_v1(buffer, count, flags)` validates/prepares the full
+writable guest range before invoking the runtime's cryptographic entropy
+capability in bounded host buffers. Native runtime adapters use OS getrandom;
+browser workers use Web Crypto getRandomValues. Missing/failed capabilities
+return negative errno; guest libc translates these to -1/errno. There is no
+PRNG fallback. `getentropy` limits requests to 256 bytes. Compatibility
+rand/arc4random remain deterministic and are not security interfaces. Raw socket
+ABI stubs report EOPNOTSUPP without accessing caller buffers.

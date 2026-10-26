@@ -30,7 +30,7 @@ const {readOfflinePackage} = require("./offline-html-package.cjs");
   }
   const {instance} = await WebAssembly.instantiate(page.read("waste-wast.wasm"), {waste_host:{
     strtod:floating, strtof:floating, posix_open:()=>-1, posix_close:()=>0,
-    posix_read:()=>-1, posix_write:(_fd, _ptr, length)=>length, wall_clock_ms:()=>Date.now(),
+    posix_read:()=>-1, posix_write:(_fd, _ptr, length)=>length, wall_clock_ms:()=>Date.now(), random_bytes:()=>-38,
   }});
   exp = instance.exports;
   function stage(bytes, invoke) {

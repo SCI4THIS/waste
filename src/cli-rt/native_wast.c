@@ -6,6 +6,7 @@
 #include "wasm/decode.h"
 #include "runtime_internal.h"
 #include "guest_posix.h"
+#include "native_entropy.h"
 #include "process_driver.h"
 #include "lib/include/kernel.h"
 #include "lib/include/select.h"
@@ -199,7 +200,7 @@ static void native_platform_trace(void *data, const char *event) {
 static const guest_posix_platform native_platform = {
     native_platform_open, native_platform_close,
     native_platform_read, native_platform_write,
-    native_platform_trace,
+    native_platform_trace, native_entropy,
 };
 
 static int cli_host_resolver(const char *module, const char *name,

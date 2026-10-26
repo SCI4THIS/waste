@@ -205,6 +205,12 @@ async function runWastScript(wasmBytes, testSpec) {
     posix_read: () => 0,
     posix_write: (descriptor, ptr, count) => count,
     wall_clock_ms: () => Date.now(),
+    random_bytes: (ptr, count) => {
+      try {
+        globalThis.crypto.getRandomValues(new Uint8Array(engineMemory.buffer, ptr, count));
+        return count;
+      } catch (_) { return -5; }
+    },
   }};
   if (!cachedEngineModule) {
     const bytes = wasmBytes ||

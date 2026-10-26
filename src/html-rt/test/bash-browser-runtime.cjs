@@ -1094,6 +1094,7 @@ const self = {
 
 const context = vm.createContext({
   self,
+  crypto: require("node:crypto").webcrypto,
   WebAssembly,
   Uint8Array,
   DataView,

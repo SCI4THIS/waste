@@ -1112,6 +1112,44 @@ static exec_status guest_posix_i32_zero(void *data, const wasm_value *args,
     return guest_posix_result(0, results, result_count);
 }
 
+/* Bounded transfers keep guest pointers out of platform adapters. */
+static exec_status guest_posix_getrandom_v1(
+        void *data, const wasm_value *args, int arg_count,
+        wasm_value *results, int *result_count, exec_error *error,
+        const waste_exec_engine *caller) {
+    native_store *store = data;
+    uint8_t bytes[256];
+    uint32_t count, at = 0;
+    (void)error;
+    if (arg_count != 3 || ((uint32_t)args[2].i32 & ~3u))
+        return guest_posix_result(-POSIX_EINVAL, results, result_count);
+    count = (uint32_t)args[1].i32;
+    if (count > INT32_MAX) count = INT32_MAX;
+    if (!count) return guest_posix_result(0, results, result_count);
+    if (!caller || !caller->memory || !args[0].i32)
+        return guest_posix_result(-POSIX_EFAULT, results, result_count);
+    exec_error memory_error = {0};
+    if (exec_memory_prepare_write(caller->memory, (uint32_t)args[0].i32,
+                                  count, &memory_error) != EXEC_OK)
+        return guest_posix_result(memory_error.memory_fault ? -POSIX_EFAULT : -POSIX_ENOMEM,
+                                  results, result_count);
+    if (!store || !store->guest_platform || !store->guest_platform->random)
+        return guest_posix_result(-POSIX_ENOSYS, results, result_count);
+    while (at < count) {
+        uint32_t n = count - at;
+        if (n > sizeof(bytes)) n = sizeof(bytes);
+        int32_t result = store->guest_platform->random(store->guest_platform_data, bytes, n);
+        if (result <= 0 || (uint32_t)result > n)
+            return guest_posix_result(at ? (int32_t)at : result < 0 ? result : -POSIX_EIO,
+                                      results, result_count);
+        if (!guest_posix_write_guest(caller->memory, (uint64_t)(uint32_t)args[0].i32 + at,
+                                     bytes, (uint32_t)result))
+            return guest_posix_result(at ? (int32_t)at : -POSIX_EFAULT, results, result_count);
+        at += (uint32_t)result;
+    }
+    return guest_posix_result((int32_t)at, results, result_count);
+}
+
 static exec_status guest_posix_realtime_v1(
         void *data, const wasm_value *args, int arg_count,
         wasm_value *results, int *result_count, exec_error *error,
@@ -3571,6 +3609,7 @@ static exec_host_func guest_posix_function(const char *module,
         if (strcmp(name, "openat_v1") == 0) return guest_posix_openat_v1;
         if (strcmp(name, "fstatat_v1") == 0) return guest_posix_fstatat_v1;
         if (strcmp(name, "fstatat_v2") == 0) return guest_posix_fstatat_v2;
+        if (strcmp(name, "getrandom_v1") == 0) return guest_posix_getrandom_v1;
         if (strcmp(name, "realtime_v1") == 0) return guest_posix_realtime_v1;
         if (strcmp(name, "clock_gettime_v1") == 0) return guest_posix_clock_gettime_v1;
         if (strcmp(name, "select_v1") == 0) return guest_posix_select;

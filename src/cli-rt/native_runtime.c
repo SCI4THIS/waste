@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "native_runtime.h"
 #include "guest_posix.h"
+#include "native_entropy.h"
 #include "process_driver.h"
 #include "native_vfs.h"
 #include "native_terminal.h"
@@ -162,7 +163,7 @@ static int32_t session_write(void *opaque, int32_t descriptor,
 }
 
 static const guest_posix_platform session_platform = {
-    NULL, NULL, NULL, session_write, NULL
+    NULL, NULL, NULL, session_write, NULL, native_entropy
 };
 
 static uint32_t session_control_word(const uint8_t *bytes) {

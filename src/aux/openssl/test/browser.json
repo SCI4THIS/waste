@@ -1,0 +1,16 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "assertions": 37,
+  "exitStatus": 0,
+  "hostTimeoutMs": 600000,
+  "events": [
+    {
+      "after": "# ",
+      "text": ". /root/test/aux/openssl/setup.sh\n"
+    },
+    {
+      "after": "# ",
+      "text": "status=0; /bin/wast --verbose /root/test/aux/openssl/library.wast || status=1; /bin/wast --verbose /root/test/aux/openssl/cli.wast || status=1; /bin/wast --verbose /root/test/aux/libc/entropy-sockets.wast || status=1; /bin/wast --verbose /root/test/system/entropy/getrandom.wast || status=1; /bin/wast --verbose /root/test/aux/libc/integer-shift.wast || status=1; exit \"$status\"\n"
+    }
+  ]
+}

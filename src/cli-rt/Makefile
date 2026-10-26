@@ -65,7 +65,7 @@ SAN_ENGINE_OBJECTS := $(patsubst $(ENGINE_DIR)/%.c,$(SAN_OBJECT_DIR)/engine/%.o,
 NATIVE_RUNTIME_OBJECTS := $(NATIVE_OBJECT_DIR)/runtime/native_runtime.o $(NATIVE_OBJECT_DIR)/runtime/native_vfs.o $(NATIVE_OBJECT_DIR)/runtime/native_wast.o $(NATIVE_OBJECT_DIR)/runtime/native_terminal.o
 SAN_RUNTIME_OBJECTS := $(SAN_OBJECT_DIR)/runtime/native_runtime.o $(SAN_OBJECT_DIR)/runtime/native_vfs.o $(SAN_OBJECT_DIR)/runtime/native_wast.o $(SAN_OBJECT_DIR)/runtime/native_terminal.o
 SAN_CFLAGS := -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-omit-frame-pointer
-NATIVE_RUNTIME_HEADERS := native_runtime.h native_input.h application.h guest_suite.h native_wast.h native_terminal.h
+NATIVE_RUNTIME_HEADERS := native_entropy.h native_runtime.h native_input.h application.h guest_suite.h native_wast.h native_terminal.h
 
 $(NATIVE_OBJECT_DIR)/engine/%.o: $(ENGINE_DIR)/%.c $(ENGINE_HEADERS)
 	mkdir -p $(@D)
