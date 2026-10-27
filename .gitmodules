@@ -28,3 +28,9 @@
 [submodule "submodules/openssl"]
 	path = submodules/openssl
 	url = https://github.com/openssl/openssl
+[submodule "submodules/gawk"]
+	path = submodules/gawk
+	url = https://git.savannah.gnu.org/git/gawk.git
+[submodule "submodules/m4"]
+	path = submodules/m4
+	url = https://git.savannah.gnu.org/git/m4.git
