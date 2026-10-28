@@ -34,3 +34,6 @@
 [submodule "submodules/m4"]
 	path = submodules/m4
 	url = https://git.savannah.gnu.org/git/m4.git
+[submodule "submodules/graphviz"]
+	path = submodules/graphviz
+	url = https://gitlab.com/graphviz/graphviz.git
