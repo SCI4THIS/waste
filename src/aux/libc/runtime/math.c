@@ -87,8 +87,10 @@ float frexpf(float x, int *exp) {
 
 #ifdef __wasm__
 double copysign(double x, double y) { return __builtin_copysign(x, y); }
+#ifndef WASTE_SHARED_LIBC
 double fmin(double a, double b) { return __builtin_fmin(a, b); }
 double fmax(double a, double b) { return __builtin_fmax(a, b); }
+#endif
 #else
 double copysign(double x, double y) {
     union { double d; uint64_t u; } ux = {x}, uy = {y};
@@ -96,6 +98,7 @@ double copysign(double x, double y) {
            (uy.u & UINT64_C(0x8000000000000000));
     return ux.d;
 }
+#ifndef WASTE_SHARED_LIBC
 double fmin(double a, double b) {
     if (a != a) return a;
     if (b != b) return b;
@@ -106,6 +109,7 @@ double fmax(double a, double b) {
     if (b != b) return b;
     return a > b ? a : b;
 }
+#endif
 #endif
 
 /* ---- FMA (relaxed semantics) ---- */

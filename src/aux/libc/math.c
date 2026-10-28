@@ -86,3 +86,28 @@ double modf(double value, double *integer) {
     if (__builtin_isinf(value)) return copysign(0.0, value);
     return copysign(value - *integer, value);
 }
+
+/* C min/max prefer a numeric operand to NaN. Keep these explicit: Clang's
+ * Wasm __builtin_fmin/fmax can lower to a call to this same library function.
+ * Resolve zero ties by sign so argument order does not change the result. */
+double fmin(double a, double b) {
+    if (__builtin_isnan(a)) return b;
+    if (__builtin_isnan(b)) return a;
+    if (a == 0.0 && b == 0.0) {
+        union { double value; uint64_t bits; } x = {a}, y = {b};
+        x.bits |= y.bits;
+        return x.value;
+    }
+    return a < b ? a : b;
+}
+
+double fmax(double a, double b) {
+    if (__builtin_isnan(a)) return b;
+    if (__builtin_isnan(b)) return a;
+    if (a == 0.0 && b == 0.0) {
+        union { double value; uint64_t bits; } x = {a}, y = {b};
+        x.bits &= y.bits;
+        return x.value;
+    }
+    return a > b ? a : b;
+}

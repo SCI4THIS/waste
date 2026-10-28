@@ -1055,3 +1055,7 @@ $(WASM_BINARY_TEST_TARGET) \
 	$(PROCESS_LIFECYCLE_TEST_TARGET) \
 	$(STORE_CHECKPOINT_TEST_TARGET) \
 	$(CONTINUATION_TEST_TARGET): ../config.h
+
+.PHONY: relocated-callbacks
+relocated-callbacks: $(WASM_TARGET)
+	WASTE_CALLBACK_BUILD="$(abspath $(BUILD_DIR)/relocated-callbacks)" bash test/relocated-callbacks/check.sh "$(abspath $(WASM_TARGET))"

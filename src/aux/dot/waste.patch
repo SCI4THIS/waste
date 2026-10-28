@@ -1,0 +1,57 @@
+--- a/lib/util/streq.h
++++ b/lib/util/streq.h
+@@ -7,6 +7,9 @@
+ #include <stddef.h>
+ #include <string.h>
+ 
++/* Keep Graphviz's private helper distinct from the SDK extension. */
++#define streq gv_streq
++
+ /// are `a` and `b` equal?
+ static inline bool streq(const char *a, const char *b) {
+   assert(a != NULL);
+--- a/lib/util/lockfile.h
++++ b/lib/util/lockfile.h
+@@ -6,7 +6,9 @@
+ #include <stdio.h>
+ 
+ static inline void lockfile(FILE *file) {
+-#if defined(_WIN32) && !defined(__CYGWIN__)
++#if defined(WASTE_SINGLE_THREAD)
++  (void)file;
++#elif defined(_WIN32) && !defined(__CYGWIN__)
+   _lock_file(file);
+ #else
+   flockfile(file);
+@@ -14,7 +16,9 @@
+ }
+ 
+ static inline void unlockfile(FILE *file) {
+-#if defined(_WIN32) && !defined(__CYGWIN__)
++#if defined(WASTE_SINGLE_THREAD)
++  (void)file;
++#elif defined(_WIN32) && !defined(__CYGWIN__)
+   _unlock_file(file);
+ #else
+   funlockfile(file);
+--- a/lib/common/timing.c
++++ b/lib/common/timing.c
+@@ -16,11 +16,14 @@
+ #include <common/utils.h>
+ #include <time.h>
+ 
+-static clock_t T;
++/* This guest profile reports elapsed monotonic time rather than CPU time. */
++static struct timespec T;
+ 
+-void start_timer(void) { T = clock(); }
++void start_timer(void) { clock_gettime(CLOCK_MONOTONIC, &T); }
+ 
+ double elapsed_sec(void) {
+-  const clock_t S = clock();
+-  return (S - T) / (double)CLOCKS_PER_SEC;
++    struct timespec now;
++    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
++    return (double)(now.tv_sec - T.tv_sec) +
++           (double)(now.tv_nsec - T.tv_nsec) / 1000000000.0;
+ }

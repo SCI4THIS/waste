@@ -1,0 +1,16 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "assertions": 97,
+  "exitStatus": 0,
+  "hostTimeoutMs": 300000,
+  "events": [
+    {
+      "after": "# ",
+      "text": ". /root/test/aux/dot/setup.sh\n"
+    },
+    {
+      "after": "# ",
+      "text": "status=0; /bin/wast --verbose /root/test/aux/dot/installed.wast || status=1; /bin/wast --verbose /root/test/aux/libc/dot-math.wast || status=1; /bin/wast --verbose /root/test/aux/libc/strndup.wast || status=1; exit \"$status\"\n"
+    }
+  ]
+}

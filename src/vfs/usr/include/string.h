@@ -39,6 +39,7 @@ char *strrchr(const char *, int);
 char *strpbrk(const char *, const char *);
 char *strstr(const char *, const char *);
 char *strdup(const char *);
+char *strndup(const char *, size_t);
 char *strtok(char *, const char *);
 char *strtok_r(char *, const char *, char **);
 char *strerror(int);

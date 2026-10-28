@@ -1,6 +1,8 @@
 #ifndef WASTE_CTYPE_H
 #define WASTE_CTYPE_H
 
+static inline int isascii(int c) { return (unsigned int)c <= 127; }
+
 static inline int waste_ctype_ascii(int c) { return (unsigned char)c; }
 static inline int isalnum(int c) {
   c = waste_ctype_ascii(c);

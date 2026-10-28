@@ -442,6 +442,29 @@ static exec_status process_prepare_exec_provider_continuations(
 static exec_status process_initialize_image(native_process_driver *driver,
     native_store *store, native_process_image *image, exec_error *error) {
     if (image->runtime_initialized) return EXEC_OK;
+    /* Match DSO loading: the GOT has been resolved, but PIC static data can
+     * still contain unrelocated imported function/data addresses. Apply the
+     * executable's optional linker hook before constructors or main use them. */
+    uint32_t relocs;
+    exec_error reloc_lookup = {0};
+    if (exec_find_export(image->engine, "__wasm_apply_data_relocs",
+                         &relocs, &reloc_lookup) == EXEC_OK) {
+        uint32_t type_index;
+        if (exec_get_func_type_index(image->engine, relocs, &type_index, error) != EXEC_OK ||
+            type_index >= image->engine->type_count)
+            return exec_fail(error, EXEC_ERROR_FORMAT, "invalid executable data relocator");
+        const exec_func_type *type = &image->engine->types[type_index];
+        if (type->param_count || type->result_count)
+            return exec_fail(error, EXEC_ERROR_FORMAT, "incompatible executable data relocator");
+        uint64_t quantum = store->execution_control.pump_quantum_ns;
+        store->execution_control.pump_quantum_ns = 0;
+        exec_status status = exec_invoke(image->engine, relocs, NULL, 0, NULL, 0, error);
+        store->execution_control.pump_quantum_ns = quantum;
+        if (status == EXEC_YIELD)
+            return exec_fail(error, EXEC_ERROR_UNSUPPORTED, "executable data relocator cannot yield");
+        if (status != EXEC_OK) return status;
+        process_driver_trace(driver, "image-relocs-ok");
+    }
     uint32_t heap_base = EXEC_PAGE_SIZE;
     exec_global *heap_global = NULL;
     exec_error lookup_error = {0};

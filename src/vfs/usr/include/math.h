@@ -53,6 +53,8 @@ double fmin(double, double); double fmax(double, double);
 double pow(double, double); double log(double); double exp(double);
 double sin(double); double cos(double); double atan2(double, double);
 double fmod(double, double);
+double acos(double); double atan(double); double tan(double);
+double cbrt(double); double hypot(double, double); double log10(double);
 #define MATH_ERRNO 1
 #define math_errhandling MATH_ERRNO
 

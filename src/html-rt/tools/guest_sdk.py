@@ -9,7 +9,7 @@ import shutil
 import subprocess
 
 COMPILER_ROOTS = ("stddef.h", "stdarg.h", "stdbool.h", "limits.h", "float.h",
-                  "stdalign.h", "stdnoreturn.h", "stdckdint.h", "stdcountof.h")
+                  "stdalign.h", "stdnoreturn.h", "stdatomic.h", "stdckdint.h", "stdcountof.h")
 GENERATED_PUBLIC = {"term.h", "unctrl.h", "ncurses_dll.h", "waste/ncurses/curses.h"}
 
 

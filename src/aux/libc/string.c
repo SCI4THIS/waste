@@ -94,3 +94,14 @@ int strerror_r(int error,char *buffer,u32 capacity){
 }
 char *strsignal(i32 signal){return number_text("signal ",signal);}
 i32 __libc_current_sigrtmin(void){return 32;} i32 __libc_current_sigrtmax(void){return 64;}
+
+/* POSIX bounded duplication, with independent owned storage. */
+char *strndup(const char *source, u32 limit) {
+  u32 length = strnlen(source, limit);
+  if (length == 0xffffffffU) { *__errno_location() = 12; return 0; }
+  char *result = malloc(length + 1);
+  if (!result) { *__errno_location() = 12; return 0; }
+  bytes_copy(result, source, length);
+  result[length] = 0;
+  return result;
+}

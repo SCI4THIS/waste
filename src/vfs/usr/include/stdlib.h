@@ -14,6 +14,7 @@ extern "C" {
 #endif
 
 #define MB_CUR_MAX 1
+#define RAND_MAX 2147483647
 
 void *malloc(size_t);
 void *aligned_alloc(size_t, size_t);

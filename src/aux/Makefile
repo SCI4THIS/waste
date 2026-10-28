@@ -151,3 +151,5 @@ include $(AUX_DIR)/openssl/openssl.mk
 include $(AUX_DIR)/awk/awk.mk
 
 include $(AUX_DIR)/m4/m4.mk
+
+include $(AUX_DIR)/dot/dot.mk

@@ -3,6 +3,10 @@
 
 #include <stdlib.h>
 
+#if !defined(__cplusplus) && __STDC_VERSION__ >= 201112L && __STDC_VERSION__ < 202311L
+# define static_assert _Static_assert
+#endif
+
 #ifndef NDEBUG
 # ifdef WASTE_LEGACY_DECLARATIONS
 #  define assert(expression) ((expression) ? (void)0 : abort())

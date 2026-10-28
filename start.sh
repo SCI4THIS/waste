@@ -466,7 +466,7 @@ generate_c_engine_tests() {
 
 # ── Auxiliary utility build helpers ──────────────────────────────────────
 
-AUX_UTILITIES=(libc awk m4 libcrypto openssl true false pwd echo printf basename dirname cat chmod wc ls date sleep bash rogue libncurses ldd upload download clipboard vim clang lld-link)
+AUX_UTILITIES=(libc awk m4 dot libcrypto openssl true false pwd echo printf basename dirname cat chmod wc ls date sleep bash rogue libncurses ldd upload download clipboard vim clang lld-link)
 AUX_STAGING="$REPO_ROOT/src/vfs"
 AUX_LOG="$LOG_DIR/aux-build.log"
 
@@ -535,6 +535,19 @@ build_single_aux() {
     libcrypto|openssl)
       if ! have_command perl || ! have_command llvm-ar || ! have_command llvm-ranlib || ! have_command patch; then
         show_message "Aux build" "Perl, llvm-ar, llvm-ranlib, and patch are required for OpenSSL."
+        return 1
+      fi
+      ;;
+    dot)
+      local dot_tool
+      for dot_tool in bison flex patch; do
+        if ! have_command "$dot_tool"; then
+          show_message "Aux build" "$dot_tool is required to stage Graphviz dot."
+          return 1
+        fi
+      done
+      if ! have_command clang++; then
+        show_message "Aux build" "clang++ is required for shared-libc math providers."
         return 1
       fi
       ;;

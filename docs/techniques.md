@@ -87,6 +87,14 @@ checkout is a redirect without sources; stage the selected release under
 Bootstrap runs entirely offline in the staged copy. Macro tests cover the
 installed binary in native Bash and the packaged production worker.
 
+Graphviz's `dot` command builds through `src/aux/dot`. Stage the source and
+Bison/Flex/color/entity generation under `build/aux/dot`, then link the selected
+C layout and core renderer plugins into the command with shared libc. Run
+`make -C src/aux dot`, `install-dot`, and `test-dot`; see
+[the package notes](../src/aux/dot/README.md) for supported formats and limits.
+The installed package tests check rendering content and actual rank geometry
+in native Bash and the offline production worker.
+
 ## OpenSSL Guest Package
 
 `make -C src/aux openssl libcrypto` stages upstream OpenSSL under

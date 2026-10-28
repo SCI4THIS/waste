@@ -1,0 +1,13 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "assertions": 3,
+  "exitStatus": 0,
+  "hostTimeoutMs": 300000,
+  "files": [
+    {"path": "/tmp/relocated-callback", "mode": 493, "source": "build/cli-rt/relocated-callbacks/probe.wasm"}
+  ],
+  "events": [
+    {"after": "# ", "text": "/tmp/relocated-callback > /tmp/relocated-callback-output; printf '%s\\n' \"$?\" > /tmp/relocated-callback-status\n"},
+    {"after": "# ", "text": "/bin/wast --verbose /root/test/system/cli-runtime/relocated-callbacks.wast; exit \"$?\"\n"}
+  ]
+}

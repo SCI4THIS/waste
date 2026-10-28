@@ -332,3 +332,14 @@ commit immediately. These read-only queries preserve errno and return zero
 for null streams. `stdio-state.wast` checks direction, consumption, seek/purge,
 output and errno behavior against the installed provider. GNU M4's Gnulib
 support uses these interfaces instead of a host FILE representation.
+
+Graphviz adds the portable LLVM binary64 `acos`, `atan`, `tan`, `cbrt`, `hypot`
+and `log10` providers to the existing math profile, with the same rounding and
+floating exception limits. `strndup` returns an owned, terminated copy bounded
+by either the requested byte count or the first NUL. Package regressions live
+in `dot-math.wast` and `strndup.wast`.
+
+The guest `fmin`/`fmax` use explicit C numeric/NaN and signed-zero handling,
+avoiding a Wasm compiler builtin lowering back into the same library function.
+Shared process startup applies PIC data relocations before constructors; the runtime
+system regression is documented in `src/cli-rt/test/relocated-callbacks`.
