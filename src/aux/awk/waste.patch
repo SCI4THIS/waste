@@ -1,0 +1,184 @@
+--- a/support/dfa.c
++++ b/support/dfa.c
+@@ -53,7 +53,7 @@
+ # include <wctype.h>
+ # define c32tob wctob
+ # define c32isprint iswprint
+-# define c32isspace iswspace
++# define c32isspace(c) ((c) <= UCHAR_MAX && isspace ((unsigned char) (c)))
+ #endif	/* !__MINGW32__ */
+ #define mbszero(p) memset ((p), 0, sizeof (mbstate_t))
+ 
+@@ -65,7 +65,7 @@
+ #define assume_nonnull(x) assume ((x) != NULL)
+ 
+ static bool
+-streq (char const *a, char const *b)
++dfa_streq (char const *a, char const *b)
+ {
+   return strcmp (a, b) == 0;
+ }
+@@ -946,7 +946,7 @@
+ find_pred (const char *str)
+ {
+   for (int i = 0; prednames[i].name; i++)
+-    if (streq (str, prednames[i].name))
++    if (dfa_streq (str, prednames[i].name))
+       return &prednames[i];
+   return NULL;
+ }
+@@ -1025,8 +1025,8 @@
+                    worry about that possibility.  */
+                 {
+                   char const *class
+-                    = (dfa->syntax.case_fold && (streq (str, "upper")
+-                                                 || streq (str, "lower"))
++                    = (dfa->syntax.case_fold && (dfa_streq (str, "upper")
++                                                 || dfa_streq (str, "lower"))
+                        ? "alpha" : str);
+                   const struct dfa_ctype *pred = find_pred (class);
+                   if (!pred)
+@@ -4210,7 +4210,7 @@
+             idx_t ln, rn, n;
+ 
+             /* Guaranteed to be.  Unlikely, but ...  */
+-            if (streq (lmp->is, rmp->is))
++            if (dfa_streq (lmp->is, rmp->is))
+               {
+                 lmp->begline &= rmp->begline;
+                 lmp->endline &= rmp->endline;
+@@ -4262,7 +4262,7 @@
+           for (idx_t i = 0; mp->in[i] != NULL; i++)
+             if (strlen (mp->in[i]) > strlen (result))
+               result = mp->in[i];
+-          if (streq (result, mp->is))
++          if (dfa_streq (result, mp->is))
+             {
+               if ((!need_begline || mp->begline) && (!need_endline
+                                                      || mp->endline))
+--- a/builtin.c
++++ b/builtin.c
+@@ -3385,7 +3385,7 @@
+ 		istat = signal(SIGINT, istat);
+ 		qstat = signal(SIGQUIT, qstat);
+ #endif
+-		execl("/bin/sh", "sh", "-c", command, NULL);
++		execv("/usr/bin/bash", (char *const []) { "bash", "-c", (char *) command, NULL });
+ 		_exit(errno == ENOENT ? 127 : 126);
+ 
+ 		return 0;	// silence compiler warnings
+@@ -3425,7 +3425,8 @@
+ 	printf("\n");
+ 	fflush(stdout);
+ 
+-	FILE *fp = popen("sort -n", "w");
++	/* The guest has no sort/popen provider; keep this developer dump in declaration order. */
++	FILE *fp = stdout;
+ 	if (fp == NULL)
+ 		return Nnull_string;
+ 
+@@ -3486,7 +3487,7 @@
+ 	fprintf(fp, "%zu\twstptr\t%zu\n", offsetof(NODE, wstptr), sizeof(n.wstptr));
+ 	fprintf(fp, "%zu\txarray\t%zu\n", offsetof(NODE, xarray), sizeof(n.xarray));
+ 
+-	pclose(fp);
++	fflush(fp);
+ 
+ 	return Nnull_string;
+ }
+--- a/io.c
++++ b/io.c
+@@ -2079,7 +2079,7 @@
+ 
+ 		set_sigpipe_to_default();
+ 
+-		execl("/bin/sh", "sh", "-c", command, NULL);
++		execv("/usr/bin/bash", (char *const []) { "bash", "-c", (char *) command, NULL });
+ 		_exit(errno == ENOENT ? 127 : 126);
+ 
+ 	case -1:
+@@ -2131,7 +2131,7 @@
+ 
+ 		signal(SIGPIPE, SIG_DFL);
+ 
+-		execl("/bin/sh", "sh", "-c", command, NULL);
++		execv("/usr/bin/bash", (char *const []) { "bash", "-c", (char *) command, NULL });
+ 		_exit(errno == ENOENT ? 127 : 126);
+ 
+ 	case -1:
+@@ -2470,7 +2470,7 @@
+ 			fatal(_("close of pipe failed: %s"), strerror(errno));
+ 		/* stderr does NOT get dup'ed onto child's stdout */
+ 		set_sigpipe_to_default();
+-		execl("/bin/sh", "sh", "-c", str, NULL);
++		execv("/usr/bin/bash", (char *const []) { "bash", "-c", (char *) str, NULL });
+ 		_exit(errno == ENOENT ? 127 : 126);
+ 	}
+ #endif /* NOT __MINGW32__ */
+@@ -2718,7 +2718,7 @@
+ 		if (close(p[0]) == -1 || close(p[1]) == -1)
+ 			fatal(_("close of pipe failed: %s"), strerror(errno));
+ 		set_sigpipe_to_default();
+-		execl("/bin/sh", "sh", "-c", cmd, NULL);
++		execv("/usr/bin/bash", (char *const []) { "bash", "-c", (char *) cmd, NULL });
+ 		_exit(errno == ENOENT ? 127 : 126);
+ 	}
+ #endif /* NOT __MINGW32__ */
+@@ -4722,7 +4722,7 @@
+ 			fatal(_("gawk_popen_write: failed to move pipe fd to standard input"));
+ 		(void) close(pipefds[0]);
+ 		set_sigpipe_to_default();
+-		execl("/bin/sh", "sh", "-c", cmd, NULL);
++		execv("/usr/bin/bash", (char *const []) { "bash", "-c", (char *) cmd, NULL });
+ 		_exit(errno == ENOENT ? 127 : 126);
+ 	} else if (childpid < 0) {
+ 		(void) close(pipefds[0]);
+--- a/node.c
++++ b/node.c
+@@ -1019,7 +1019,7 @@
+ 		return;
+ 
+ 	for (; len--; str++)
+-		putwc(*str, fp);
++		fprintf(fp, "%lc", (wint_t) *str);
+ }
+ 
+ /* wstrstr --- walk haystack, looking for needle, wide char version */
+--- a/profile.c
++++ b/profile.c
+@@ -1454,8 +1454,13 @@
+ 
+ 	(void) time(& now);
+ 	/* \n on purpose, with \n in ctime() output */
+-	if (do_profile)
+-		fprintf(prof_fp, _("\t# gawk profile, created %s\n"), ctime(& now));
++	if (do_profile) {
++		char timestamp[64] = "";
++		struct tm *created = localtime(& now);
++		if (created != NULL)
++			strftime(timestamp, sizeof(timestamp), "%a %b %d %H:%M:%S %Y\n", created);
++		fprintf(prof_fp, _("\t# gawk profile, created %s\n"), timestamp);
++	}
+ 	print_lib_list(prof_fp);
+ 	pprint(code, NULL, NO_PPRINT_FLAGS);
+ 	print_include_list(prof_fp);
+@@ -1756,7 +1761,7 @@
+ 			*obufout++ = '\\';
+ 			*obufout++ = printables[i];
+ 		/* NB: Deliberate use of lower-case versions. */
+-		} else if (isascii(*str) && isprint(*str)) {
++		} else if (((unsigned char) *str <= 127) && isprint(*str)) {
+ 			*obufout++ = *str;
+ 			ofre += 1;	/* used 1 less than expected */
+ 		} else {
+--- a/main.c
++++ b/main.c
+@@ -1447,7 +1447,7 @@
+ static void
+ init_locale(struct lconv *l)
+ {
+-	struct lconv *t;
++	const struct lconv *t;
+ 
+ 	t = localeconv();
+ 	*l = *t;

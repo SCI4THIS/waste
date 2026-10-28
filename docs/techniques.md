@@ -68,6 +68,25 @@ interactive screen and return to Bash in both runtimes. Executable access
 alone cannot verify that an installed module's imports resolve or its entry
 function runs. See [the Vim package notes](../src/aux/vim/README.md).
 
+GNU Awk stages `submodules/gawk` through `src/aux/awk` and installs as
+`/usr/bin/awk`. Use `make -C src/aux awk`, `install-awk` and `test-awk`;
+see [the package notes](../src/aux/awk/README.md). Keep upstream configure and
+parser generation in the staged tree, use the two-argument shared CRT, and
+route child commands to the installed Bash via public `execv`. The shared
+libc math providers stage LLVM libc's private implementation headers and
+expose their ordinary C signatures; the Awk executable does not embed libc.
+The single-byte profile retains bundled regex engines and disables optional
+extensions, NLS, MPFR, Readline and persistent allocation. Native Bash and the
+packaged production worker execute the same package-owned WAST assertions.
+
+GNU M4 builds through `src/aux/m4` using pinned stable-release and Gnulib
+Git objects exported from the local submodule repositories. The M4 master
+checkout is a redirect without sources; stage the selected release under
+`build/` instead of switching that checkout. Run `make -C src/aux m4`,
+`install-m4` and `test-m4`; see [the package notes](../src/aux/m4/README.md).
+Bootstrap runs entirely offline in the staged copy. Macro tests cover the
+installed binary in native Bash and the packaged production worker.
+
 ## OpenSSL Guest Package
 
 `make -C src/aux openssl libcrypto` stages upstream OpenSSL under

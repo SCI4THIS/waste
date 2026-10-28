@@ -53,9 +53,10 @@ int ferror(FILE *);
 void clearerr(FILE *);
 int feof(FILE *);
 int fileno(FILE *);
-size_t __freadahead(FILE *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
-int __freading(FILE *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
-int __fwriting(FILE *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
+size_t __fpending(FILE *);
+size_t __freadahead(FILE *);
+int __freading(FILE *);
+int __fwriting(FILE *);
 void __fpurge(FILE *);
 void __fseterr(FILE *);
 FILE *fopen(const char *, const char *);
@@ -74,9 +75,10 @@ off_t ftello(FILE *);
 void rewind(FILE *);
 int getc(FILE *);
 int fgetc(FILE *);
+int ungetc(int, FILE *);
 int getchar(void) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 void perror(const char *);
-const char *strerror(int);
+char *strerror(int);
 int remove(const char *);
 
 #define SEEK_SET 0

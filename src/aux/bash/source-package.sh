@@ -26,6 +26,13 @@ for INPUT in libc-config.site configure/config.h configure/config.log; do
 done
 REVISION="$(git -C "$REPO_ROOT/submodules/bash" rev-parse HEAD 2>/dev/null || cat "$REPO_ROOT/submodules/bash/.waste-source-revision")"
 printf '%s\n' "$REVISION" > "$PACKAGE_STAGE/bash-source/.waste-source-revision"
+# Shared libc's portable math dependency, including its license.
+LLVM_LIBC_DEST="$PACKAGE_STAGE/waste/submodules/llvm-project/libc"
+mkdir -p "$LLVM_LIBC_DEST/src" "$LLVM_LIBC_DEST/include"
+for INPUT in hdr src/__support include/llvm-libc-macros include/llvm-libc-types LICENSE.TXT; do
+  cp -a "$REPO_ROOT/submodules/llvm-project/libc/$INPUT" "$LLVM_LIBC_DEST/$INPUT"
+done
+chmod -R u+w "$LLVM_LIBC_DEST"
 HASH="$(sha256sum "$BASH_BUILD/bash.wasm" | cut -d ' ' -f1)"
 printf '{"format":1,"source_commit":"%s","binary_sha256":"%s","instructions":"waste/src/aux/bash/README.md"}\n' \
   "$REVISION" "$HASH" > "$PACKAGE_STAGE/SOURCE-BUNDLE.json"

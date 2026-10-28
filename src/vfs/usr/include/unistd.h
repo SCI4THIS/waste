@@ -80,6 +80,7 @@ unsigned int alarm(unsigned int);
 int usleep(useconds_t);
 int pause(void) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
 int getpid(void);
+int getppid(void);
 uid_t getuid(void);
 uid_t geteuid(void);
 gid_t getgid(void);

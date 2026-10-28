@@ -34,6 +34,7 @@ typedef struct WasteFile {
   u32 capacity;
   u32 length;
   u32 position;
+  i32 pushback;
 } FILE;
 
 #ifdef WASTE_SHARED_LIBC
@@ -64,6 +65,7 @@ static FILE *file_create(unsigned char *buffer, u32 capacity, u32 length,
   file->capacity = capacity;
   file->length = length <= capacity ? length : capacity;
   file->position = (flags & FILE_APPEND) ? file->length : 0;
+  file->pushback = EOF_VALUE;
   return file;
 }
 
@@ -151,6 +153,10 @@ i32 fread(void *pointer, u32 size, u32 members, FILE *file) {
   u32 wanted = (u32)wanted64;
   if (file->magic != FILE_MAGIC || !(file->flags & FILE_READ)) return 0;
   u32 copied = 0;
+  if (file->pushback != EOF_VALUE && wanted) {
+    ((unsigned char *)pointer)[copied++] = (unsigned char)file->pushback;
+    file->pushback = EOF_VALUE;
+  }
   while (copied < wanted) {
 #ifdef WASTE_POSIX_IO
     if (file->position >= file->length && file->descriptor >= 0) {
@@ -172,6 +178,14 @@ i32 fgetc(FILE *file) {
   return fread(&value, 1, 1, file) == 1 ? value : EOF_VALUE;
 }
 i32 getc(FILE *file) { return fgetc(file); }
+i32 ungetc(i32 character, FILE *file) {
+  if (character == EOF_VALUE || !file || file->magic != FILE_MAGIC ||
+      !(file->flags & FILE_READ) || (file->flags & FILE_CLOSED) ||
+      file->pushback != EOF_VALUE) return EOF_VALUE;
+  file->pushback = (unsigned char)character;
+  file->end_of_file = 0;
+  return file->pushback;
+}
 i32 feof(FILE *file) { return file ? file->end_of_file : 0; }
 
 i32 getdelim(char **line, u32 *capacity, i32 delimiter, FILE *file) {
@@ -234,10 +248,29 @@ void clearerr(FILE *file) {
   if (file && file->magic != FILE_MAGIC) return;
   if (file) { file->error = 0; file->end_of_file = 0; }
 }
+/* Gnulib can inspect the opaque stream through these public queries instead
+ * of assuming a host FILE layout. Descriptor writes are already committed;
+ * memory-stream writes update their backing storage immediately as well. */
+u32 __fpending(FILE *file) { (void)file; return 0; }
+i32 __freading(FILE *file) {
+  return file && file->magic == FILE_MAGIC && !(file->flags & FILE_CLOSED)
+      && (file->flags & FILE_READ) != 0;
+}
+i32 __fwriting(FILE *file) {
+  return file && file->magic == FILE_MAGIC && !(file->flags & FILE_CLOSED)
+      && (file->flags & FILE_WRITE) != 0;
+}
+u32 __freadahead(FILE *file) {
+  if (!__freading(file)) return 0;
+  return (file->position < file->length ? file->length - file->position : 0)
+      + (file->pushback != EOF_VALUE);
+}
+
 i32 fpurge(FILE *file) {
   if (!file) return -1;
   if (file->magic != FILE_MAGIC) return -1;
   file->length = file->position = 0;
+  file->pushback = EOF_VALUE;
   return 0;
 }
 void __fpurge(FILE *file) { (void)fpurge(file); }
@@ -249,6 +282,7 @@ i32 setvbuf(FILE *file, char *buffer, i32 mode, u32 size) {
   file->data = (unsigned char *)buffer;
   file->capacity = size;
   file->length = file->position = 0;
+  file->pushback = EOF_VALUE;
   file->flags &= ~FILE_OWN_BUFFER;
   return 0;
 }
@@ -262,9 +296,11 @@ i32 fseek(FILE *file, long offset, i32 whence) {
 #ifdef WASTE_POSIX_IO
   if (file->descriptor >= 0) {
     i32 position = lseek(file->descriptor, (i32)offset, whence);
-    if (position < 0) { file->error = 1; return -1; }
+    /* A seekability probe on a pipe must not become a stream I/O error. */
+    if (position < 0) return -1;
     file->position = (u32)position;
     file->end_of_file = 0;
+    file->pushback = EOF_VALUE;
     return 0;
   }
 #endif
@@ -274,6 +310,7 @@ i32 fseek(FILE *file, long offset, i32 whence) {
   if (position < 0 || (u32)position > file->length) return -1;
   file->position = (u32)position;
   file->end_of_file = 0;
+  file->pushback = EOF_VALUE;
   return 0;
 }
 
@@ -302,21 +339,14 @@ void rewind(FILE *file) {
 char *fgets(char *destination, i32 count, FILE *file) {
   if (!destination || count <= 0 || !file) return 0;
   if (file->magic != FILE_MAGIC || !(file->flags & FILE_READ)) return 0;
-#ifdef WASTE_POSIX_IO
-  if (file->position >= file->length && file->descriptor >= 0) {
-    i32 received = read(file->descriptor, file->data, file->capacity);
-    if (received < 0) { file->error = 1; return 0; }
-    file->position = 0;
-    file->length = (u32)received;
-  }
-#endif
-  if (file->position >= file->length) { file->end_of_file = 1; return 0; }
   i32 written = 0;
-  while (written + 1 < count && file->position < file->length) {
-    char value = (char)file->data[file->position++];
-    destination[written++] = value;
+  while (written + 1 < count) {
+    i32 value = fgetc(file);
+    if (value == EOF_VALUE) break;
+    destination[written++] = (char)value;
     if (value == '\n') break;
   }
+  if (!written && count > 1) return 0;
   destination[written] = 0;
   return destination;
 }

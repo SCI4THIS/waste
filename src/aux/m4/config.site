@@ -1,0 +1,34 @@
+# Cross answers supplement the installed shared-libc function inventory.
+ac_cv_c_bigendian=no
+ac_cv_func_fork=yes
+ac_cv_func_waitpid=yes
+ac_cv_func_sigprocmask=yes
+ac_cv_func_dup2=yes
+ac_cv_func_getdtablesize=yes
+ac_cv_func_getpgrp_void=yes
+ac_cv_func_sigaltstack=no
+ac_cv_func_fwrite_unlocked=no
+ac_cv_func_posix_spawn=no
+ac_cv_func_posix_spawnp=no
+ac_cv_func_mmap=no
+ac_cv_func_mprotect=no
+ac_cv_func_getrlimit=no
+ac_cv_func_getrusage=no
+ac_cv_func_getlocalename_l=no
+ac_cv_func_newlocale=no
+ac_cv_func_duplocale=no
+ac_cv_func_freelocale=no
+ac_cv_func_uselocale=no
+ac_cv_func_pthread_sigmask=no
+ac_cv_func_pthread_atfork=no
+M4_cv_func_rename_open_file_works=yes
+# strsignal is declared in the SDK's signal.h rather than string.h.
+ac_cv_have_decl_strsignal=yes
+# The existing shared mkdtemp export is unsupported; use Gnulib's provider.
+ac_cv_func_mkdtemp=no
+# These queries are shared-libc exports, unavailable to host link probes.
+gl_cv_func___fpending=yes
+# Use Gnulib's complete C-locale tables, rather than supplementing the SDK's
+# intentionally small nl_langinfo item set.
+ac_cv_func_nl_langinfo=no
+ac_cv_header_langinfo_h=no

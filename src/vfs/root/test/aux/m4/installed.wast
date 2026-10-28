@@ -1,0 +1,133 @@
+;; Run setup.sh in Bash first. Assertions check the installed GNU M4 executable.
+(module $m4
+  (import "waste-runtime" "memory" (memory 4))
+  (import "libc" "access" (func $access (param i32 i32) (result i32)))
+  (import "libc" "open" (func $open (param i32 i32 i32) (result i32)))
+  (import "libc" "close" (func $close (param i32) (result i32)))
+  (import "env" "read" (func $read (param i32 i32 i32) (result i32)))
+  (import "libc" "memcmp" (func $cmp (param i32 i32 i32) (result i32)))
+  (data (i32.const 180000) "/usr/bin/m4\00")
+  (func (export "executable") (result i32)
+    (i32.eqz (call $access (i32.const 180000) (i32.const 1))))
+  (func (export "matches") (param $path i32) (param $expected i32) (param $length i32) (result i32)
+    (local $fd i32) (local $n i32)
+    (local.set $fd (call $open (local.get $path) (i32.const 0) (i32.const 0)))
+    (if (i32.lt_s (local.get $fd) (i32.const 0)) (then (return (i32.const 0))))
+    (local.set $n (call $read (local.get $fd) (i32.const 190000) (i32.add (local.get $length) (i32.const 1))))
+    (drop (call $close (local.get $fd)))
+    (i32.and (i32.eq (local.get $n) (local.get $length))
+      (i32.eqz (call $cmp (i32.const 190000) (local.get $expected) (local.get $length)))))
+  (data (i32.const 181000) "\2f\74\6d\70\2f\6d\34\2d\6d\61\63\72\6f\00")
+  (data (i32.const 185000) "\6c\65\66\74\3a\72\69\67\68\74\0a")
+  (data (i32.const 181128) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\6d\61\63\72\6f\00")
+  (data (i32.const 185128) "\30\0a")
+  (data (i32.const 181256) "\2f\74\6d\70\2f\6d\34\2d\71\75\6f\74\65\00")
+  (data (i32.const 185256) "\33\0a\71\75\6f\74\65\64\20\78\0a")
+  (data (i32.const 181384) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\71\75\6f\74\65\00")
+  (data (i32.const 185384) "\30\0a")
+  (data (i32.const 181512) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\63\6b\00")
+  (data (i32.const 185512) "\74\6f\70\0a\62\61\73\65\0a")
+  (data (i32.const 181640) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\73\74\61\63\6b\00")
+  (data (i32.const 185640) "\30\0a")
+  (data (i32.const 181768) "\2f\74\6d\70\2f\6d\34\2d\65\76\61\6c\00")
+  (data (i32.const 185768) "46\0a00ff\0aequal\0abuiltin\0a0007:word:ff\0a")
+  (data (i32.const 181896) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\65\76\61\6c\00")
+  (data (i32.const 185896) "\30\0a")
+  (data (i32.const 182024) "\2f\74\6d\70\2f\6d\34\2d\64\69\76\65\72\74\00")
+  (data (i32.const 186024) "\73\74\61\72\74\0a\73\65\63\6f\6e\64\0a\65\6e\64\0a")
+  (data (i32.const 182152) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\64\69\76\65\72\74\00")
+  (data (i32.const 186152) "\30\0a")
+  (data (i32.const 182280) "\2f\74\6d\70\2f\6d\34\2d\73\74\72\69\6e\67\00")
+  (data (i32.const 186280) "\37\20\63\64\65\20\32\0a\41\42\72\41\43\41\64\41\42\72\41\0a")
+  (data (i32.const 182408) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\73\74\72\69\6e\67\00")
+  (data (i32.const 186408) "\30\0a")
+  (data (i32.const 182536) "\2f\74\6d\70\2f\6d\34\2d\72\65\67\65\78\00")
+  (data (i32.const 186536) "\32\0a\61\58\62\58\0a")
+  (data (i32.const 182664) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\72\65\67\65\78\00")
+  (data (i32.const 186664) "\30\0a")
+  (data (i32.const 182792) "\2f\74\6d\70\2f\6d\34\2d\72\65\63\75\72\73\69\6f\6e\00")
+  (data (i32.const 186792) "\33\20\32\20\31\20\64\6f\6e\65\0a")
+  (data (i32.const 182920) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\72\65\63\75\72\73\69\6f\6e\00")
+  (data (i32.const 186920) "\30\0a")
+  (data (i32.const 183048) "\2f\74\6d\70\2f\6d\34\2d\70\72\6f\63\65\73\73\00")
+  (data (i32.const 187048) "\37\0a\63\61\70\74\75\72\65\64\0a\30\0a\33\38\34\30\0a")
+  (data (i32.const 183176) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\70\72\6f\63\65\73\73\00")
+  (data (i32.const 187176) "\30\0a")
+  (data (i32.const 183304) "\2f\74\6d\70\2f\6d\34\2d\77\72\61\70\00")
+  (data (i32.const 187304) "\62\6f\64\79\0a\77\72\61\70\70\65\64\0a")
+  (data (i32.const 183432) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\77\72\61\70\00")
+  (data (i32.const 187432) "\30\0a")
+  (data (i32.const 183560) "\2f\74\6d\70\2f\6d\34\2d\69\6e\63\6c\75\64\65\2d\72\65\73\75\6c\74\00")
+  (data (i32.const 187560) "\69\6e\63\6c\75\64\65\64\3a\34\32\0a")
+  (data (i32.const 183688) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\69\6e\63\6c\75\64\65\00")
+  (data (i32.const 187688) "\30\0a")
+  (data (i32.const 183816) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\66\72\65\65\7a\65\00")
+  (data (i32.const 187816) "\30\0a")
+  (data (i32.const 183944) "\2f\74\6d\70\2f\6d\34\2d\72\65\6c\6f\61\64\00")
+  (data (i32.const 187944) "\66\72\6f\7a\65\6e\0a")
+  (data (i32.const 184072) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\72\65\6c\6f\61\64\00")
+  (data (i32.const 188072) "\30\0a")
+  (data (i32.const 184200) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\65\78\69\74\00")
+  (data (i32.const 188200) "\39\0a")
+  (data (i32.const 184328) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\6d\69\73\73\69\6e\67\00")
+  (data (i32.const 188328) "\31\0a")
+  (data (i32.const 184456) "\2f\74\6d\70\2f\6d\34\2d\73\74\61\74\75\73\2d\76\65\72\73\69\6f\6e\00")
+  (data (i32.const 188456) "\30\0a")
+)
+(assert_return (invoke $m4 "executable") (i32.const 1))
+;; macro
+(assert_return (invoke $m4 "matches" (i32.const 181000) (i32.const 185000) (i32.const 11)) (i32.const 1))
+;; status-macro
+(assert_return (invoke $m4 "matches" (i32.const 181128) (i32.const 185128) (i32.const 2)) (i32.const 1))
+;; quote
+(assert_return (invoke $m4 "matches" (i32.const 181256) (i32.const 185256) (i32.const 11)) (i32.const 1))
+;; status-quote
+(assert_return (invoke $m4 "matches" (i32.const 181384) (i32.const 185384) (i32.const 2)) (i32.const 1))
+;; stack
+(assert_return (invoke $m4 "matches" (i32.const 181512) (i32.const 185512) (i32.const 9)) (i32.const 1))
+;; status-stack
+(assert_return (invoke $m4 "matches" (i32.const 181640) (i32.const 185640) (i32.const 2)) (i32.const 1))
+;; eval
+(assert_return (invoke $m4 "matches" (i32.const 181768) (i32.const 185768) (i32.const 35)) (i32.const 1))
+;; status-eval
+(assert_return (invoke $m4 "matches" (i32.const 181896) (i32.const 185896) (i32.const 2)) (i32.const 1))
+;; divert
+(assert_return (invoke $m4 "matches" (i32.const 182024) (i32.const 186024) (i32.const 17)) (i32.const 1))
+;; status-divert
+(assert_return (invoke $m4 "matches" (i32.const 182152) (i32.const 186152) (i32.const 2)) (i32.const 1))
+;; string
+(assert_return (invoke $m4 "matches" (i32.const 182280) (i32.const 186280) (i32.const 20)) (i32.const 1))
+;; status-string
+(assert_return (invoke $m4 "matches" (i32.const 182408) (i32.const 186408) (i32.const 2)) (i32.const 1))
+;; regex
+(assert_return (invoke $m4 "matches" (i32.const 182536) (i32.const 186536) (i32.const 7)) (i32.const 1))
+;; status-regex
+(assert_return (invoke $m4 "matches" (i32.const 182664) (i32.const 186664) (i32.const 2)) (i32.const 1))
+;; recursion
+(assert_return (invoke $m4 "matches" (i32.const 182792) (i32.const 186792) (i32.const 11)) (i32.const 1))
+;; status-recursion
+(assert_return (invoke $m4 "matches" (i32.const 182920) (i32.const 186920) (i32.const 2)) (i32.const 1))
+;; process
+(assert_return (invoke $m4 "matches" (i32.const 183048) (i32.const 187048) (i32.const 18)) (i32.const 1))
+;; status-process
+(assert_return (invoke $m4 "matches" (i32.const 183176) (i32.const 187176) (i32.const 2)) (i32.const 1))
+;; wrap
+(assert_return (invoke $m4 "matches" (i32.const 183304) (i32.const 187304) (i32.const 13)) (i32.const 1))
+;; status-wrap
+(assert_return (invoke $m4 "matches" (i32.const 183432) (i32.const 187432) (i32.const 2)) (i32.const 1))
+;; include-result
+(assert_return (invoke $m4 "matches" (i32.const 183560) (i32.const 187560) (i32.const 12)) (i32.const 1))
+;; status-include
+(assert_return (invoke $m4 "matches" (i32.const 183688) (i32.const 187688) (i32.const 2)) (i32.const 1))
+;; status-freeze
+(assert_return (invoke $m4 "matches" (i32.const 183816) (i32.const 187816) (i32.const 2)) (i32.const 1))
+;; reload
+(assert_return (invoke $m4 "matches" (i32.const 183944) (i32.const 187944) (i32.const 7)) (i32.const 1))
+;; status-reload
+(assert_return (invoke $m4 "matches" (i32.const 184072) (i32.const 188072) (i32.const 2)) (i32.const 1))
+;; status-exit
+(assert_return (invoke $m4 "matches" (i32.const 184200) (i32.const 188200) (i32.const 2)) (i32.const 1))
+;; status-missing
+(assert_return (invoke $m4 "matches" (i32.const 184328) (i32.const 188328) (i32.const 2)) (i32.const 1))
+;; status-version
+(assert_return (invoke $m4 "matches" (i32.const 184456) (i32.const 188456) (i32.const 2)) (i32.const 1))

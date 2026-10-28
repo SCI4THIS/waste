@@ -1,0 +1,98 @@
+--- a/src/builtin.c
++++ b/src/builtin.c
+@@ -24,12 +24,10 @@
+ 
+ #include "m4.h"
+ 
+-#include "execute.h"
++#include "waste-process.h"
+ #include "memchr2.h"
+ #include "progname.h"
+ #include "regex.h"
+-#include "spawn-pipe.h"
+-#include "wait-process.h"
+ 
+ #define ARG(i) (argc > (i) ? TOKEN_DATA_TEXT (argv[i]) : "")
+ #define ARGLEN(i) (argc > (i) ? TOKEN_DATA_LEN (argv[i]) : 0)
+@@ -990,8 +988,7 @@
+     }
+   prog_args[3] = NULL;
+   errno = 0;
+-  status = execute (ARG (0), SYSCMD_SHELL, prog_args, NULL, NULL, false,
+-                    false, false, false, true, false, &sig_status);
++  status = m4_waste_execute (prog_args, &sig_status);
+   if (sig_status)
+     {
+       assert (status == 127);
+@@ -1046,8 +1043,7 @@
+     }
+   prog_args[3] = NULL;
+   errno = 0;
+-  child = create_pipe_in (ARG (0), SYSCMD_SHELL, prog_args, NULL, NULL,
+-                          NULL, false, true, false, &fd);
++  child = m4_waste_pipe_in (prog_args, &fd);
+   if (child == -1)
+     {
+       M4ERROR ((warning_status, errno, _("cannot run command `%s'"), cmd));
+@@ -1088,8 +1084,7 @@
+   if (ferror (pin) || fclose (pin))
+     m4_failure (errno, _("cannot read pipe"));
+   errno = 0;
+-  status = wait_subprocess (child, ARG (0), false, true, true, false,
+-                            &sig_status);
++  status = m4_waste_wait (child, &sig_status);
+   if (sig_status)
+     {
+       assert (status == 127);
+--- a/src/m4.c
++++ b/src/m4.c
+@@ -451,6 +451,7 @@
+   sigemptyset (&act.sa_mask);
+   /* One-shot - if we fault while handling a fault, we want to revert
+      to default signal behavior.  */
++#if defined SA_RESETHAND && defined SA_NODEFER
+   act.sa_flags = SA_NODEFER | SA_RESETHAND;
+   act.sa_handler = fault_handler;
+   sigaction (SIGSEGV, &act, NULL);
+@@ -458,6 +459,7 @@
+   sigaction (SIGILL, &act, NULL);
+   sigaction (SIGFPE, &act, NULL);
+   sigaction (SIGBUS, &act, NULL);
++#endif
+   if (c_stack_action (fault_handler) == 0)
+     nesting_limit = 0;
+ 
+--- a/gnulib/lib/mbrtowc.c
++++ b/gnulib/lib/mbrtowc.c
+@@ -77,6 +77,8 @@
+ # endif
+ 
+ # undef mbrtowc
++  /* The SDK guard may have been consumed by Gnulib's renamed declaration. */
++  extern size_t mbrtowc (wchar_t *, const char *, size_t, mbstate_t *);
+ 
+ size_t
+ rpl_mbrtowc (wchar_t *pwc, const char *s, size_t n, mbstate_t *ps)
+--- a/gnulib/lib/wcwidth.c
++++ b/gnulib/lib/wcwidth.c
+@@ -65,6 +65,8 @@
+     {
+       /* Otherwise, fall back to the system's wcwidth function.  */
+ #if HAVE_WCWIDTH
++  /* The SDK guard may have been consumed by Gnulib's renamed declaration. */
++  extern int wcwidth (wchar_t);
+       return wcwidth (wc);
+ #else
+       return wc == 0 ? 0 : iswprint (wc) ? 1 : -1;
+--- a/gnulib/lib/tempname.c
++++ b/gnulib/lib/tempname.c
+@@ -113,7 +113,8 @@
+   v = mix_random_values (v, tv.tv_nsec);
+ #endif
+ 
+-  *r = mix_random_values (v, clock ());
++  /* WASTE provides the wall-clock timestamp above, but no CPU clock. */
++  *r = v;
+   return false;
+ }
+ 

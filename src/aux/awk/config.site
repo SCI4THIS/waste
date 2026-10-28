@@ -1,0 +1,26 @@
+# Explicit wasm32 answers supplement the actual shared-libc export inventory.
+ac_cv_c_bigendian=no
+ac_cv_func_getpgrp_void=yes
+ac_cv_func_getgroups=yes
+ac_cv_func_waitpid=yes
+ac_cv_func_getdtablesize=yes
+ac_cv_func_fwrite_unlocked=no
+ac_cv_func_posix_spawnp=no
+ac_cv_func_getaddrinfo=no
+ac_cv_func_gai_strerror=no
+ac_cv_func_clock_gettime=no
+ac_cv_func_getgrent=no
+ac_cv_func_grantpt=no
+ac_cv_func_posix_openpt=no
+ac_cv_func_personality=no
+ac_cv_func_procctl=no
+ac_cv_func_sysctl=no
+ac_cv_func_mtrace=no
+ac_cv_search_fmod='none required'
+ac_cv_search_isinf='none required'
+ac_cv_search_isnan='none required'
+# No public Internet socket layout is available in this package profile.
+ac_cv_func_connect=no
+ac_cv_lib_socket_connect=no
+ac_cv_func_gethostbyname=no
+ac_cv_lib_nsl_gethostbyname=no

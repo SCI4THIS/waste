@@ -45,6 +45,13 @@ REVISION="$(cat "$COREUTILS_BUILD/source-revision.txt")"
   done
   printf '}}\n'
 } > "$PACKAGE_STAGE/SOURCE-BUNDLE.json"
+# Shared libc's portable math dependency, including its license.
+LLVM_LIBC_DEST="$PACKAGE_STAGE/waste/submodules/llvm-project/libc"
+mkdir -p "$LLVM_LIBC_DEST/src" "$LLVM_LIBC_DEST/include"
+for INPUT in hdr src/__support include/llvm-libc-macros include/llvm-libc-types LICENSE.TXT; do
+  cp -a "$REPO_ROOT/submodules/llvm-project/libc/$INPUT" "$LLVM_LIBC_DEST/$INPUT"
+done
+chmod -R u+w "$LLVM_LIBC_DEST"
 ARCHIVE="$COREUTILS_BUILD/coreutils-corresponding-source.tar.gz"
 tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
   --exclude=.git --exclude=__pycache__ --exclude='*.pyc' --exclude='*.wasm' \

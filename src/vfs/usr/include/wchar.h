@@ -62,6 +62,7 @@ int iswspace(wint_t) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration o
 int iswupper(wint_t);
 wint_t towlower(wint_t);
 wint_t towupper(wint_t);
+size_t mbrlen(const char *, size_t, mbstate_t *);
 size_t mbrtowc(wchar_t *, const char *, size_t, mbstate_t *);
 int mbtowc(wchar_t *, const char *, size_t);
 int mblen(const char *, size_t);

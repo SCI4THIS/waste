@@ -3,3 +3,4 @@
 # artifact itself; the patched source remains subject to normal whitespace
 # checks.
 submodules/*.patch whitespace=-blank-at-eol
+src/aux/*/*.patch whitespace=-blank-at-eol

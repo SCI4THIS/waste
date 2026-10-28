@@ -49,7 +49,13 @@ long double frexpl(long double, int *);
 double copysign(double, double);
 double modf(double, double *);
 double fmin(double, double); double fmax(double, double);
-double pow(double, double) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability"); double log(double) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability"); double exp(double) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
+/* Binary64 functions use the pinned LLVM libc portable implementation. */
+double pow(double, double); double log(double); double exp(double);
+double sin(double); double cos(double); double atan2(double, double);
+double fmod(double, double);
+#define MATH_ERRNO 1
+#define math_errhandling MATH_ERRNO
+
 
 #ifdef __cplusplus
 }

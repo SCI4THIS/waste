@@ -1,0 +1,16 @@
+{
+  "fixture": "src/vfs/usr/share/waste/launch.wast",
+  "assertions": 67,
+  "exitStatus": 0,
+  "hostTimeoutMs": 300000,
+  "events": [
+    {
+      "after": "# ",
+      "text": ". /root/test/aux/m4/setup.sh\n"
+    },
+    {
+      "after": "# ",
+      "text": "status=0; /bin/wast --verbose /root/test/aux/m4/installed.wast || status=1; /bin/wast --verbose /root/test/aux/libc/stdio-state.wast || status=1; /bin/wast --verbose /root/test/aux/libc/stdio-pushback.wast || status=1; exit \"$status\"\n"
+    }
+  ]
+}

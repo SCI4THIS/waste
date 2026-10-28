@@ -5,9 +5,18 @@
 
 #include <stdio.h>
 
-size_t __freadahead(FILE *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
-int __freading(FILE *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
-int __fwriting(FILE *) WASTE_UNAVAILABLE("No WASTE runtime provider; declaration only, not a supported guest capability");
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+size_t __fpending(FILE *);
+size_t __freadahead(FILE *);
+int __freading(FILE *);
+int __fwriting(FILE *);
 void __fseterr(FILE *);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -298,10 +298,10 @@ build_waste_libc() {
     printf 'Output: %s\n\n' "$LIBC_OUTPUT"
   } >>"$LIBC_LOG"
 
-  if ! have_command make || ! have_command clang || ! wasm_ld_is_usable; then
-    printf 'error: make, clang and wasm-ld are required\n' >>"$LIBC_LOG"
+  if ! have_command make || ! have_command clang || ! have_command clang++ || ! wasm_ld_is_usable; then
+    printf 'error: make, clang, clang++ and wasm-ld are required\n' >>"$LIBC_LOG"
     if [[ "$quiet" != true ]]; then
-      show_message "Guest libc build failed" "make, clang and wasm-ld are required.\n\nLog: $LIBC_LOG"
+      show_message "Guest libc build failed" "make, clang, clang++ and wasm-ld are required.\n\nLog: $LIBC_LOG"
     fi
     return 1
   fi
@@ -466,7 +466,7 @@ generate_c_engine_tests() {
 
 # ── Auxiliary utility build helpers ──────────────────────────────────────
 
-AUX_UTILITIES=(libc libcrypto openssl true false pwd echo printf basename dirname cat chmod wc ls date sleep bash rogue libncurses ldd upload download clipboard vim clang lld-link)
+AUX_UTILITIES=(libc awk m4 libcrypto openssl true false pwd echo printf basename dirname cat chmod wc ls date sleep bash rogue libncurses ldd upload download clipboard vim clang lld-link)
 AUX_STAGING="$REPO_ROOT/src/vfs"
 AUX_LOG="$LOG_DIR/aux-build.log"
 
@@ -538,7 +538,28 @@ build_single_aux() {
         return 1
       fi
       ;;
-    libc|ldd|upload|download|clipboard) ;;
+    m4)
+      local m4_tool
+      for m4_tool in autoconf automake autopoint m4 git tar patch ar ranlib gperf; do
+        if ! have_command "$m4_tool"; then
+          show_message "Aux build" "$m4_tool is required for GNU M4 staging and bootstrap."
+          return 1
+        fi
+      done
+      ;;
+    awk)
+      if ! have_command clang++ || ! have_command patch || ! have_command ar || ! have_command ranlib || ! have_command tar; then
+        show_message "Aux build" "clang++, patch, ar, ranlib, and tar are required for GNU Awk staging and compilation."
+        return 1
+      fi
+      ;;
+    libc)
+      if ! have_command clang++; then
+        show_message "Aux build" "clang++ is required for the shared libc portable math providers."
+        return 1
+      fi
+      ;;
+    ldd|upload|download|clipboard) ;;
     *)
       if ! have_command patch || ! have_command wasm-opt; then
         show_message "Aux build" "patch and wasm-opt are required for Coreutils."

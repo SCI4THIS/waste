@@ -147,3 +147,7 @@ test-sleep: install-sleep aux-test-runner
 		"$(AUX_DIR)/sleep/test/system" "$(abspath $(BUILD_DIR)/sleep/tests)" "$(abspath $(WASM_RUNNER))"
 
 include $(AUX_DIR)/openssl/openssl.mk
+
+include $(AUX_DIR)/awk/awk.mk
+
+include $(AUX_DIR)/m4/m4.mk

@@ -45,7 +45,7 @@ i32 mbrtowc(u32 *wide, const char *source, u32 available, void *state) {
 }
 i32 mbtowc(u32 *wide, const char *source, u32 available) { return mbrtowc(wide, source, available, 0); }
 i32 btowc(i32 value) { return value < 0 ? -1 : (unsigned char)value; }
-i32 mbrlen(const char *source, u32 available, void *state) { return mbrtowc(0, source, available, state); }
+size_t mbrlen(const char *source, size_t available, void *state) { return mbrtowc(0, source, available, state); }
 i32 mblen(const char *source, u32 available) { return mbrtowc(0, source, available, 0); }
 i32 wcrtomb(char *destination, u32 value, void *state) {
   (void)state; if (!destination) return 1; i32 result = utf8_encode((unsigned char *)destination, value);

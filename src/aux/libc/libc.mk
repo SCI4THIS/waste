@@ -11,6 +11,8 @@ LIBC_CFLAGS := --target=wasm32 -std=c11 -ffreestanding -fno-builtin \
 	-fdata-sections -ffunction-sections -nostdinc -nostdlib \
 	-isystem "$(SDK_ROOT)/usr/include" \
 	-isystem "$(SDK_ROOT)/usr/lib/waste/cc/include"
+include $(LIBC_DIR)/llvm-math/llvm-math.mk
+
 LIBC_LDFLAGS := --shared --import-memory --import-table \
 	--export-all --allow-undefined --no-entry
 
@@ -38,3 +40,8 @@ install-libc: libc
 include $(LIBC_DIR)/system.mk
 
 -include $(LIBC_OBJECTS:.o=.d)
+
+install-libc: install-libc-math-notices
+.PHONY: install-libc-math-notices
+install-libc-math-notices: $(LIBC_MATH_STAGE)
+	flock "$(BUILD_DIR)/.vfs-install.lock" bash -c 'mkdir -p "$$1/usr/share/licenses/libc/llvm-math" && install -m 644 "$$2" "$$1/usr/share/licenses/libc/llvm-math/LICENSE.TXT"' -- "$(VFS_ROOT)" "$(LIBC_MATH_BUILD)/source/LICENSE.TXT"

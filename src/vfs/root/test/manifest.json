@@ -2,12 +2,14 @@
   "baselineRepairs": [],
   "counts": {
     "groups": {
+      "aux/awk": 1,
       "aux/bash": 1,
       "aux/clang": 1,
       "aux/clipboard": 2,
       "aux/clipboard/browser": 1,
-      "aux/libc": 29,
+      "aux/libc": 32,
       "aux/lld-link": 1,
+      "aux/m4": 1,
       "aux/openssl": 2,
       "aux/sleep": 1,
       "aux/vim": 1,
@@ -104,7 +106,7 @@
       "wasm-spec/custom/name": 1
     },
     "supported": 293,
-    "tests": 444
+    "tests": 449
   },
   "files": [
     {
@@ -134,6 +136,13 @@
       "sha256": "6cafc2691e750b9ec4b5d55e5d49c423973eb339ef1f2273ca988e5f5e908bd4",
       "size": 302,
       "source": "assembled:src/vfs/root/test/diy-posix-test/vfs-mounted-paths.wast"
+    },
+    {
+      "path": "/root/test/aux/awk/installed.wast",
+      "role": "test-input",
+      "sha256": "d3ea2c24269676729ceb69161ae5f8bde4bf58c29c9aa59f2eb5c4d76e730345",
+      "size": 7572,
+      "source": "src/vfs/root/test/aux/awk/installed.wast"
     },
     {
       "path": "/root/test/aux/bash/tail-call-smoke.wast",
@@ -190,6 +199,13 @@
       "sha256": "52e8059e2149daf3a6184489a024276acab12e67c9fe6d77e31c8ea7195a2407",
       "size": 6475,
       "source": "src/vfs/root/test/aux/libc/allocator.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/awk-math.wast",
+      "role": "test-input",
+      "sha256": "9fd75001d716866153dcb9d9457c4afe95a599dd63f35921bff82797057b754d",
+      "size": 5576,
+      "source": "src/vfs/root/test/aux/libc/awk-math.wast"
     },
     {
       "path": "/root/test/aux/libc/clocks.wast",
@@ -332,6 +348,20 @@
       "source": "src/vfs/root/test/aux/libc/search-tokenize.wast"
     },
     {
+      "path": "/root/test/aux/libc/stdio-pushback.wast",
+      "role": "test-input",
+      "sha256": "cff0c68613bc417eb6937fd8c2b8f386e51de2dc7d14f29b9a57451594a9788e",
+      "size": 6037,
+      "source": "src/vfs/root/test/aux/libc/stdio-pushback.wast"
+    },
+    {
+      "path": "/root/test/aux/libc/stdio-state.wast",
+      "role": "test-input",
+      "sha256": "89fc64d5510d2c4bedd834d6894ea14a9baa70cb13a290505c4a5e0e0915a0ae",
+      "size": 4172,
+      "source": "src/vfs/root/test/aux/libc/stdio-state.wast"
+    },
+    {
       "path": "/root/test/aux/libc/stdio.wast",
       "role": "test-input",
       "sha256": "f3bb7128afb6e4cf3065dd60c9c84208268844b9a0db2b7459ccf1be64684f4d",
@@ -379,6 +409,13 @@
       "sha256": "cd4194c1fd98162d543668fa31d4ff22c34c9c6b40c0e4d7aad1ae9b38692f2a",
       "size": 11775,
       "source": "src/vfs/root/test/aux/lld-link/installed.wast"
+    },
+    {
+      "path": "/root/test/aux/m4/installed.wast",
+      "role": "test-input",
+      "sha256": "9516fb483fdf84f24d59d401b20757efc9c2028a580f897be578d158877988d2",
+      "size": 8518,
+      "source": "src/vfs/root/test/aux/m4/installed.wast"
     },
     {
       "path": "/root/test/aux/openssl/cli.wast",
@@ -3277,7 +3314,7 @@
       "timeoutScope": "existing dashboard has no per-test deadline"
     }
   },
-  "selection_sha256": "9020fb4322149cd403953aaa718672378bd3929a1a50c9f628028ffd4dd8823d",
+  "selection_sha256": "9a0221e070d7ea5d18f917cafaf94bc4429e0e9f7375cbb93261b324e6da44e6",
   "sourceInputs": [
     {
       "hostOnly": true,
@@ -11890,6 +11927,33 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "aux/awk/installed.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 7572,
+        "sourcePath": "src/vfs/root/test/aux/awk/installed.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/awk",
+      "id": "aux/awk/installed.wast",
+      "name": "installed.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/awk/installed.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/vfs/root/test/aux/awk/installed.wast",
+        "sha256": "d3ea2c24269676729ceb69161ae5f8bde4bf58c29c9aa59f2eb5c4d76e730345",
+        "size": 7572
+      },
+      "spec_sha256": "bf1699abdbb166976b47b3adece9277cb6744ef217ef66647a0c882d26a8a0ca",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "aux/bash/tail-call-smoke.wast",
         "mode": "wast-stream",
         "sourceBytes": 798,
@@ -12098,6 +12162,33 @@
         "size": 6475
       },
       "spec_sha256": "4951a3492b16aad9094b98982066b6476723b83a80a4754dc3acfca90eca3a4f",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/awk-math.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 5576,
+        "sourcePath": "src/vfs/root/test/aux/libc/awk-math.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/awk-math.wast",
+      "name": "awk-math.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/awk-math.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/vfs/root/test/aux/libc/awk-math.wast",
+        "sha256": "9fd75001d716866153dcb9d9457c4afe95a599dd63f35921bff82797057b754d",
+        "size": 5576
+      },
+      "spec_sha256": "c1801c537ee9ecef7bc6c3c971c75bedfbc77a1d543de18380632d091203e31f",
       "suite": "aux",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
@@ -12646,6 +12737,60 @@
       "assets": [],
       "executionSpec": {
         "assertionCount": 0,
+        "file": "aux/libc/stdio-pushback.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 6037,
+        "sourcePath": "src/vfs/root/test/aux/libc/stdio-pushback.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/stdio-pushback.wast",
+      "name": "stdio-pushback.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/stdio-pushback.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/vfs/root/test/aux/libc/stdio-pushback.wast",
+        "sha256": "cff0c68613bc417eb6937fd8c2b8f386e51de2dc7d14f29b9a57451594a9788e",
+        "size": 6037
+      },
+      "spec_sha256": "44e0615b7518041efc4d5b62695e0a552e57baa00aff106439b4ef60e5f7cbb1",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/libc/stdio-state.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 4172,
+        "sourcePath": "src/vfs/root/test/aux/libc/stdio-state.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/libc",
+      "id": "aux/libc/stdio-state.wast",
+      "name": "stdio-state.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/libc/stdio-state.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/vfs/root/test/aux/libc/stdio-state.wast",
+        "sha256": "89fc64d5510d2c4bedd834d6894ea14a9baa70cb13a290505c4a5e0e0915a0ae",
+        "size": 4172
+      },
+      "spec_sha256": "d72e0816a4277a5a188f6d0d41bccac047f8d5e0454632b63ce36390e4604635",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
         "file": "aux/libc/stdio.wast",
         "mode": "wast-stream",
         "sourceBytes": 3765,
@@ -12827,6 +12972,33 @@
         "size": 11775
       },
       "spec_sha256": "596930cd0cfeb45303534eac7703b08aa1c488fcc394af8e23e3aad07328ec9f",
+      "suite": "aux",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "aux/m4/installed.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 8518,
+        "sourcePath": "src/vfs/root/test/aux/m4/installed.wast"
+      },
+      "expectFailure": false,
+      "group": "aux/m4",
+      "id": "aux/m4/installed.wast",
+      "name": "installed.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/aux/m4/installed.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/vfs/root/test/aux/m4/installed.wast",
+        "sha256": "9516fb483fdf84f24d59d401b20757efc9c2028a580f897be578d158877988d2",
+        "size": 8518
+      },
+      "spec_sha256": "02ca991631d486518f64dacf1b13448bc5aaf5030939a3b33c1772063ee9822f",
       "suite": "aux",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"

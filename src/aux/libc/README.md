@@ -297,3 +297,38 @@ counts or parsed fields beyond INT_MAX report EOVERFLOW. Package
 compiled mixed argument alignment and production four-digit statistics.
 This extends floating formatting; unrelated printf extensions and alternate
 locales still require separate acceptance.
+
+## Portable binary64 math
+
+GNU Awk's math builtins use the shared `exp`, `log`, `pow`, `sin`, `cos`,
+`atan2` and `fmod` providers. Their C wrappers live in `llvm-math/`; the build
+stages headers from the pinned, read-only `submodules/llvm-project/libc`
+checkout under `build/aux/libc/llvm-math/source`. Clang++ compiles this private
+C++ implementation without libc++, exceptions, RTTI or host headers. Consumers
+still call the ordinary public C ABI. Installation preserves LLVM's license
+under `/usr/share/licenses/libc/llvm-math`, and Bash/Coreutils/Awk source bundles
+include the required upstream math inputs.
+
+This profile selects LLVM's fast pass, fixed nearest-even rounding and errno
+reporting, without floating-point exception emulation or a correctly rounded
+transcendental guarantee. No extra math service or host math imports are used.
+`src/vfs/root/test/aux/libc/awk-math.wast` checks ordinary results, large trig
+arguments, signs of zero, nonfinite inputs and domain/range errno through the
+installed shared provider. The public `mbrlen` declaration exposes the existing
+shared UTF-8 provider; it does not add a second package implementation.
+
+## Opaque stream state
+
+`ungetc` preserves one unsigned byte of pushback without modifying the
+backing input. `fgetc`, `fread` and `fgets` consume that byte first; successful
+seeks and purges discard it, and successful pushback clears EOF.
+Failed seekability probes on pipes preserve the stream's error indicator.
+`__freadahead`, `__freading`, `__fwriting` and `__fpending` expose the current
+stream state without exporting the private FILE layout. Read-ahead counts the
+unconsumed input buffer; the direction queries report the current read/write
+flags. Current public streams use fixed directions, rather than full update
+mode semantics. Pending output is zero because descriptor and memory writes
+commit immediately. These read-only queries preserve errno and return zero
+for null streams. `stdio-state.wast` checks direction, consumption, seek/purge,
+output and errno behavior against the installed provider. GNU M4's Gnulib
+support uses these interfaces instead of a host FILE representation.
