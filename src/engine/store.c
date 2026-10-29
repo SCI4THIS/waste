@@ -534,7 +534,9 @@ static exec_status native_store_instantiate_executable_sync(
     uint8_t *compiled_bytes = NULL;
     waste_source_view source_view;
     waste_source_result source_result;
+#ifndef WASTE_BINARY_COMMAND
     char text_error[256] = {0};
+#endif
     native_exec_request effective_request;
     int effective_request_owned = 0;
     uint32_t effective_owned_count = 0;
@@ -666,6 +668,13 @@ static exec_status native_store_instantiate_executable_sync(
                              "WAT interpreter is not executable");
         }
     }
+#ifdef WASTE_BINARY_COMMAND
+    if ((is_wat || is_wast) && (image_size < 4 || memcmp(image_bytes, "\0asm", 4) != 0)) {
+        free(vfs_bytes);
+        return exec_fail(error, EXEC_ERROR_UNSUPPORTED,
+                         "text interpreters are unavailable in the binary command profile");
+    }
+#else
     if (is_wast && (image_size < 4 || memcmp(image_bytes, "\0asm", 4) != 0)) {
         wast_script script;
         int parse_status = wast_parse_bytes((const char *)image_bytes,
@@ -695,7 +704,9 @@ static exec_status native_store_instantiate_executable_sync(
                              text_error[0] ? text_error : "WAT compilation failed");
         }
         image_bytes = compiled_bytes;
-    } else if (image_size < 4 || memcmp(image_bytes, "\0asm", 4) != 0) {
+    } else
+#endif
+    if (image_size < 4 || memcmp(image_bytes, "\0asm", 4) != 0) {
         free(vfs_bytes);
         return exec_fail(error, EXEC_ERROR_FORMAT,
                          "executable is neither Wasm nor WAT");
@@ -745,7 +756,7 @@ static exec_status native_store_instantiate_executable_sync(
             effective_request.argv[0] = native_store_strdup(load_path);
             if (!effective_request.argv[0]) {
                 exec_free(engine);
-                return exec_fail(error, EXEC_ERROR_TRAP,
+                return exec_fail(error, EXEC_ERROR_RESOURCE,
                                  "WAT interpreter argv allocation failed");
             }
             for (uint32_t i = 2; i < argument_count; i++)
@@ -766,7 +777,7 @@ static exec_status native_store_instantiate_executable_sync(
                 free(effective_request.argv[1]);
                 if (shebang_argument) free(effective_request.argv[2]);
                 exec_free(engine);
-                return exec_fail(error, EXEC_ERROR_TRAP,
+                return exec_fail(error, EXEC_ERROR_RESOURCE,
                                  "WAT interpreter argv allocation failed");
             }
             for (uint32_t i = 1; i < argument_count; i++)
@@ -816,7 +827,7 @@ static exec_status native_store_instantiate_executable_sync(
                 free(effective_request.argv[i]);
         }
         exec_free(engine);
-        return exec_fail(error, EXEC_ERROR_TRAP,
+        return exec_fail(error, EXEC_ERROR_RESOURCE,
                          "executable image allocation failed");
     }
     image->engine = engine;
@@ -844,7 +855,7 @@ static exec_status native_store_instantiate_executable_sync(
             native_process_image_dispose_startup(image);
             exec_free(image->engine);
             free(image);
-            return exec_fail(error, EXEC_ERROR_TRAP,
+            return exec_fail(error, EXEC_ERROR_RESOURCE,
                              "executable argv allocation failed");
         }
         image->argc++;
@@ -859,7 +870,7 @@ static exec_status native_store_instantiate_executable_sync(
             native_process_image_dispose_startup(image);
             exec_free(image->engine);
             free(image);
-            return exec_fail(error, EXEC_ERROR_TRAP,
+            return exec_fail(error, EXEC_ERROR_RESOURCE,
                              "executable environment allocation failed");
         }
         image->envc++;

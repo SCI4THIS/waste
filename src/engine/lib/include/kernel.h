@@ -3,6 +3,7 @@
 
 #include "select.h"
 #include "path.h"
+#include "resource.h"
 #include "../../../vfs/usr/include/waste/abi/fcntl.h"
 
 #include <stdint.h>
@@ -164,6 +165,8 @@ typedef struct {
 } posix_flock;
 
 struct posix_file_object {
+    waste_resource_budget *resources;
+    uint64_t resource_bytes;
     uint8_t *data;
     size_t data_capacity;
     uint32_t refs;
@@ -288,6 +291,7 @@ typedef struct {
 
 /* Per-sandbox kernel. */
 typedef struct posix_kernel {
+    waste_resource_budget *resources;
     posix_fd_entry fds[POSIX_KERNEL_FD_MAX];
     posix_wait_record wait;
     posix_clock_now_fn clock_now;

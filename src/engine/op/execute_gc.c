@@ -48,7 +48,7 @@ int gc_allocate(waste_exec_engine *eng, wast_type_kind kind,
                 wasm_value *out, exec_error *err) {
     if (length > (uint32_t)(EXEC_MAX_GC_OBJECT_BYTES /
                             sizeof(*eng->gc_objects[0].values))) {
-        exec_fail(err, EXEC_ERROR_TRAP, "GC allocation failed");
+        exec_fail(err, EXEC_ERROR_RESOURCE, "GC allocation failed");
         return 0;
     }
     if (eng->gc_object_count >= UINT32_C(0x7ffffffe)) {
@@ -65,7 +65,7 @@ int gc_allocate(waste_exec_engine *eng, wast_type_kind kind,
             capacity = eng->gc_object_capacity * 2u;
 #if SIZE_MAX <= UINT32_MAX
         if (capacity > SIZE_MAX / sizeof(*eng->gc_objects)) {
-            exec_fail(err, EXEC_ERROR_TRAP, "GC allocation failed");
+            exec_fail(err, EXEC_ERROR_RESOURCE, "GC allocation failed");
             return 0;
         }
 #endif
@@ -87,7 +87,7 @@ int gc_allocate(waste_exec_engine *eng, wast_type_kind kind,
     if (length) {
 #if SIZE_MAX <= UINT32_MAX
         if (length > SIZE_MAX / sizeof(*object->values)) {
-            exec_fail(err, EXEC_ERROR_TRAP, "GC allocation failed");
+            exec_fail(err, EXEC_ERROR_RESOURCE, "GC allocation failed");
             eng->gc_object_count--;
             return 0;
         }

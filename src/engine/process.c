@@ -69,15 +69,8 @@ int native_store_shared_file_page(native_store *store,
         store->shared_file_page_capacity = capacity;
     }
     entry = &store->shared_file_pages[store->shared_file_page_count];
-    entry->page = calloc(1, sizeof(*entry->page));
+    entry->page = exec_memory_page_allocate(store->execution_control.resources);
     if (!entry->page) return -POSIX_ENOMEM;
-    entry->page->bytes = calloc(EXEC_PAGE_SIZE, 1);
-    if (!entry->page->bytes) {
-        free(entry->page);
-        entry->page = NULL;
-        return -POSIX_ENOMEM;
-    }
-    entry->page->refs = 1;
     if (file_offset < file_object->data_capacity) {
         size_t length = file_object->data_capacity - (size_t)file_offset;
         if (length > EXEC_PAGE_SIZE) length = EXEC_PAGE_SIZE;
@@ -1419,6 +1412,11 @@ int native_store_take_process_wake(native_store *store, int *result_out) {
 int native_store_fork_process(native_store *store, int *pid_out) {
     native_process *parent = active_process(store);
     if (!parent || !pid_out) return -POSIX_EFAULT;
+    waste_resource_budget *resources = store->execution_control.resources;
+    if (resources && (uint32_t)store->process_count >= resources->process_limit) {
+        if (!resources->exhausted) resources->exhausted = WASTE_RESOURCE_PROCESSES;
+        return -POSIX_ENOMEM;
+    }
     int slot = -1;
     for (int i = 0; i < NATIVE_PROCESS_MAX; i++)
         if (!store->processes[i].used) { slot = i; break; }
@@ -1448,6 +1446,8 @@ int native_store_fork_process(native_store *store, int *pid_out) {
         return -POSIX_ENOMEM;
     }
     store->process_count++;
+    if (resources && (uint32_t)store->process_count > resources->process_peak)
+        resources->process_peak = (uint32_t)store->process_count;
     *pid_out = pid;
     return 0;
 }

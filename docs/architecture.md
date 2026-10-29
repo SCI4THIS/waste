@@ -24,6 +24,20 @@ and `wast`.
 
 ## Repository and Artifact Layout
 
+The embedding interface adds opaque command sessions in the public
+`src/engine/include/waste.h` header. `src/engine/session/` owns session resources
+and drives the shared process driver; native and Wasm hosts supply only platform
+services. `src/html-rt/command/` builds a separate binary-command artifact and
+byte-oriented JavaScript/worker adapters without the shell or WAST frontend.
+Native and browser frontend adapters borrow the owned store/driver through
+`session/adapter.h`; they retain terminal and WAST callbacks outside the public
+batch contract. Browser Bash starts directly through the same lifecycle, while
+the legacy script exports remain available. The standalone command profile
+packages only selected installed files and has its own offline example.
+The guest ABI remains distinct from this host interface. See
+[the embedding reference](embedding.md) for the implemented contract and
+[the active plan](active-embedding.md) for the implementation and acceptance record.
+
 The current source boundaries are:
 
 ```text

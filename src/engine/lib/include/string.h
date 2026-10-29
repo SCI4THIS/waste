@@ -13,5 +13,8 @@ size_t strlen(const char *s);
 char  *strncpy(char *dst, const char *src, size_t n);
 char  *strcpy(char *dst, const char *src);
 char  *strerror(int errnum);
+char  *strchr(const char *s, int c);
+char  *strrchr(const char *s, int c);
+void  *memchr(const void *s, int c, size_t n);
 
 #endif

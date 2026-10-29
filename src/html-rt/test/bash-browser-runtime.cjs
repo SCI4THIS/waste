@@ -1407,7 +1407,8 @@ Promise.race([completion, timeout]).then(result => {
       ? promptSeen && commandSent && vfsSeen && coreutilsLsOutputSeen &&
         coreutilsLsStatusSeen &&
         output.includes("__C_ENGINE_COREUTILS_LS_STATUS_0__") &&
-        !output.includes("Jan  1  1970") &&
+        // Custom probes include virtual interpreter nodes with epoch mtimes.
+        (coreutilsLsCommand !== "" || !output.includes("Jan  1  1970")) &&
         exitSent && !doneBeforeExit && result.ok
     : wastRepeatProbe
       ? promptSeen && commandSent && vfsSeen && exitSent && !doneBeforeExit &&

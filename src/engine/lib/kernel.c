@@ -63,18 +63,42 @@ static void ofd_release(posix_ofd *ofd) {
     free(ofd);
 }
 
+static int file_object_resize(posix_file_object *object, size_t size) {
+    size_t extra = object->metadata.kind == POSIX_NODE_SYMLINK;
+    if (size > SIZE_MAX - extra) return 0;
+    size_t allocated = size + extra;
+    size_t old_capacity = object->data_capacity + extra;
+    uint64_t old_charge = object->resource_bytes;
+    uint64_t added = allocated > old_charge ? allocated - old_charge : 0;
+    if (!waste_resource_reserve(object->resources, WASTE_RESOURCE_FILESYSTEM, added)) return 0;
+    uint8_t *data = realloc(object->data, allocated);
+    if (!data && allocated) {
+        waste_resource_release(object->resources, WASTE_RESOURCE_FILESYSTEM, added);
+        return 0;
+    }
+    if (allocated > old_capacity) memset(data + old_capacity, 0, allocated - old_capacity);
+    if (extra) data[size] = 0;
+    if (old_charge > allocated)
+        waste_resource_release(object->resources, WASTE_RESOURCE_FILESYSTEM, old_charge - allocated);
+    object->data = data;
+    object->data_capacity = size;
+    object->resource_bytes = allocated;
+    return 1;
+}
+
 static posix_file_object *file_object_create(const uint8_t *data,
                                              size_t length,
-                                             const posix_path_metadata *metadata) {
+                                             const posix_path_metadata *metadata,
+                                             waste_resource_budget *resources) {
     posix_file_object *object = calloc(1, sizeof(*object));
     if (!object) return NULL;
     object->refs = 1;
     object->inode = metadata->inode;
     object->metadata = *metadata;
+    object->resources = resources;
     int symlink = metadata->kind == POSIX_NODE_SYMLINK;
     if (length || symlink) {
-        object->data = malloc(length + (size_t)symlink);
-        if (!object->data) { free(object); return NULL; }
+        if (!file_object_resize(object, length)) { free(object); return NULL; }
         if (length) memcpy(object->data, data, length);
         if (symlink) object->data[length] = 0;
         object->data_capacity = length;
@@ -109,6 +133,7 @@ void posix_file_object_retain(posix_file_object *object) {
 
 void posix_kernel_file_release(posix_file_object *object) {
     if (!object || !object->refs || --object->refs > 0) return;
+    waste_resource_release(object->resources, WASTE_RESOURCE_FILESYSTEM, object->resource_bytes);
     free(object->data);
     free(object);
 }
@@ -142,7 +167,7 @@ posix_shm_namespace *posix_shm_namespace_clone(
         clone->objects[i].file = file_object_create(
             source->objects[i].file->data,
             source->objects[i].file->data_capacity,
-            &source->objects[i].file->metadata);
+            &source->objects[i].file->metadata, source->objects[i].file->resources);
         if (!clone->objects[i].file) {
             posix_shm_namespace_release(clone);
             return NULL;
@@ -390,7 +415,7 @@ static int path_install_object(posix_kernel *kernel, const char *path,
     if (!node && kernel->path_node_count >= POSIX_PATH_NODE_MAX)
         return -POSIX_ENOMEM;
     posix_file_object *file = metadata->kind != POSIX_NODE_DIRECTORY ?
-        file_object_create(data, data_length, metadata) : NULL;
+        file_object_create(data, data_length, metadata, kernel->resources) : NULL;
     if (metadata->kind != POSIX_NODE_DIRECTORY && !file) return -POSIX_ENOMEM;
     if (!node) {
         node = &kernel->path_nodes[kernel->path_node_count++];
@@ -2021,6 +2046,9 @@ static int kernel_open_node(posix_kernel *kernel, posix_kernel_path_node *node,
     ofd->status->flags = flags & (POSIX_O_WRONLY | POSIX_O_RDWR |
                                 POSIX_O_APPEND | POSIX_O_NONBLOCK);
     if ((flags & POSIX_O_TRUNC) && ofd->regular.writable) {
+        waste_resource_release(ofd->regular.file->resources, WASTE_RESOURCE_FILESYSTEM,
+            ofd->regular.file->resource_bytes);
+        ofd->regular.file->resource_bytes = 0;
         free(ofd->regular.file->data); ofd->regular.file->data = NULL;
         ofd->regular.file->data_capacity = 0;
         node->file->metadata.size = 0;
@@ -2126,7 +2154,7 @@ int posix_kernel_shm_open(posix_kernel *kernel, const uint8_t *name,
             kernel->uid, kernel->gid,
             0, posix_kernel_allocate_inode(kernel), 0, 0 };
         metadata_set_now(kernel, &metadata);
-        object->file = file_object_create(NULL, 0, &metadata);
+        object->file = file_object_create(NULL, 0, &metadata, kernel->resources);
         if (!object->file) {
             kernel->shm_namespace->count--;
             return -POSIX_ENOMEM;
@@ -2662,7 +2690,6 @@ int posix_kernel_fsync(posix_kernel *kernel, int fd) {
 
 int posix_kernel_ftruncate(posix_kernel *kernel, int fd, uint64_t size) {
     posix_ofd *ofd;
-    uint8_t *resized;
     if (!kernel || !fd_valid(fd) || size > SIZE_MAX)
         return -POSIX_EINVAL;
     ofd = kernel->fds[fd].ofd;
@@ -2670,13 +2697,7 @@ int posix_kernel_ftruncate(posix_kernel *kernel, int fd, uint64_t size) {
     if (ofd->kind != POSIX_OFD_REGULAR || !ofd->regular.writable)
         return -POSIX_EBADF;
     if ((size_t)size == ofd->regular.file->data_capacity) return 0;
-    resized = (uint8_t *)realloc(ofd->regular.file->data, (size_t)size);
-    if (!resized && size != 0) return -POSIX_ENOMEM;
-    if ((size_t)size > ofd->regular.file->data_capacity)
-        memset(resized + ofd->regular.file->data_capacity, 0,
-               (size_t)size - ofd->regular.file->data_capacity);
-    ofd->regular.file->data = resized;
-    ofd->regular.file->data_capacity = (size_t)size;
+    if (!file_object_resize(ofd->regular.file, (size_t)size)) return -POSIX_ENOMEM;
     ofd->regular.file->metadata.size = (int64_t)size;
     metadata_set_now(kernel, &ofd->regular.file->metadata);
     return 0;
@@ -2708,13 +2729,7 @@ int posix_kernel_file_write_object(posix_kernel *kernel,
     end = offset + count;
     if (end > SIZE_MAX) return -POSIX_EINVAL;
     if (end > object->data_capacity) {
-        uint8_t *grown = realloc(object->data, (size_t)end);
-        if (!grown) return -POSIX_ENOMEM;
-        if ((size_t)end > object->data_capacity)
-            memset(grown + object->data_capacity, 0,
-                   (size_t)end - object->data_capacity);
-        object->data = grown;
-        object->data_capacity = (size_t)end;
+        if (!file_object_resize(object, (size_t)end)) return -POSIX_ENOMEM;
     }
     object->metadata.size = (int64_t)object->data_capacity;
     if (count) {
@@ -2793,10 +2808,7 @@ int posix_kernel_write(posix_kernel *kernel, int fd,
         size_t needed = offset + (size_t)count;
         if (needed < offset) return -POSIX_ENOSPC;
         if (needed > ofd->regular.file->data_capacity) {
-            uint8_t *grown = realloc(ofd->regular.file->data, needed);
-            if (!grown) return -POSIX_ENOMEM;
-            ofd->regular.file->data = grown;
-            ofd->regular.file->data_capacity = needed;
+            if (!file_object_resize(ofd->regular.file, needed)) return -POSIX_ENOMEM;
         }
         memcpy(ofd->regular.file->data + offset, buf, (size_t)count);
         ofd->regular.offset = offset + (size_t)count;

@@ -1,6 +1,7 @@
 /* Native guest session: mounted inputs and shared guest ABI/process driver. */
 #define _POSIX_C_SOURCE 200809L
 #include "native_runtime.h"
+#include "session/adapter.h"
 #include "guest_posix.h"
 #include "native_entropy.h"
 #include "process_driver.h"
@@ -41,8 +42,9 @@ struct cli_guest_session {
     struct sigaction previous_signals[2];
     int signal_count, host_stdio, host_signal;
     int suite_root_fd;
-    native_store store;
-    native_process_driver driver;
+    waste_session *execution;
+    native_store *store;
+    native_process_driver *driver;
     wast_process_handler handler;
     wast_script *retained[NATIVE_SESSION_MAX_COMMANDS];
     int retained_count;
@@ -106,13 +108,13 @@ static exec_stop_reason session_control(void *opaque) {
     uint64_t now = host_now();
     if (session->host_stdio) {
         if (native_terminal_resized()) {
-            if (native_terminal_resize(&session->terminal, session->store.kernel) < 0)
+            if (native_terminal_resize(&session->terminal, session->store->kernel) < 0)
                 snprintf(session->error, sizeof(session->error), "cannot update host terminal size");
             else session->resize_events++;
         }
         int signal;
         while ((signal = native_terminal_take_signal()) != 0) {
-            native_store_signal_foreground(&session->store, signal);
+            native_store_signal_foreground(session->store, signal);
             session->signal_events++;
         }
     }
@@ -134,7 +136,7 @@ static int32_t session_write(void *opaque, int32_t descriptor,
     cli_guest_session *session = opaque;
     if (session->host_stdio) {
         if (descriptor < 0 || descriptor >= POSIX_KERNEL_FD_MAX) return -POSIX_EBADF;
-        const posix_ofd *ofd = session->store.kernel->fds[descriptor].ofd;
+        const posix_ofd *ofd = session->store->kernel->fds[descriptor].ofd;
         if (!ofd || (ofd->kind != POSIX_OFD_TERMINAL && ofd->kind != POSIX_OFD_STREAM) ||
             ofd->output_handle < 0 || ofd->output_handle >= 3) return -POSIX_EBADF;
         int host = session->terminal.handles[ofd->output_handle];
@@ -197,7 +199,7 @@ static int session_control_read(cli_guest_session *session, exec_error *error) {
     if (operation == 1 && first && first <= UINT16_MAX &&
         second && second <= UINT16_MAX) {
         posix_winsize dimensions = {(uint16_t)second, (uint16_t)first, 0, 0};
-        if (posix_kernel_terminal_set_winsize(session->store.kernel, 0,
+        if (posix_kernel_terminal_set_winsize(session->store->kernel, 0,
                                              &dimensions)) goto invalid;
         session->resize_events++;
     } else if (operation == 2 && first && first <= POSIX_SIGNAL_MAX) {
@@ -207,8 +209,8 @@ static int session_control_read(cli_guest_session *session, exec_error *error) {
          * without stealing the active continuation.  Any store/kernel error
          * stays visible, rather than being hidden as a passed event. */
         int routed = second
-            ? native_store_signal_process(&session->store, (int)second, (int)first)
-            : posix_kernel_signal_raise(session->store.kernel, (int)first);
+            ? native_store_signal_process(session->store, (int)second, (int)first)
+            : posix_kernel_signal_raise(session->store->kernel, (int)first);
         if (routed) goto invalid;
         session->signal_events++;
     } else if (operation == 3 && first && first <= POSIX_SIGNAL_MAX && second) {
@@ -217,7 +219,7 @@ static int session_control_read(cli_guest_session *session, exec_error *error) {
          * error (callers should keep groups non-empty), so a negative or
          * zero result is reported as an invalid record rather than silently
          * dropped. */
-        int delivered = native_store_signal_process_group(&session->store,
+        int delivered = native_store_signal_process_group(session->store,
                                                            (int)second,
                                                            (int)first);
         if (delivered <= 0) goto invalid;
@@ -241,10 +243,10 @@ invalid:
 static int session_input(cli_guest_session *session, exec_error *error) {
     int selecting = error->yield_reason == EXEC_YIELD_SELECT;
     int pumping = error->yield_reason == EXEC_YIELD_PUMP;
-    posix_wait_record *initial_wait = &session->store.kernel->wait;
+    posix_wait_record *initial_wait = &session->store->kernel->wait;
     uint64_t initial_timeout;
-    int timed = native_process_driver_wait_timeout(&session->store, &initial_timeout);
-    if (!session->store.kernel_terminal &&
+    int timed = native_process_driver_wait_timeout(session->store, &initial_timeout);
+    if (!session->store->kernel_terminal &&
         !pumping && !timed && (!selecting || !initial_wait->active || !initial_wait->has_deadline)) {
         (void)exec_fail(error, EXEC_ERROR_UNSUPPORTED,
                        "external input waits require a runtime terminal context");
@@ -256,11 +258,11 @@ static int session_input(cli_guest_session *session, exec_error *error) {
     }
     for (;;) {
         uint64_t host = host_now();
-        exec_status checked = exec_execution_check(&session->store.execution_control, error);
+        exec_status checked = exec_execution_check(&session->store->execution_control, error);
         if (checked != EXEC_OK) return checked == EXEC_ERROR_EXIT;
-        posix_wait_record *wait = &session->store.kernel->wait;
+        posix_wait_record *wait = &session->store->kernel->wait;
         if (wait->active) {
-            int state = posix_kernel_wait_poll(session->store.kernel);
+            int state = posix_kernel_wait_poll(session->store->kernel);
             if (state == POSIX_WAIT_SIGNAL ||
                 (selecting && state != POSIX_WAIT_BLOCKED)) return 1;
         }
@@ -268,7 +270,7 @@ static int session_input(cli_guest_session *session, exec_error *error) {
         if (session->cancel_deadline && session->cancel_deadline < deadline)
             deadline = session->cancel_deadline;
         uint64_t scheduled_remaining;
-        if (native_process_driver_wait_timeout(&session->store, &scheduled_remaining)) {
+        if (native_process_driver_wait_timeout(session->store, &scheduled_remaining)) {
             if (!scheduled_remaining) return 1;
             if (deadline > host && scheduled_remaining < deadline - host)
                 deadline = host + scheduled_remaining;
@@ -289,7 +291,7 @@ static int session_input(cli_guest_session *session, exec_error *error) {
         int timeout = deadline == UINT64_MAX ? -1 : remaining > INT_MAX ? INT_MAX : (int)remaining;
         if (pumping) timeout = 0;
         struct pollfd descriptors[4] = {
-            {session->input_eof || !session->store.kernel_terminal ? -1 : STDIN_FILENO, POLLIN, 0},
+            {session->input_eof || !session->store->kernel_terminal ? -1 : STDIN_FILENO, POLLIN, 0},
             {session->control_fd, POLLIN, 0}, {-1, POLLIN, 0}, {-1, POLLIN, 0}
         };
         int guest_fds[3] = {-1, -1, -1};
@@ -298,7 +300,7 @@ static int session_input(cli_guest_session *session, exec_error *error) {
             /* The session input capability belongs to the terminal OFD, not
              * guest fd 0, which may now be closed or name a pipe/file. */
             for (int fd = 0; fd < POSIX_KERNEL_FD_MAX; fd++) {
-                posix_ofd *ofd = session->store.kernel->fds[fd].ofd;
+                posix_ofd *ofd = session->store->kernel->fds[fd].ofd;
                 if (ofd && ofd->kind == POSIX_OFD_TERMINAL &&
                     !ofd->stream_mode && !ofd->terminal.eof) {
                     terminal_fd = fd;
@@ -310,7 +312,7 @@ static int session_input(cli_guest_session *session, exec_error *error) {
         if (session->host_stdio) {
             descriptors[0].fd = -1;
             for (int fd = 0; fd < POSIX_KERNEL_FD_MAX; fd++) {
-                posix_ofd *ofd = session->store.kernel->fds[fd].ofd;
+                posix_ofd *ofd = session->store->kernel->fds[fd].ofd;
                 if (!ofd || (ofd->kind != POSIX_OFD_TERMINAL && ofd->kind != POSIX_OFD_STREAM) ||
                     (pumping && ofd->kind != POSIX_OFD_TERMINAL) ||
                     ofd->input_handle < 0 || ofd->input_handle >= 3 || ofd->terminal.eof ||
@@ -353,7 +355,7 @@ static int session_input(cli_guest_session *session, exec_error *error) {
         uint8_t bytes[1024];
         size_t capacity = sizeof(bytes);
         if (session->host_stdio) {
-            const posix_ofd *ofd = session->store.kernel->fds[guest_fd].ofd;
+            const posix_ofd *ofd = session->store->kernel->fds[guest_fd].ofd;
             size_t available = (size_t)(ofd->terminal.input_capacity - ofd->terminal.input_length);
             if (capacity > available) capacity = available;
             if (!capacity) return 1;
@@ -366,8 +368,8 @@ static int session_input(cli_guest_session *session, exec_error *error) {
         }
         if (count == 0) {
             if (!session->host_stdio) session->input_eof = 1;
-            if (posix_kernel_terminal_signal_eof(session->store.kernel, guest_fd) == 0) return 1;
-        } else if (guest_posix_enqueue_input(&session->store, guest_fd,
+            if (posix_kernel_terminal_signal_eof(session->store->kernel, guest_fd) == 0) return 1;
+        } else if (guest_posix_enqueue_input(session->store, guest_fd,
                                                   bytes, (int)count) == 0) {
             session->input_bytes += (unsigned)count;
             return 1;
@@ -383,7 +385,7 @@ static int session_input(cli_guest_session *session, exec_error *error) {
 #include "guest_suite.h"
 
 static int session_host_io(cli_guest_session *session, exec_error *error) {
-    native_host_io_state *host_io = &session->store.host_io;
+    native_host_io_state *host_io = &session->store->host_io;
     if (host_io->kind == NATIVE_HOST_IO_CLIPBOARD) {
         /* No desktop clipboard capability is granted by the native runtime.
          * Resume the guest with failure rather than terminating its shell. */
@@ -455,7 +457,7 @@ static exec_status session_handler_step(const uint8_t *source, size_t size,
     exec_status status = wast_process_handler_step(source, size, offset, line,
                                                     next_offset, next_line, handler);
     cli_guest_session *session = handler->result_data;
-    session->driver.handler_wait_reason = handler->wait_reason;
+    session->driver->handler_wait_reason = handler->wait_reason;
     return status;
 }
 
@@ -465,8 +467,7 @@ static exec_status session_invoke(void *opaque, waste_exec_engine *engine,
                                   exec_error *error) {
     cli_guest_session *session = opaque;
     for (;;) {
-        exec_status status = native_process_driver_invoke(&session->driver,
-            &session->store, engine, function, args, argc, results, result_count, error);
+        exec_status status = waste_session_adapter_invoke(session->execution, engine, function, args, argc, results, result_count, error);
         if (status == EXEC_ERROR_EXIT) {
             session->exited = 1;
             session->exit_code = error->exit_code;
@@ -489,7 +490,7 @@ static exec_status session_invoke(void *opaque, waste_exec_engine *engine,
         if (session->trace_waits && !host_io_yield && error->yield_reason != EXEC_YIELD_PUMP) {
             fprintf(stderr, "{\"wait\":%u,\"pid\":%d,\"kind\":%d}\n",
                     session->waits + session->select_waits,
-                    native_store_getpid(&session->store), (int)error->yield_reason);
+                    native_store_getpid(session->store), (int)error->yield_reason);
             fflush(stderr);
         }
         if (host_io_yield) {
@@ -503,13 +504,13 @@ static exec_status session_invoke(void *opaque, waste_exec_engine *engine,
                 error->status = EXEC_ERROR_TRAP;
             return error->status;
         }
-        native_driver_selection *selected = &session->driver.selection;
-        if (native_store_set_active_process(&session->store, selected->pid) != 0)
+        native_driver_selection *selected = &session->driver->selection;
+        if (native_store_set_active_process(session->store, selected->pid) != 0)
             return exec_fail(error, EXEC_ERROR_TRAP, "native session process disappeared");
         exec_yield_reason handler_reason = EXEC_YIELD_NONE;
-        if (native_store_process_handler_wait_reason(&session->store, &handler_reason) == 0 &&
+        if (native_store_process_handler_wait_reason(session->store, &handler_reason) == 0 &&
             handler_reason != EXEC_YIELD_NONE &&
-            native_store_resume_process_handler(&session->store) != 0)
+            native_store_resume_process_handler(session->store) != 0)
             return exec_fail(error, EXEC_ERROR_TRAP, "cannot resume native WAST handler");
         engine = selected->engine;
         function = selected->func_idx;
@@ -531,7 +532,7 @@ static int session_command(wast_stream_command_kind kind, const char *bytes,
     cli_guest_session *session = opaque;
     (void)bytes; (void)length; (void)offset; (void)line;
     exec_error stop_error = {0};
-    if (exec_execution_check(&session->store.execution_control, &stop_error) != EXEC_OK) {
+    if (exec_execution_check(&session->store->execution_control, &stop_error) != EXEC_OK) {
         session_failure(session, stop_error.message);
         return 0;
     }
@@ -541,7 +542,7 @@ static int session_command(wast_stream_command_kind kind, const char *bytes,
     }
     if (kind == WAST_STREAM_REGISTER && parsed->group_count == 1) {
         wast_module *module = &parsed->groups[0].module;
-        native_linked_module *selected = native_selected_module(&session->store,
+        native_linked_module *selected = native_selected_module(session->store,
                                                                   module->register_target);
         if (!selected) session_failure(session, "unknown register target");
         else snprintf(selected->registered, sizeof(selected->registered), "%s", module->register_name);
@@ -573,13 +574,13 @@ static int session_command(wast_stream_command_kind kind, const char *bytes,
         }
         waste_exec_engine *engine = NULL;
         exec_error error = {0};
-        exec_status status = native_load_module(&session->store, module, binary, size,
+        exec_status status = native_load_module(session->store, module, binary, size,
                                                 &engine, &error);
         free(binary);
         if (status != EXEC_OK) {
             exec_free(engine);
             session_failure(session, error.message);
-        } else if (!native_store_add(&session->store, engine, module, module)) {
+        } else if (!native_store_add(session->store, engine, module, module)) {
             exec_free(engine);
             session_failure(session, "cannot retain guest instance");
         }
@@ -589,7 +590,7 @@ static int session_command(wast_stream_command_kind kind, const char *bytes,
         parsed->group_count == 1 && !parsed->groups[0].has_module_assertion) {
         for (int i = 0; i < parsed->assertion_count && !session->stopped; i++) {
             const wast_assertion *assertion = &parsed->assertions[i];
-            waste_exec_engine *engine = native_selected_engine(&session->store, assertion->module_id);
+            waste_exec_engine *engine = native_selected_engine(session->store, assertion->module_id);
             exec_error error = {0};
             exec_status status = engine ? wast_run_assertion_with_invoke(
                 engine, assertion, &error, session_invoke, session) : EXEC_ERROR_NOT_FOUND;
@@ -690,7 +691,7 @@ int native_runtime_finish(native_runtime *session, const char *result_path) {
                         "\"uploadEvents\":%u,\"downloadEvents\":%u,\"clockEvents\":%u,"
                         "\"timedOut\":%s,\"cancelled\":%s,\"exited\":%s,"
                         "\"exitStatus\":%d,\"signal\":%d,\"error\":", session->passed, session->total,
-                        session->driver.forks, session->driver.execs, session->driver.child_exits,
+                        session->driver->forks, session->driver->execs, session->driver->child_exits,
                         session->waits, session->select_waits, session->input_bytes,
                         session->resize_events, session->signal_events,
                         session->upload_events, session->download_events, session->clock_events,
@@ -703,9 +704,9 @@ int native_runtime_finish(native_runtime *session, const char *result_path) {
         fputs("}\n", result);
         if (result_path && fclose(result)) session_failure(session, "cannot write native session results");
     } else if (result_path || session->report_default) session_failure(session, "cannot open native session results");
-    native_process_driver_destroy(&session->driver);
     wast_process_handler_reset(&session->handler);
-    native_store_free(&session->store);
+    waste_session_delete(&session->execution);
+    session->handler.store = NULL;
     wast_process_handler_destroy(&session->handler);
     for (int i = 0; i < session->retained_count; i++) {
         wast_script_free(session->retained[i]);
@@ -739,35 +740,40 @@ native_runtime *native_runtime_create_vfs(const char *root, const waste_vfs *mou
     session->clock_realtime_ns = options->clock_realtime_ns;
     session->clock_monotonic_fixed = options->clock_monotonic_fixed;
     session->clock_monotonic_ns = options->clock_monotonic_ns;
-    native_store_init(&session->store);
-    session->store.test_suite_enabled = !options->disable_test_suite;
-    native_process_driver_init(&session->driver);
-    wast_process_handler_init(&session->handler, &session->store, session_handler_result, session);
-    session->driver.handler_step = session_handler_step;
-    session->driver.handler_reset = wast_process_handler_reset;
-    session->driver.handler_create = wast_process_handler_create;
-    session->driver.handler_destroy = wast_process_handler_destroy_owned;
-    session->driver.handler_context = &session->handler;
-    if (options->trace_process) session->driver.trace = session_process_trace;
+    exec_error initialization = {0};
+    if (waste_session_adapter_create(&session->execution, &initialization) != EXEC_OK) {
+        free(session);
+        return NULL;
+    }
+    session->store = waste_session_adapter_store(session->execution);
+    session->driver = waste_session_adapter_driver(session->execution);
+    session->store->test_suite_enabled = !options->disable_test_suite;
+    wast_process_handler_init(&session->handler, session->store, session_handler_result, session);
+    session->driver->handler_step = session_handler_step;
+    session->driver->handler_reset = wast_process_handler_reset;
+    session->driver->handler_create = wast_process_handler_create;
+    session->driver->handler_destroy = wast_process_handler_destroy_owned;
+    session->driver->handler_context = &session->handler;
+    if (options->trace_process) session->driver->trace = session_process_trace;
     session->raw_output = options->raw_output;
     session->columns = options->columns;
     session->rows = options->rows;
     if (session->host_stdio) {
-        if (native_terminal_open(&session->terminal, session->store.kernel))
+        if (native_terminal_open(&session->terminal, session->store->kernel))
             session_failure(session, "cannot configure inherited stdio/host terminal");
-        session->store.kernel_terminal = 1;
-    } else if (!options->empty_descriptors) native_store_enable_terminal(&session->store);
-    if (options->raw_output && !session->host_stdio && session->store.kernel) {
+        session->store->kernel_terminal = 1;
+    } else if (!options->empty_descriptors) native_store_enable_terminal(session->store);
+    if (options->raw_output && !session->host_stdio && session->store->kernel) {
         posix_termios termios;
-        if (!posix_kernel_tcgetattr(session->store.kernel, 0, &termios)) {
+        if (!posix_kernel_tcgetattr(session->store->kernel, 0, &termios)) {
             termios.oflag = 0;
-            (void)posix_kernel_tcsetattr(session->store.kernel, 0, &termios);
+            (void)posix_kernel_tcsetattr(session->store->kernel, 0, &termios);
         }
     }
-    session->store.guest_platform = &session_platform;
-    session->store.guest_platform_data = session;
-    session->store.host_resolver = guest_posix_host_resolver;
-    session->store.host_context = &session->store;
+    session->store->guest_platform = &session_platform;
+    session->store->guest_platform_data = session;
+    session->store->host_resolver = guest_posix_host_resolver;
+    session->store->host_context = session->store;
     session_interrupted = 0;
     struct sigaction action = {0};
     action.sa_handler = session_interrupt;
@@ -784,27 +790,27 @@ native_runtime *native_runtime_create_vfs(const char *root, const waste_vfs *mou
     uint64_t now = host_now();
     if (options->timeout_ms) session->deadline = now + (uint64_t)options->timeout_ms * 1000000u;
     if (options->cancel_after_ms) session->cancel_deadline = now + (uint64_t)options->cancel_after_ms * 1000000u;
-    session->store.execution_control.poll = session_control;
-    session->store.execution_control.context = session;
-    session->store.execution_control.pump_quantum_ns =
+    session->store->execution_control.poll = session_control;
+    session->store->execution_control.context = session;
+    session->store->execution_control.pump_quantum_ns =
         (uint64_t)EXECUTION_DEFAULT_PUMP_QUANTUM_MS * UINT64_C(1000000);
-    session->store.execution_control.pump_clock_now = session_pump_now;
-    session->store.execution_control.pump_clock_context = session;
+    session->store->execution_control.pump_clock_now = session_pump_now;
+    session->store->execution_control.pump_clock_context = session;
     waste_vfs vfs = {0};
     char error[256] = {0};
     session->suite_root_fd = native_vfs_open_root(root);
-    if (!session->store.kernel || session->suite_root_fd < 0 ||
+    if (!session->store->kernel || session->suite_root_fd < 0 ||
         (!mounted && native_vfs_load_at(session->suite_root_fd, &vfs, error, sizeof(error))) ||
-        waste_vfs_mount(session->store.kernel, mounted ? mounted : &vfs))
+        waste_vfs_mount(session->store->kernel, mounted ? mounted : &vfs))
         session_failure(session, error[0] ? error : "cannot mount native VFS tree");
     waste_vfs_free(&vfs);
     if (!session->stopped) {
-        posix_kernel_set_clock(session->store.kernel, session_now, session);
-        posix_kernel_set_realtime_clock(session->store.kernel, session_realtime, session);
+        posix_kernel_set_clock(session->store->kernel, session_now, session);
+        posix_kernel_set_realtime_clock(session->store->kernel, session_realtime, session);
         posix_winsize dimensions = {(uint16_t)options->rows, (uint16_t)options->columns, 0, 0};
-        if (posix_kernel_path_set_cwd(session->store.kernel, "/root") ||
+        if (posix_kernel_path_set_cwd(session->store->kernel, "/root") ||
             (!options->empty_descriptors && !session->host_stdio &&
-             posix_kernel_terminal_set_winsize(session->store.kernel, 0, &dimensions)))
+             posix_kernel_terminal_set_winsize(session->store->kernel, 0, &dimensions)))
             session_failure(session, "cannot configure native session terminal");
     }
     return session;
@@ -815,7 +821,7 @@ int native_runtime_stage_file(native_runtime *session, const char *guest, unsign
     size_t length = 0;
     uint8_t *bytes = session_read_file(host, NATIVE_EXEC_BYTES_MAX, &length);
     posix_path_metadata metadata = {POSIX_NODE_REGULAR, mode, 0, 0, (int64_t)length,
-        posix_kernel_allocate_inode(session->store.kernel), 0, 0};
+        posix_kernel_allocate_inode(session->store->kernel), 0, 0};
     if (!bytes) {
         session_failure(session, "cannot read explicit native input");
         return -1;
@@ -828,7 +834,7 @@ int native_runtime_stage_file(native_runtime *session, const char *guest, unsign
         session_failure(session, "explicit native inputs exceed configured VFS byte budget");
         return -1;
     }
-    int failed = posix_kernel_path_add_data(session->store.kernel, guest, &metadata, bytes, length);
+    int failed = posix_kernel_path_add_data(session->store->kernel, guest, &metadata, bytes, length);
     if (!failed) session->staged_bytes += length;
     free(bytes);
     if (failed) session_failure(session, "cannot stage explicit native input");
@@ -842,20 +848,20 @@ int native_runtime_queue_reply(native_runtime *session, native_host_io_kind kind
 int native_runtime_stage_input(native_runtime *session, const char *guest, const uint8_t *bytes, size_t length, unsigned mode) {
     if (!session || session->stopped) return -1;
     const char *directory = "/tmp/waste-cli-input";
-    int present = posix_kernel_path_access(session->store.kernel, (const uint8_t *)directory,
+    int present = posix_kernel_path_access(session->store->kernel, (const uint8_t *)directory,
                                          strlen(directory), POSIX_F_OK, 0);
     posix_path_metadata metadata = {POSIX_NODE_DIRECTORY, 0700, 0, 0, 0,
-        posix_kernel_allocate_inode(session->store.kernel), 0, 0};
+        posix_kernel_allocate_inode(session->store->kernel), 0, 0};
     if (present != -POSIX_ENOENT ||
-        posix_kernel_path_add(session->store.kernel, directory, &metadata)) {
+        posix_kernel_path_add(session->store->kernel, directory, &metadata)) {
         session_failure(session, "temporary guest input namespace already exists or is unavailable");
         return -1;
     }
     metadata.kind = POSIX_NODE_REGULAR;
     metadata.mode = mode;
     metadata.size = (int64_t)length;
-    metadata.inode = posix_kernel_allocate_inode(session->store.kernel);
-    int status = posix_kernel_path_add_data(session->store.kernel, guest, &metadata, bytes, length);
+    metadata.inode = posix_kernel_allocate_inode(session->store->kernel);
+    int status = posix_kernel_path_add_data(session->store->kernel, guest, &metadata, bytes, length);
     if (status) session_failure(session, "cannot stage explicit native input");
     return status;
 }
@@ -868,7 +874,7 @@ void native_runtime_script(native_runtime *session, const char *host_script) {
     else {
         posix_path_metadata metadata;
         const char *path = "/usr/share/waste/launch.wast";
-        if (posix_kernel_path_read_snapshot(session->store.kernel, (const uint8_t *)path,
+        if (posix_kernel_path_read_snapshot(session->store->kernel, (const uint8_t *)path,
                 strlen(path), NATIVE_SESSION_SOURCE_MAX_BYTES, &source, &length, &metadata)) source = NULL;
     }
     if (!source) { session_failure(session, "cannot load native session script"); return; }
@@ -889,10 +895,9 @@ void native_runtime_start(native_runtime *session, const char *guest,
     const native_process_start_options *options) {
     if (!session || session->stopped) return;
     exec_error error = {0};
-    exec_status status = native_process_driver_start_with_options(&session->driver,
-        &session->store, guest, argv, argc, envp, envc, options, &error);
+    exec_status status = waste_session_adapter_start(session->execution, guest, argv, argc, envp, envc, options, &error);
     if (status == EXEC_OK) {
-        native_driver_selection *entry = &session->driver.selection;
+        native_driver_selection *entry = &session->driver->selection;
         int count = 0;
         status = session_invoke(session, entry->engine, entry->func_idx, NULL, 0, NULL, &count, &error);
     }
@@ -903,18 +908,18 @@ void native_runtime_start(native_runtime *session, const char *guest,
 native_runtime *native_runtime_create(const char *root, const native_runtime_options *options) {
     return native_runtime_create_vfs(root, NULL, options);
 }
-native_store *native_runtime_store(native_runtime *runtime) { return runtime ? &runtime->store : NULL; }
+native_store *native_runtime_store(native_runtime *runtime) { return runtime ? runtime->store : NULL; }
 static void session_wast_context_ready(void *opaque) {
     native_runtime *runtime = opaque;
     if (runtime->raw_output) {
         posix_termios termios;
-        if (!posix_kernel_tcgetattr(runtime->store.kernel, 0, &termios)) {
+        if (!posix_kernel_tcgetattr(runtime->store->kernel, 0, &termios)) {
             termios.oflag = 0;
-            (void)posix_kernel_tcsetattr(runtime->store.kernel, 0, &termios);
+            (void)posix_kernel_tcsetattr(runtime->store->kernel, 0, &termios);
         }
     }
     posix_winsize dimensions = {(uint16_t)runtime->rows, (uint16_t)runtime->columns, 0, 0};
-    (void)posix_kernel_terminal_set_winsize(runtime->store.kernel, 0, &dimensions);
+    (void)posix_kernel_terminal_set_winsize(runtime->store->kernel, 0, &dimensions);
 }
 int native_runtime_wast(native_runtime *runtime, const char *filename, const char *source,
     size_t length, native_wast_counts *counts, const native_wast_options *requested) {
@@ -923,6 +928,6 @@ int native_runtime_wast(native_runtime *runtime, const char *filename, const cha
     options.invoke = session_invoke;
     options.invoke_context = runtime;
     options.context_ready = session_wast_context_ready;
-    options.driver = &runtime->driver;
-    return native_wast_run_with_options(&runtime->store, filename, source, length, counts, &options);
+    options.driver = runtime->driver;
+    return native_wast_run_with_options(runtime->store, filename, source, length, counts, &options);
 }

@@ -10,6 +10,7 @@
 #include "wast/setup.h"
 #include "posix_stubs.h"
 #include "process_driver.h"
+#include "session/adapter.h"
 #include "guest_posix.h"
 #include "lib/include/kernel.h"
 
@@ -179,7 +180,7 @@ static exec_stop_reason browser_execution_poll(void *opaque) {
         g_execution_stop = EXEC_STOP_TIMEOUT;
     return g_execution_stop;
 }
-static native_process_driver g_shared_process;
+static native_process_driver *g_shared_process;
 #define BROWSER_TRANSITION_EVIDENCE_MAX 2048
 static char g_browser_transition_evidence[BROWSER_TRANSITION_EVIDENCE_MAX];
 static size_t g_browser_transition_evidence_length;
@@ -595,7 +596,8 @@ uint32_t waste_wast_assert_return(
 /* ---- waste_wast_run_script: run an entire WAST script ---- */
 
 typedef struct {
-    native_store store;
+    waste_session *session;
+    native_store *store;
     wast_script **retained;
     uint32_t retained_count;
     uint32_t retained_capacity;
@@ -631,18 +633,18 @@ static void browser_forget_retained(browser_wast_context *context,
 static void browser_release_superseded_anonymous(
         browser_wast_context *context) {
     if (!context->current_anonymous_script ||
-        context->store.module_count == 0)
+        context->store->module_count == 0)
         return;
     native_linked_module *current =
-        &context->store.modules[context->store.module_count - 1];
+        &context->store->modules[context->store->module_count - 1];
     if (current->id[0] || current->registered[0]) {
         context->current_anonymous_script = (void *)0;
         return;
     }
     int imports_table = 0;
-    int process_owned = current->engine == g_shared_process.parent_engine;
+    int process_owned = current->engine == g_shared_process->parent_engine;
     native_process_capsule *active_capsule =
-        native_store_active_capsule(&context->store);
+        native_store_active_capsule(context->store);
     process_owned = process_owned ||
                     (active_capsule && active_capsule->engine == current->engine);
     if (current->module) {
@@ -650,14 +652,14 @@ static void browser_release_superseded_anonymous(
             imports_table |= current->module->tables[i].is_import != 0;
     }
     if (imports_table || process_owned) {
-        if (!native_store_keep_orphan(&context->store, current->engine))
+        if (!native_store_keep_orphan(context->store, current->engine))
             return;
     } else {
         browser_record_engine_transition("release-current", current->engine);
         exec_free(current->engine);
     }
     memset(current, 0, sizeof(*current));
-    context->store.module_count--;
+    context->store->module_count--;
     browser_forget_retained(context,
                             context->current_anonymous_script);
     context->current_anonymous_script = (void *)0;
@@ -797,12 +799,12 @@ static void browser_driver_publish_wait(void) {
 }
 
 static void browser_process_state_init(void) {
-    if (g_shared_process.initialized) return;
-    native_process_driver_init(&g_shared_process);
+    /* The session constructor initializes its owned driver. */
+    if (g_shared_process && g_shared_process->initialized) return;
     browser_driver_reset();
 }
 static void browser_process_state_reset(void) {
-    native_process_driver_destroy(&g_shared_process);
+    g_shared_process = NULL;
     browser_driver_reset();
 }
 
@@ -812,7 +814,9 @@ static void browser_yield_cleanup(void) {
     browser_process_state_reset();
     wast_process_handler_reset(&g_yield_context.handler);
     wast_stream_destroy(&g_yield_stream);
-    native_store_free(&g_yield_context.store);
+    waste_session_delete(&g_yield_context.session);
+    g_yield_context.store = NULL;
+    g_yield_context.handler.store = NULL;
     wast_process_handler_destroy(&g_yield_context.handler);
     for (uint32_t i = 0; i < g_yield_context.retained_count; i++) {
         if (!g_yield_context.retained[i]) continue;
@@ -837,26 +841,26 @@ static exec_status browser_driver_handler_step(const uint8_t *source, size_t siz
     wast_process_handler *handler = opaque;
     exec_status status = wast_process_handler_step(source, size, offset, line,
                                                    next_offset, next_line, handler);
-    g_shared_process.handler_wait_reason = handler->wait_reason;
+    g_shared_process->handler_wait_reason = handler->wait_reason;
     return status;
 }
 static exec_status browser_invoke_process(browser_wast_context *context,
     waste_exec_engine *engine, uint32_t function, const wasm_value *args, int count,
     wasm_value *results, int *result_count, exec_error *error) {
     browser_process_state_init();
-    g_shared_process.handler_step = browser_driver_handler_step;
-    g_shared_process.handler_reset = wast_process_handler_reset;
-    g_shared_process.handler_create = wast_process_handler_create;
-    g_shared_process.handler_destroy = wast_process_handler_destroy_owned;
-    g_shared_process.handler_context = &context->handler;
-    g_shared_process.trace = browser_driver_trace;
-    exec_status status = native_process_driver_invoke(&g_shared_process, &context->store,
+    g_shared_process->handler_step = browser_driver_handler_step;
+    g_shared_process->handler_reset = wast_process_handler_reset;
+    g_shared_process->handler_create = wast_process_handler_create;
+    g_shared_process->handler_destroy = wast_process_handler_destroy_owned;
+    g_shared_process->handler_context = &context->handler;
+    g_shared_process->trace = browser_driver_trace;
+    exec_status status = waste_session_adapter_invoke(context->session,
         engine, function, args, count, results, result_count, error);
     if (status == EXEC_ERROR_EXIT) {
         g_browser_guest_exited = 1;
         g_browser_guest_exit_status = error->exit_code;
     }
-    native_driver_selection *selected = &g_shared_process.selection;
+    native_driver_selection *selected = &g_shared_process->selection;
     g_process_driver.pid = selected->pid;
     g_process_driver.engine = selected->engine;
     g_process_driver.func_idx = selected->func_idx;
@@ -895,12 +899,12 @@ static void browser_run_assertions(browser_wast_context *context,
                                    const wast_group *group) {
     /* Executable manifests are immutable store state; refresh the active
      * process namespace after terminal/kernel replacement or fork cloning. */
-    (void)native_store_bind_executable_paths(&context->store);
+    (void)native_store_bind_executable_paths(context->store);
     for (int i = 0; i < group->assertion_count; i++) {
         const wast_assertion *assertion =
             &script->assertions[group->assertion_start + i];
         waste_exec_engine *selected =
-            native_selected_engine(&context->store, assertion->module_id);
+            native_selected_engine(context->store, assertion->module_id);
         exec_error error;
         memset(&error, 0, sizeof(error));
         exec_status status;
@@ -918,7 +922,7 @@ static void browser_run_assertions(browser_wast_context *context,
             g_assertion_pending = 1;
             g_yield_active = 1;
             g_yield_reason = error.yield_reason;
-            if (!g_shared_process.active_engine) {
+            if (!g_shared_process->active_engine) {
                 g_process_driver.engine = selected;
                 g_process_driver.func_idx = 0;
                 g_process_driver.arg_count = assertion->arg_count;
@@ -927,7 +931,7 @@ static void browser_run_assertions(browser_wast_context *context,
                 for (int j = 0; j < assertion->arg_count; j++)
                     g_process_driver.args[j] = assertion->args[j];
             }
-            g_process_driver.pid = native_store_getpid(&context->store);
+            g_process_driver.pid = native_store_getpid(context->store);
             /* Pump yields are time-slice boundaries, not guest I/O.  Publish
              * the saved engine/args for resume; the worker distinguishes
              * via waste_wast_wait_kind == EXEC_YIELD_PUMP and drives the
@@ -982,7 +986,7 @@ static void browser_process_module(browser_wast_context *context,
     waste_exec_engine *engine = (void *)0;
     exec_error error;
     memset(&error, 0, sizeof(error));
-    exec_status status = native_load_module(&context->store, load_module,
+    exec_status status = native_load_module(context->store, load_module,
                                             binary, binary_size, &engine,
                                             &error);
     free(binary);
@@ -991,7 +995,7 @@ static void browser_process_module(browser_wast_context *context,
             wast_setup_record(&g_browser_setup, g_browser_command_line,
                 status, WAST_SETUP_LOAD, error.message);
         add_result(0, "(module)", error.message);
-        if (engine && !native_store_keep_orphan(&context->store, engine))
+        if (engine && !native_store_keep_orphan(context->store, engine))
             exec_free(engine);
         return;
     }
@@ -1001,20 +1005,20 @@ static void browser_process_module(browser_wast_context *context,
         add_result(ok, "(module)", ok ? (void *)0 :
                    (status == EXEC_OK ? "module unexpectedly instantiated" :
                     error.message));
-        if (engine && !native_store_keep_orphan(&context->store, engine)) {
+        if (engine && !native_store_keep_orphan(context->store, engine)) {
         }
         return;
     }
     if (status != EXEC_OK) {
         wast_setup_record(&g_browser_setup, g_browser_command_line,
             status, WAST_SETUP_LOAD, error.message);
-        if (engine && !native_store_keep_orphan(&context->store, engine)) {
+        if (engine && !native_store_keep_orphan(context->store, engine)) {
             exec_free(engine);
             add_command_failure("(module)", "cannot retain failed setup engine");
         }
         return;
     }
-    if (!native_store_add(&context->store, engine, &group->module,
+    if (!native_store_add(context->store, engine, &group->module,
                           load_module)) {
         wast_setup_record(&g_browser_setup, g_browser_command_line,
             EXEC_ERROR_TRAP, WAST_SETUP_RETAIN, "cannot retain module instance");
@@ -1048,7 +1052,7 @@ static int browser_process_command(wast_stream_command_kind kind,
         }
         wast_module *registration = &parsed->groups[0].module;
         native_linked_module *target = native_selected_module(
-            &context->store, registration->register_target);
+            context->store, registration->register_target);
         if (!target) {
             add_result(0, "(register)", "unknown module id");
             return 0;
@@ -1082,7 +1086,7 @@ static int browser_process_command(wast_stream_command_kind kind,
     }
     wast_script *script = must_retain ?
         context->retained[context->retained_count - 1] : parsed;
-    int modules_before = context->store.module_count;
+    int modules_before = context->store->module_count;
     for (int i = 0; i < script->group_count; i++) {
         wast_group *group = &script->groups[i];
         if (group->module.is_definition) continue;
@@ -1092,7 +1096,7 @@ static int browser_process_command(wast_stream_command_kind kind,
      * after iteration, never while the loop still reads script->group_count. */
     if (must_retain && script->group_count == 1 &&
         !script->groups[0].module.is_definition &&
-        context->store.module_count == modules_before) {
+        context->store->module_count == modules_before) {
         browser_forget_retained(context, script);
         return 0;
     }
@@ -1101,21 +1105,21 @@ static int browser_process_command(wast_stream_command_kind kind,
         !script->groups[0].module.is_definition &&
         !script->groups[0].module.id[0] &&
         !script->groups[0].module.register_name[0] &&
-        context->store.module_count > 0 &&
-        context->store.modules[context->store.module_count - 1].module ==
+        context->store->module_count > 0 &&
+        context->store->modules[context->store->module_count - 1].module ==
             &script->groups[0].module)
         context->current_anonymous_script = script;
     return 0;
 }
 
 static int browser_stream_loop(void) {
-    if (g_yield_context.store.execution_control.stopped) {
+    if (g_yield_context.store->execution_control.stopped) {
         browser_yield_cleanup();
         return 0;
     }
     for (;;) {
         exec_error error = {0};
-        if (exec_execution_check(&g_yield_context.store.execution_control, &error) != EXEC_OK) {
+        if (exec_execution_check(&g_yield_context.store->execution_control, &error) != EXEC_OK) {
             add_result(0, "(execution)", error.message);
             break;
         }
@@ -1128,14 +1132,14 @@ static int browser_stream_loop(void) {
             break;
         }
         if (g_yield_active) return 1;
-        if (g_yield_context.store.execution_control.stopped) break;
+        if (g_yield_context.store->execution_control.stopped) break;
     }
     browser_yield_cleanup();
     return 0;
 }
 
-__attribute__((export_name("waste_wast_run_script")))
-uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
+static int browser_session_begin(void) {
+    if (g_yield_context.session) browser_yield_cleanup();
     browser_process_state_reset();
     g_browser_result_count = 0;
     g_browser_result_passed = 0;
@@ -1161,48 +1165,54 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
     waste_browser_record_transition("run-start");
 
     memset(&g_yield_context, 0, sizeof(g_yield_context));
-    native_store_init(&g_yield_context.store);
-    g_yield_context.store.test_suite_enabled = g_test_suite_requested;
-    g_yield_context.store.render_test_enabled = g_render_test_requested;
+    exec_error initialization = {0};
+    if (waste_session_adapter_create(&g_yield_context.session, &initialization) != EXEC_OK) {
+        add_result(0, "(session)", initialization.message);
+        return 0;
+    }
+    g_yield_context.store = waste_session_adapter_store(g_yield_context.session);
+    g_shared_process = waste_session_adapter_driver(g_yield_context.session);
+    g_yield_context.store->test_suite_enabled = g_test_suite_requested;
+    g_yield_context.store->render_test_enabled = g_render_test_requested;
     g_render_test_requested = 0;
     g_test_suite_requested = 0;
     if (g_execution_timeout_ms || g_execution_cancel_ms)
-        g_yield_context.store.execution_control.poll = browser_execution_poll;
+        g_yield_context.store->execution_control.poll = browser_execution_poll;
     if (g_pump_quantum_ms) {
         /* Dispatch-loop safepoint only runs when poll != NULL, so install a
          * no-op poll when only pump is configured.  browser_execution_poll
          * already returns EXEC_STOP_NONE until the timeout/cancel windows
          * engage; it is safe to reuse. */
-        if (!g_yield_context.store.execution_control.poll)
-            g_yield_context.store.execution_control.poll = browser_execution_poll;
-        g_yield_context.store.execution_control.pump_quantum_ns =
+        if (!g_yield_context.store->execution_control.poll)
+            g_yield_context.store->execution_control.poll = browser_execution_poll;
+        g_yield_context.store->execution_control.pump_quantum_ns =
             (uint64_t)g_pump_quantum_ms * 1000000ull;
-        g_yield_context.store.execution_control.pump_clock_now =
+        g_yield_context.store->execution_control.pump_clock_now =
             browser_pump_clock_now;
-        g_yield_context.store.execution_control.pump_clock_context = NULL;
-        g_yield_context.store.execution_control.last_pump_ns = 0;
+        g_yield_context.store->execution_control.pump_clock_context = NULL;
+        g_yield_context.store->execution_control.last_pump_ns = 0;
     }
-    wast_process_handler_init(&g_yield_context.handler, &g_yield_context.store,
+    wast_process_handler_init(&g_yield_context.handler, g_yield_context.store,
                                browser_handler_result, NULL);
     if (g_boot_executable) {
         (void)native_store_register_executable(
-            &g_yield_context.store, "/bin/waste-probe", g_boot_executable,
+            g_yield_context.store, "/bin/waste-probe", g_boot_executable,
             g_boot_executable_size, 0755u, 1u, "_start");
         free(g_boot_executable);
         g_boot_executable = NULL;
         g_boot_executable_size = 0;
     }
     if (g_terminal_requested) {
-        native_store_enable_terminal(&g_yield_context.store);
+        native_store_enable_terminal(g_yield_context.store);
         g_terminal_requested = 0;
     }
-    posix_kernel_set_realtime_clock(g_yield_context.store.kernel,
+    posix_kernel_set_realtime_clock(g_yield_context.store->kernel,
                                     browser_guest_realtime_now, NULL);
-    posix_kernel_set_clock(g_yield_context.store.kernel,
+    posix_kernel_set_clock(g_yield_context.store->kernel,
                            browser_guest_monotonic_now, NULL);
-    (void)native_store_bind_interpreter_paths(&g_yield_context.store);
+    (void)native_store_bind_interpreter_paths(g_yield_context.store);
     if (g_boot_vfs.count) {
-        int rc = waste_vfs_mount(g_yield_context.store.kernel, &g_boot_vfs);
+        int rc = waste_vfs_mount(g_yield_context.store->kernel, &g_boot_vfs);
         waste_vfs_free(&g_boot_vfs);
         if (rc) {
             add_result(0, "(vfs)", "cannot mount installed VFS files");
@@ -1216,15 +1226,15 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
         /* Staged entries are new nodes, independent of catalogue identities.
          * Reserve through the shared kernel after its source is mounted. */
         posix_path_metadata metadata = g_vfs_manifest[i].metadata;
-        metadata.inode = posix_kernel_allocate_inode(g_yield_context.store.kernel);
+        metadata.inode = posix_kernel_allocate_inode(g_yield_context.store->kernel);
         int install_status;
         if (g_vfs_manifest[i].metadata.kind == POSIX_NODE_SYMLINK)
             install_status = posix_kernel_path_add_symlink(
-                g_yield_context.store.kernel, g_vfs_manifest[i].path,
+                g_yield_context.store->kernel, g_vfs_manifest[i].path,
                 &metadata, g_vfs_manifest[i].link_target);
         else
             install_status = posix_kernel_path_add_data(
-                g_yield_context.store.kernel, g_vfs_manifest[i].path,
+                g_yield_context.store->kernel, g_vfs_manifest[i].path,
                 &metadata, g_vfs_manifest[i].data,
                 g_vfs_manifest[i].data_length);
         if (install_status != 0) {
@@ -1248,13 +1258,13 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
              i++) {
             const char *path = engine_paths[i];
             (void)posix_kernel_path_set_mtime(
-                g_yield_context.store.kernel, (const uint8_t *)path,
+                g_yield_context.store->kernel, (const uint8_t *)path,
                 strlen(path), g_build_mtime_sec, g_build_mtime_nsec);
         }
         g_build_mtime_valid = 0;
     }
     if (g_initial_cwd[0]) {
-        (void)posix_kernel_path_set_cwd(g_yield_context.store.kernel,
+        (void)posix_kernel_path_set_cwd(g_yield_context.store->kernel,
                                         g_initial_cwd);
         g_initial_cwd[0] = '\0';
     }
@@ -1263,11 +1273,49 @@ uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
             waste_wast_shared_file_page_probe();
         g_shared_file_page_probe_requested = 0;
     }
-    g_yield_context.store.host_resolver = browser_host_resolver;
-    g_yield_context.store.host_context = &g_yield_context.store;
-    wast_stream_init(&g_yield_stream,
-                     (const char *)(uintptr_t)text_ptr, text_len);
+    g_yield_context.store->host_resolver = browser_host_resolver;
+    g_yield_context.store->host_context = g_yield_context.store;
+    return 1;
+}
+
+__attribute__((export_name("waste_wast_run_script")))
+uint32_t waste_wast_run_script(uint32_t text_ptr, uint32_t text_len) {
+    if (!browser_session_begin()) return 0;
+    wast_stream_init(&g_yield_stream, (const char *)(uintptr_t)text_ptr, text_len);
     return browser_stream_loop();
+}
+
+/* Normal shell startup is a direct command client. Legacy WAST launchers and
+ * assertion workers keep run_script/resume above as compatibility consumers. */
+__attribute__((export_name("waste_wast_start_shell")))
+uint32_t waste_wast_start_shell(void) {
+    if (!browser_session_begin()) return 0;
+    wast_stream_init(&g_yield_stream, "", 0);
+    const char *argv[] = {"/usr/bin/bash", "--rcfile", "/etc/bash.bashrc", "-i"};
+    const char *envp[] = {"HOME=/root", "USER=root", "LOGNAME=root", "PWD=/root",
+        "PATH=/bin:/usr/bin", "TERM=xterm", "PS1=# "};
+    native_process_start_options options = {.format = NATIVE_EXEC_FORMAT_WASM};
+    exec_error error = {0};
+    exec_status status = waste_session_adapter_start(g_yield_context.session,
+        argv[0], argv, 4, envp, 7, &options, &error);
+    wast_setup_record(&g_browser_setup, 1, status, WAST_SETUP_LOAD, error.message);
+    if (status == EXEC_OK) {
+        native_driver_selection *selected = &g_shared_process->selection;
+        int count = 0;
+        status = browser_invoke_process(&g_yield_context, selected->engine,
+            selected->func_idx, selected->args, selected->arg_count, NULL, &count, &error);
+    }
+    if (status == EXEC_YIELD) {
+        g_yield_active = 1;
+        g_yield_reason = error.yield_reason;
+        browser_driver_publish_wait();
+        return 1;
+    }
+    int passed = status == EXEC_OK || status == EXEC_ERROR_EXIT;
+    add_result(passed, "main", passed ? NULL : error.message);
+    g_browser_script_completed = passed;
+    browser_yield_cleanup();
+    return 0;
 }
 
 __attribute__((export_name("waste_wast_resume")))
@@ -1275,7 +1323,7 @@ uint32_t waste_wast_resume(void) {
     exec_yield_reason stored_reason = EXEC_YIELD_NONE;
     char resume_event[96];
     snprintf(resume_event, sizeof(resume_event), "resume-entry-a%d-p%d-d%d",
-             g_yield_active, native_store_getpid(&g_yield_context.store),
+             g_yield_active, native_store_getpid(g_yield_context.store),
              g_process_driver.pid);
     waste_browser_record_transition(resume_event);
     if (!g_yield_active) {
@@ -1286,7 +1334,7 @@ uint32_t waste_wast_resume(void) {
     /* Resume the exact capsule that published the browser wait.  Internal
      * fork/exec transitions never come through this entry point. */
     if (g_process_driver.pid > 0 &&
-        native_store_set_active_process(&g_yield_context.store,
+        native_store_set_active_process(g_yield_context.store,
                                         g_process_driver.pid) != 0) {
         waste_browser_record_transition("resume-setpid-fail");
         g_process_driver.state = BROWSER_DRIVER_ERROR;
@@ -1296,9 +1344,9 @@ uint32_t waste_wast_resume(void) {
         return 0;
     }
     if (native_store_process_handler_wait_reason(
-            &g_yield_context.store, &stored_reason) == 0 &&
+            g_yield_context.store, &stored_reason) == 0 &&
         stored_reason != EXEC_YIELD_NONE) {
-        if (native_store_resume_process_handler(&g_yield_context.store) != 0) {
+        if (native_store_resume_process_handler(g_yield_context.store) != 0) {
             g_process_driver.state = BROWSER_DRIVER_ERROR;
             g_yield_active = 0;
             add_result(0, "main", "browser WAST handler could not resume");
@@ -1355,7 +1403,7 @@ __attribute__((export_name("waste_wast_wait_kind")))
 uint32_t waste_wast_wait_kind(void) {
     exec_yield_reason stored_reason = EXEC_YIELD_NONE;
     if (native_store_process_handler_wait_reason(
-            &g_yield_context.store, &stored_reason) == 0 &&
+            g_yield_context.store, &stored_reason) == 0 &&
         stored_reason != EXEC_YIELD_NONE)
         return g_yield_active ? (uint32_t)stored_reason : EXEC_YIELD_NONE;
     return g_yield_active ? (uint32_t)g_yield_reason : EXEC_YIELD_NONE;
@@ -1368,7 +1416,7 @@ __attribute__((export_name("waste_wast_wait_timeout_ms")))
 uint32_t waste_wast_wait_timeout_ms(void) {
     uint64_t remaining_ns;
     if (!g_yield_active ||
-        !native_process_driver_wait_timeout(&g_yield_context.store, &remaining_ns))
+        !native_process_driver_wait_timeout(g_yield_context.store, &remaining_ns))
         return 0;
     if (g_clock_monotonic_fixed) return 10;
     if (!remaining_ns) return 1;
@@ -1410,7 +1458,7 @@ int32_t waste_wast_set_pump_quantum_ms(uint32_t quantum_ms) {
 __attribute__((export_name("waste_wast_request_cancel")))
 void waste_wast_request_cancel(void) {
     g_execution_stop = EXEC_STOP_CANCELLED;
-    g_yield_context.store.execution_control.stopped = EXEC_STOP_CANCELLED;
+    if (g_yield_context.store) g_yield_context.store->execution_control.stopped = EXEC_STOP_CANCELLED;
 }
 
 /* Freeze the kernel-visible realtime/monotonic clock at a scripted value for
@@ -1455,38 +1503,44 @@ __attribute__((export_name("waste_wast_guest_exit_status")))
 int32_t waste_wast_guest_exit_status(void) { return g_browser_guest_exit_status; }
 
 __attribute__((export_name("waste_wast_process_id")))
-int32_t waste_wast_process_id(void) { return native_store_getpid(&g_yield_context.store); }
+int32_t waste_wast_process_id(void) { return native_store_getpid(g_yield_context.store); }
 
 /* ---- Host I/O query/response exports for upload/download ---- */
 
 __attribute__((export_name("waste_wast_host_io_kind")))
 uint32_t waste_wast_host_io_kind(void) {
-    return (uint32_t)g_yield_context.store.host_io.kind;
+    if (!g_yield_context.store) return 0;
+    return (uint32_t)g_yield_context.store->host_io.kind;
 }
 
 __attribute__((export_name("waste_wast_host_io_path_ptr")))
 uint32_t waste_wast_host_io_path_ptr(void) {
-    return (uint32_t)(uintptr_t)g_yield_context.store.host_io.path;
+    if (!g_yield_context.store) return 0;
+    return (uint32_t)(uintptr_t)g_yield_context.store->host_io.path;
 }
 
 __attribute__((export_name("waste_wast_host_io_path_len")))
 uint32_t waste_wast_host_io_path_len(void) {
-    return (uint32_t)g_yield_context.store.host_io.path_len;
+    if (!g_yield_context.store) return 0;
+    return (uint32_t)g_yield_context.store->host_io.path_len;
 }
 
 __attribute__((export_name("waste_wast_host_io_data_ptr")))
 uint32_t waste_wast_host_io_data_ptr(void) {
-    return (uint32_t)(uintptr_t)g_yield_context.store.host_io.data;
+    if (!g_yield_context.store) return 0;
+    return (uint32_t)(uintptr_t)g_yield_context.store->host_io.data;
 }
 
 __attribute__((export_name("waste_wast_host_io_data_len")))
 uint32_t waste_wast_host_io_data_len(void) {
-    return (uint32_t)g_yield_context.store.host_io.data_len;
+    if (!g_yield_context.store) return 0;
+    return (uint32_t)g_yield_context.store->host_io.data_len;
 }
 
 __attribute__((export_name("waste_wast_host_io_provide_upload")))
 int32_t waste_wast_host_io_provide_upload(uint32_t ptr, uint32_t len) {
-    native_host_io_state *host_io = &g_yield_context.store.host_io;
+    if (!g_yield_context.store) return -1;
+    native_host_io_state *host_io = &g_yield_context.store->host_io;
     if (host_io->kind != NATIVE_HOST_IO_UPLOAD || host_io->result != 0)
         return -1;
     uint8_t *copy = (uint8_t *)malloc(len ? len : 1);
@@ -1501,18 +1555,21 @@ int32_t waste_wast_host_io_provide_upload(uint32_t ptr, uint32_t len) {
 
 __attribute__((export_name("waste_wast_host_io_verbose")))
 uint32_t waste_wast_host_io_verbose(void) {
-    return (uint32_t)g_yield_context.store.host_io.verbose;
+    if (!g_yield_context.store) return 0;
+    return (uint32_t)g_yield_context.store->host_io.verbose;
 }
 
 __attribute__((export_name("waste_wast_host_io_cancel")))
 int32_t waste_wast_host_io_cancel(void) {
-    g_yield_context.store.host_io.result = -1;
+    if (!g_yield_context.store) return -1;
+    g_yield_context.store->host_io.result = -1;
     return 0;
 }
 
 __attribute__((export_name("waste_wast_host_io_complete")))
 int32_t waste_wast_host_io_complete(void) {
-    g_yield_context.store.host_io.result = 1;
+    if (!g_yield_context.store) return -1;
+    g_yield_context.store->host_io.result = 1;
     return 0;
 }
 
@@ -1526,7 +1583,8 @@ int32_t waste_wast_enable_test_suite(void) {
 
 __attribute__((export_name("waste_wast_test_suite_reply")))
 int32_t waste_wast_test_suite_reply(uint32_t ptr, uint32_t len) {
-    native_host_io_state *io = &g_yield_context.store.host_io;
+    if (!g_yield_context.store) return -1;
+    native_host_io_state *io = &g_yield_context.store->host_io;
     if (io->kind != NATIVE_HOST_IO_TEST_SUITE || io->result || len < 16 || len > 16u*1024u*1024u)
         return -1;
     uint8_t *copy = malloc(len);
@@ -1545,7 +1603,8 @@ int32_t waste_wast_enable_render_test(void) {
 
 __attribute__((export_name("waste_wast_render_test_reply")))
 int32_t waste_wast_render_test_reply(uint32_t ptr, uint32_t len) {
-    native_host_io_state *io = &g_yield_context.store.host_io;
+    if (!g_yield_context.store) return -1;
+    native_host_io_state *io = &g_yield_context.store->host_io;
     if (io->kind != NATIVE_HOST_IO_RENDER_TEST || io->result ||
         len < 4 || len > RENDER_TEST_REPLY_MAX_BYTES) return -1;
     uint8_t *copy = malloc(len);
@@ -1820,29 +1879,29 @@ finish:
 
 __attribute__((export_name("waste_wast_path_access")))
 int32_t waste_wast_path_access(uint32_t ptr, uint32_t length, uint32_t mode) {
-    if (!g_yield_context.store.kernel || length >= POSIX_PATH_MAX)
+    if (!g_yield_context.store || !g_yield_context.store->kernel || length >= POSIX_PATH_MAX)
         return -POSIX_EINVAL;
-    return posix_kernel_path_access(g_yield_context.store.kernel,
+    return posix_kernel_path_access(g_yield_context.store->kernel,
                                     (const uint8_t *)(uintptr_t)ptr, length,
                                     (int)mode, 0);
 }
 
 __attribute__((export_name("waste_wast_resize_terminal")))
 int32_t waste_wast_resize_terminal(uint32_t columns, uint32_t rows) {
-    if (!g_yield_context.store.kernel_terminal || columns == 0 || rows == 0 ||
+    if (!g_yield_context.store || !g_yield_context.store->kernel_terminal || columns == 0 || rows == 0 ||
         columns > UINT16_MAX || rows > UINT16_MAX)
         return -POSIX_EINVAL;
     posix_winsize size = {(uint16_t)rows, (uint16_t)columns, 0, 0};
-    return posix_kernel_terminal_set_winsize(g_yield_context.store.kernel, 0,
+    return posix_kernel_terminal_set_winsize(g_yield_context.store->kernel, 0,
                                              &size);
 }
 
 __attribute__((export_name("waste_wast_enqueue_input")))
 int32_t waste_wast_enqueue_input(uint32_t ptr, uint32_t length) {
     int32_t result = -POSIX_EINVAL;
-    if (g_yield_context.store.kernel_terminal && length <= INT32_MAX)
+    if (g_yield_context.store && g_yield_context.store->kernel_terminal && length <= INT32_MAX)
         result = guest_posix_enqueue_input(
-            &g_yield_context.store, 0,
+            g_yield_context.store, 0,
             (const uint8_t *)(uintptr_t)ptr, (int)length);
     free((void *)(uintptr_t)ptr);
     if (result == 0)
@@ -1854,14 +1913,14 @@ int32_t waste_wast_enqueue_input(uint32_t ptr, uint32_t length) {
 
 __attribute__((export_name("waste_wast_enqueue_eof")))
 int32_t waste_wast_enqueue_eof(void) {
-    if (!g_yield_context.store.kernel_terminal) return -POSIX_EINVAL;
-    return posix_kernel_terminal_signal_eof(g_yield_context.store.kernel, 0);
+    if (!g_yield_context.store || !g_yield_context.store->kernel_terminal) return -POSIX_EINVAL;
+    return posix_kernel_terminal_signal_eof(g_yield_context.store->kernel, 0);
 }
 
 __attribute__((export_name("waste_wast_raise_signal")))
 int32_t waste_wast_raise_signal(uint32_t signal) {
-    if (!g_yield_context.store.kernel_terminal) return -POSIX_EINVAL;
-    return posix_kernel_signal_raise(g_yield_context.store.kernel,
+    if (!g_yield_context.store || !g_yield_context.store->kernel_terminal) return -POSIX_EINVAL;
+    return posix_kernel_signal_raise(g_yield_context.store->kernel,
                                      (int)signal);
 }
 
@@ -1871,11 +1930,11 @@ int32_t waste_wast_raise_signal(uint32_t signal) {
  * Store errors (unknown/zombie process, invalid signal) stay visible. */
 __attribute__((export_name("waste_wast_raise_signal_pid")))
 int32_t waste_wast_raise_signal_pid(uint32_t signal, uint32_t pid) {
-    if (!g_yield_context.store.kernel_terminal) return -POSIX_EINVAL;
+    if (!g_yield_context.store || !g_yield_context.store->kernel_terminal) return -POSIX_EINVAL;
     if (!pid)
-        return posix_kernel_signal_raise(g_yield_context.store.kernel,
+        return posix_kernel_signal_raise(g_yield_context.store->kernel,
                                          (int)signal);
-    return native_store_signal_process(&g_yield_context.store,
+    return native_store_signal_process(g_yield_context.store,
                                        (int)pid, (int)signal);
 }
 
@@ -1886,9 +1945,9 @@ int32_t waste_wast_raise_signal_pid(uint32_t signal, uint32_t pid) {
  * empty group) or a negative POSIX errno. */
 __attribute__((export_name("waste_wast_raise_signal_pgid")))
 int32_t waste_wast_raise_signal_pgid(uint32_t signal, uint32_t pgid) {
-    if (!g_yield_context.store.kernel_terminal) return -POSIX_EINVAL;
+    if (!g_yield_context.store || !g_yield_context.store->kernel_terminal) return -POSIX_EINVAL;
     if (!pgid) return -POSIX_EINVAL;
-    return native_store_signal_process_group(&g_yield_context.store,
+    return native_store_signal_process_group(g_yield_context.store,
                                               (int)pgid, (int)signal);
 }
 
@@ -1902,7 +1961,7 @@ int32_t waste_wast_shared_file_page_probe(void) {
     posix_path_metadata metadata = {
         POSIX_NODE_REGULAR, 0666, 0, 0, 1, 9101, 0, 0
     };
-    native_store *store = &g_yield_context.store;
+    native_store *store = g_yield_context.store;
     exec_memory shared_memory;
     exec_memory observer_memory;
     exec_memory private_memory;
@@ -1916,7 +1975,7 @@ int32_t waste_wast_shared_file_page_probe(void) {
     memset(&shared_memory, 0, sizeof(shared_memory));
     memset(&observer_memory, 0, sizeof(observer_memory));
     memset(&private_memory, 0, sizeof(private_memory));
-    if (!store->kernel ||
+    if (!store || !store->kernel ||
         posix_kernel_path_add_data(store->kernel, (const char *)path,
                                     &metadata, initial, sizeof(initial) - 1) != 0)
         return -POSIX_EIO;

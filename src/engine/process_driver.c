@@ -79,7 +79,7 @@ static exec_status process_capture_parent_graph(native_process_driver *driver, n
         continuations = calloc(capacity, sizeof(*continuations));
         if (!engines || !continuations) {
             free(engines); free(continuations);
-            return exec_fail(error, EXEC_ERROR_TRAP,
+            return exec_fail(error, EXEC_ERROR_RESOURCE,
                              "parent continuation graph allocation failed");
         }
     }
@@ -415,7 +415,7 @@ static exec_status process_prepare_exec_provider_continuations(
         if (!next) {
             (void)process_finish_exec_provider_continuations(
                 saved, count, 1, error);
-            return exec_fail(error, EXEC_ERROR_TRAP,
+            return exec_fail(error, EXEC_ERROR_RESOURCE,
                              "exec provider continuation allocation failed");
         }
         saved = next;
@@ -530,10 +530,11 @@ static exec_status process_initialize_image(native_process_driver *driver,
 /* A store-owned provider holds the initial process resources. Executable and
  * DSO imports borrow them, and fork clones them through the ordinary provider
  * graph. No WAT/WAST bootstrap, guest code or platform allocation is involved. */
-static waste_exec_engine *process_create_resources(uint32_t pages, uint32_t table_entries, exec_error *error) {
+static waste_exec_engine *process_create_resources(uint32_t pages, uint32_t table_entries,
+    waste_resource_budget *budget, exec_error *error) {
     waste_exec_engine *engine = calloc(1, sizeof(*engine));
     if (!engine) {
-        exec_fail(error, EXEC_ERROR_TRAP, "cannot allocate initial process resources");
+        exec_fail(error, EXEC_ERROR_RESOURCE, "cannot allocate initial process resources");
         return NULL;
     }
     engine->static_ref_count = malloc(sizeof(*engine->static_ref_count));
@@ -546,6 +547,7 @@ static waste_exec_engine *process_create_resources(uint32_t pages, uint32_t tabl
     if (wasm_instance_allocate_memory(engine->memory,
             pages, EXEC_MEM32_MAX_PAGES, 0, error) != EXEC_OK)
         goto failed;
+    engine->memory->resources = budget;
     engine->table_count = 1;
     engine->tables[0] = &engine->owned_tables[0];
     if (wasm_instance_allocate_table(engine->tables[0], engine, WASM_VALTYPE_FUNCREF,
@@ -567,7 +569,7 @@ static waste_exec_engine *process_create_resources(uint32_t pages, uint32_t tabl
     return engine;
 failed:
     exec_free(engine);
-    if (!error->message[0]) exec_fail(error, EXEC_ERROR_TRAP, "cannot allocate process resources");
+    if (!error->message[0]) exec_fail(error, EXEC_ERROR_RESOURCE, "cannot allocate process resources");
     return NULL;
 }
 
@@ -656,8 +658,9 @@ exec_status native_process_driver_prepare_runtime(native_process_driver *driver,
     }
     waste_exec_engine *resources = process_create_resources(
         pages > PROCESS_INITIAL_MEMORY_PAGES ? pages : PROCESS_INITIAL_MEMORY_PAGES,
-        table_entries > PROCESS_INITIAL_TABLE_ENTRIES ? table_entries : PROCESS_INITIAL_TABLE_ENTRIES, error);
-    exec_status status = resources ? EXEC_OK : EXEC_ERROR_TRAP;
+        table_entries > PROCESS_INITIAL_TABLE_ENTRIES ? table_entries : PROCESS_INITIAL_TABLE_ENTRIES,
+        store->execution_control.resources, error);
+    exec_status status = resources ? EXEC_OK : error->status;
     if (resources && !native_store_add(store, resources, NULL, NULL)) {
         exec_free(resources);
         resources = NULL;
@@ -751,8 +754,9 @@ exec_status native_process_driver_start_with_options(native_process_driver *driv
     }
     store->kernel = store->processes[0].kernel = candidate;
     native_process_image *image = NULL;
-    waste_exec_engine *resources = process_create_resources(PROCESS_INITIAL_MEMORY_PAGES, PROCESS_INITIAL_TABLE_ENTRIES, error);
-    exec_status status = resources ? EXEC_OK : EXEC_ERROR_TRAP;
+    waste_exec_engine *resources = process_create_resources(PROCESS_INITIAL_MEMORY_PAGES,
+        PROCESS_INITIAL_TABLE_ENTRIES, store->execution_control.resources, error);
+    exec_status status = resources ? EXEC_OK : error->status;
     if (resources && !native_store_add(store, resources, NULL, NULL)) {
         exec_free(resources);
         resources = NULL;
@@ -1061,6 +1065,8 @@ exec_status native_process_driver_invoke(native_process_driver *driver, native_s
         if (status == EXEC_ERROR_INTERRUPTED)
             return status;
         if (image_active && status != EXEC_YIELD) {
+            if (native_store_getpid(store) == driver->invocation_pid)
+                driver->completion_status = status;
             char image_event[512];
             snprintf(image_event, sizeof(image_event),
                      "image-return-s%d-e%d-f%llu-%s", status,
@@ -1158,7 +1164,7 @@ process_yield:
                                    EXEC_YIELD_FORK, parent_pid, 1);
         parent_capsule->continuation = malloc(sizeof(*parent_capsule->continuation));
         if (!parent_capsule->continuation)
-            return exec_fail(error, EXEC_ERROR_TRAP,
+            return exec_fail(error, EXEC_ERROR_RESOURCE,
                              "parent continuation capsule allocation failed");
         *parent_capsule->continuation = driver->continuation;
         parent_capsule->continuation_valid = 1;

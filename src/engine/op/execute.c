@@ -17,6 +17,8 @@ extern void native_process_image_unpin(native_process_image *image)
 exec_status exec_execution_check(exec_execution_control *control,
                                   exec_error *error) {
     if (!control) return EXEC_OK;
+    if (!control->stopped && control->resources && control->resources->exhausted)
+        control->stopped = EXEC_STOP_RESOURCE;
     if (!control->stopped && control->poll)
         control->stopped = control->poll(control->context);
     if (!control->stopped) {
@@ -29,6 +31,7 @@ exec_status exec_execution_check(exec_execution_control *control,
     }
     return exec_fail(error, EXEC_ERROR_INTERRUPTED,
         control->stopped == EXEC_STOP_TIMEOUT ? "execution deadline exceeded" :
+        control->stopped == EXEC_STOP_RESOURCE ? "execution resource limit exceeded" :
                                                "execution cancelled");
 }
 
@@ -58,7 +61,7 @@ void exec_continuation_destroy(exec_continuation *continuation) {
 
 static exec_status continuation_allocation_error(exec_error *error,
                                                  const char *message) {
-    return exec_fail(error, EXEC_ERROR_TRAP, message);
+    return exec_fail(error, EXEC_ERROR_RESOURCE, message);
 }
 
 exec_status exec_continuation_capture(waste_exec_engine *engine,
@@ -362,7 +365,7 @@ static exec_status save_jump_frame(waste_exec_context *ctx,
             exec_jump_snapshot *next = (exec_jump_snapshot *)realloc(
                 eng->jump_snapshots, (size_t)capacity * sizeof(*next));
             if (!next)
-                return exec_fail(ctx->error, EXEC_ERROR_TRAP,
+                return exec_fail(ctx->error, EXEC_ERROR_RESOURCE,
                                  "setjmp snapshot allocation failed");
             memset(next + eng->jump_snapshot_capacity, 0,
                    (size_t)(capacity - eng->jump_snapshot_capacity) *
@@ -376,7 +379,7 @@ static exec_status save_jump_frame(waste_exec_context *ctx,
         wasm_value *next = (wasm_value *)realloc(
             snapshot->locals, (size_t)ctx->local_count * sizeof(*next));
         if (!next)
-            return exec_fail(ctx->error, EXEC_ERROR_TRAP,
+            return exec_fail(ctx->error, EXEC_ERROR_RESOURCE,
                              "setjmp locals allocation failed");
         snapshot->locals = next;
         memcpy(snapshot->locals, ctx->locals,
@@ -917,7 +920,7 @@ int execute_op_call(waste_exec_context *ctx, const exec_instr *instr) {
         eng->call_arg_frames[ctx->depth] = (wasm_value *)calloc(
             EXEC_MAX_CALL_ARGS, sizeof(wasm_value));
         if (!eng->call_arg_frames[ctx->depth])
-            return exec_fail(ctx->error, EXEC_ERROR_TRAP,
+            return exec_fail(ctx->error, EXEC_ERROR_RESOURCE,
                              "call arg frame allocation failed");
     }
     wasm_value *call_args = eng->call_arg_frames[ctx->depth];
@@ -1012,7 +1015,7 @@ int execute_op_call_indirect(waste_exec_context *ctx, const exec_instr *instr) {
         eng->call_arg_frames[ctx->depth] = (wasm_value *)calloc(
             EXEC_MAX_CALL_ARGS, sizeof(wasm_value));
         if (!eng->call_arg_frames[ctx->depth])
-            return exec_fail(ctx->error, EXEC_ERROR_TRAP,
+            return exec_fail(ctx->error, EXEC_ERROR_RESOURCE,
                              "call arg frame allocation failed");
     }
     wasm_value *call_args = eng->call_arg_frames[ctx->depth];
@@ -1072,7 +1075,7 @@ int execute_op_call_ref(waste_exec_context *ctx, const exec_instr *instr) {
         eng->call_arg_frames[ctx->depth] = (wasm_value *)calloc(
             EXEC_MAX_CALL_ARGS, sizeof(wasm_value));
         if (!eng->call_arg_frames[ctx->depth])
-            return exec_fail(ctx->error, EXEC_ERROR_TRAP,
+            return exec_fail(ctx->error, EXEC_ERROR_RESOURCE,
                              "call arg frame allocation failed");
     }
     wasm_value *call_args = eng->call_arg_frames[ctx->depth];
@@ -1484,7 +1487,7 @@ tail_entry:
         eng->control_frames[depth] = (exec_control *)calloc(
             EXEC_MAX_CONTROL, sizeof(*eng->control_frames[depth]));
         if (!eng->operand_frames[depth] || !eng->control_frames[depth])
-            return exec_fail(err, EXEC_ERROR_TRAP,
+            return exec_fail(err, EXEC_ERROR_RESOURCE,
                              "runtime frame allocation failed");
     }
     exec_stack *runtime_stack = eng->operand_frames[depth];
@@ -1541,7 +1544,7 @@ tail_entry:
                 eng->local_frames[depth],
                 (size_t)storage_count * sizeof(*next));
             if (!next)
-                return exec_fail(err, EXEC_ERROR_TRAP,
+                return exec_fail(err, EXEC_ERROR_RESOURCE,
                                  "runtime locals allocation failed");
             eng->local_frames[depth] = next;
             eng->local_frame_capacities[depth] = storage_count;
@@ -1605,6 +1608,14 @@ tail_entry:
             } else control->remaining--;
         }
         const exec_instr *instr = &func->code[pc];
+        if (control && control->resources) {
+            waste_resource_budget *resources = control->resources;
+            if (resources->instruction_limit && resources->instructions >= resources->instruction_limit) {
+                if (!resources->exhausted) resources->exhausted = WASTE_RESOURCE_INSTRUCTIONS;
+                return exec_execution_check(control, err);
+            }
+            if (resources->instructions != UINT64_MAX) resources->instructions++;
+        }
         context.pc = &pc;
 
         const wasm_opcode_dispatch *dispatch = wasm_opcode_get_dispatch(instr);

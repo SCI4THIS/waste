@@ -347,13 +347,8 @@ void native_store_checkpoint_destroy(native_store_checkpoint *checkpoint) {
 }
 
 static exec_memory_page *copy_checkpoint_page(const exec_memory_page *source) {
-    exec_memory_page *copy = calloc(1, sizeof(*copy));
+    exec_memory_page *copy = exec_memory_page_allocate(source->resources);
     if (!copy) return NULL;
-    copy->bytes = malloc(EXEC_PAGE_SIZE);
-    if (!copy->bytes) {
-        free(copy);
-        return NULL;
-    }
     memcpy(copy->bytes, source->bytes, EXEC_PAGE_SIZE);
     copy->refs = 1;
     copy->shared = source->shared;
@@ -542,6 +537,7 @@ alloc_fail:
 static exec_status restore_memory(memory_snapshot *snapshot, exec_error *error) {
     exec_memory *memory = snapshot->object;
     exec_memory replacement = {0};
+    replacement.resources = memory->resources;
     if (snapshot->pages > SIZE_MAX / sizeof(*replacement.page_data) ||
         snapshot->pages > SIZE_MAX / sizeof(*replacement.page_protection))
         return checkpoint_error(error, "memory checkpoint is too large");

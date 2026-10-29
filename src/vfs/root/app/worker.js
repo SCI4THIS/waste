@@ -409,7 +409,7 @@ function stageInstalledVfs(exp, vfs) {
   if (exp.waste_wast_vfs_ready() !== 0) throw new Error("Incomplete installed VFS");
 }
 
-async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vfsPaths = [], executionLimits, suiteRequest) {
+async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vfsPaths = [], executionLimits, suiteRequest, directShell = false) {
   const wasmBytes = new Uint8Array(wasmBuf);
   const hostFloat = (ptr, length, asF32) => {
     const bytes = new Uint8Array(engineMemory.buffer, ptr, length);
@@ -620,7 +620,7 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
     scriptPtr = exp.waste_wast_suite_prepare(index);
     if (!scriptPtr) throw new Error(suiteError());
     scriptLength = exp.waste_wast_suite_source_length();
-  } else {
+  } else if (!directShell) {
     const sourceBytes = new TextEncoder().encode(source);
     scriptLength = sourceBytes.length;
     scriptPtr = exp.waste_wast_alloc(scriptLength);
@@ -640,7 +640,7 @@ async function run(wasmBuf, source, probeBuf, packagedFiles, buildMtime, vfs, vf
   };
   if (Number.isFinite(duration)) limitTimer = setTimeout(wakeLimit, duration);
   try {
-  let yielded = exp.waste_wast_run_script(scriptPtr, scriptLength);
+  let yielded = directShell ? exp.waste_wast_start_shell() : exp.waste_wast_run_script(scriptPtr, scriptLength);
   flushOutput();
   if (!suiteRequest) {
     // The C runner tears down its per-session kernel before run_script returns.
@@ -797,7 +797,7 @@ self.onmessage = function(e) {
       error: error && (error.stack || error.message) || String(error)}));
   } else if (msg.type === "start") {
     run(msg.wasmBytes, msg.source, msg.probeBytes, msg.vfsFiles || [],
-        msg.buildMtime, msg.vfs, msg.vfsPaths, msg.executionLimits, msg.suite).catch(error => {
+        msg.buildMtime, msg.vfs, msg.vfsPaths, msg.executionLimits, msg.suite, Boolean(msg.shell)).catch(error => {
       self.postMessage({type: "done", ok: false,
         error: error && (error.stack || error.message) || String(error)});
     });

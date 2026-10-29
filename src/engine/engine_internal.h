@@ -4,6 +4,7 @@
 #include "wat/types.h"
 #include "wasm/module.h"
 #include "lib/include/select.h"
+#include "lib/include/resource.h"
 #include <stddef.h>
 
 typedef struct waste_exec_engine waste_exec_engine;
@@ -32,12 +33,15 @@ typedef enum {
     EXEC_YIELD,
     /* Runtime execution policy stopped the session; never a guest trap. */
     EXEC_ERROR_INTERRUPTED,
+    /* Host allocation failed; distinct from a guest Wasm trap. */
+    EXEC_ERROR_RESOURCE,
 } exec_status;
 
 typedef enum {
     EXEC_STOP_NONE = 0,
     EXEC_STOP_TIMEOUT,
-    EXEC_STOP_CANCELLED
+    EXEC_STOP_CANCELLED,
+    EXEC_STOP_RESOURCE
 } exec_stop_reason;
 
 /* Borrowed per-session policy. Clones/providers share its instruction counter,
@@ -66,6 +70,7 @@ typedef struct {
     uint64_t last_pump_ns;
     uint64_t (*pump_clock_now)(void *);
     void *pump_clock_context;
+    waste_resource_budget *resources;
 } exec_execution_control;
 
 
@@ -162,6 +167,7 @@ typedef struct exec_memory_page {
     uint32_t refs;
     uint8_t shared;
     uint8_t dirty;
+    waste_resource_budget *resources;
 } exec_memory_page;
 
 typedef struct exec_memory exec_memory;
@@ -177,6 +183,7 @@ typedef struct {
 } exec_memory_mapping;
 
 struct exec_memory {
+    waste_resource_budget *resources;
     /* A NULL page is an in-bounds, zero-filled page until first write. */
     exec_memory_page **page_data;
     uint8_t *page_protection;

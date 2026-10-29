@@ -16,6 +16,23 @@ see [OCaml reference interpreter build](#ocaml-reference-interpreter-build).
 
 ## Auxiliary Guest Utilities
 
+For embedding work, run `make -C src/cli-rt embedding-check` for public C session
+ownership and direct command execution under ASan/UBSan, then build with
+`make -C src/html-rt embedding` and run `node src/html-rt/test/embedding.mjs`.
+The latter uses the standalone Wasm profile and an actual worker to check raw
+streams, generated files, wait/resume, cancellation, stale messages and reuse.
+Keep ownership/callback/host ABI checks in host probes and package assertions
+in their canonical WAST inputs. Worker host checks alone do not establish the
+actual offline-browser gate. The contract and verification record are documented
+in [embedding.md](embedding.md) and [active-embedding.md](active-embedding.md).
+`./start.sh --embedding-check` composes these checks with the distribution
+consumer. `./start.sh --embedding-browser` adds actual Chromium execution of
+the self-contained embedding page over `file://`; its classic Blob worker
+contains no external module imports. Keep guest compilation and explicit VFS
+installation separate from `embedding-package`. Resource profiles live in
+`src/html-rt/command/packages.json`, and package metadata describes current
+bytes rather than imposing source-hash approval on local edits.
+
 Authored `ldd` source lives in `src/aux/ldd/ldd.c`. Run `make -C src/aux ldd`
 to compile and link `build/aux/ldd/ldd.wasm` directly with Clang and `wasm-ld`,
 using the installed guest SDK and shared-libc import attributes. Run

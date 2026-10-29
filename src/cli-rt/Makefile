@@ -12,6 +12,7 @@ WASM_LD_LIB ?= $(abspath $(ENGINE_BUILD_DIR)/toolchain/usr/lib)
 
 # Engine core sources (platform-independent)
 ENGINE_SOURCES := $(ENGINE_DIR)/process_driver.c $(ENGINE_DIR)/guest_posix.c $(ENGINE_DIR)/wasm/load.c \
+	$(ENGINE_DIR)/session/session.c \
 	$(ENGINE_DIR)/vfs.c \
 	$(ENGINE_DIR)/source.c \
 	$(ENGINE_DIR)/wasm/opcode.c $(ENGINE_DIR)/wasm/encode.c \
@@ -47,9 +48,10 @@ ENGINE_HEADERS := $(ENGINE_DIR)/wat/types.h $(ENGINE_DIR)/store.h \
 	$(ENGINE_DIR)/instantiate.h $(ENGINE_DIR)/runtime_internal.h
 
 ENGINE_HEADERS += native_vfs.h $(ENGINE_DIR)/lib/json.h $(ENGINE_DIR)/process_driver.h $(ENGINE_DIR)/vfs.h $(ENGINE_DIR)/guest_posix.h $(ENGINE_DIR)/include/waste.h \
+	$(ENGINE_DIR)/lib/include/resource.h \
 	$(ENGINE_DIR)/../config.h $(ENGINE_DIR)/lib/include/kernel.h \
 	$(ENGINE_DIR)/lib/include/path.h
-ENGINE_HEADERS += $(ENGINE_DIR)/wast/setup.h
+ENGINE_HEADERS += $(ENGINE_DIR)/wast/setup.h $(ENGINE_DIR)/session/adapter.h
 ENGINE_HEADERS += ../vfs/usr/include/waste/abi/mman.h
 ENGINE_HEADERS += ../vfs/usr/include/waste/abi/fcntl.h
 ENGINE_HEADERS += ../vfs/usr/include/waste/abi/resource.h
@@ -66,6 +68,7 @@ NATIVE_RUNTIME_OBJECTS := $(NATIVE_OBJECT_DIR)/runtime/native_runtime.o $(NATIVE
 SAN_RUNTIME_OBJECTS := $(SAN_OBJECT_DIR)/runtime/native_runtime.o $(SAN_OBJECT_DIR)/runtime/native_vfs.o $(SAN_OBJECT_DIR)/runtime/native_wast.o $(SAN_OBJECT_DIR)/runtime/native_terminal.o
 SAN_CFLAGS := -O1 -g -std=c11 -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-omit-frame-pointer
 NATIVE_RUNTIME_HEADERS := native_entropy.h native_runtime.h native_input.h application.h guest_suite.h native_wast.h native_terminal.h
+NATIVE_RUNTIME_HEADERS += lib/include/syscall.h
 
 $(NATIVE_OBJECT_DIR)/engine/%.o: $(ENGINE_DIR)/%.c $(ENGINE_HEADERS)
 	mkdir -p $(@D)
@@ -278,6 +281,60 @@ guest-session-sanitize: gen $(SESSION_SAN_TARGET) test-suite-sanitize $(BUILD_DI
 direct-start-build: gen $(BUILD_DIR)/direct-start-sanitize guest-session
 direct-start-check: direct-start-build
 	cd ../.. && ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 $(abspath $(BUILD_DIR))/direct-start-sanitize
+
+.PHONY: embedding-check embedding-resource-check embedding-failure-check embedding-example embedding-library embedding-native-package
+embedding-library: gen $(BUILD_DIR)/libwaste.a
+$(BUILD_DIR)/libwaste.a: $(NATIVE_ENGINE_OBJECTS) $(BUILD_DIR)/wast.tab.session.o $(BUILD_DIR)/wast.lex.session.o
+	$(AR) rcs $@ $^
+
+embedding-native-package: embedding-library
+	mkdir -p $(BUILD_DIR)/embedding/include $(BUILD_DIR)/embedding/examples
+	cp $(BUILD_DIR)/libwaste.a $(BUILD_DIR)/embedding/
+	cp $(ENGINE_DIR)/include/waste.h $(BUILD_DIR)/embedding/include/
+	cp examples/embedding.c $(BUILD_DIR)/embedding/examples/
+	cp ../../LICENSE ../../docs/embedding.md $(BUILD_DIR)/embedding/
+
+embedding-example: gen $(BUILD_DIR)/embedding-example
+$(NATIVE_OBJECT_DIR)/checks/embedding-example.o: examples/embedding.c $(ENGINE_HEADERS)
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) -c $< -o $@
+$(BUILD_DIR)/embedding-example: $(NATIVE_OBJECT_DIR)/checks/embedding-example.o $(BUILD_DIR)/libwaste.a
+	$(CC) $(CFLAGS) $^ -lm -o $@
+
+embedding-check: gen $(BUILD_DIR)/embedding-sanitize embedding-resource-check embedding-failure-check
+	mkdir -p $(abspath $(ENGINE_BUILD_DIR))/logs
+	cd ../.. && ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 $(abspath $(BUILD_DIR))/embedding-sanitize $(abspath $(ENGINE_BUILD_DIR))/logs/embedding-native.svg
+
+$(SAN_OBJECT_DIR)/checks/embedding.o: test/embedding.c $(ENGINE_HEADERS)
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(SAN_CFLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) -c $< -o $@
+$(BUILD_DIR)/embedding-sanitize: $(SAN_OBJECT_DIR)/checks/embedding.o $(SAN_ENGINE_OBJECTS) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
+	$(CC) $(SAN_CFLAGS) $^ -lm -o $@
+
+embedding-resource-check: gen $(BUILD_DIR)/embedding-resources-sanitize
+	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 $(abspath $(BUILD_DIR))/embedding-resources-sanitize
+$(SAN_OBJECT_DIR)/checks/embedding-resources.o: $(ENGINE_DIR)/test/embedding/resources.c $(ENGINE_HEADERS)
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(SAN_CFLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) -c $< -o $@
+$(BUILD_DIR)/embedding-resources-sanitize: $(SAN_OBJECT_DIR)/checks/embedding-resources.o $(SAN_ENGINE_OBJECTS) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
+	$(CC) $(SAN_CFLAGS) $^ -lm -o $@
+
+$(BUILD_DIR)/embedding-output.o: ../vfs/root/test/system/embedding/output.c ../vfs/usr/include/unistd.h
+	mkdir -p $(@D)
+	clang --target=wasm32 -O2 -fPIC -ffreestanding -fno-builtin -fno-stack-protector -nostdinc -nostdlib \
+		-isystem ../vfs/usr/include -isystem ../vfs/usr/lib/waste/cc/include -c $< -o $@
+$(BUILD_DIR)/embedding-output.wasm: $(BUILD_DIR)/embedding-output.o
+	env LD_LIBRARY_PATH=$(WASM_LD_LIB) $(WASM_LD) --no-entry --import-memory --import-table \
+		--experimental-pic --unresolved-symbols=import-dynamic --export=_start --export=__heap_base \
+		--global-base=655360 --table-base=1024 -z stack-size=524288 $< -o $@
+embedding-failure-check: gen $(BUILD_DIR)/embedding-failures-sanitize $(BUILD_DIR)/embedding-output.wasm
+	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 $(abspath $(BUILD_DIR))/embedding-failures-sanitize \
+		$(abspath ../vfs/lib/libc.so.wasm) $(abspath $(BUILD_DIR))/embedding-output.wasm
+$(SAN_OBJECT_DIR)/checks/embedding-failures.o: test/embedding-failures.c $(ENGINE_HEADERS)
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(SAN_CFLAGS) -I$(ENGINE_DIR) -I$(WAST_GEN_DIR) -c $< -o $@
+$(BUILD_DIR)/embedding-failures-sanitize: $(SAN_OBJECT_DIR)/checks/embedding-failures.o $(SAN_ENGINE_OBJECTS) $(WAST_TAB_SAN_O) $(WAST_LEX_SAN_O)
+	$(CC) $(SAN_CFLAGS) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free $^ -lm -o $@
 
 $(SAN_OBJECT_DIR)/checks/direct-start.o: test/direct-start.c $(ENGINE_HEADERS)
 	mkdir -p $(@D)
@@ -551,7 +608,7 @@ vfs-check: $(BUILD_DIR)/vfs-inventory-sanitize $(WAST_TARGET)
 	$(WAST_TARGET) --vfs-root ../vfs ../../src/engine/test/guest-sdk/mounted.wast
 	python3 ../../src/engine/test/vfs/directory-check.py $(WAST_TARGET)
 
-$(BUILD_DIR)/vfs-inventory-sanitize: native_vfs.c native_vfs.h $(ENGINE_DIR)/lib/json.h ../../src/engine/test/vfs/vfs-inventory.c $(ENGINE_DIR)/vfs.c \
+$(BUILD_DIR)/vfs-inventory-sanitize: native_vfs.c native_vfs.h lib/include/syscall.h $(ENGINE_DIR)/lib/json.h ../../src/engine/test/vfs/vfs-inventory.c $(ENGINE_DIR)/vfs.c \
 		$(ENGINE_DIR)/vfs.h $(ENGINE_DIR)/lib/kernel.c $(ENGINE_DIR)/lib/path.c \
 		$(ENGINE_DIR)/lib/include/kernel.h $(ENGINE_DIR)/lib/include/path.h
 	mkdir -p $(BUILD_DIR)

@@ -163,7 +163,7 @@ static exec_status parse_types(waste_exec_engine *eng, wasm_reader *sec, exec_er
     uint32_t capacity = entries;
     eng->types = entries ? calloc(entries, sizeof(*eng->types)) : NULL;
     if (entries && !eng->types)
-        return exec_fail(err, EXEC_ERROR_FORMAT, "type alloc failed");
+        return exec_fail(err, EXEC_ERROR_RESOURCE, "type alloc failed");
     uint32_t index = 0;
     for (uint32_t entry = 0; entry < entries; entry++) {
         uint8_t form;
@@ -186,7 +186,7 @@ static exec_status parse_types(waste_exec_engine *eng, wasm_reader *sec, exec_er
              * Preserve the existing allocation until growth succeeds. */
             exec_func_type *grown = calloc(grown_capacity, sizeof(*grown));
             if (!grown)
-                return exec_fail(err, EXEC_ERROR_FORMAT, "type alloc failed");
+                return exec_fail(err, EXEC_ERROR_RESOURCE, "type alloc failed");
             if (capacity)
                 memcpy(grown, eng->types, (size_t)capacity * sizeof(*grown));
             free(eng->types);
@@ -252,7 +252,7 @@ static exec_status instantiate_imports(waste_exec_engine *eng,
         eng->declared_funcs = calloc(function_count,
                                      sizeof(*eng->declared_funcs));
         if (!eng->function_imports || !eng->declared_funcs)
-            return exec_fail(err, EXEC_ERROR_FORMAT,
+            return exec_fail(err, EXEC_ERROR_RESOURCE,
                              "function import metadata alloc failed");
     }
     for (uint32_t i = 0; i < module->import_count; i++) {
@@ -328,6 +328,7 @@ static exec_status instantiate_imports(waste_exec_engine *eng,
                 exec_status status = wasm_instance_allocate_memory(
                     memory, initial, maximum, flags, err);
                 if (status != EXEC_OK) return status;
+                memory->resources = eng->execution_control ? eng->execution_control->resources : NULL;
                 eng->owns_memories[eng->memory_count] = 1;
             }
             if (!memory) return exec_fail(err,EXEC_ERROR_NOT_FOUND,"unresolved memory import");
@@ -420,7 +421,7 @@ static exec_status parse_funcs(waste_exec_engine *eng, wasm_reader *sec,
         uint8_t *declarations = realloc(eng->declared_funcs,
                                         (size_t)total * sizeof(*declarations));
         if (!declarations)
-            return exec_fail(err, EXEC_ERROR_FORMAT,
+            return exec_fail(err, EXEC_ERROR_RESOURCE,
                              "function declaration metadata alloc failed");
         memset(declarations + eng->import_func_count, 0,
                (size_t)count * sizeof(*declarations));
@@ -428,7 +429,7 @@ static exec_status parse_funcs(waste_exec_engine *eng, wasm_reader *sec,
     }
     eng->funcs = (exec_func *)calloc(count, sizeof(*eng->funcs));
     if (count && !eng->funcs)
-        return exec_fail(err, EXEC_ERROR_FORMAT, "func alloc failed");
+        return exec_fail(err, EXEC_ERROR_RESOURCE, "func alloc failed");
     eng->func_count = count;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t ti;
@@ -450,7 +451,7 @@ static exec_status parse_exports(waste_exec_engine *eng, wasm_reader *sec, exec_
         return exec_fail(err, EXEC_ERROR_FORMAT, "too many exports");
     eng->exports = (exec_export *)calloc(count, sizeof(*eng->exports));
     if (count && !eng->exports)
-        return exec_fail(err, EXEC_ERROR_FORMAT, "export alloc failed");
+        return exec_fail(err, EXEC_ERROR_RESOURCE, "export alloc failed");
     eng->export_count = count;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t name_len;
@@ -503,6 +504,7 @@ static exec_status parse_memory(waste_exec_engine *eng, wasm_reader *sec, exec_e
             memory, initial, maximum, flags, err);
         if (status != EXEC_OK) return status;
         eng->memories[index]=memory;
+        memory->resources = eng->execution_control ? eng->execution_control->resources : NULL;
         eng->owns_memories[index]=1;
         eng->memory_count++;
         if (!eng->memory) eng->memory=memory;
@@ -1099,7 +1101,7 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func,
     if (local_count) {
         func->locals = calloc(local_count, sizeof(*func->locals));
         if (!func->locals)
-            return exec_fail(err, EXEC_ERROR_FORMAT, "local alloc failed");
+            return exec_fail(err, EXEC_ERROR_RESOURCE, "local alloc failed");
     }
     /* Replay the bounded, validated declarations into the exact-sized array.
        The function table owns it, including on later body/validation failure. */
@@ -1151,7 +1153,7 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func,
             exec_instr *next = realloc(code, next_capacity * sizeof(*code));
             if (!next) {
                 FREE_CODE(code, code_size);
-                return exec_fail(err, EXEC_ERROR_FORMAT, "code alloc failed");
+                return exec_fail(err, EXEC_ERROR_RESOURCE, "code alloc failed");
             }
             uint64_t peak = ((uint64_t)capacity + next_capacity) * sizeof(*code);
             if (peak > peak_buffer_bytes) peak_buffer_bytes = peak;
@@ -1209,7 +1211,7 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func,
                     catch_count ? catch_count : 1, sizeof(*instr.catches));
                 if (!instr.catches) {
                     FREE_CODE(code, code_size);
-                    return exec_fail(err, EXEC_ERROR_FORMAT,
+                    return exec_fail(err, EXEC_ERROR_RESOURCE,
                                      "catch allocation failed");
                 }
                 instr.catch_count = catch_count;
@@ -1255,7 +1257,7 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func,
             uint32_t count;
             if (!wasm_reader_read_u32(body, &count) || count > 0xFFFF) { FREE_CODE(code, code_size); return exec_fail(err, EXEC_ERROR_FORMAT, "invalid br_table"); }
             uint32_t *depths = (uint32_t *)malloc((count + 1) * sizeof(uint32_t));
-            if (!depths) { FREE_CODE(code, code_size); return exec_fail(err, EXEC_ERROR_FORMAT, "br_table alloc failed"); }
+            if (!depths) { FREE_CODE(code, code_size); return exec_fail(err, EXEC_ERROR_RESOURCE, "br_table alloc failed"); }
             for (uint32_t i = 0; i <= count; i++) {
                 if (!wasm_reader_read_u32(body, &depths[i])) { free(depths); FREE_CODE(code, code_size); return exec_fail(err, EXEC_ERROR_FORMAT, "invalid br_table label"); }
             }
@@ -1577,7 +1579,7 @@ static exec_status parse_body(waste_exec_engine *eng, exec_func *func,
         if (validation.status != WASM_VALIDATION_VALID) {
             FREE_CODE(code, code_size);
             if (validation.status == WASM_VALIDATION_ALLOCATION_FAILED)
-                return exec_fail(err, EXEC_ERROR_UNSUPPORTED,
+                return exec_fail(err, EXEC_ERROR_RESOURCE,
                                  "validation control workspace allocation failed");
             if (err) {
                 err->status = validation.status == WASM_VALIDATION_INVALID
@@ -1653,7 +1655,7 @@ static exec_status parse_code(waste_exec_engine *eng, wasm_reader *sec,
             exec_func *function = &eng->funcs[i];
             function->encoded_body = malloc(body_size);
             if (!function->encoded_body)
-                return exec_fail(err, EXEC_ERROR_FORMAT,
+                return exec_fail(err, EXEC_ERROR_RESOURCE,
                                  "encoded function allocation failed");
             memcpy(function->encoded_body, encoded, body_size);
             function->encoded_body_size = body_size;
@@ -1716,11 +1718,11 @@ static exec_status load_decoded_with_imports(
 
     waste_exec_engine *eng = (waste_exec_engine *)calloc(1, sizeof(*eng));
     if (!eng)
-        return exec_fail(err, EXEC_ERROR_FORMAT, "engine alloc failed");
+        return exec_fail(err, EXEC_ERROR_RESOURCE, "engine alloc failed");
     eng->static_ref_count = malloc(sizeof(*eng->static_ref_count));
     if (!eng->static_ref_count) {
         free(eng);
-        return exec_fail(err, EXEC_ERROR_FORMAT,
+        return exec_fail(err, EXEC_ERROR_RESOURCE,
                          "engine static metadata alloc failed");
     }
     *eng->static_ref_count = 1;
@@ -1920,7 +1922,7 @@ exec_status exec_validate_functions_streamed(const wasm_module *module,
     exec_host_import *bindings = module->import_count ?
         calloc(module->import_count, sizeof(*bindings)) : NULL;
     if (module->import_count && !bindings)
-        return exec_fail(err, EXEC_ERROR_FORMAT, "analysis bindings alloc failed");
+        return exec_fail(err, EXEC_ERROR_RESOURCE, "analysis bindings alloc failed");
     uint32_t function_count = 0;
     for (uint32_t i = 0; i < module->import_count; i++) {
         if (module->imports[i].kind != WASM_IMPORT_FUNCTION) continue;
@@ -1949,7 +1951,7 @@ exec_status exec_measure_module(const wasm_module *module,
         return exec_fail(err, EXEC_ERROR_FORMAT, "footprint requires a decoded module");
     memset(measure, 0, sizeof(*measure));
     waste_exec_engine *eng = calloc(1, sizeof(*eng));
-    if (!eng) return exec_fail(err, EXEC_ERROR_FORMAT, "footprint engine alloc failed");
+    if (!eng) return exec_fail(err, EXEC_ERROR_RESOURCE, "footprint engine alloc failed");
     exec_status status = EXEC_OK;
     uint32_t tables = 0, tags = 0;
     for (uint32_t i = 0; i < module->import_count; i++) {
@@ -1967,7 +1969,7 @@ exec_status exec_measure_module(const wasm_module *module,
     if (eng->import_func_count) {
         eng->declared_funcs = calloc(eng->import_func_count, 1);
         if (!eng->declared_funcs) {
-            status = exec_fail(err, EXEC_ERROR_FORMAT, "footprint declarations alloc failed");
+            status = exec_fail(err, EXEC_ERROR_RESOURCE, "footprint declarations alloc failed");
             goto done;
         }
     }

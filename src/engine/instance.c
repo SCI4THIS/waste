@@ -88,7 +88,7 @@ exec_status exec_clone_engine(const waste_exec_engine *source,
     *clone_out = NULL;
     clone = calloc(1, sizeof(*clone));
     if (!clone)
-        return exec_fail(error, EXEC_ERROR_TRAP, "engine clone allocation failed");
+        return exec_fail(error, EXEC_ERROR_RESOURCE, "engine clone allocation failed");
     *clone = *source;
     if (clone->static_ref_count)
         (*clone->static_ref_count)++;
@@ -274,7 +274,7 @@ exec_status exec_clone_engine(const waste_exec_engine *source,
 
 failure:
     exec_free(clone);
-    return exec_fail(error, EXEC_ERROR_TRAP, "engine clone allocation failed");
+    return exec_fail(error, EXEC_ERROR_RESOURCE, "engine clone allocation failed");
 }
 
 exec_status exec_clone_engine_bind(waste_exec_engine *clone,
@@ -294,7 +294,7 @@ exec_status exec_clone_engine_bind(waste_exec_engine *clone,
         return exec_fail(error, EXEC_ERROR_TRAP, "clone bindings capacity exceeded");
     exec_clone_binding *replacement = malloc(capacity * sizeof(*replacement));
     if (!replacement)
-        return exec_fail(error, EXEC_ERROR_TRAP, "clone bindings allocation failed");
+        return exec_fail(error, EXEC_ERROR_RESOURCE, "clone bindings allocation failed");
     memcpy(replacement, bindings, (size_t)binding_count * sizeof(*replacement));
     uint32_t count = binding_count;
     /* Funcrefs retain their original owner identity across fork generations.

@@ -67,7 +67,7 @@ ENGINE_HEADERS := $(ENGINE_DIR)/lib/json.h $(ENGINE_DIR)/wat/types.h $(ENGINE_DI
 	$(ENGINE_DIR)/instantiate.h $(ENGINE_DIR)/runtime_internal.h
 
 ENGINE_HEADERS += $(ENGINE_DIR)/process_driver.h $(ENGINE_DIR)/vfs.h $(ENGINE_DIR)/../config.h $(ENGINE_DIR)/guest_posix.h $(ENGINE_DIR)/include/waste.h
-ENGINE_HEADERS += $(ENGINE_DIR)/wast/setup.h
+ENGINE_HEADERS += $(ENGINE_DIR)/wast/setup.h $(ENGINE_DIR)/session/adapter.h
 ENGINE_HEADERS += ../vfs/usr/include/waste/abi/mman.h
 ENGINE_HEADERS += ../vfs/usr/include/waste/abi/fcntl.h
 ENGINE_HEADERS += ../vfs/usr/include/waste/abi/resource.h
@@ -83,7 +83,7 @@ LIB_SHARED_SRC := ../aux/libc/runtime/string.c ../aux/libc/runtime/stdio.c \
 LIB_WASM_SRC := lib/stdlib.c lib/stdio.c lib/unistd.c
 
 # Object files
-ENGINE_OBJS := $(BUILD_DIR)/process_driver.o $(BUILD_DIR)/guest_posix.o $(BUILD_DIR)/store.o $(BUILD_DIR)/checkpoint.o $(BUILD_DIR)/process.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/select.o $(BUILD_DIR)/path.o \
+ENGINE_OBJS := $(BUILD_DIR)/session.o $(BUILD_DIR)/process_driver.o $(BUILD_DIR)/guest_posix.o $(BUILD_DIR)/store.o $(BUILD_DIR)/checkpoint.o $(BUILD_DIR)/process.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/select.o $(BUILD_DIR)/path.o \
 	$(BUILD_DIR)/source.o $(BUILD_DIR)/vfs.o \
 	$(BUILD_DIR)/wasm_load.o \
 	$(BUILD_DIR)/wast_runner.o $(BUILD_DIR)/wasm_encode.o \
@@ -104,6 +104,8 @@ ENGINE_OBJS := $(BUILD_DIR)/process_driver.o $(BUILD_DIR)/guest_posix.o $(BUILD_
 RT_OBJS := $(BUILD_DIR)/browser_api.o $(BUILD_DIR)/posix_stubs.o $(BUILD_DIR)/test_suite.o
 
 ENGINE_HEADERS += $(ENGINE_DIR)/test_suite.h
+ENGINE_HEADERS += $(ENGINE_DIR)/process_driver.h $(ENGINE_DIR)/guest_posix.h $(ENGINE_DIR)/include/waste.h
+ENGINE_HEADERS += $(ENGINE_DIR)/lib/include/resource.h
 
 WASM_LIB_SHARED_O := $(patsubst ../aux/libc/runtime/%.c,$(BUILD_DIR)/lib_shared_%.o,$(LIB_SHARED_SRC))
 WASM_LIB_WASM_O := $(patsubst lib/%.c,$(BUILD_DIR)/lib_wasm_%.o,$(LIB_WASM_SRC))
@@ -370,3 +372,9 @@ $(BUILD_DIR)/path.o $(BUILD_DIR)/test_suite.o: ../config.h
 .PHONY: bash-html
 bash-html: wast-browser
 	bash tools/build.sh bash --wasm "$(abspath $(WAST_WASM_TARGET))" --output "$(abspath $(BUILD_DIR))/bash.html"
+
+include command/command.mk
+
+$(BUILD_DIR)/session.o: $(ENGINE_DIR)/session/session.c $(ENGINE_HEADERS)
+	mkdir -p $(@D)
+	clang $(WASM_CC_FLAGS) -c $< -o $@

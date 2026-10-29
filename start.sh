@@ -60,6 +60,11 @@ Engine (C):
   --cli-test       run the full core spec test suite via the CLI runner
   --html-bash      build the self-contained C-engine Bash page
   --html-check     run focused worker and terminal-model checks (Node, no Chromium)
+  --embedding      build the command runtime and an offline AWK/M4/DOT example
+  --embedding-check
+                   verify native C, Wasm host, workers and selected command package
+  --embedding-browser
+                   verify the offline embedding example in Chromium
   --html-browser-full
                    run full offline-browser verification (requires Chromium)
   --build-aux      build all auxiliary Wasm utilities (coreutils, rogue, ncurses, ldd)
@@ -1006,6 +1011,49 @@ dependency_menu() {
   done
 }
 
+build_embedding() {
+  local log="$LOG_DIR/embedding-build.log"
+  : >"$log"
+  if ! run_logged_step "Build the embedding runtime and selected installed commands" "$log" \
+      make -C "$REPO_ROOT/src/html-rt" BUILD_DIR="$HTML_BUILD" \
+      ENGINE_BUILD_DIR="$ENGINE_BUILD" embedding-package; then
+    show_message "Embedding build failed" "See $log. Install the selected guest commands into src/vfs explicitly before packaging."
+    return 1
+  fi
+  show_message "Embedding package built" "Output: $HTML_BUILD/embedding/embedding.html\nLog: $log"
+}
+
+check_embedding() {
+  local log="$LOG_DIR/embedding-check.log"
+  build_embedding || return 1
+  : >"$log"
+  if ! run_logged_step "Verify the public C session and ownership" "$log" \
+      make -C "$REPO_ROOT/src/cli-rt" BUILD_DIR="$CLI_BUILD" ENGINE_BUILD_DIR="$ENGINE_BUILD" embedding-check; then
+    show_message "Embedding checks failed" "See $log"
+    return 1
+  fi
+  if ! (cd "$REPO_ROOT" && run_logged_step "Verify the Wasm ABI and worker host" "$log" \
+      node src/html-rt/test/embedding.mjs "--native-svg=$LOG_DIR/embedding-native.svg" && \
+      run_logged_step "Verify the distributed package" "$log" \
+      node src/html-rt/test/embedding-package.mjs "$HTML_BUILD/embedding"); then
+    show_message "Embedding checks failed" "See $log"
+    return 1
+  fi
+  show_message "Embedding checks passed" "Log: $log"
+}
+
+check_embedding_browser() {
+  check_embedding || return 1
+  local log="$LOG_DIR/embedding-browser.log"
+  : >"$log"
+  if ! run_logged_step "Verify offline command embedding in Chromium" "$log" \
+      node "$REPO_ROOT/src/html-rt/test/embedding-browser.cjs" "$HTML_BUILD/embedding/embedding.html"; then
+    show_message "Embedding browser check failed" "See $log"
+    return 1
+  fi
+  show_message "Embedding browser check passed" "Log: $log"
+}
+
 main_menu() {
   while true; do
     local choice
@@ -1018,6 +1066,7 @@ main_menu() {
       cli-test    "Run the full test suite in the cli runtime" \
       html-bash   "Build engine and package current VFS into static HTML" \
       html-check  "Run focused C-engine Bash worker checks" \
+      embedding   "Build the embeddable command runtime and offline example" \
       aux         "Build auxiliary Wasm utilities" \
       -----   "────────────────────────────────────────────" \
       quit    "Exit" 3>&1 1>&2 2>&3)" || return 0
@@ -1028,6 +1077,7 @@ main_menu() {
       cli-test) run_cli_tests || true ;;
       html-bash) generate_c_engine_bash_html || true ;;
       html-check) check_c_engine_bash || true ;;
+      embedding) build_embedding || true ;;
       aux) aux_menu ;;
       quit) return 0 ;;
     esac
@@ -1067,6 +1117,9 @@ main() {
       return "$c_engine_status" ;;
     --c-engine-bash-html|--html-bash) generate_c_engine_bash_html ;;
     --html-check) check_c_engine_bash ;;
+    --embedding) build_embedding ;;
+    --embedding-check) check_embedding ;;
+    --embedding-browser) check_embedding_browser ;;
     --html-browser-full) check_c_engine_browser_full ;;
     --c-engine-core-tests)
       : >"$TEST_LOG"

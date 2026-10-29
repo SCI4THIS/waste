@@ -12,11 +12,11 @@ trap 'chmod -R u+w "$PACKAGE_STAGE"; rm -rf -- "$PACKAGE_STAGE"' EXIT
 # Export the exact immutable source objects used by this package.
 M4_REVISION="$(cat "$REPO_ROOT/src/aux/m4/source-revision")"
 GNULIB_REVISION="$(cat "$REPO_ROOT/src/aux/m4/gnulib-revision")"
-bash "$REPO_ROOT/src/aux/m4/archive-source.sh" "$REPO_ROOT/submodules/m4" \
+bash "$REPO_ROOT/src/aux/m4/archive-source.sh" "${M4_SOURCE_REPO:-$REPO_ROOT/submodules/m4}" \
   "$M4_REVISION" "$PACKAGE_STAGE/waste/submodules/m4"
-bash "$REPO_ROOT/src/aux/m4/archive-source.sh" "$REPO_ROOT/submodules/coreutils/gnulib" \
+bash "$REPO_ROOT/src/aux/m4/archive-source.sh" "${M4_GNULIB_SOURCE_REPO:-$REPO_ROOT/submodules/coreutils/gnulib}" \
   "$GNULIB_REVISION" "$PACKAGE_STAGE/waste/submodules/coreutils/gnulib"
-for INPUT in start.sh .gitmodules src/config.h src/aux src/engine src/cli-rt src/html-rt \
+for INPUT in LICENSE start.sh .gitmodules src/config.h src/aux src/engine src/cli-rt src/html-rt \
   src/vfs/root/test src/vfs/usr/include src/vfs/usr/lib/waste/cc/include \
   src/vfs/usr/share/licenses/clang skills/add-aux-binary docs/architecture.md docs/techniques.md docs/guest-sdk.md; do
   mkdir -p "$PACKAGE_STAGE/waste/$(dirname -- "$INPUT")"

@@ -26,6 +26,7 @@ static waste_status public_status(exec_status status) {
         case EXEC_ERROR_EXIT: return WASTE_ERROR_EXIT;
         case EXEC_YIELD: return WASTE_YIELD;
         case EXEC_ERROR_INTERRUPTED: return WASTE_ERROR_INTERRUPTED;
+        case EXEC_ERROR_RESOURCE: return WASTE_ERROR_RESOURCE;
         case EXEC_ERROR_LONGJMP:
         case EXEC_ERROR_TRAP: return WASTE_ERROR_TRAP;
     }

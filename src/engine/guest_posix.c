@@ -973,12 +973,10 @@ static exec_status guest_posix_read(void *data, const wasm_value *args,
     count = (uint32_t)args[2].i32;
 retry_read:
     buffer = NULL;
-    if ((count && !(buffer = (uint8_t *)malloc(count))) ||
-        exec_memory_read(memory, (uint32_t)args[1].i32, buffer, count, error) != EXEC_OK) {
+    if (count && !(buffer = (uint8_t *)malloc(count)))
+        return exec_fail(error, EXEC_ERROR_RESOURCE, "POSIX read buffer allocation failed");
+    if (exec_memory_read(memory, (uint32_t)args[1].i32, buffer, count, error) != EXEC_OK) {
         free(buffer);
-        error->status = EXEC_ERROR_TRAP;
-        snprintf(error->message, sizeof(error->message),
-                 "POSIX read buffer is outside guest memory");
         return error->status;
     }
     /* Keep the kernel's non-NULL buffer contract for zero-count I/O without
@@ -1083,12 +1081,10 @@ static exec_status guest_posix_write(void *data, const wasm_value *args,
     if (arg_count != 3 || guest_posix_memory(caller, &memory, error) != EXEC_OK)
         return error->status;
     count = (uint32_t)args[2].i32;
-    if ((count && !(buffer = (uint8_t *)malloc(count))) ||
-        exec_memory_read(memory, (uint32_t)args[1].i32, buffer, count, error) != EXEC_OK) {
+    if (count && !(buffer = (uint8_t *)malloc(count)))
+        return exec_fail(error, EXEC_ERROR_RESOURCE, "POSIX write buffer allocation failed");
+    if (exec_memory_read(memory, (uint32_t)args[1].i32, buffer, count, error) != EXEC_OK) {
         free(buffer);
-        error->status = EXEC_ERROR_TRAP;
-        snprintf(error->message, sizeof(error->message),
-                 "POSIX write buffer is outside guest memory");
         return error->status;
     }
     int32_t written = guest_posix_write_bytes(store, args[0].i32,

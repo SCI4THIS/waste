@@ -21,7 +21,7 @@ static int session_suite_reply(native_host_io_state *io, unsigned code,
 }
 
 static int session_test_suite(cli_guest_session *session, exec_error *error) {
-    native_host_io_state *io = &session->store.host_io;
+    native_host_io_state *io = &session->store->host_io;
     char executable[PATH_MAX], baseline[PATH_MAX+80], root_arg[PATH_MAX+32];
     ssize_t n = readlink("/proc/self/exe", executable, sizeof(executable)-1);
     if (n < 0) return 0;
@@ -91,7 +91,7 @@ static int session_test_suite(cli_guest_session *session, exec_error *error) {
                 ssize_t count = read(STDIN_FILENO, bytes, sizeof(bytes));
                 if (!count) {
                     session->input_eof = 1;
-                    (void)posix_kernel_terminal_signal_eof(session->store.kernel, 0);
+                    (void)posix_kernel_terminal_signal_eof(session->store->kernel, 0);
                 }
                 unsigned retained = 0;
                 for (ssize_t i = 0; i < count; i++) {
@@ -100,7 +100,7 @@ static int session_test_suite(cli_guest_session *session, exec_error *error) {
                     } else bytes[retained++] = bytes[i];
                 }
                 if (retained) {
-                    (void)posix_kernel_terminal_enqueue(session->store.kernel, 0, bytes, (int)retained);
+                    (void)posix_kernel_terminal_enqueue(session->store->kernel, 0, bytes, (int)retained);
                     session->input_bytes += retained;
                 }
             }

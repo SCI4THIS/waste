@@ -23,6 +23,18 @@ revisions independently of the checked-out branch. Exported source snapshots
 with matching `.waste-source-revision` markers also work, including the
 corresponding-source bundle.
 
+If a checkout lacks a pinned object, `M4_SOURCE_REPO` and
+`M4_GNULIB_SOURCE_REPO` may point to separate local Git repositories or exported
+snapshots. Staging and source packaging both verify the same pinned revisions.
+Fetch missing objects explicitly into a repository under `build/`; build targets
+never fetch or modify the checked-out submodules. For example, after populating
+`build/aux/source-cache/gnulib.git` with the commit in `gnulib-revision`:
+
+```sh
+M4_GNULIB_SOURCE_REPO="$PWD/build/aux/source-cache/gnulib.git" \
+  make -C src/aux m4-source-package
+```
+
 Host prerequisites are Clang, wasm-ld, make, ar, ranlib, git, tar, patch,
 Python 3, autoconf, automake, autopoint, host m4, gperf and flock. Bootstrap
 runs autopoint before Gnulib import so old gettext macros cannot overwrite

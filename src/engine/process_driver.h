@@ -34,6 +34,10 @@ typedef struct {
     void (*trace)(void *, const char *);
     void *trace_context;
     unsigned forks, execs, child_exits;
+    /* Original root application outcome before the POSIX exit translation.
+     * CLI compatibility still returns exit 127 for an image trap; embedders
+     * can distinguish that fault from an explicit guest exit(127). */
+    exec_status completion_status;
 } native_process_driver;
 
 void native_process_driver_init(native_process_driver *driver);

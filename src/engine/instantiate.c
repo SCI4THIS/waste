@@ -42,7 +42,7 @@ exec_status wasm_instance_allocate_memory(exec_memory *memory,
         memory->page_data = NULL;
         memory->page_protection = NULL;
         memory->mappings = NULL;
-        return exec_fail(error, EXEC_ERROR_FORMAT,
+        return exec_fail(error, EXEC_ERROR_RESOURCE,
                          "memory allocation failed");
     }
     if (initial)
@@ -80,7 +80,7 @@ exec_status wasm_instance_allocate_table(exec_table *table,
     table->elements = malloc((initial ? (size_t)initial : 1) *
                              sizeof(*table->elements));
     if (!table->elements)
-        return exec_fail(error, EXEC_ERROR_FORMAT,
+        return exec_fail(error, EXEC_ERROR_RESOURCE,
                                "table allocation failed");
     for (uint64_t i = 0; i < initial; i++) {
         table->elements[i].owner = NULL;
@@ -108,7 +108,7 @@ exec_status wasm_instance_copy_segment(uint8_t **destination,
     if (length) {
         copy = malloc(length);
         if (!copy)
-            return exec_fail(error, EXEC_ERROR_FORMAT,
+            return exec_fail(error, EXEC_ERROR_RESOURCE,
                                    "segment allocation failed");
         memcpy(copy, source, length);
     }
@@ -124,7 +124,7 @@ exec_status wasm_instance_allocate_elements(exec_table_element **elements,
                                "invalid element segment allocation");
     *elements = count ? calloc(count, sizeof(**elements)) : NULL;
     if (count && !*elements)
-        return exec_fail(error, EXEC_ERROR_FORMAT,
+        return exec_fail(error, EXEC_ERROR_RESOURCE,
                                "element segment allocation failed");
     return EXEC_OK;
 }
@@ -160,7 +160,7 @@ void *wasm_instance_resize_objects(void *objects, size_t old_count,
     }
     resized = realloc(objects, new_count * item_size);
     if (!resized) {
-        exec_fail(error, failure_status, message);
+        exec_fail(error, EXEC_ERROR_RESOURCE, message);
         return NULL;
     }
     memset((uint8_t *)resized + old_count * item_size, 0,
@@ -179,6 +179,6 @@ void *wasm_instance_allocate_objects(size_t count, size_t item_size,
     }
     objects = calloc(count, item_size);
     if (count && !objects)
-        exec_fail(error, failure_status, message);
+        exec_fail(error, EXEC_ERROR_RESOURCE, message);
     return objects;
 }

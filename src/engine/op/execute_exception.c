@@ -55,7 +55,7 @@ static int exception_reference(waste_exec_engine *eng, const exec_tag *tag,
         return 0;
     }
     if (eng->exception_object_count >= UINT32_C(0x3ffffffe)) {
-        exec_fail(err, EXEC_ERROR_TRAP, "exception allocation failed");
+        exec_fail(err, EXEC_ERROR_RESOURCE, "exception allocation failed");
         return 0;
     }
     if (eng->exception_object_count == eng->exception_object_capacity) {

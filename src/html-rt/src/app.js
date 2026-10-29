@@ -205,7 +205,6 @@ async function startShell(event) {
     if (worker) { worker.postMessage({type: "stop"}); }
     worker?.terminate();
 
-    const source = await loadText("launch.wast");
     const wasmBytes = await loadBinary("waste-wast.wasm");
     const vfs = await loadInstalledVfs();
     const vfsManifest = await loadJSON("vfs-manifest.json");
@@ -316,7 +315,7 @@ async function startShell(event) {
       }
     };
     worker.onerror = event => { append(event.message || "worker error"); finish("failed"); };
-    worker.postMessage({type: "start", wasmBytes, source, vfs, vfsFiles,
+    worker.postMessage({type: "start", shell: true, wasmBytes, vfs, vfsFiles,
       vfsPaths: vfsManifest.entries.map(entry => entry.path)});
   } catch (error) { status.textContent = error.message || String(error); }
 }

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WASTE command embedding</title>
+<style>
+  body { max-width: 58rem; margin: 3rem auto; padding: 0 1rem; font: 16px/1.5 system-ui, sans-serif; }
+  button { padding: .6rem 1rem; margin: 0 .4rem .5rem 0; font: inherit; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f2f4f6; padding: 1rem; min-height: 5rem; }
+</style>
+<h1>Run a command with WASTE</h1>
+<p>This page embeds the engine and selected commands. Each run uses a fresh guest filesystem in a worker.</p>
+<div id="commands"></div>
+<button id="cancel" disabled>Cancel</button>
+<button id="download" hidden>Save graph.svg</button>
+<p id="status" role="status">Loading…</p>
+<pre id="output" aria-label="Command output"></pre>
+<script type="module">
+/* WASTE_HOST */
+/* WASTE_ASSETS */
+const unbase64 = value => Uint8Array.from(atob(value), character => character.charCodeAt(0));
+const files = Object.fromEntries(Object.entries(embedded.resources).map(([name, asset]) =>
+  [name, {bytes: unbase64(asset.bytes), mode: asset.mode}]));
+const examples = {
+  awk: {executable: "/usr/bin/awk", args: ["{print $1}"], stdin: "one two\nthree four\n"},
+  m4: {executable: "/usr/bin/m4", stdin: "define(`name', `WASTE')name\n"},
+  dot: {executable: "/usr/bin/dot", args: ["-Tsvg", "-o", "/work/graph.svg"],
+    stdin: "digraph { a -> b }", outputPaths: ["/work/graph.svg"]},
+  bash: {executable: "/usr/bin/bash", args: ["-c", "printf 'hello from Bash\\n'"]}
+};
+let runtime, active, svgURL;
+const status = document.querySelector("#status"), output = document.querySelector("#output");
+const cancelButton = document.querySelector("#cancel"), downloadButton = document.querySelector("#download");
+async function run(job) {
+  if (active) throw Error("A command is already running");
+  active = new AbortController(); cancelButton.disabled = false;
+  document.querySelectorAll("#commands button").forEach(button => { button.disabled = true; });
+  status.textContent = "Running…"; output.textContent = ""; downloadButton.hidden = true;
+  if (svgURL) { URL.revokeObjectURL(svgURL); svgURL = undefined; }
+  try {
+    const result = await runtime.run({...job, signal: active.signal});
+    status.textContent = result.outcome === "exited" ? `Exited with status ${result.exitCode}` : `${result.outcome}: ${result.message}`;
+    output.textContent = new TextDecoder().decode(result.stdout) + new TextDecoder().decode(result.stderr);
+    const svg = result.outputFiles["/work/graph.svg"];
+    if (svg) {
+      output.textContent = new TextDecoder().decode(svg);
+      svgURL = URL.createObjectURL(new Blob([svg], {type: "image/svg+xml"}));
+      downloadButton.hidden = false;
+    }
+    return result;
+  } catch (error) { status.textContent = error.message; throw error; }
+  finally {
+    active = undefined; cancelButton.disabled = true;
+    document.querySelectorAll("#commands button").forEach(button => { button.disabled = false; });
+  }
+}
+cancelButton.onclick = () => active?.abort();
+downloadButton.onclick = () => { const link = document.createElement("a"); link.href = svgURL; link.download = "graph.svg"; link.click(); };
+window.embedding = {ready: false, run, examples, cancel: () => active?.abort()};
+try {
+  runtime = await createWasteWorker({engine: unbase64(embedded.engine), files, workerSource: embedded.workerSource});
+  for (const name of embedded.tools) {
+    const button = document.createElement("button"); button.textContent = `Run ${name.toUpperCase()}`;
+    button.onclick = () => { run(examples[name]).catch(() => {}); };
+    document.querySelector("#commands").append(button);
+  }
+  window.embedding.ready = true; status.textContent = "Ready";
+} catch (error) { window.embedding.error = error.message; status.textContent = error.message; }
+</script>
+</html>

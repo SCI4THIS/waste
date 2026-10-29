@@ -16,7 +16,7 @@ for INPUT in COPYING LICENSE EPL-2.0.txt CHANGELOG.md graphviz_version.h.in; do
   cp -a "$UPSTREAM/$INPUT" "$DEST/"
 done
 cp "$DOT_BUILD/source/.source-revision" "$DEST/.waste-source-revision"
-for INPUT in start.sh .gitmodules src/config.h src/aux src/engine src/cli-rt src/html-rt \
+for INPUT in LICENSE start.sh .gitmodules src/config.h src/aux src/engine src/cli-rt src/html-rt \
   src/vfs/root/test src/vfs/usr/include src/vfs/usr/lib/waste/cc/include \
   src/vfs/usr/share/licenses/clang skills/add-aux-binary docs/architecture.md docs/techniques.md docs/guest-sdk.md; do
   mkdir -p "$PACKAGE_STAGE/waste/$(dirname -- "$INPUT")"

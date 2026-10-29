@@ -10,8 +10,8 @@ case "$M4_BUILD" in
 esac
 M4_REVISION="$(cat "$SCRIPT_DIR/source-revision")"
 GNULIB_REVISION="$(cat "$SCRIPT_DIR/gnulib-revision")"
-M4_UPSTREAM="$REPO_ROOT/submodules/m4"
-GNULIB_UPSTREAM="$REPO_ROOT/submodules/coreutils/gnulib"
+M4_UPSTREAM="${M4_SOURCE_REPO:-$REPO_ROOT/submodules/m4}"
+GNULIB_UPSTREAM="${M4_GNULIB_SOURCE_REPO:-$REPO_ROOT/submodules/coreutils/gnulib}"
 mkdir -p "$M4_BUILD"
 STAGE="$(mktemp -d "$M4_BUILD/source-stage-XXXXXX")"
 trap 'rm -rf -- "$STAGE"' EXIT

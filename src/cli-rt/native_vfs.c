@@ -6,8 +6,13 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(__aarch64__)
+#define HOST_DIRECTORY 00040000
+#define HOST_NOFOLLOW 00100000
+#else
 #define HOST_DIRECTORY 00200000
 #define HOST_NOFOLLOW 00400000
+#endif
 #define HOST_CLOEXEC 02000000
 #define HOST_NONBLOCK 00004000
 

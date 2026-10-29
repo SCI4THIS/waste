@@ -14,7 +14,7 @@ mkdir -p "$PACKAGE_STAGE/waste/submodules/gawk"
 tar -C "$REPO_ROOT/submodules/gawk" --exclude=.git -cf - . |
   tar -C "$PACKAGE_STAGE/waste/submodules/gawk" -xf -
 chmod -R u+w "$PACKAGE_STAGE/waste/submodules/gawk"
-for INPUT in start.sh .gitmodules src/config.h src/aux src/engine src/cli-rt src/html-rt \
+for INPUT in LICENSE start.sh .gitmodules src/config.h src/aux src/engine src/cli-rt src/html-rt \
   src/vfs/root/test src/vfs/usr/include src/vfs/usr/lib/waste/cc/include \
   src/vfs/usr/share/licenses/clang skills/add-aux-binary docs/architecture.md docs/techniques.md docs/guest-sdk.md; do
   mkdir -p "$PACKAGE_STAGE/waste/$(dirname -- "$INPUT")"

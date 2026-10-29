@@ -382,6 +382,7 @@ exec_status exec_memory_fill(exec_memory *memory, uint64_t offset,
                               uint8_t value, size_t length, exec_error *error);
 void exec_memory_release(exec_memory *memory);
 void exec_memory_page_retain(exec_memory_page *page);
+exec_memory_page *exec_memory_page_allocate(waste_resource_budget *resources);
 void exec_memory_page_release(exec_memory_page *page);
 exec_status exec_memory_resize_pages(exec_memory *memory, uint64_t pages,
                                      exec_error *error);

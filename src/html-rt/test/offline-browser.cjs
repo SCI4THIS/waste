@@ -8,6 +8,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {pathToFileURL} = require("node:url");
 const {spawn} = require("node:child_process");
+const {readOfflinePackage} = require("./offline-html-package.cjs");
 
 // Select one real page for a focused DOM rerun; default checks both.
 const pageFlag = process.argv.find(arg => arg.startsWith("--page="));
@@ -84,7 +85,7 @@ async function until(session, expression, timeoutMs = 25000) {
 }
 
 async function waitSession(session, name = "waits") {
-  const contract = JSON.parse(fs.readFileSync(path.join(root, `tests/guest-session-${name}.json`)));
+  const contract = JSON.parse(fs.readFileSync(path.join(root, `src/vfs/root/test/guest-session/${name}.json`)));
   const source = fs.readFileSync(path.join(root, contract.fixture), "utf8");
   await evaluate(session, `(async () => {
     window.waitProbe = {ready:0, output:'', errors:[], done:null};
@@ -158,6 +159,9 @@ async function waitSession(session, name = "waits") {
     if (selectedPage && selectedPage !== target) continue;
     const pagePath = path.resolve(process.argv.slice(2).find(arg => arg.endsWith(".html")) ||
       path.join(root, "build/html-rt", filename));
+    const installedTests = JSON.parse(readOfflinePackage(pagePath).read("root/test/manifest.json")).tests;
+    const coreGroup = installedTests.find(test => test.id.endsWith("/address.wast"))?.group;
+    assert(coreGroup, "installed core test group");
     const url = pathToFileURL(pagePath).href;
     const {targetId} = await call("Target.createTarget", {url: "about:blank"});
     const {sessionId} = await call("Target.attachToTarget", {targetId, flatten: true});
@@ -178,7 +182,7 @@ async function waitSession(session, name = "waits") {
       await until(sessionId, `document.querySelector('#terminal-transcript').textContent
         .includes(String.fromCharCode(13) + '__OFFLINE_LAYOUT_OK__')`);
       await evaluate(sessionId, `document.querySelector('#terminal-input').value =
-        'waste-test --group=core --results=/tmp/early-cancel.json >/tmp/early-cancel.txt; printf "__EARLY_CANCEL__%s\\n" "$?"';
+        'waste-test --group=${coreGroup} --results=/tmp/early-cancel.json >/tmp/early-cancel.txt; printf "__EARLY_CANCEL__%s\\n" "$?"';
         document.querySelector('#terminal-form').dispatchEvent(new Event('submit', {cancelable: true}));`);
       await until(sessionId, `browserTestSuite !== null && browserTestSuite.guestPending !== null`);
       await evaluate(sessionId, `worker.postMessage({type:'input', bytes:[3]})`);
@@ -186,8 +190,12 @@ async function waitSession(session, name = "waits") {
       await evaluate(sessionId, `document.querySelector('.diagnostics').open = true;
         document.querySelector('#installed-tests').open = true;
         document.querySelector('#suite-list').click();`);
-      await until(sessionId, `document.querySelector('#suite-status').textContent === '296 installed tests'`);
-      assert.equal(await evaluate(sessionId, `browserTestSuite.catalogue.filter(test => test.skipReason).length`), 4);
+      await until(sessionId, `document.querySelector('#suite-status').textContent === '${installedTests.length} installed tests'`);
+      assert.deepEqual(await evaluate(sessionId, "browserTestSuite.catalogue.map(test => test.identity)"), installedTests.map(test => test.id));
+      const expectedSkips = installedTests.filter(test => test.unsupported ||
+        (test.executionSpec.mode !== "wast-stream" && !(test.executionSpec.mode === "browser-native" &&
+          test.executionSpec.modules?.length > 0 && Array.isArray(test.executionSpec.steps))));
+      assert.deepEqual(await evaluate(sessionId, "browserTestSuite.catalogue.filter(test => test.skipReason).map(test => test.identity)"), expectedSkips.map(test => test.id));
       await evaluate(sessionId, `document.querySelector('#suite-files').value = 'address.wast setjmp-buffer-copy.wast';
         document.querySelector('#suite-run').click();`);
       await until(sessionId, `browserTestResults !== null && !document.querySelector('#suite-run').disabled`);
@@ -201,23 +209,19 @@ async function waitSession(session, name = "waits") {
       await until(sessionId, `browserTestResults !== null && !document.querySelector('#suite-run').disabled`);
       const regressions = await evaluate(sessionId, "browserTestResults");
       assert.equal(regressions.exitCode, 0);
-      assert.equal(regressions.summary.pass, 12);
-      assert.deepEqual(regressions.tests.map(test => [test.identity, test.passed, test.total]), [
-        ['engine-regressions/caller-memory.wast', 12, 12],
-        ['engine-regressions/continuation-waits.wast', 23, 23],
-        ['engine-regressions/descriptor-flags.wast', 93, 93],
-        ['engine-regressions/directory-umask.wast', 219, 219],
-        ['engine-regressions/extern-aliases.wast', 16, 16],
-        ['engine-regressions/i32-smoke.wast', 32, 32],
-        ['engine-regressions/instance-isolation.wast', 16, 16],
-        ['engine-regressions/path-vfs.wast', 71, 71],
-        ['engine-regressions/pipe-descriptors.wast', 136, 136],
-        ['engine-regressions/select-polling.wast', 247, 247],
-        ['engine-regressions/shared-memory.wast', 231, 231],
-        ['engine-regressions/signal-masks.wast', 134, 134],
-      ]);
+      const expectedRegressions = installedTests.filter(test => test.group === "engine-regressions");
+      assert.equal(regressions.summary.pass, expectedRegressions.length);
+      assert.deepEqual(regressions.tests.map(test => test.identity), expectedRegressions.map(test => test.id));
+      assert(regressions.tests.every(test => test.status === "PASS" && test.total > 0 && test.passed === test.total));
+      const nativeFlag = process.argv.find(arg => arg.startsWith("--native-regressions="));
+      if (nativeFlag) {
+        const native = JSON.parse(fs.readFileSync(nativeFlag.slice("--native-regressions=".length)));
+        assert.equal(native.exitCode, 0);
+        assert.deepEqual(regressions.tests.map(test => [test.identity, test.passed, test.total]),
+          native.tests.map(test => [test.identity, test.passed, test.total]));
+      }
       fs.writeFileSync(path.join(artifacts, "engine-regressions-results.json"), JSON.stringify(regressions, null, 2) + "\n");
-      console.log("PASS production browser executor regressions: 12 installed WAST files, 1230 assertions");
+      console.log(`PASS production browser executor regressions: ${regressions.tests.length} installed WAST files, ${regressions.tests.reduce((n, test) => n + test.total, 0)} assertions`);
       await waitSession(sessionId);
       await waitSession(sessionId, "terminal-readiness");
       await waitSession(sessionId, "terminal-timing");
@@ -238,7 +242,7 @@ async function waitSession(session, name = "waits") {
       await until(sessionId, `document.querySelector('#terminal-transcript').textContent.includes('__GUEST_BATCH__0') &&
         document.querySelector('#terminal-transcript').textContent.includes('"identity":"engine-regressions/setjmp-buffer-copy.wast"')`);
       await evaluate(sessionId, `document.querySelector('#terminal-input').value =
-        'waste-test --group=core --results=/tmp/guest-cancel.json >/tmp/guest-cancel.txt; printf "__GUEST_CANCEL__%s\\n" "$?"';
+        'waste-test --group=${coreGroup} --results=/tmp/guest-cancel.json >/tmp/guest-cancel.txt; printf "__GUEST_CANCEL__%s\\n" "$?"';
         document.querySelector('#terminal-form').dispatchEvent(new Event('submit', {cancelable: true}));`);
       await until(sessionId, `browserTestSuite.running !== null`);
       await evaluate(sessionId, `worker.postMessage({type:'input', bytes:[3]})`);

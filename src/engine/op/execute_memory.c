@@ -6,15 +6,21 @@
 #include <stdlib.h>
 #include <string.h>
 
-static exec_memory_page *allocate_memory_page(void) {
+exec_memory_page *exec_memory_page_allocate(waste_resource_budget *resources) {
+    if (!waste_resource_reserve(resources, WASTE_RESOURCE_MEMORY, 1)) return NULL;
     exec_memory_page *page = calloc(1, sizeof(*page));
-    if (!page) return NULL;
+    if (!page) {
+        waste_resource_release(resources, WASTE_RESOURCE_MEMORY, 1);
+        return NULL;
+    }
     page->bytes = calloc(EXEC_PAGE_SIZE, 1);
     if (!page->bytes) {
         free(page);
+        waste_resource_release(resources, WASTE_RESOURCE_MEMORY, 1);
         return NULL;
     }
     page->refs = 1;
+    page->resources = resources;
     return page;
 }
 
@@ -22,6 +28,7 @@ void exec_memory_page_release(exec_memory_page *page) {
     if (!page || !page->refs) return;
     page->refs--;
     if (!page->refs) {
+        waste_resource_release(page->resources, WASTE_RESOURCE_MEMORY, 1);
         free(page->bytes);
         free(page);
     }
@@ -36,8 +43,8 @@ static exec_status detach_memory_page(exec_memory *memory, uint64_t page,
     exec_memory_page *old = memory->page_data[page];
     exec_memory_page *copy;
     if (!old || old->refs <= 1 || old->shared) return EXEC_OK;
-    copy = allocate_memory_page();
-    if (!copy) return exec_fail(error, EXEC_ERROR_TRAP,
+    copy = exec_memory_page_allocate(memory->resources);
+    if (!copy) return exec_fail(error, EXEC_ERROR_RESOURCE,
                                 "memory page allocation failed");
     memcpy(copy->bytes, old->bytes, EXEC_PAGE_SIZE);
     old->refs--;
@@ -210,9 +217,9 @@ exec_status exec_memory_prepare_write(exec_memory *memory, uint64_t offset,
     uint64_t last = (offset + length - 1) / EXEC_PAGE_SIZE;
     for (uint64_t page = first; page <= last; page++) {
         if (!memory->page_data[page]) {
-            memory->page_data[page] = allocate_memory_page();
+            memory->page_data[page] = exec_memory_page_allocate(memory->resources);
             if (!memory->page_data[page])
-                return exec_fail(error, EXEC_ERROR_TRAP,
+                return exec_fail(error, EXEC_ERROR_RESOURCE,
                                  "memory page allocation failed");
         }
         status = detach_memory_page(memory, page, error);
@@ -247,9 +254,9 @@ exec_status exec_memory_write(exec_memory *memory, uint64_t offset,
             size_t chunk = EXEC_PAGE_SIZE - in_page;
             if (chunk > length) chunk = length;
             if (!memory->page_data[page]) {
-                memory->page_data[page] = allocate_memory_page();
+                memory->page_data[page] = exec_memory_page_allocate(memory->resources);
                 if (!memory->page_data[page])
-                    return exec_fail(error, EXEC_ERROR_TRAP,
+                    return exec_fail(error, EXEC_ERROR_RESOURCE,
                                      "memory page allocation failed");
             }
             if (detach_memory_page(memory, page, error) != EXEC_OK)
@@ -326,9 +333,9 @@ exec_status exec_memory_fill(exec_memory *memory, uint64_t offset,
             continue;
         }
         if (!memory->page_data[page]) {
-            memory->page_data[page] = allocate_memory_page();
+            memory->page_data[page] = exec_memory_page_allocate(memory->resources);
             if (!memory->page_data[page])
-                return exec_fail(error, EXEC_ERROR_TRAP,
+                return exec_fail(error, EXEC_ERROR_RESOURCE,
                                  "memory page allocation failed");
         }
         if (detach_memory_page(memory, page, error) != EXEC_OK)
@@ -382,12 +389,12 @@ exec_status exec_memory_resize_pages(exec_memory *memory, uint64_t pages,
         return EXEC_OK;
     }
     grown = realloc(memory->page_data, (size_t)pages * sizeof(*grown));
-    if (!grown) return exec_fail(error, EXEC_ERROR_TRAP,
+    if (!grown) return exec_fail(error, EXEC_ERROR_RESOURCE,
                                  "memory page map allocation failed");
     protection = realloc(memory->page_protection, (size_t)pages);
     if (!protection) {
         memory->page_data = grown;
-        return exec_fail(error, EXEC_ERROR_TRAP,
+        return exec_fail(error, EXEC_ERROR_RESOURCE,
                          "memory protection map allocation failed");
     }
     if (memory->mapping_count && memory->mappings[
@@ -411,7 +418,7 @@ exec_status exec_memory_resize_pages(exec_memory *memory, uint64_t pages,
         if (!mappings) {
             memory->page_data = grown;
             memory->page_protection = protection;
-            return exec_fail(error, EXEC_ERROR_TRAP,
+            return exec_fail(error, EXEC_ERROR_RESOURCE,
                              "memory mapping metadata allocation failed");
         }
         mappings[memory->mapping_count] = (exec_memory_mapping){
@@ -450,12 +457,12 @@ exec_status exec_memory_reserve_virtual_pages(exec_memory *memory,
     if (pages == memory->pages) return EXEC_OK;
     grown = realloc(memory->page_data, (size_t)pages * sizeof(*grown));
     if (!grown)
-        return exec_fail(error, EXEC_ERROR_TRAP,
+        return exec_fail(error, EXEC_ERROR_RESOURCE,
                          "virtual page table allocation failed");
     protection = realloc(memory->page_protection, (size_t)pages);
     if (!protection) {
         memory->page_data = grown;
-        return exec_fail(error, EXEC_ERROR_TRAP,
+        return exec_fail(error, EXEC_ERROR_RESOURCE,
                          "virtual protection table allocation failed");
     }
     memset(grown + memory->pages, 0,
@@ -497,7 +504,7 @@ static exec_status build_shared_mapping(const exec_memory *memory,
     replacement = calloc((size_t)memory->mapping_count * 3 + 1,
                          sizeof(*replacement));
     if (!replacement)
-        return exec_fail(error, EXEC_ERROR_TRAP,
+        return exec_fail(error, EXEC_ERROR_RESOURCE,
                          "memory mapping metadata allocation failed");
     for (uint32_t i = 0; i < memory->mapping_count; i++) {
         exec_memory_mapping old = memory->mappings[i];
@@ -548,7 +555,7 @@ exec_status exec_memory_share_pages(exec_memory *destination,
     if (!page_count) return EXEC_OK;
     pages = calloc((size_t)page_count, sizeof(*pages));
     if (!pages)
-        return exec_fail(error, EXEC_ERROR_TRAP,
+        return exec_fail(error, EXEC_ERROR_RESOURCE,
                          "shared memory page map allocation failed");
     if (build_shared_mapping(destination, destination_first, page_count,
                              &destination_mappings,
@@ -654,7 +661,7 @@ exec_status exec_memory_unmap_pages(exec_memory *memory, uint64_t first_page,
     replacement = calloc((size_t)memory->mapping_count * 2 + 1,
                          sizeof(*replacement));
     if (!replacement)
-        return exec_fail(error, EXEC_ERROR_TRAP,
+        return exec_fail(error, EXEC_ERROR_RESOURCE,
                          "memory mapping metadata allocation failed");
     for (uint32_t i = 0; i < memory->mapping_count; i++) {
         exec_memory_mapping old = memory->mappings[i];
@@ -717,7 +724,7 @@ exec_status exec_memory_map_pages(exec_memory *memory, uint64_t first_page,
     replacement = calloc((size_t)memory->mapping_count + 1,
                          sizeof(*replacement));
     if (!replacement)
-        return exec_fail(error, EXEC_ERROR_TRAP,
+        return exec_fail(error, EXEC_ERROR_RESOURCE,
                          "memory mapping metadata allocation failed");
     for (i = 0; i < memory->mapping_count; i++) {
         if (replacement_count == i &&
@@ -769,7 +776,7 @@ exec_status exec_memory_set_protection(exec_memory *memory, uint64_t first_page,
     replacement = calloc((size_t)memory->mapping_count * 3 + 1,
                          sizeof(*replacement));
     if (!replacement)
-        return exec_fail(error, EXEC_ERROR_TRAP,
+        return exec_fail(error, EXEC_ERROR_RESOURCE,
                          "memory mapping metadata allocation failed");
     for (uint32_t i = 0; i < memory->mapping_count; i++) {
         exec_memory_mapping old = memory->mappings[i];
@@ -843,7 +850,9 @@ exec_status exec_memory_instruction(waste_exec_context *context,
             return exec_fail(err, EXEC_ERROR_TRAP, "load address missing");
         const wasm_opcode_info *op_info =
             wasm_opcode_get_info(instr->opcode);
-        uint32_t width = op_info->load_width;
+        uint32_t width = op_info ? op_info->load_width : 0;
+        if (!width || width > 8)
+            return exec_fail(err, EXEC_ERROR_TRAP, "invalid scalar load width");
         value.type = (wasm_valtype)op_info->result_type;
         int sign = op_info->sign_extend;
         uint64_t base_address = memory->is_64 ? (uint64_t)base.i64 :
@@ -885,7 +894,9 @@ exec_status exec_memory_instruction(waste_exec_context *context,
                              "store operands missing");
         const wasm_opcode_info *st_info =
             wasm_opcode_get_info(instr->opcode);
-        uint32_t width = st_info->load_width;
+        uint32_t width = st_info ? st_info->load_width : 0;
+        if (!width || width > 8)
+            return exec_fail(err, EXEC_ERROR_TRAP, "invalid scalar store width");
         if (st_info->operand_type == WASM_VALTYPE_F32) {
             uint32_t word;
             memcpy(&word, &value.f32, sizeof(word));

@@ -70,3 +70,25 @@ void *memmove(void *dst, const void *src, size_t n) {
     }
     return dst;
 }
+
+void *memchr(const void *source, int value, size_t length) {
+    const unsigned char *bytes = source;
+    for (size_t i = 0; i < length; i++)
+        if (bytes[i] == (unsigned char)value) return (void *)(bytes + i);
+    return NULL;
+}
+
+char *strchr(const char *text, int value) {
+    do {
+        if ((unsigned char)*text == (unsigned char)value) return (char *)text;
+    } while (*text++);
+    return NULL;
+}
+
+char *strrchr(const char *text, int value) {
+    const char *found = NULL;
+    do {
+        if ((unsigned char)*text == (unsigned char)value) found = text;
+    } while (*text++);
+    return (char *)found;
+}
