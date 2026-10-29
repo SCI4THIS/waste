@@ -51,6 +51,7 @@ $(BASH_BUILD)/waste-crt.o: $(CRT_SOURCE) $(BASH_DIR)/bash.mk
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WASM_CFLAGS) -c "$<" -o "$@"
 
 $(BASH_COMPILED): $(BASH_CONFIGURED) $(BASH_BUILD)/waste-crt.o $(BASH_DIR)/bash.mk
+	rm -f "$(BASH_CONFIGURE)/bash"
 	$(BASH_ENV) $(MAKE) -C "$(BASH_CONFIGURE)" bash \
 		LDFLAGS="$(BASH_LDFLAGS) $(abspath $(BASH_BUILD))/waste-crt.o"
 	touch "$@"

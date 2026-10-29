@@ -1,0 +1,986 @@
+LLVM tools (clang, wasm-ld, lld-link): upstream credits and maintainers.
+
+--- Extracted from llvm/CREDITS.TXT ---
+This file is a partial list of people who have contributed to the LLVM
+project. If you have contributed a patch or made some other contribution to
+LLVM, please submit a patch to this file to add yourself, and it will be
+done!
+
+The list is sorted by surname and formatted to allow easy grepping and
+beautification by scripts.  The fields are: name (N), email (E), web-address
+(W), PGP key ID and fingerprint (P), and description (D).
+
+N: Vikram Adve
+E: vadve@cs.uiuc.edu
+W: http://www.cs.uiuc.edu/~vadve/
+D: The Sparc64 backend, provider of much wisdom, and motivator for LLVM
+
+N: Owen Anderson
+E: resistor@mac.com
+D: LCSSA pass and related LoopUnswitch work
+D: GVNPRE pass, DataLayout refactoring, random improvements
+
+N: Henrik Bach
+D: MingW Win32 API portability layer
+
+N: Aaron Ballman
+E: aaron@aaronballman.com
+D: Clang frontend, frontend attributes, Windows support, general bug fixing
+
+N: Alexey Bataev
+E: a.bataev@outlook.com
+D: Clang frontend, OpenMP in clang, SLP vectorizer, Loop vectorizer, InstCombine
+
+N: Nate Begeman
+E: natebegeman@mac.com
+D: PowerPC backend developer
+D: Target-independent code generator and analysis improvements
+
+N: Daniel Berlin
+E: dberlin@dberlin.org
+D: ET-Forest implementation.
+D: Sparse bitmap
+
+N: Geoff Berry
+E: gberry@codeaurora.org
+E: gcb@acm.org
+D: AArch64 backend improvements
+D: Added EarlyCSE MemorySSA support
+D: CodeGen improvements
+
+N: David Blaikie
+E: dblaikie@gmail.com
+D: General bug fixing/fit & finish, mostly in Clang
+
+N: Neil Booth
+E: neil@daikokuya.co.uk
+D: APFloat implementation.
+
+N: Alex Bradbury
+E: asb@igalia.com
+D: RISC-V backend
+
+N: Misha Brukman
+E: brukman+llvm@uiuc.edu
+W: http://misha.brukman.net
+D: Portions of X86 and Sparc JIT compilers, PowerPC backend
+D: Incremental bitcode loader
+
+N: Cameron Buschardt
+E: buschard@uiuc.edu
+D: The `mem2reg' pass - promotes values stored in memory to registers
+
+N: Brendon Cahoon
+E: bcahoon@codeaurora.org
+D: Loop unrolling with run-time trip counts.
+
+N: Chandler Carruth
+E: chandlerc@gmail.com
+E: chandlerc@google.com
+D: Hashing algorithms and interfaces
+D: Inline cost analysis
+D: Machine block placement pass
+D: SROA
+
+N: Casey Carter
+E: ccarter@uiuc.edu
+D: Fixes to the Reassociation pass, various improvement patches
+
+N: Evan Cheng
+E: evan.cheng@apple.com
+D: ARM and X86 backends
+D: Instruction scheduler improvements
+D: Register allocator improvements
+D: Loop optimizer improvements
+D: Target-independent code generator improvements
+
+N: Dan Villiom Podlaski Christiansen
+E: danchr@gmail.com
+E: danchr@cs.au.dk
+W: http://villiom.dk
+D: LLVM Makefile improvements
+D: Clang diagnostic & driver tweaks
+S: Aarhus, Denmark
+
+N: Jeff Cohen
+E: jeffc@jolt-lang.org
+W: http://jolt-lang.org
+D: Native Win32 API portability layer
+
+N: John T. Criswell
+E: criswell@uiuc.edu
+D: Original Autoconf support, documentation improvements, bug fixes
+
+N: Anshuman Dasgupta
+E: adasgupt@codeaurora.org
+D: Deterministic finite automaton based infrastructure for VLIW packetization
+
+N: Stefanus Du Toit
+E: stefanus.du.toit@intel.com
+D: Bug fixes and minor improvements
+
+N: Rafael Avila de Espindola
+E: rafael@espindo.la
+D: MC and LLD work
+
+N: Dave Estes
+E: cestes@codeaurora.org
+D: AArch64 machine description for Cortex-A53
+
+N: Alkis Evlogimenos
+E: alkis@evlogimenos.com
+D: Linear scan register allocator, many codegen improvements, Java frontend
+
+N: Hal Finkel
+E: hfinkel@anl.gov
+D: Basic-block autovectorization, PowerPC backend improvements
+
+N: Eric Fiselier
+E: eric@efcs.ca
+D: LIT patches and documentation
+
+N: Ryan Flynn
+E: pizza@parseerror.com
+D: Miscellaneous bug fixes
+
+N: Brian Gaeke
+E: gaeke@uiuc.edu
+W: http://www.students.uiuc.edu/~gaeke/
+D: Portions of X86 static and JIT compilers; initial SparcV8 backend
+D: Dynamic trace optimizer
+D: FreeBSD/X86 compatibility fixes, the llvm-nm tool
+
+N: Nicolas Geoffray
+E: nicolas.geoffray@lip6.fr
+W: http://www-src.lip6.fr/homepages/Nicolas.Geoffray/
+D: PPC backend fixes for Linux
+
+N: Louis Gerbarg
+E: lgg@apple.com
+D: Portions of the PowerPC backend
+
+N: Saem Ghani
+E: saemghani@gmail.com
+D: Callgraph class cleanups
+
+N: Mikhail Glushenkov
+E: foldr@codedgers.com
+D: Author of llvmc2
+
+N: Dan Gohman
+E: llvm@sunfishcode.online
+D: Miscellaneous bug fixes
+D: WebAssembly Backend
+
+N: Renato Golin
+E: rengolin@systemcall.eu
+E: rengolin@gmail.com
+D: ARM/AArch64 back-end improvements
+D: Loop Vectorizer improvements
+D: Regression and Test Suite improvements
+D: Linux compatibility (GNU, musl, etc)
+D: Initial Linux kernel / Android support effort
+
+N: David Goodwin
+E: david@goodwinz.net
+D: Thumb-2 code generator
+
+N: David Greene
+E: greened@obbligato.org
+D: Miscellaneous bug fixes
+D: Register allocation refactoring
+
+N: Gabor Greif
+E: ggreif@gmail.com
+D: Improvements for space efficiency
+
+N: James Grosbach
+E: grosbach@apple.com
+D: SjLj exception handling support
+D: General fixes and improvements for the ARM back-end
+D: MCJIT
+D: ARM integrated assembler and assembly parser
+D: Led effort for the backend formerly known as ARM64
+
+N: Lang Hames
+E: lhames@gmail.com
+D: PBQP-based register allocator
+
+N: Gordon Henriksen
+E: gordonhenriksen@mac.com
+D: Pluggable GC support
+D: C interface
+D: Ocaml bindings
+
+N: Raul Fernandes Herbster
+E: raul@dsc.ufcg.edu.br
+D: JIT support for ARM
+
+N: Paolo Invernizzi
+E: arathorn@fastwebnet.it
+D: Visual C++ compatibility fixes
+
+N: Patrick Jenkins
+E: patjenk@wam.umd.edu
+D: Nightly Tester
+
+N: Tony(Yanjun) Jiang
+E: jtony@ca.ibm.com
+D: PowerPC Backend Developer
+D: Improvements to the PPC backend and miscellaneous bug fixes
+
+N: Dale Johannesen
+E: dalej@apple.com
+D: ARM constant islands improvements
+D: Tail merging improvements
+D: Rewrite X87 back end
+D: Use APFloat for floating point constants widely throughout compiler
+D: Implement X87 long double
+
+N: Brad Jones
+E: kungfoomaster@nondot.org
+D: Support for packed types
+
+N: Rod Kay
+E: rkay@auroraux.org
+D: Author of LLVM Ada bindings
+
+N: Erich Keane
+E: erich.keane@intel.com
+D: A variety of Clang contributions including function multiversioning, regcall/vectorcall.
+
+N: Eric Kidd
+W: http://randomhacks.net/
+D: llvm-config script
+
+N: Anton Korobeynikov
+E: anton at korobeynikov dot info
+D: Mingw32 fixes, cross-compiling support, stdcall/fastcall calling conv.
+D: x86/linux PIC codegen, aliases, regparm/visibility attributes
+D: Switch lowering refactoring
+
+N: Sumant Kowshik
+E: kowshik@uiuc.edu
+D: Author of the original C backend
+
+N: Benjamin Kramer
+E: benny.kra@gmail.com
+D: Miscellaneous bug fixes
+
+N: Michael Kuperstein
+E: mkuper@google.com
+D: Loop Vectorizer
+
+N: Sundeep Kushwaha
+E: sundeepk@codeaurora.org
+D: Implemented DFA-based target independent VLIW packetizer
+
+N: Christopher Lamb
+E: christopher.lamb@gmail.com
+D: aligned load/store support, parts of noalias and restrict support
+D: vreg subreg infrastructure, X86 codegen improvements based on subregs
+D: address spaces
+
+N: Jim Laskey
+E: jlaskey@apple.com
+D: Improvements to the PPC backend, instruction scheduling
+D: Debug and Dwarf implementation
+D: Auto upgrade mangler
+D: llvm-gcc4 svn wrangler
+
+N: Chris Lattner
+E: sabre@nondot.org
+W: http://nondot.org/~sabre/
+D: Primary architect of LLVM
+
+N: Tanya Lattner (Tanya Brethour)
+E: tonic@nondot.org
+W: http://nondot.org/~tonic/
+D: The initial llvm-ar tool, converted regression testsuite to dejagnu
+D: Modulo scheduling in the SparcV9 backend
+D: Release manager (1.7+)
+
+N: Sylvestre Ledru
+E: sylvestre@debian.org
+W: http://sylvestre.ledru.info/
+W: https://apt.llvm.org/
+D: Debian and Ubuntu packaging
+D: Continuous integration with jenkins
+
+N: Andrew Lenharth
+E: alenhar2@cs.uiuc.edu
+W: http://www.lenharth.org/~andrewl/
+D: Alpha backend
+D: Sampling based profiling
+
+N: Nick Lewycky
+E: nicholas@mxc.ca
+D: PredicateSimplifier pass
+
+N: Tony Linthicum, et. al.
+E: tlinth@codeaurora.org
+D: Backend for Qualcomm's Hexagon VLIW processor.
+
+N: Bruno Cardoso Lopes
+E: bruno.cardoso@gmail.com
+W: http://brunocardoso.cc
+D: Mips backend
+D: Random ARM integrated assembler and assembly parser improvements
+D: General X86 AVX1 support
+
+N: Weining Lu
+E: luweining@loongson.cn
+D: LoongArch backend
+
+N: Duraid Madina
+E: duraid@octopus.com.au
+W: http://kinoko.c.u-tokyo.ac.jp/~duraid/
+D: IA64 backend, BigBlock register allocator
+
+N: John McCall
+E: rjmccall@apple.com
+D: Clang semantic analysis and IR generation
+
+N: Michael McCracken
+E: michael.mccracken@gmail.com
+D: Line number support for llvmgcc
+
+N: Fanbo Meng
+E: fanbo.meng@ibm.com
+D: z/OS support
+
+N: Vladimir Merzliakov
+E: wanderer@rsu.ru
+D: Test suite fixes for FreeBSD
+
+N: Scott Michel
+E: scottm@aero.org
+D: Added STI Cell SPU backend.
+
+N: Kai Nacke
+E: kai@redstar.de
+D: Support for implicit TLS model used with MS VC runtime
+D: Dumping of Win64 EH structures
+
+N: Takumi Nakamura
+E: geek4civic@gmail.com
+E: chapuni@hf.rim.or.jp
+D: Maintaining the Git monorepo
+W: https://github.com/llvm-project/
+S: Ebina, Japan
+
+N: Edward O'Callaghan
+E: eocallaghan@auroraux.org
+W: http://www.auroraux.org
+D: Add Clang support with various other improvements to utils/NewNightlyTest.pl
+D: Fix and maintain Solaris & AuroraUX support for llvm, various build warnings
+D: and error clean ups.
+
+N: Morten Ofstad
+E: morten@hue.no
+D: Visual C++ compatibility fixes
+
+N: Jakob Stoklund Olesen
+E: stoklund@2pi.dk
+D: Machine code verifier
+D: Blackfin backend
+D: Fast register allocator
+D: Greedy register allocator
+
+N: Richard Osborne
+E: richard@xmos.com
+D: XCore backend
+
+N: Piotr Padlewski
+E: piotr.padlewski@gmail.com
+D: !invariant.group metadata and other intrinsics for devirtualization in clang
+
+N: Devang Patel
+E: dpatel@apple.com
+D: LTO tool, PassManager rewrite, Loop Pass Manager, Loop Rotate
+D: GCC PCH Integration (llvm-gcc), llvm-gcc improvements
+D: Optimizer improvements, Loop Index Split
+
+N: Ana Pazos
+E: apazos@codeaurora.org
+D: Fixes and improvements to the AArch64 backend
+
+N: Wesley Peck
+E: peckw@wesleypeck.com
+W: http://wesleypeck.com/
+D: MicroBlaze backend
+
+N: Francois Pichet
+E: pichet2000@gmail.com
+D: MSVC support
+
+N: Simon Pilgrim
+E: llvm-dev@redking.me.uk
+D: X86 backend, Selection DAG, Scheduler Models and Cost Tables.
+
+N: Adrian Prantl
+E: aprantl@apple.com
+D: Debug Information
+
+N: Vladimir Prus
+W: http://vladimir_prus.blogspot.com
+E: ghost@cs.msu.su
+D: Made inst_iterator behave like a proper iterator, LowerConstantExprs pass
+
+N: Kalle Raiskila
+E: kalle.rasikila@nokia.com
+D: Some bugfixes to CellSPU
+
+N: Xerxes Ranby
+E: xerxes@zafena.se
+D: Cmake dependency chain and various bug fixes
+
+N: Alex Rosenberg
+E: alexr@leftfield.org
+D: ARM calling conventions rewrite, hard float support
+
+N: Chad Rosier
+E: mcrosier@codeaurora.org
+D: AArch64 fast instruction selection pass
+D: Fixes and improvements to the ARM fast-isel pass
+D: Fixes and improvements to the AArch64 backend
+
+N: Nadav Rotem
+E: nadav.rotem@me.com
+D: X86 code generation improvements, Loop Vectorizer, SLP Vectorizer
+
+N: Roman Samoilov
+E: roman@codedgers.com
+D: MSIL backend
+
+N: Duncan Sands
+E: baldrick@free.fr
+D: Ada support in llvm-gcc
+D: Dragonegg plugin
+D: Exception handling improvements
+D: Type legalizer rewrite
+
+N: Ruchira Sasanka
+E: sasanka@uiuc.edu
+D: Graph coloring register allocator for the Sparc64 backend
+
+N: Alina Sbirlea
+E: alina.sbirlea@gmail.com
+D: MemorySSA, BatchAA, misc loop and new pass manager work.
+
+N: Arnold Schwaighofer
+E: arnold.schwaighofer@gmail.com
+D: Tail call optimization for the x86 backend
+
+N: Shantonu Sen
+E: ssen@apple.com
+D: Miscellaneous bug fixes
+
+N: Anand Shukla
+E: ashukla@cs.uiuc.edu
+D: The `paths' pass
+
+N: Michael J. Spencer
+E: bigcheesegs@gmail.com
+D: Shepherding Windows COFF support into MC.
+D: Lots of Windows stuff.
+
+N: Reid Spencer
+E: rspencer@reidspencer.com
+W: http://reidspencer.com/
+D: Lots of stuff, see: http://wiki.llvm.org/index.php/User:Reid
+
+N: Abhina Sreeskantharajan
+E: Abhina.Sreeskantharajan@ibm.com
+D: z/OS support
+
+N: Alp Toker
+E: alp@nuanti.com
+W: http://atoker.com/
+D: C++ frontend next generation standards implementation
+
+N: Craig Topper
+E: craig.topper@gmail.com
+D: X86 codegen and disassembler improvements. AVX2 support.
+
+N: Edwin Torok
+E: edwintorok@gmail.com
+D: Miscellaneous bug fixes
+
+N: Adam Treat
+E: manyoso@yahoo.com
+D: C++ bugs filed, and C++ front-end bug fixes.
+
+N: Andrew Trick
+E: atrick@apple.com
+D: Instruction Scheduling, ...
+
+N: Lauro Ramos Venancio
+E: lauro.venancio@indt.org.br
+D: ARM backend improvements
+D: Thread Local Storage implementation
+
+N: Phoebe Wang
+E: phoebe.wang@intel.com
+D: X86 bug fixes and new instruction support.
+
+N: Bill Wendling
+E: isanbard@gmail.com
+D: Release manager, IR Linker, LTO.
+D: Bunches of stuff.
+
+N: Bob Wilson
+E: bob.wilson@acm.org
+D: Advanced SIMD (NEON) support in the ARM backend.
+
+N: QingShan Zhang
+N: steven.zhang
+E: zhangqingshan.zll@bytedance.com
+
+N: Li Jia He
+E: hljhehlj@cn.ibm.com
+D: PowerPC Backend Developer
+
+N: Zi Xuan Wu
+N: Zeson
+E: zixuan.wu@linux.alibaba.com
+
+N: Kang Zhang
+E: shkzhang@cn.ibm.com
+D: PowerPC Backend Developer
+
+N: Zheng Chen
+E: czhengsz@cn.ibm.com
+D: PowerPC Backend Developer
+
+N: Djordje Todorovic
+E: djordje.todorovic@rt-rk.com
+D: Debug Information
+
+N: Biplob Mishra
+E: biplmish@in.ibm.com
+D: PowerPC Analysis
+
+--- Extracted from clang/Maintainers.md ---
+# Clang Maintainers
+
+This file is a list of the
+[maintainers](https://llvm.org/docs/DeveloperPolicy.html#maintainers)
+for Clang. The list of current Clang Area Team members can be found
+[here](https://github.com/llvm/llvm-project/blob/main/clang/AreaTeamMembers.txt).
+
+
+# Active Maintainers
+
+The following people are the active maintainers for the project. Please
+reach out to them for code reviews, questions about their area of
+expertise, or other assistance.
+
+## Lead Maintainer
+
+Aaron Ballman \
+aaron@aaronballman.com (email), aaron.ballman (Phabricator), [AaronBallman](https://github.com/AaronBallman) (GitHub), AaronBallman (Discourse), aaronballman (Discord)
+
+## Contained Components
+
+These maintainers are responsible for particular high-level components
+within Clang that are typically contained to one area of the compiler.
+
+### AST matchers
+
+Aaron Ballman \
+aaron@aaronballman.com (email), aaron.ballman (Phabricator), [AaronBallman](https://github.com/AaronBallman) (GitHub), AaronBallman (Discourse), aaronballman (Discord)
+
+### AST Visitors
+
+Ambrose Leeb \
+aleeb@nvidia.com (email), [Sirraide](https://github.com/Sirraide) (GitHub), Ætérnal (Discord), Sirraide (Discourse)
+
+### Clang LLVM IR generation
+
+Eli Friedman \
+efriedma@qti.qualcomm.com (email), efriedma (Phabricator), [efriedma-quic](https://github.com/efriedma-quic) (GitHub)
+
+Anton Korobeynikov \
+anton@korobeynikov.info (email), asl (Phabricator), [asl](https://github.com/asl) (GitHub)
+
+### Clang MLIR generation
+
+Andy Kaylor \
+akaylor@nvidia.com (email), AndyKaylor (Discord), [AndyKaylor](https://github.com/AndyKaylor) (GitHub)
+
+Bruno Cardoso Lopes \
+bruno.cardoso@gmail.com (email), sonicsprawl (Discord), [bcardosolopes](https://github.com/bcardosolopes) (GitHub)
+
+Henrich Lauko \
+henrich.lau@gmail.com (email), henrich.lauko (Discord), [xlauko](https://github.com/xlauko) (GitHub)
+
+### Analysis & CFG
+
+Yitzhak Mandelbaum \
+yitzhakm@google.com (email), ymandel (Phabricator), [ymand](https://github.com/ymand) (GitHub)
+
+### Sema
+
+Ambrose Leeb \
+aleeb@nvidia.com (email), [Sirraide](https://github.com/Sirraide) (GitHub), Ætérnal (Discord), Sirraide (Discourse)
+
+Mariya Podchishchaeva \
+Mariya.Podchishchaeva@amd.com (email), [Fznamznon](https://github.com/Fznamznon) (GitHub), fznamznon (Discord), Fznamznon (Discourse)
+
+### Recovery AST
+
+Haojian Wu \
+hokein.wu@gmail.com (email), hokein (Phabricator), [hokein](https://github.com/hokein) (GitHub), hokein (Discourse)
+
+### Experimental new constant interpreter
+
+Timm Bäder \
+tbaeder@redhat.com (email), tbaeder (Phabricator), [tbaederr](https://github.com/tbaederr) (GitHub), tbaeder (Discourse), tbaeder (Discord)
+
+### Modules & serialization
+
+Chuanqi Xu \
+yedeng.yd@linux.alibaba.com (email), ChuanqiXu (Phabricator), [ChuanqiXu9](https://github.com/ChuanqiXu9) (GitHub)
+
+Michael Spencer \
+bigcheesegs@gmail.com (email), Bigcheese (Phabricator), [Bigcheese](https://github.com/Bigcheese) (GitHub)
+
+Vassil Vassilev \
+Vassil.Vassilev@cern.ch (email), v.g.vassilev (Phabricator), [vgvassilev](https://github.com/vgvassilev) (GitHub)
+
+### Templates
+
+Erich Keane \
+ekeane@nvidia.com (email), ErichKeane (Phabricator), [erichkeane](https://github.com/erichkeane) (GitHub)
+
+### Concepts
+
+Corentin Jabot \
+corentin.jabot@gmail.com (email), cor3ntin (Phabricator), [cor3ntin](https://github.com/cor3ntin) (GitHub)
+
+### Lambdas
+
+Corentin Jabot \
+corentin.jabot@gmail.com (email), cor3ntin (Phabricator), [cor3ntin](https://github.com/cor3ntin) (GitHub)
+
+### Debug information
+
+Adrian Prantl \
+aprantl@apple.com (email), aprantl (Phabricator), [adrian-prantl](https://github.com/adrian-prantl) (GitHub)
+
+David Blaikie \
+dblaikie@gmail.com (email), dblaikie (Phabricator), [dwblaikie](https://github.com/dwblaikie) (GitHub)
+
+Eric Christopher \
+echristo@gmail.com (email), echristo (Phabricator), [echristo](https://github.com/echristo) (GitHub)
+
+### Exception handling
+
+Anton Korobeynikov \
+anton@korobeynikov.info (email), asl (Phabricator), [asl](https://github.com/asl) (GitHub)
+
+### Clang static analyzer
+
+Artem Dergachev \
+artem.dergachev@gmail.com (email), NoQ (Phabricator), [haoNoQ](https://github.com/haoNoQ) (GitHub)
+
+Gábor Horváth \
+xazax.hun@gmail.com (email), xazax.hun (Phabricator), [Xazax-hun](https://github.com/Xazax-hun) (GitHub)
+
+Balázs Benics \
+benicsbalazs@gmail.com (email), steakhal (Phabricator), [steakhal](https://github.com/steakhal) (GitHub)
+
+Donát Nagy \
+donat.nagy@ericsson.com (email), [NagyDonat](https://github.com/NagyDonat) (GitHub), DonatNagyE (Discourse)
+
+### Compiler options
+
+Jan Svoboda \
+jan_svoboda@apple.com (email), jansvoboda11 (Phabricator), [jansvoboda11](https://github.com/jansvoboda11) (GitHub)
+
+### API Notes
+
+Egor Zhdan \
+e_zhdan@apple.com (email), [egorzhdan](https://github.com/egorzhdan) (GitHub), egor.zhdan (Discourse)
+
+Saleem Abdulrasool \
+compnerd@compnerd.org (email), [compnerd](https://github.com/compnerd) (GitHub), compnerd (Discourse)
+
+### OpenBSD driver
+
+Brad Smith \
+brad@comstyle.com (email), brad (Phabricator), [brad0](https://github.com/brad0) (GitHub)
+
+### Offloading driver
+
+Joseph Huber \
+joseph.huber@amd.com (email), [jhuber6](https://github.com/jhuber6) (GitHub)
+
+Nick Sarnie \
+nick.sarnie@intel.com (email), [sarnex](https://github.com/sarnex) (GitHub)
+
+### Driver parts not covered by someone else
+
+Fangrui Song \
+i@maskray.me (email), MaskRay (Phabricator), [MaskRay](https://github.com/MaskRay) (GitHub)
+
+### Constant Expressions
+
+Mariya Podchishchaeva \
+Mariya.Podchishchaeva@amd.com (email), [Fznamznon](https://github.com/Fznamznon) (GitHub), fznamznon (Discord), Fznamznon (Discourse)
+
+### Thread Safety Analysis
+
+Aaron Puchert \
+aaron.puchert@sap.com (email), [aaronpuchert](https://github.com/aaronpuchert) (GitHub), aaronpuchert (Discourse)
+
+### Function Effect Analysis
+
+Doug Wyatt \
+dwyatt@apple.com (email), [dougsonos](https://github.com/dougsonos) (GitHub), dougsonos (Discourse)
+
+Ambrose Leeb \
+aleeb@nvidia.com (email), [Sirraide](https://github.com/Sirraide) (GitHub), Ætérnal (Discord), Sirraide (Discourse)
+
+### Code Coverage
+
+Takumi Nakamura \
+geek4civic@gmail.com (email), chapuni(GitHub), chapuni (Discord), chapuni (Discourse)
+
+Alan Phipps \
+a-phipps@ti.com (email), [evodius96](https://github.com/evodius96) (GitHub), evodius96 (Discourse)
+
+### Python Bindings
+
+Vlad Serebrennikov \
+serebrennikov.vladislav@gmail.com (email), [Endilll](https://github.com/Endilll) (GitHub), Endill (Discord), Endill (Discourse)
+
+## Tools
+
+These maintainers are responsible for user-facing tools under the Clang
+umbrella or components used to support such tools.
+
+### clang-format
+
+MyDeveloperDay \
+mydeveloperday@gmail.com (email), MyDeveloperDay (Phabricator), [MyDeveloperDay](https://github.com/MyDeveloperDay) (GitHub)
+
+Björn Schäpers \
+llvm@hazardy.de (email), [HazardyKnusperkeks](https://github.com/HazardyKnusperkeks) (GitHub), HazardyKnusperkeks (Discourse)
+
+## ABIs
+
+The following people are responsible for decisions involving ABI.
+
+### Itanium ABI
+
+### Microsoft ABI
+
+Reid Kleckner \
+rnk@llvm.org (email), [rnk](https://github.com/rnk) (GitHub), rnk (Discourse), rnk (Discord), rnk (Phabricator)
+
+### ARM EABI
+
+Anton Korobeynikov \
+anton@korobeynikov.info (email), asl (Phabricator), [asl](https://github.com/asl) (GitHub)
+
+## Compiler-Wide Topics
+
+The following people are responsible for functionality that does not fit
+into a single part of the compiler, but instead spans multiple
+components within the compiler.
+
+### Attributes
+
+Aaron Ballman \
+aaron@aaronballman.com (email), aaron.ballman (Phabricator), [AaronBallman](https://github.com/AaronBallman) (GitHub), AaronBallman (Discourse), aaronballman (Discord)
+
+### Floating-point and numerics
+
+Joshua Cranmer \
+joshua.cranmer@intel.com (email), [jcranmer-intel](https://github.com/jcranmer-intel) (GitHub), jcranmer (Discourse)
+
+### Plugins
+
+Vassil Vassilev \
+Vassil.Vassilev@cern.ch (email), v.g.vassilev (Phabricator), [vgvassilev](https://github.com/vgvassilev) (GitHub)
+
+### Inline assembly
+
+Eric Christopher \
+echristo@gmail.com (email), echristo (Phabricator), [echristo](https://github.com/echristo) (GitHub)
+
+### Text encodings
+
+Corentin Jabot \
+corentin.jabot@gmail.com (email), cor3ntin (Phabricator), [cor3ntin](https://github.com/cor3ntin) (GitHub)
+
+### CMake integration
+
+Petr Hosek \
+phosek@google.com (email), phosek (Phabricator), [petrhosek](https://github.com/petrhosek) (GitHub)
+
+### General Windows support
+
+Reid Kleckner \
+rnk@llvm.org (email), [rnk](https://github.com/rnk) (GitHub), rnk (Discourse), rnk (Discord), rnk (Phabricator)
+
+### Incremental compilation, REPLs, clang-repl
+
+Vassil Vassilev \
+Vassil.Vassilev@cern.ch (email), v.g.vassilev (Phabricator), [vgvassilev](https://github.com/vgvassilev) (GitHub)
+
+## Standards Conformance
+
+The following people are responsible for validating that changes are
+conforming to a relevant standard. Contact them for questions about how
+to interpret a standard, when fixing standards bugs, or when
+implementing a new standard feature.
+
+### C conformance
+
+Aaron Ballman \
+aaron@aaronballman.com (email), aaron.ballman (Phabricator), [AaronBallman](https://github.com/AaronBallman) (GitHub), AaronBallman (Discourse), aaronballman (Discord)
+
+### C++ conformance
+
+Hubert Tong \
+hubert.reinterpretcast@gmail.com (email), hubert.reinterpretcast (Phabricator), [hubert-reinterpretcast](https://github.com/hubert-reinterpretcast) (GitHub)
+
+Shafik Yaghmour \
+shafik.yaghmour@intel.com (email), [shafik](https://github.com/shafik) (GitHub), shafik.yaghmour (Discord), shafik (Discourse)
+
+Vlad Serebrennikov \
+serebrennikov.vladislav@gmail.com (email), [Endilll](https://github.com/Endilll) (GitHub), Endill (Discord), Endill (Discourse)
+
+### C++ Defect Reports
+
+Vlad Serebrennikov \
+serebrennikov.vladislav@gmail.com (email), [Endilll](https://github.com/Endilll) (GitHub), Endill (Discord), Endill (Discourse)
+
+### Objective-C/C++ conformance
+
+Akira Hatanaka \
+ahatanak@gmail.com, [ahatanak](https://github.com/ahatanak) (GitHub), ahatanak4220 (Discord), ahatanak (Discourse)
+
+### Swift conformance
+
+John McCall \
+rjmccall@apple.com (email), [rjmccall](https://github.com/rjmccall) (GitHub)
+
+
+### OpenMP conformance
+
+Alexey Bataev \
+a.bataev@hotmail.com (email), ABataev (Phabricator), [alexey-bataev](https://github.com/alexey-bataev) (GitHub)
+
+### OpenCL conformance
+
+Sven van Haastregt \
+sven.vanhaastregt@arm.com (email), [svenvh](https://github.com/svenvh) (GitHub)
+
+### OpenACC
+
+Erich Keane \
+ekeane@nvidia.com (email), ErichKeane (Phabricator), [erichkeane](https://github.com/erichkeane) (GitHub)
+
+### SYCL conformance
+
+Alexey Bader \
+alexey.bader@intel.com (email), [bader](https://github.com/bader) (GitHub), bader7427 (Discord), bader (Discourse)
+
+Tom Honermann \
+tom@honermann.net (email), [tahonermann](https://github.com/tahonermann) (GitHub), tahonermann (Discord), tahonermann (Discourse)
+
+### HLSL conformance
+
+Chris Bieneman \
+chris.bieneman@gmail.com (email), [llvm-beanz](https://github.com/llvm-beanz) (GitHub), beanz (Discord), beanz (Discourse)
+
+### Issue Triage
+
+Shafik Yaghmour \
+shafik.yaghmour@intel.com (email), [shafik](https://github.com/shafik) (GitHub), shafik.yaghmour (Discord), shafik (Discourse)
+
+hstk30 \
+hanwei62@huawei.com (email), [hstk30-hw](https://github.com/hstk30-hw) (GitHub), hstk30(Discord), hstk30 (Discourse)
+
+# Inactive Maintainers
+
+The following people have graciously spent time performing
+maintainership responsibilities but are no longer active in that role.
+Thank you for all your help with the success of the project!
+
+## Emeritus Lead Maintainers
+
+Doug Gregor (dgregor@apple.com) \
+Richard Smith (richard@metafoo.co.uk)
+
+## Inactive component maintainers
+
+Anastasia Stulova (stulovaa@gmail.com) \-- OpenCL, C++ for OpenCL \
+Chandler Carruth (chandlerc@gmail.com, chandlerc@google.com) \--   CMake, library layering \
+Devin Coughlin (dcoughlin@apple.com) \-- Clang static analyzer \
+Manuel Klimek (klimek@google.com (email), klimek (Phabricator), [r4nt](https://github.com/r4nt) (GitHub)) \-- Tooling, AST matchers \
+Dmitri Gribenko (gribozavr@gmail.com (email), gribozavr (Phabricator), [gribozavr](https://github.com/gribozavr) (GitHub)) \-- Analysis & CFG \
+Tom Honermann (tom@honermann.net (email), tahonermann (Phabricator), [tahonermann](https://github.com/tahonermann) (GitHub)) \-- Text Encodings \
+John McCall (rjmccall@apple.com (email), rjmccall (Phabricator), [rjmccall](https://github.com/rjmccall) (GitHub)) \-- Clang LLVM IR generation, Objective-C/C++ conformance, Itanium ABI \
+John Ericson (git@johnericson.me (email), Ericson2314 (Phabricator), [Ericson2314](https://github.com/Ericson2314) (GitHub)) \-- CMake Integration \
+Stanislav Gatev (sgatev@google.com (email), sgatev (Phabricator), [sgatev](https://github.com/sgatev) (GitHub)) \-- Analysis & CFG \
+Owen Pan (owenpiano@gmail.com (email), owenpan (Phabricator), [owenca](https://github.com/owenca) (GitHub)) \-- clang-format
+
+--- Extracted from lld/Maintainers.md ---
+# LLD Maintainers
+
+This file is a list of the
+[maintainers](https://llvm.org/docs/DeveloperPolicy.html#maintainers) for
+LLD.
+
+## Current Maintainers
+
+The following people are the active maintainers for the project. Please reach
+out to them for code reviews, questions about their area of expertise, or other
+assistance.
+
+### ELF backend
+
+Fangrui Song \
+i@maskray.me (email), [maskray](https://github.com/maskray) (GitHub)
+
+Peter Smith \
+peter.smith@arm.com (email), [smithp35](https://github.com/smithp35) (GitHub)
+
+### COFF backend
+
+Martin Storsjö \
+martin@martin.st (email), [mstorsjo](https://github.com/mstorsjo) (GitHub)
+
+Alexandre Ganea \
+alex_toresh@yahoo.fr (email), [aganea](https://github.com/aganea) (GitHub)
+
+
+### Old Mach-O backend
+
+Lang Hames \
+lhames@gmail.com (email)
+
+Nick Kledzik \
+kledzik@apple.com (email)
+
+### WebAssembly backend (wasm/*)
+
+Sam Clegg \
+sbc@chromium.org (email)
+
+### New Mach-O backend
+
+Jez Ng \
+jezng@fb.com (email)
+
+Greg McGary \
+gkm@fb.com (email)
+
+Shoaib Meenai \
+smeenai@fb.com (email)
+

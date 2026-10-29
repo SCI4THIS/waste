@@ -8,7 +8,7 @@ $(BUILD_DIR)/clipboard/clipboard.o: $(AUX_DIR)/clipboard/clipboard.c $(REPO_ROOT
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WASM_CFLAGS) -Wall -Wextra -Werror \
 		-include "$(AUX_DIR)/libc-imports.h" -c "$<" -o "$@"
 
-$(BUILD_DIR)/clipboard/clipboard.wasm: $(CRT_OBJECT) $(BUILD_DIR)/clipboard/clipboard.o
+$(BUILD_DIR)/clipboard/clipboard.wasm: $(BUILD_DIR)/clipboard/notice-crt.o $(BUILD_DIR)/clipboard/clipboard.o
 	$(WASM_LD) $(LDFLAGS) $(WASM_LDFLAGS) -o "$@" $(foreach object,$^,"$(object)")
 
 test-clipboard: install-clipboard aux-test-runner

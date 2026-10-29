@@ -1,0 +1,16 @@
+GNU Coreutils commands shipped with WASTE.
+Extracted from upstream AUTHORS.
+
+basename: David MacKenzie
+cat: Torbjörn Granlund, Richard M. Stallman
+chmod: David MacKenzie, Jim Meyering
+date: David MacKenzie
+dirname: David MacKenzie, Jim Meyering
+echo: Brian Fox, Chet Ramey
+false: Jim Meyering
+ls: Richard M. Stallman, David MacKenzie
+printf: David MacKenzie
+pwd: Jim Meyering
+sleep: Jim Meyering, Paul Eggert
+true: Jim Meyering
+wc: Paul Rubin, David MacKenzie

@@ -17,7 +17,6 @@ COREUTILS_STAGE_STAMP := $(COREUTILS_SOURCE)/.prepared-$(COREUTILS_REVISION)
 COREUTILS_CONFIGURE_STAMP := $(COREUTILS_CONFIGURE)/.configured
 COREUTILS_OBJECT_STAMP := $(COREUTILS_BUILD)/.objects-built
 COREUTILS_ARCHIVE := $(COREUTILS_BUILD)/libcoreutils-runtime.a
-COREUTILS_CRT := $(COREUTILS_BUILD)/waste-crt.o
 COREUTILS_GENERATED := lib/configmake.h src/version.h lib/unitypes.h \
 	lib/unictype.h lib/unicase.h lib/uninorm.h lib/uniwidth.h \
 	lib/malloc/scratch_buffer.gl.h lib/crc-sliceby8.h lib/fts_.h \
@@ -79,25 +78,18 @@ $(COREUTILS_OBJECT_STAMP): $(COREUTILS_CONFIGURE_STAMP) $(COREUTILS_DIR)/coreuti
 $(COREUTILS_ARCHIVE): $(COREUTILS_OBJECT_STAMP)
 	cp "$(COREUTILS_CONFIGURE)/lib/libcoreutils.a" "$@"
 	$(AR) d "$@" $(COREUTILS_STRIP_OBJECTS)
-
-$(COREUTILS_CRT): $(CRT_SOURCE) $(COREUTILS_DIR)/coreutils.mk
-	mkdir -p "$(@D)"
-	$(CC) $(CPPFLAGS) $(CFLAGS) --target=wasm32 -ffreestanding -fno-builtin \
-		-DWASTE_MAIN_TWO_ARGS -fno-stack-protector \
-		-nostdlib -c "$<" -o "$@"
-
 define COREUTILS_RULE
 .PHONY: $(1) install-$(1)
 $(1): $(BUILD_DIR)/$(1)/$(1).wasm
 install-$(1): $(1)
-$(BUILD_DIR)/$(1)/$(1).wasm: $(COREUTILS_ARCHIVE) $(COREUTILS_CRT) \
+$(BUILD_DIR)/$(1)/$(1).wasm: $(COREUTILS_ARCHIVE) $(COREUTILS_BUILD)/crt-$(1).o \
 		$(LIBC_REVIEW) $(SDK_ROOT)/lib/libc.so.wasm \
 		$(COREUTILS_EXTRA_OBJECTS_$(1))
 	mkdir -p "$$(@D)"
 	$(WASM_LD) $(LDFLAGS) $(COREUTILS_LDFLAGS) -o "$$(@D)/$(1)-raw.wasm" \
 		$(foreach object,$(COREUTILS_OBJECTS_$(1)),"$(COREUTILS_CONFIGURE)/$(object)") \
 		$(foreach object,$(COREUTILS_EXTRA_OBJECTS_$(1)),"$(object)") \
-		"$(COREUTILS_CONFIGURE)/src/libver.a" "$(COREUTILS_ARCHIVE)" "$(COREUTILS_ARCHIVE)" "$(COREUTILS_CRT)"
+		"$(COREUTILS_CONFIGURE)/src/libver.a" "$(COREUTILS_ARCHIVE)" "$(COREUTILS_ARCHIVE)" "$(COREUTILS_BUILD)/crt-$(1).o"
 	wasm-opt "$$(@D)/$(1)-raw.wasm" --strip-debug -o "$$(@D)/$(1)-stripped.wasm"
 	$(PYTHON) "$(LIBC_REVIEW)" --provider "$(SDK_ROOT)/lib/libc.so.wasm" \
 		--rewrite "$$(@D)/$(1)-stripped.wasm" --output "$$@"

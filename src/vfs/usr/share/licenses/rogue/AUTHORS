@@ -1,0 +1,19 @@
+Rogue credits, extracted from LICENSE.TXT.
+
+Rogue: Exploring the Dungeons of Doom
+Copyright (C) 1980-1983, 1985, 1999 Michael Toy, Ken Arnold and Glenn Wichman
+All rights reserved.
+
+Portions of this software (state.c, mdport.c) are based on the work 
+of Nicholas J. Kisseberth. Used under license:
+
+Copyright (C) 1999, 2000, 2005 Nicholas J. Kisseberth
+All rights reserved.
+
+Portions of this software (xcrypt.c) are based on the work 
+of David Burren. Used under license:
+
+FreeSec: libcrypt
+
+Copyright (C) 1994 David Burren
+All rights reserved.

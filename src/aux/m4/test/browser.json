@@ -1,6 +1,6 @@
 {
   "fixture": "src/vfs/usr/share/waste/launch.wast",
-  "assertions": 67,
+  "assertions": 83,
   "exitStatus": 0,
   "hostTimeoutMs": 300000,
   "events": [

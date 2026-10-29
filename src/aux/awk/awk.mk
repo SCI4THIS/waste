@@ -41,6 +41,8 @@ $(AWK_BUILD)/waste-crt.o: $(CRT_SOURCE) $(AWK_DIR)/awk.mk $(SDK_HEADERS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WASM_CFLAGS) -DWASTE_MAIN_TWO_ARGS -c "$<" -o "$@"
 
 $(AWK_BUILD)/.compiled: $(AWK_CONFIGURED) $(AWK_BUILD)/waste-crt.o $(AWK_DIR)/awk.mk
+	# LIBS is a link flag upstream, not a dependency on the external CRT.
+	rm -f "$(AWK_CONFIGURE)/gawk"
 	$(AWK_ENV) $(MAKE) -C "$(AWK_CONFIGURE)/support" libsupport.a
 	$(AWK_ENV) $(MAKE) -C "$(AWK_CONFIGURE)" gawk \
 		LDFLAGS="$(AWK_LDFLAGS)" LIBS="$(abspath $(AWK_BUILD))/waste-crt.o"

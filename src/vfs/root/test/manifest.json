@@ -91,6 +91,7 @@
       "system/devices": 1,
       "system/entropy": 1,
       "system/libc": 10,
+      "system/notices": 1,
       "system/scheduling": 5,
       "system/wast": 3,
       "system/windows-demo": 1,
@@ -107,7 +108,7 @@
       "wasm-spec/custom/name": 1
     },
     "supported": 293,
-    "tests": 453
+    "tests": 454
   },
   "files": [
     {
@@ -435,8 +436,8 @@
     {
       "path": "/root/test/aux/m4/installed.wast",
       "role": "test-input",
-      "sha256": "9516fb483fdf84f24d59d401b20757efc9c2028a580f897be578d158877988d2",
-      "size": 8518,
+      "sha256": "ba84f7bf3366ea6f6f19d1986c63b2374a369006f17980df0e5add6cfaee9418",
+      "size": 13542,
       "source": "src/vfs/root/test/aux/m4/installed.wast"
     },
     {
@@ -1446,6 +1447,13 @@
       "sha256": "533d7e3fe71c574b2bcc59997ce87dd37b1b09d7342c0672ceccb2c49ab14d40",
       "size": 3343,
       "source": "src/vfs/root/test/system/libc/time-resource.wast"
+    },
+    {
+      "path": "/root/test/system/notices/installed.wast",
+      "role": "test-input",
+      "sha256": "8ba42c1b2d2ebe590e26d6c7812cb41061c925397239438303aa8b9d15f7152c",
+      "size": 32241,
+      "source": "src/vfs/root/test/system/notices/installed.wast"
     },
     {
       "path": "/root/test/system/scheduling/cpu.wast",
@@ -3343,7 +3351,7 @@
       "timeoutScope": "existing dashboard has no per-test deadline"
     }
   },
-  "selection_sha256": "e054f37086f6be6ec3917fd34c98fce64f4acb5d5a4ecb08636386ffc1454590",
+  "selection_sha256": "4625c91e043aeb7e5ebd18c782bc8babbd0e8d78b316e663f7876a350af9cd64",
   "sourceInputs": [
     {
       "hostOnly": true,
@@ -13092,7 +13100,7 @@
         "assertionCount": 0,
         "file": "aux/m4/installed.wast",
         "mode": "wast-stream",
-        "sourceBytes": 8518,
+        "sourceBytes": 13542,
         "sourcePath": "src/vfs/root/test/aux/m4/installed.wast"
       },
       "expectFailure": false,
@@ -13105,10 +13113,10 @@
       "runtime": "c-wast-stream",
       "source": {
         "path": "src/vfs/root/test/aux/m4/installed.wast",
-        "sha256": "9516fb483fdf84f24d59d401b20757efc9c2028a580f897be578d158877988d2",
-        "size": 8518
+        "sha256": "ba84f7bf3366ea6f6f19d1986c63b2374a369006f17980df0e5add6cfaee9418",
+        "size": 13542
       },
-      "spec_sha256": "02ca991631d486518f64dacf1b13448bc5aaf5030939a3b33c1772063ee9822f",
+      "spec_sha256": "a9e141efaf1f7e7c545625d880eab418e942fa5f5f68cbb4e4e34d09f8012dd4",
       "suite": "aux",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
@@ -15998,6 +16006,33 @@
         "size": 3343
       },
       "spec_sha256": "a68dc4e5b9e92cb2865a77a176cb2a17bba464415ac3e7267abfdb4dc4675f40",
+      "suite": "system",
+      "unsupported": true,
+      "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"
+    },
+    {
+      "assets": [],
+      "executionSpec": {
+        "assertionCount": 0,
+        "file": "system/notices/installed.wast",
+        "mode": "wast-stream",
+        "sourceBytes": 32241,
+        "sourcePath": "src/vfs/root/test/system/notices/installed.wast"
+      },
+      "expectFailure": false,
+      "group": "system/notices",
+      "id": "system/notices/installed.wast",
+      "name": "installed.wast",
+      "nativeParity": "pending-stage-6",
+      "path": "/root/test/system/notices/installed.wast",
+      "requiredFeatures": [],
+      "runtime": "c-wast-stream",
+      "source": {
+        "path": "src/vfs/root/test/system/notices/installed.wast",
+        "sha256": "8ba42c1b2d2ebe590e26d6c7812cb41061c925397239438303aa8b9d15f7152c",
+        "size": 32241
+      },
+      "spec_sha256": "3823cad6d1f479c755e23b3ba0f9496457d4d4df76e3ede967b2d8af3944180e",
       "suite": "system",
       "unsupported": true,
       "unsupportedReason": "Requires Bash process context; run /bin/wast --verbose"

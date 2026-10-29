@@ -2,9 +2,9 @@
   "format": 1,
   "common": ["/lib/libc.so.wasm", "/usr/share/licenses/libc/llvm-math/LICENSE.TXT"],
   "tools": {
-    "awk": {"executable": "/usr/bin/awk", "files": ["/usr/bin/awk", "/usr/share/licenses/awk/COPYING"], "sourceTarget": "awk-source-package"},
-    "m4": {"executable": "/usr/bin/m4", "files": ["/usr/bin/m4", "/usr/share/licenses/m4/COPYING"], "sourceTarget": "m4-source-package"},
-    "dot": {"executable": "/usr/bin/dot", "files": ["/usr/bin/dot", "/usr/share/licenses/dot/COPYING", "/usr/share/licenses/dot/LICENSE", "/usr/share/licenses/dot/EPL-2.0.txt"], "sourceTarget": "dot-source-package"},
-    "bash": {"executable": "/usr/bin/bash", "files": ["/usr/bin/bash", "/usr/share/licenses/bash/COPYING"], "sourceTarget": "bash-source-package"}
+    "awk": {"executable": "/usr/bin/awk", "files": ["/usr/bin/awk", "/usr/share/licenses/awk/COPYING", "/usr/share/licenses/awk/AUTHORS"], "sourceTarget": "awk-source-package"},
+    "m4": {"executable": "/usr/bin/m4", "files": ["/usr/bin/m4", "/usr/share/licenses/m4/COPYING", "/usr/share/licenses/m4/AUTHORS"], "sourceTarget": "m4-source-package"},
+    "dot": {"executable": "/usr/bin/dot", "files": ["/usr/bin/dot", "/usr/share/licenses/dot/COPYING", "/usr/share/licenses/dot/LICENSE", "/usr/share/licenses/dot/EPL-2.0.txt", "/usr/share/licenses/dot/AUTHORS"], "sourceTarget": "dot-source-package"},
+    "bash": {"executable": "/usr/bin/bash", "files": ["/usr/bin/bash", "/usr/share/licenses/bash/COPYING", "/usr/share/licenses/bash/AUTHORS"], "sourceTarget": "bash-source-package"}
   }
 }

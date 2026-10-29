@@ -47,6 +47,8 @@ $(M4_BUILD)/process.o: $(M4_DIR)/process.c $(M4_DIR)/waste-process.h $(M4_DIR)/m
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WASM_CFLAGS) -Wall -Wextra -Werror -c "$<" -o "$@"
 
 $(M4_BUILD)/.compiled: $(M4_BUILD)/process.o $(M4_CONFIGURED) $(M4_BUILD)/waste-crt.o $(M4_DIR)/m4.mk
+	# Relink when the external CRT changes even if upstream objects are cached.
+	rm -f "$(M4_CONFIGURE)/src/m4"
 	$(M4_ENV) $(MAKE) -C "$(M4_CONFIGURE)/lib" all V=1
 	$(M4_ENV) $(MAKE) -C "$(M4_CONFIGURE)/src" m4 V=1 \
 		LDFLAGS="$(M4_LDFLAGS)" LIBS="$(abspath $(M4_BUILD))/waste-crt.o $(abspath $(M4_BUILD))/process.o"

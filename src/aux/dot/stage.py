@@ -17,7 +17,7 @@ source.mkdir(parents=True)
 for name in ["lib", "cmd/dot", "plugin/core", "plugin/dot_layout"]:
     shutil.copytree(upstream / name, source / name, ignore=shutil.ignore_patterns(".git"))
 subprocess.run(["patch", "--batch", "--fuzz=0", "-p1", "-i", str(repo / "src/aux/dot/waste.patch")], cwd=source, check=True)
-for name in ["COPYING", "LICENSE", "EPL-2.0.txt", "CHANGELOG.md", "graphviz_version.h.in"]:
+for name in ["AUTHORS", "COPYING", "LICENSE", "EPL-2.0.txt", "CHANGELOG.md", "graphviz_version.h.in"]:
     shutil.copy2(upstream / name, source / name)
 marker = upstream / ".waste-source-revision"
 revision = marker.read_text().strip() if marker.exists() else subprocess.check_output(["git", "-C", str(upstream), "rev-parse", "HEAD"], text=True).strip()

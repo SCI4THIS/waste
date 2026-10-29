@@ -130,3 +130,17 @@ diff --git a/src/sleep.c b/src/sleep.c
 -  if (xnanosleep (seconds))
 +  if (waste_sleep_seconds (seconds))
      error (EXIT_FAILURE, errno, _("cannot read realtime clock"));
+
+diff --git a/gnulib/lib/strerror.c b/gnulib/lib/strerror.c
+--- a/gnulib/lib/strerror.c
++++ b/gnulib/lib/strerror.c
+@@ -40,3 +40,4 @@
++#ifndef WASTE_WASM /* The guest SDK/provider owns strerror, including its type. */
+ const char *
+ strerror (int n)
+ #undef strerror
+@@ -73,3 +74,4 @@
+   memcpy (buf, msg, len + 1);
+   return buf;
+ }
++#endif

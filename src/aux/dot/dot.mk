@@ -5,7 +5,7 @@ DOT_SOURCE := $(DOT_BUILD)/source
 DOT_UPSTREAM := $(REPO_ROOT)/submodules/graphviz
 include $(DOT_DIR)/sources.mk
 DOT_SOURCES += lib/cgraph/grammar.c lib/cgraph/scan.c lib/common/htmlparse.c
-DOT_INPUTS := $(shell find "$(DOT_UPSTREAM)/lib" "$(DOT_UPSTREAM)/cmd/dot" "$(DOT_UPSTREAM)/plugin/core" "$(DOT_UPSTREAM)/plugin/dot_layout" -type f) $(DOT_UPSTREAM)/CHANGELOG.md $(DOT_UPSTREAM)/graphviz_version.h.in $(DOT_UPSTREAM)/COPYING $(DOT_UPSTREAM)/LICENSE $(DOT_UPSTREAM)/EPL-2.0.txt
+DOT_INPUTS := $(shell find "$(DOT_UPSTREAM)/lib" "$(DOT_UPSTREAM)/cmd/dot" "$(DOT_UPSTREAM)/plugin/core" "$(DOT_UPSTREAM)/plugin/dot_layout" -type f) $(DOT_UPSTREAM)/CHANGELOG.md $(DOT_UPSTREAM)/graphviz_version.h.in $(DOT_UPSTREAM)/AUTHORS $(DOT_UPSTREAM)/COPYING $(DOT_UPSTREAM)/LICENSE $(DOT_UPSTREAM)/EPL-2.0.txt
 DOT_REVISION := $(shell cat "$(DOT_UPSTREAM)/.waste-source-revision" 2>/dev/null || git -C "$(DOT_UPSTREAM)" rev-parse HEAD)
 DOT_STAGE := $(DOT_SOURCE)/.prepared-$(DOT_REVISION)
 DOT_OBJECTS := $(addprefix $(DOT_BUILD)/objects/,$(DOT_SOURCES:.c=.o))

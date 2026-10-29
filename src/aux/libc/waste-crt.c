@@ -31,8 +31,12 @@ extern i32 waste_kernel_startup_v1(void);
 __attribute__((import_module("env"), import_name("exit")))
 extern void waste_env_exit(i32 status);
 
-extern i32 fflush(void *stream) WASTE_CRT_LIBC_IMPORT;
+extern i32 fflush(__waste_crt_FILE *stream) WASTE_CRT_LIBC_IMPORT;
 #undef WASTE_CRT_LIBC_IMPORT
+
+#ifdef WASTE_NOTICE_PACKAGE
+#include "../notices/options.h"
+#endif
 
 /* Linkers may provide this when constructors are present. */
 extern void __wasm_call_ctors(void) __attribute__((weak));
@@ -42,6 +46,13 @@ i32 __waste_startup_call(waste_main_entry entry) {
   if (!entry) return 127;
   block = waste_kernel_startup_v1();
   if (block < 0) return 127;
+#ifdef WASTE_NOTICE_PACKAGE
+  {
+    int status = waste_command_notice(*(i32 *)(u32)block,
+                         (char **)(u32)*(u32 *)(u32)(block + 4));
+    if (status >= 0) return status;
+  }
+#endif
 #ifdef WASTE_MAIN_TWO_ARGS
   return entry(*(i32 *)(u32)block,
                (char **)(u32)*(u32 *)(u32)(block + 4));

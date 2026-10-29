@@ -32,6 +32,11 @@ ac_cv_func_posix_memalign=no
 # The guest implements timed waits through nanosleep/pselect; pause is not a
 # separate kernel capability and must not leave an unresolved import in sleep.
 ac_cv_func_pause=no
+# The SDK supplies timespec_getres, but has no clock_getres declaration/provider.
+# Unresolved-import links can otherwise make configure report it as present.
+ac_cv_func_clock_getres=no
+# The SDK has no clock_settime entry point; keep the settimeofday fallback.
+ac_cv_func_clock_settime=no
 # Cross-configuration cannot execute the guest nanosleep probe. Trust the
 # runtime implementation so Coreutils does not bundle Gnulib's fallback.
 gl_cv_func_nanosleep=yes

@@ -97,6 +97,8 @@ $(CLANG_GUEST_BUILD)/.configured: $(CLANG_CXX_BUILD)/.compiled $(CLANG_HOST_BUIL
 		-C "$(CLANG_DIR)/llvm.cmake" -C "$(CLANG_DIR)/guest.cmake" \
 		-DCMAKE_TOOLCHAIN_FILE="$(CLANG_DIR)/guest-toolchain.cmake" \
 		-DCMAKE_BUILD_TYPE=MinSizeRel -DLLVM_NATIVE_TOOL_DIR="$(CLANG_HOST_BUILD)/bin" \
+		-DCMAKE_PROJECT_INCLUDE="$(AUX_DIR)/notices/link-depends.cmake" \
+		-DWASTE_CRT_OBJECT="$(CLANG_BUILD)/waste-crt.o" \
 		$(CLANG_VCS_FLAGS) \
 		-DLLVM_TABLEGEN="$(CLANG_HOST_BUILD)/bin/llvm-tblgen" \
 		-DCLANG_TABLEGEN="$(CLANG_HOST_BUILD)/bin/clang-tblgen" \

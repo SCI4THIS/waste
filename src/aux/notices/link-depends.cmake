@@ -1,0 +1,17 @@
+# External CRTs supplied through linker flags are not automatic CMake inputs.
+# Register them on executable targets after the guest project creates its tree.
+include_guard(GLOBAL)
+function(waste_crt_link_dependencies directory)
+  get_property(targets DIRECTORY "${directory}" PROPERTY BUILDSYSTEM_TARGETS)
+  foreach(target IN LISTS targets)
+    get_target_property(kind "${target}" TYPE)
+    if(kind STREQUAL "EXECUTABLE")
+      set_property(TARGET "${target}" APPEND PROPERTY LINK_DEPENDS "${WASTE_CRT_OBJECT}")
+    endif()
+  endforeach()
+  get_property(subdirectories DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
+  foreach(child IN LISTS subdirectories)
+    waste_crt_link_dependencies("${child}")
+  endforeach()
+endfunction()
+cmake_language(DEFER CALL waste_crt_link_dependencies "${CMAKE_SOURCE_DIR}")

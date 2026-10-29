@@ -85,3 +85,16 @@ M4_MISSING
 printf '%s\n' "$?" > /tmp/m4-status-missing
 /usr/bin/m4 --version > /tmp/m4-version
 printf '%s\n' "$?" > /tmp/m4-status-version
+/usr/bin/m4 --license > /tmp/m4-license 2> /tmp/m4-license-error
+printf '%s\n' "$?" > /tmp/m4-status-license
+/usr/bin/m4 --copying > /tmp/m4-copying 2> /tmp/m4-copying-error
+printf '%s\n' "$?" > /tmp/m4-status-copying
+/usr/bin/m4 --help > /tmp/m4-help
+/usr/bin/m4 --license=unexpected > /tmp/m4-license-argument 2> /tmp/m4-license-argument-error
+printf '%s\n' "$?" > /tmp/m4-status-license-argument
+printf 'm4exit(99)\n' | /usr/bin/m4 --license > /tmp/m4-license-stdin
+printf '%s\n' "$?" > /tmp/m4-status-license-stdin
+/usr/bin/m4 --copying /tmp/m4-unused-missing-input > /tmp/m4-copying-operand
+printf '%s\n' "$?" > /tmp/m4-status-copying-operand
+/usr/bin/m4 --copying | /usr/bin/cat > /tmp/m4-copying-pipe
+printf '%s\n' "$?" > /tmp/m4-status-copying-pipe

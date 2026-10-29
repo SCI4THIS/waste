@@ -71,6 +71,27 @@ Installation preserves the upstream GPLv3-or-later notice at
 pristine pinned M4/Gnulib sources, patches, build inputs, configuration records,
 shared-libc source dependencies and the binary digest. Publish it with releases.
 
+## License output options (WASTE extensions)
+
+The WASTE patch adds `m4 --license` and `m4 --copying` as aliases. Both print
+the complete installed `/usr/share/licenses/m4/COPYING` file byte for byte to
+stdout and exit successfully, without reading macro input or expanding it.
+GNU M4 currently ships this one notice file; the aliases do not select separate
+LICENSE and COPYING documents. `--help` identifies these as WASTE extensions;
+`--version` retains the upstream short version/license notice.
+
+The text is read from the VFS rather than embedded in the executable, so package
+consumers must supply the COPYING resource. The embedding M4 package already
+includes it. Missing/unreadable notices and read/write failures produce a
+diagnostic on stderr and a nonzero status. Output uses small writes compatible
+with guest pipes. Neither option accepts an argument.
+
+```sh
+# Inside WASTE Bash:
+/usr/bin/m4 --license
+/usr/bin/m4 --copying > /tmp/m4-copying.txt
+```
+
 ## Tests
 
 Authored tests live in `src/vfs/root/test/aux/m4`; `test/system` is a symlink
@@ -79,6 +100,8 @@ all expected results live in `installed.wast`. Coverage includes argument
 expansion, quoting, definition stacks, conditionals, integer arithmetic,
 diversions, string and regex operations, recursion, m4wrap, includes and `-D`,
 frozen-state reload, shell command capture/status, explicit exit and errors.
+Notice tests compare both options and piped output with the installed COPYING
+bytes, check exit statuses and stderr, verify help and reject option arguments.
 `WASM_RUNNER` selects the native or sanitizer runtime, and
 `WASTE_TEST_TIMEOUT_MS` overrides the five-minute package deadline.
 

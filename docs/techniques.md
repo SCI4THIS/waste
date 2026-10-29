@@ -16,6 +16,12 @@ see [OCaml reference interpreter build](#ocaml-reference-interpreter-build).
 
 ## Auxiliary Guest Utilities
 
+Auxiliary executables support `--license` and `--authors` through an opted-in
+application CRT helper. Notice resources are installed explicitly alongside
+the command, with reproducible AUTHORS extracts for Coreutils, Vim, Rogue and
+LLVM tools. See [command notices](../src/aux/notices/README.md) for option
+boundaries, attribution sources, and the native/browser `test-notices` gate.
+
 For embedding work, run `make -C src/cli-rt embedding-check` for public C session
 ownership and direct command execution under ASan/UBSan, then build with
 `make -C src/html-rt embedding` and run `node src/html-rt/test/embedding.mjs`.

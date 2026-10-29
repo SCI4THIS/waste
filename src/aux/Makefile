@@ -96,13 +96,13 @@ $(BUILD_DIR)/ldd/ldd.o: $(AUX_DIR)/ldd/ldd.c $(AUX_DIR)/libc-imports.h $(AUX_DIR
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WASM_CFLAGS) \
 		-include "$(AUX_DIR)/libc-imports.h" -c "$<" -o "$@"
 
-$(BUILD_DIR)/upload/upload.wasm: $(CRT_OBJECT) $(BUILD_DIR)/upload/upload.o
+$(BUILD_DIR)/upload/upload.wasm: $(BUILD_DIR)/upload/notice-crt.o $(BUILD_DIR)/upload/upload.o
 	$(WASM_LD) $(LDFLAGS) $(WASM_LDFLAGS) -o "$@" $(foreach object,$^,"$(object)")
 
-$(BUILD_DIR)/download/download.wasm: $(CRT_OBJECT) $(BUILD_DIR)/download/download.o
+$(BUILD_DIR)/download/download.wasm: $(BUILD_DIR)/download/notice-crt.o $(BUILD_DIR)/download/download.o
 	$(WASM_LD) $(LDFLAGS) $(WASM_LDFLAGS) -o "$@" $(foreach object,$^,"$(object)")
 
-$(BUILD_DIR)/ldd/ldd.wasm: $(CRT_OBJECT) $(BUILD_DIR)/ldd/ldd.o
+$(BUILD_DIR)/ldd/ldd.wasm: $(BUILD_DIR)/ldd/notice-crt.o $(BUILD_DIR)/ldd/ldd.o
 	$(WASM_LD) $(LDFLAGS) $(WASM_LDFLAGS) -o "$@" $(foreach object,$^,"$(object)")
 
 # Upstream checkouts remain read-only. Re-copy originals before applying any
@@ -122,7 +122,7 @@ $(ROGUE_OBJECTS): $(ROGUE_BUILD)/objects/%.o: $(ROGUE_STAMP) $(ROGUE_DIR)/bool-f
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WASM_CFLAGS) $(ROGUE_CFLAGS) \
 		-MMD -MP -c "$(ROGUE_BUILD)/src/$*.c" -o "$@"
 
-$(ROGUE_BUILD)/rogue.wasm: $(ROGUE_OBJECTS) $(CRT_OBJECT)
+$(ROGUE_BUILD)/rogue.wasm: $(ROGUE_OBJECTS) $(ROGUE_BUILD)/notice-crt.o
 	$(WASM_LD) $(LDFLAGS) $(WASM_LDFLAGS) -o "$@" $(foreach object,$^,"$(object)")
 
 -include $(ROGUE_OBJECTS:.o=.d)
@@ -153,3 +153,5 @@ include $(AUX_DIR)/awk/awk.mk
 include $(AUX_DIR)/m4/m4.mk
 
 include $(AUX_DIR)/dot/dot.mk
+
+include $(AUX_DIR)/notices/notices.mk

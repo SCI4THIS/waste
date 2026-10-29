@@ -29,6 +29,8 @@ $(COFF_LLD_GUEST)/.configured: $(CLANG_GUEST_BUILD)/.configured $(COFF_LLD_SOURC
 		"$(CLANG_CMAKE)" -S "$(COFF_LLD_DIR)" -B "$(@D)" -G "Unix Makefiles" \
 		-DCMAKE_TOOLCHAIN_FILE="$(CLANG_DIR)/guest-toolchain.cmake" \
 		-DCMAKE_BUILD_TYPE=MinSizeRel $(CLANG_VCS_FLAGS) \
+		-DCMAKE_PROJECT_INCLUDE="$(AUX_DIR)/notices/link-depends.cmake" \
+		-DWASTE_CRT_OBJECT="$(CLANG_BUILD)/waste-crt.o" \
 		-DLLVM_SOURCE="$(CLANG_SOURCE)" -DLLVM_BUILD="$(CLANG_GUEST_BUILD)" \
 		-DCOFF_SOURCE="$(COFF_LLD_SOURCE)" -DLLVM_TABLEGEN="$(CLANG_HOST_BUILD)/bin/llvm-tblgen" \
 		-DCMAKE_EXE_LINKER_FLAGS="$(CLANG_BUILD)/waste-crt.o -L$(CLANG_CXX_BUILD)/lib -lc++ -lc++abi -Wl,--no-entry,--import-memory,--import-table,--experimental-pic,--unresolved-symbols=import-dynamic,--export=_start,--export=main,--export=__heap_base,--export=__data_end,--export=__stack_pointer $(CLANG_NO_WASM_OPT)"

@@ -46,7 +46,101 @@
        assert (status == 127);
 --- a/src/m4.c
 +++ b/src/m4.c
-@@ -451,6 +451,7 @@
+@@ -21,6 +21,7 @@
+ 
+ #include "m4.h"
+ 
++#include <fcntl.h>
+ #include <getopt.h>
+ #include <limits.h>
+ #include <signal.h>
+@@ -41,6 +42,57 @@
+ #define AUTHORS proper_name_utf8 ("Rene' Seindal", "Ren\xC3\xA9 Seindal")
+ 
+ static _Noreturn void usage (int);
++
++/* WASTE extension: print the installed notice without macro expansion.  */
++static int
++print_copying (void)
++{
++  const char *path = "/usr/share/licenses/m4/COPYING";
++  char buffer[1024];
++  int status = EXIT_SUCCESS;
++  int fd = open (path, O_RDONLY, 0);
++  if (fd < 0)
++    {
++      error (0, errno, _("cannot open `%s'"), path);
++      return EXIT_FAILURE;
++    }
++  for (;;)
++    {
++      ssize_t count = read (fd, buffer, sizeof buffer);
++      if (count < 0)
++        {
++          if (errno == EINTR)
++            continue;
++          error (0, errno, _("cannot read `%s'"), path);
++          status = EXIT_FAILURE;
++          break;
++        }
++      if (count == 0)
++        break;
++      for (size_t at = 0; at < (size_t) count; )
++        {
++          ssize_t written = write (STDOUT_FILENO, buffer + at, count - at);
++          if (written < 0 && errno == EINTR)
++            continue;
++          if (written <= 0)
++            {
++              error (0, written < 0 ? errno : EIO, _("write error"));
++              status = EXIT_FAILURE;
++              break;
++            }
++          at += written;
++        }
++      if (status != EXIT_SUCCESS)
++        break;
++    }
++  if (close (fd) < 0 && status == EXIT_SUCCESS)
++    {
++      error (0, errno, _("cannot close `%s'"), path);
++      status = EXIT_FAILURE;
++    }
++  return status;
++}
++
+ 
+ /* Enable sync output for /lib/cpp (-s).  */
+ int sync_output = 0;
+@@ -227,6 +279,8 @@
+ Operation modes:\n\
+       --help                   display this help and exit\n\
+       --version                output version information and exit\n\
++      --license                print the bundled GPL text and exit (WASTE)\n\
++      --copying                same as --license (WASTE)\n\
+ "), stdout);
+       fputs (_("\
+   -E, --fatal-warnings         once: warnings become errors, twice: stop\n\
+@@ -321,7 +375,8 @@
+   WARN_MACRO_SEQUENCE_OPTION,   /* no short opt */
+ 
+   HELP_OPTION,                  /* no short opt */
+-  VERSION_OPTION                /* no short opt */
++  VERSION_OPTION,               /* no short opt */
++  COPYING_OPTION                /* WASTE notice aliases */
+ };
+ 
+ static const struct option long_options[] = {
+@@ -358,6 +413,8 @@
+ 
+   {"help", no_argument, NULL, HELP_OPTION},
+   {"version", no_argument, NULL, VERSION_OPTION},
++  {"license", no_argument, NULL, COPYING_OPTION},
++  {"copying", no_argument, NULL, COPYING_OPTION},
+ 
+   {NULL, 0, NULL, 0},
+ };
+@@ -453,6 +510,7 @@
    sigemptyset (&act.sa_mask);
    /* One-shot - if we fault while handling a fault, we want to revert
       to default signal behavior.  */
@@ -54,7 +148,7 @@
    act.sa_flags = SA_NODEFER | SA_RESETHAND;
    act.sa_handler = fault_handler;
    sigaction (SIGSEGV, &act, NULL);
-@@ -458,6 +459,7 @@
+@@ -460,6 +518,7 @@
    sigaction (SIGILL, &act, NULL);
    sigaction (SIGFPE, &act, NULL);
    sigaction (SIGBUS, &act, NULL);
@@ -62,6 +156,16 @@
    if (c_stack_action (fault_handler) == 0)
      nesting_limit = 0;
  
+@@ -618,6 +677,9 @@
+         macro_sequence = optarg;
+         break;
+ 
++      case COPYING_OPTION:
++        return print_copying ();
++
+       case VERSION_OPTION:
+         version_etc (stdout, PACKAGE, PACKAGE_NAME, VERSION, AUTHORS, NULL);
+         exit (EXIT_SUCCESS);
 --- a/gnulib/lib/mbrtowc.c
 +++ b/gnulib/lib/mbrtowc.c
 @@ -77,6 +77,8 @@

@@ -72,6 +72,7 @@ $(VIM_BUILD)/waste-crt.o: $(CRT_SOURCE) $(VIM_DIR)/vim.mk
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WASM_CFLAGS) -DWASTE_MAIN_TWO_ARGS -c "$<" -o "$@"
 
 $(VIM_COMPILED): $(VIM_CONFIGURED) $(VIM_BUILD)/waste-crt.o $(VIM_DIR)/vim.mk
+	rm -f "$(VIM_CONFIGURE)/vim"
 	$(VIM_ENV) $(MAKE) -C "$(VIM_CONFIGURE)" vim \
 		LDFLAGS="$(VIM_LDFLAGS) $(abspath $(VIM_BUILD))/waste-crt.o" \
 		VIMRUNTIMEDIR="$(VIM_RUNTIME_DIR)"
