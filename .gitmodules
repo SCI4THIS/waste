@@ -37,3 +37,15 @@
 [submodule "submodules/graphviz"]
 	path = submodules/graphviz
 	url = https://gitlab.com/graphviz/graphviz.git
+[submodule "submodules/jdk21u"]
+	path = submodules/jdk21u
+	url = https://github.com/openjdk/jdk21u
+[submodule "submodules/libffi"]
+	path = submodules/libffi
+	url = https://github.com/libffi/libffi
+[submodule "submodules/plantuml"]
+	path = submodules/plantuml
+	url = https://github.com/plantuml/plantuml
+[submodule "submodules/libexpat"]
+	path = submodules/libexpat
+	url = https://github.com/libexpat/libexpat
